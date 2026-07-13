@@ -5,11 +5,18 @@ use codex_analytics::PluginInstallRequestSource;
 use codex_analytics::PluginInstallRequested;
 use codex_analytics::PluginInstallRequestedPlugin;
 use codex_analytics::build_track_events_context;
+use codex_app_server_protocol::PluginAvailability;
+use codex_app_server_protocol::PluginInstallPolicy;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use codex_core_plugins::remote::RemotePluginDetail;
+use codex_core_plugins::remote::RemotePluginServiceConfig;
+use codex_core_plugins::remote::fetch_remote_plugin_detail;
+use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
+use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
@@ -147,36 +154,45 @@ impl RequestPluginInstallHandler {
             turn.app_server_client_name.as_deref(),
         );
 
-        let tool = discoverable_tools
-            .into_iter()
-            .find(|tool| {
-                tool.id() == requested_tool_id
-                    && match self.presentation {
-                        ToolSuggestPresentation::ListTool => {
-                            Some(tool.tool_type()) == requested_tool_type
-                        }
-                        ToolSuggestPresentation::RecommendationContext => {
-                            matches!(tool, DiscoverableTool::Plugin(_))
-                        }
+        let candidate_not_found = || {
+            let (argument_name, source) = match self.presentation {
+                ToolSuggestPresentation::ListTool => (
+                    "tool_id",
+                    format!(
+                        "the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
+                    ),
+                ),
+                ToolSuggestPresentation::RecommendationContext => (
+                    "plugin_id",
+                    "the entries in the <recommended_plugins> list".to_string(),
+                ),
+            };
+            FunctionCallError::RespondToModel(format!(
+                "{argument_name} must match one of {source} or be an exact installable canonical_plugin_id returned by get_plugin_dependencies"
+            ))
+        };
+        let plugin_request = requested_tool_type == Some(DiscoverableToolType::Plugin)
+            || self.presentation == ToolSuggestPresentation::RecommendationContext;
+        let tool = if let Some(tool) = discoverable_tools.into_iter().find(|tool| {
+            tool.id() == requested_tool_id
+                && match self.presentation {
+                    ToolSuggestPresentation::ListTool => {
+                        Some(tool.tool_type()) == requested_tool_type
                     }
-            })
-            .ok_or_else(|| {
-                let (argument_name, source) = match self.presentation {
-                    ToolSuggestPresentation::ListTool => (
-                        "tool_id",
-                        format!(
-                            "the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
-                        ),
-                    ),
-                    ToolSuggestPresentation::RecommendationContext => (
-                        "plugin_id",
-                        "the entries in the <recommended_plugins> list".to_string(),
-                    ),
-                };
-                FunctionCallError::RespondToModel(format!(
-                    "{argument_name} must match one of {source}"
-                ))
-            })?;
+                    ToolSuggestPresentation::RecommendationContext => {
+                        matches!(tool, DiscoverableTool::Plugin(_))
+                    }
+                }
+        }) {
+            tool
+        } else if plugin_request {
+            let auth = session.services.auth_manager.auth().await;
+            resolve_backend_plugin_install_tool(turn.as_ref(), auth.as_ref(), &requested_tool_id)
+                .await
+                .ok_or_else(candidate_not_found)?
+        } else {
+            return Err(candidate_not_found());
+        };
         let tool_type = tool.tool_type();
 
         let suggestion_id = format!("request_plugin_install_{call_id}");
@@ -286,6 +302,88 @@ impl RequestPluginInstallHandler {
 }
 
 impl CoreToolRuntime for RequestPluginInstallHandler {}
+
+async fn resolve_backend_plugin_install_tool(
+    turn: &crate::session::turn_context::TurnContext,
+    auth: Option<&codex_login::CodexAuth>,
+    requested_plugin_id: &str,
+) -> Option<DiscoverableTool> {
+    if !turn.config.plugins_config_input().remote_plugin_enabled
+        || !is_valid_remote_plugin_id(requested_plugin_id)
+    {
+        return None;
+    }
+
+    let service_config = RemotePluginServiceConfig {
+        chatgpt_base_url: turn.config.chatgpt_base_url.clone(),
+    };
+    let detail = match fetch_remote_plugin_detail(
+        &service_config,
+        auth,
+        REMOTE_GLOBAL_MARKETPLACE_NAME,
+        requested_plugin_id,
+    )
+    .await
+    {
+        Ok(detail) => detail,
+        Err(err) => {
+            warn!(
+                error = %err,
+                requested_plugin_id,
+                "failed to resolve backend plugin install request"
+            );
+            return None;
+        }
+    };
+
+    discoverable_backend_plugin_install_tool(
+        requested_plugin_id,
+        &turn.config.tool_suggest.disabled_tools,
+        detail,
+    )
+}
+
+fn discoverable_backend_plugin_install_tool(
+    requested_plugin_id: &str,
+    disabled_tools: &[ToolSuggestDisabledTool],
+    detail: RemotePluginDetail,
+) -> Option<DiscoverableTool> {
+    if detail.summary.remote_plugin_id != requested_plugin_id
+        || detail.marketplace_name != REMOTE_GLOBAL_MARKETPLACE_NAME
+        || detail.summary.availability != PluginAvailability::Available
+        || detail.summary.install_policy != PluginInstallPolicy::Available
+        || detail.summary.installed
+        || disabled_tools.contains(&ToolSuggestDisabledTool::plugin(detail.summary.id.as_str()))
+        || disabled_tools.contains(&ToolSuggestDisabledTool::plugin(
+            detail.summary.remote_plugin_id.as_str(),
+        ))
+    {
+        return None;
+    }
+
+    let name = detail
+        .summary
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.clone())
+        .unwrap_or_else(|| detail.summary.name.clone());
+    let description = detail
+        .summary
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.short_description.clone())
+        .or_else(|| detail.description.clone());
+
+    Some(DiscoverableTool::from(DiscoverablePluginInfo {
+        id: detail.summary.id,
+        remote_plugin_id: Some(detail.summary.remote_plugin_id),
+        name,
+        description,
+        has_skills: !detail.skills.is_empty(),
+        mcp_server_names: detail.mcp_servers,
+        app_connector_ids: detail.app_ids,
+    }))
+}
 
 async fn maybe_persist_disabled_install_request(
     session: &crate::session::session::Session,

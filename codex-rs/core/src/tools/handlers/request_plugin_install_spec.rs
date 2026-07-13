@@ -28,7 +28,10 @@ pub(crate) fn create_request_plugin_install_tool(
                 ),
                 (
                     "tool_id".to_string(),
-                    JsonSchema::string(Some("Connector or plugin id to suggest.".to_string())),
+                    JsonSchema::string(Some(
+                        "Connector or plugin id to suggest. For a Plugin Management dependency, use the exact canonical_plugin_id."
+                            .to_string(),
+                    )),
                 ),
                 (
                     "suggest_reason".to_string(),
@@ -45,7 +48,7 @@ pub(crate) fn create_request_plugin_install_tool(
                 "suggest_reason".to_string(),
             ],
             format!(
-                "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns a plugin or connector that exactly matches the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass the returned `tool_type` through directly, and pass the returned `id` as `tool_id`.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
+                "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns a plugin or connector that exactly matches the user's explicit request, or after Plugin Management `get_plugin_dependencies` returns an exact installable `canonical_plugin_id`.\n\nFor a dependency, use this tool only when `canonical_plugin_status=\"enabled\"`, `canonical_plugin_installation_policy=\"available\"`, and `canonical_plugin_installed=false`; pass `tool_type=\"plugin\"`, `action_type=\"install\"`, and the exact `canonical_plugin_id` as `tool_id`. Never invent IDs or use bare or fuzzy plugin names.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass list-tool results through directly.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
             ),
         ),
         ToolSuggestPresentation::RecommendationContext => (
@@ -53,7 +56,8 @@ pub(crate) fn create_request_plugin_install_tool(
                 (
                     "plugin_id".to_string(),
                     JsonSchema::string(Some(
-                        "Plugin id from the `<recommended_plugins>` list.".to_string(),
+                        "Plugin id from the `<recommended_plugins>` list, or exact canonical_plugin_id returned by Plugin Management `get_plugin_dependencies`."
+                            .to_string(),
                     )),
                 ),
                 (
@@ -65,7 +69,7 @@ pub(crate) fn create_request_plugin_install_tool(
                 ),
             ]),
             vec!["plugin_id".to_string(), "suggest_reason".to_string()],
-            "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
+            "# Suggest a plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. You may also use an exact `canonical_plugin_id` returned by Plugin Management `get_plugin_dependencies` when `canonical_plugin_status=\"enabled\"`, `canonical_plugin_installation_policy=\"available\"`, and `canonical_plugin_installed=false`. Never invent IDs or use bare or fuzzy plugin names. Briefly explain why in `suggest_reason`.".to_string(),
         ),
     };
 
@@ -90,8 +94,9 @@ mod tests {
     fn create_request_plugin_install_tool_uses_expected_legacy_wire_shape() {
         let expected_description = concat!(
             "# Request plugin/connector install\n\n",
-            "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request.\n\n",
-            "Do not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass the returned `tool_type` through directly, and pass the returned `id` as `tool_id`.\n\n",
+            "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request, or after Plugin Management `get_plugin_dependencies` returns an exact installable `canonical_plugin_id`.\n\n",
+            "For a dependency, use this tool only when `canonical_plugin_status=\"enabled\"`, `canonical_plugin_installation_policy=\"available\"`, and `canonical_plugin_installed=false`; pass `tool_type=\"plugin\"`, `action_type=\"install\"`, and the exact `canonical_plugin_id` as `tool_id`. Never invent IDs or use bare or fuzzy plugin names.\n\n",
+            "Do not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass list-tool results through directly.\n\n",
             "IMPORTANT: DO NOT call this tool in parallel with other tools.",
         );
 
@@ -120,7 +125,7 @@ mod tests {
                         (
                             "tool_id".to_string(),
                             JsonSchema::string(Some(
-                                    "Connector or plugin id to suggest."
+                                    "Connector or plugin id to suggest. For a Plugin Management dependency, use the exact canonical_plugin_id."
                                         .to_string(),
                                 ),),
                         ),
@@ -148,7 +153,7 @@ mod tests {
             create_request_plugin_install_tool(ToolSuggestPresentation::RecommendationContext),
             ToolSpec::Function(ResponsesApiTool {
                 name: "request_plugin_install".to_string(),
-                description: "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
+                description: "# Suggest a plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. You may also use an exact `canonical_plugin_id` returned by Plugin Management `get_plugin_dependencies` when `canonical_plugin_status=\"enabled\"`, `canonical_plugin_installation_policy=\"available\"`, and `canonical_plugin_installed=false`. Never invent IDs or use bare or fuzzy plugin names. Briefly explain why in `suggest_reason`.".to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
@@ -156,7 +161,7 @@ mod tests {
                         (
                             "plugin_id".to_string(),
                             JsonSchema::string(Some(
-                                "Plugin id from the `<recommended_plugins>` list.".to_string(),
+                                "Plugin id from the `<recommended_plugins>` list, or exact canonical_plugin_id returned by Plugin Management `get_plugin_dependencies`.".to_string(),
                             )),
                         ),
                         (

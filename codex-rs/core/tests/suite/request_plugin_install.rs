@@ -56,6 +56,9 @@ const REMOTE_CALENDAR_PLUGIN_ID: &str = "plugin_calendar";
 const CALENDAR_CONNECTOR_ID: &str = "calendar";
 const CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
 const CALENDAR_CREATE_EVENT_TOOL: &str = "_create_event";
+const BACKEND_SLACK_PLUGIN_CONFIG_ID: &str = "slack@openai-curated-remote";
+const BACKEND_SLACK_PLUGIN_ID: &str = "plugins~Plugin_slack";
+const SLACK_CONNECTOR_ID: &str = "connector_slack";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -221,6 +224,37 @@ async fn mount_remote_calendar_recommendation(server: &wiremock::MockServer) {
         .await;
 }
 
+async fn mount_backend_slack_plugin_detail(server: &wiremock::MockServer) -> MockGuard {
+    Mock::given(method("GET"))
+        .and(path(format!("/ps/plugins/{BACKEND_SLACK_PLUGIN_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": BACKEND_SLACK_PLUGIN_ID,
+            "name": "slack",
+            "scope": "GLOBAL",
+            "installation_policy": "AVAILABLE",
+            "authentication_policy": "ON_USE",
+            "status": "ENABLED",
+            "release": {
+                "version": "1.0.0",
+                "display_name": "Slack",
+                "description": "Collaborate in Slack.",
+                "app_ids": [SLACK_CONNECTOR_ID],
+                "interface": {
+                    "short_description": "Collaborate in Slack."
+                },
+                "skills": [{
+                    "name": "slack",
+                    "description": "Work with Slack.",
+                    "interface": null
+                }],
+                "mcp_servers": [{"key": "slack"}]
+            }
+        })))
+        .expect(1)
+        .mount_as_scoped(server)
+        .await
+}
+
 fn remote_installed_plugins_response(plugins: Vec<Value>) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({
         "plugins": plugins,
@@ -329,8 +363,11 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() -> Result<()> {
+async fn endpoint_mode_injects_candidates_hides_list_and_rejects_missing_backend_ids() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
+
+    const MISSING_PLUGIN_ID: &str = "plugins~Plugin_missing";
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
@@ -357,7 +394,13 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
         })),
     )
     .await;
-    let call_id = "invented-plugin";
+    Mock::given(method("GET"))
+        .and(path(format!("/ps/plugins/{MISSING_PLUGIN_ID}")))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let call_id = "missing-plugin";
     let mock = mount_sse_sequence(
         &server,
         vec![
@@ -367,7 +410,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
                     call_id,
                     REQUEST_PLUGIN_INSTALL_TOOL_NAME,
                     &serde_json::to_string(&json!({
-                        "plugin_id": "invented@openai-curated-remote",
+                        "plugin_id": MISSING_PLUGIN_ID,
                         "suggest_reason": "Try this"
                     }))?,
                 ),
@@ -407,6 +450,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
         .function_call_output_text(call_id)
         .expect("request tool output");
     assert!(output.contains("<recommended_plugins> list"));
+    assert!(output.contains("canonical_plugin_id"));
     Ok(())
 }
 
@@ -416,6 +460,84 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
     skip_if_no_network!(Ok(()));
 
     run_remote_plugin_install_metadata_case().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn endpoint_mode_resolves_backend_plugin_id_for_install_elicitation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_recommendations(
+        &server,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": true,
+            "plugins": []
+        })),
+    )
+    .await;
+    let _detail = mount_backend_slack_plugin_detail(&server).await;
+    let _installed = mount_empty_remote_installed_plugins(&server).await;
+    let call_id = "install-slack-dependency";
+    let suggest_reason = "Use Slack for this request";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+                    &serde_json::to_string(&json!({
+                        "plugin_id": BACKEND_SLACK_PLUGIN_ID,
+                        "suggest_reason": suggest_reason
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = build_test(&server, &apps_server).await?;
+
+    let elicitation = start_install_turn(&test, "use Slack").await?;
+    let ElicitationRequest::Form {
+        meta: Some(meta), ..
+    } = &elicitation.request
+    else {
+        panic!("expected form elicitation metadata");
+    };
+    assert_eq!(meta["tool_id"], BACKEND_SLACK_PLUGIN_CONFIG_ID);
+    assert_eq!(meta["tool_name"], "Slack");
+    assert_eq!(meta["remote_plugin_id"], BACKEND_SLACK_PLUGIN_ID);
+    assert_eq!(meta["app_connector_ids"], json!([SLACK_CONNECTOR_ID]));
+
+    resolve_install_elicitation(&test, elicitation, ElicitationAction::Decline).await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &requests[1]
+                .function_call_output_text(call_id)
+                .expect("install tool output")
+        )?,
+        json!({
+            "completed": false,
+            "user_confirmed": false,
+            "tool_type": "plugin",
+            "action_type": "install",
+            "tool_id": BACKEND_SLACK_PLUGIN_CONFIG_ID,
+            "tool_name": "Slack",
+            "suggest_reason": suggest_reason
+        })
+    );
+    Ok(())
 }
 
 async fn run_remote_plugin_install_metadata_case() -> Result<()> {
@@ -624,16 +746,16 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
         "the resumed router should reflect the refreshed Apps tools"
     );
     assert!(
-        !tool_names(&requests[1].body_json())
+        tool_names(&requests[1].body_json())
             .iter()
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        "the refreshed installed-plugin cache should filter the cached recommendation"
+        "the request tool should remain available for backend dependency IDs after the cached recommendation is filtered"
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools() -> Result<()> {
+async fn endpoint_mode_with_no_eligible_candidates_still_exposes_request_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -688,7 +810,7 @@ async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools()
             .any(|name| name == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
     );
     assert!(
-        !tools
+        tools
             .iter()
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     );

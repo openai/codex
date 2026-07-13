@@ -3,6 +3,7 @@ use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
+use codex_app_server_protocol::PluginAuthPolicy;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::ToolSuggestConfig;
@@ -11,6 +12,9 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::remote::RemotePluginDetail;
+use codex_core_plugins::remote::RemotePluginSkill;
+use codex_core_plugins::remote::RemotePluginSummary;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;
@@ -87,6 +91,66 @@ fn recommended_plugin_install_args_accept_legacy_tool_id() {
     .expect("legacy arguments should deserialize");
 
     assert_eq!(current, legacy);
+}
+
+#[test]
+fn backend_plugin_detail_resolves_to_installable_tool() {
+    assert_eq!(
+        discoverable_backend_plugin_install_tool(BACKEND_PLUGIN_ID, &[], backend_plugin_detail()),
+        Some(DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+            id: "slack@openai-curated-remote".to_string(),
+            remote_plugin_id: Some(BACKEND_PLUGIN_ID.to_string()),
+            name: "Slack".to_string(),
+            description: Some("Collaborate in Slack.".to_string()),
+            has_skills: true,
+            mcp_server_names: vec!["slack".to_string()],
+            app_connector_ids: vec!["connector_slack".to_string()],
+        })))
+    );
+}
+
+#[test]
+fn backend_plugin_detail_rejects_uninstallable_or_disabled_plugins() {
+    let mut mismatched_id = backend_plugin_detail();
+    mismatched_id.summary.remote_plugin_id = "plugins~Plugin_other".to_string();
+    let mut non_global = backend_plugin_detail();
+    non_global.marketplace_name = "workspace-directory".to_string();
+    let mut disabled_by_admin = backend_plugin_detail();
+    disabled_by_admin.summary.availability = PluginAvailability::DisabledByAdmin;
+    let mut not_available = backend_plugin_detail();
+    not_available.summary.install_policy = PluginInstallPolicy::NotAvailable;
+    let mut installed_by_default = backend_plugin_detail();
+    installed_by_default.summary.install_policy = PluginInstallPolicy::InstalledByDefault;
+    let mut installed = backend_plugin_detail();
+    installed.summary.installed = true;
+
+    for detail in [
+        mismatched_id,
+        non_global,
+        disabled_by_admin,
+        not_available,
+        installed_by_default,
+        installed,
+    ] {
+        assert_eq!(
+            discoverable_backend_plugin_install_tool(BACKEND_PLUGIN_ID, &[], detail),
+            None
+        );
+    }
+
+    for disabled_tool in [
+        ToolSuggestDisabledTool::plugin("slack@openai-curated-remote"),
+        ToolSuggestDisabledTool::plugin(BACKEND_PLUGIN_ID),
+    ] {
+        assert_eq!(
+            discoverable_backend_plugin_install_tool(
+                BACKEND_PLUGIN_ID,
+                &[disabled_tool],
+                backend_plugin_detail(),
+            ),
+            None
+        );
+    }
 }
 
 #[test]
@@ -226,6 +290,46 @@ id = "slack@openai-curated"
             ],
         })
     );
+}
+
+const BACKEND_PLUGIN_ID: &str = "plugins~Plugin_slack";
+
+fn backend_plugin_detail() -> RemotePluginDetail {
+    RemotePluginDetail {
+        marketplace_name: REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
+        marketplace_display_name: "OpenAI Curated Remote".to_string(),
+        summary: RemotePluginSummary {
+            id: "slack@openai-curated-remote".to_string(),
+            remote_plugin_id: BACKEND_PLUGIN_ID.to_string(),
+            version: Some("1.0.0".to_string()),
+            local_version: None,
+            name: "Slack".to_string(),
+            share_context: None,
+            installed: false,
+            enabled: false,
+            install_policy: PluginInstallPolicy::Available,
+            install_policy_source: None,
+            auth_policy: PluginAuthPolicy::OnUse,
+            availability: PluginAvailability::Available,
+            interface: None,
+            keywords: Vec::new(),
+        },
+        share_url: None,
+        description: Some("Collaborate in Slack.".to_string()),
+        release_version: Some("1.0.0".to_string()),
+        bundle_download_url: None,
+        app_manifest: None,
+        skills: vec![RemotePluginSkill {
+            name: "slack".to_string(),
+            description: "Work with Slack.".to_string(),
+            short_description: None,
+            interface: None,
+            enabled: true,
+        }],
+        app_ids: vec!["connector_slack".to_string()],
+        app_templates: Vec::new(),
+        mcp_servers: vec!["slack".to_string()],
+    }
 }
 
 fn connector_tool(id: &str, name: &str) -> DiscoverableTool {
