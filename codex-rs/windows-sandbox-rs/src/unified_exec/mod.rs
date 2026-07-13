@@ -9,6 +9,7 @@
 
 mod backends;
 
+use crate::process::WindowsProcessLaunch;
 use anyhow::Result;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -26,7 +27,7 @@ pub struct WindowsSandboxSessionRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
     pub workspace_roots: &'a [AbsolutePathBuf],
     pub codex_home: &'a Path,
-    pub command: Vec<String>,
+    pub launch: WindowsProcessLaunch,
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -53,7 +54,7 @@ pub async fn spawn_windows_sandbox_session_for_level(
             request.permission_profile,
             request.workspace_roots,
             request.codex_home,
-            request.command,
+            request.launch,
             request.cwd,
             request.env_map,
             request.proxy_enforced,
@@ -70,11 +71,11 @@ pub async fn spawn_windows_sandbox_session_for_level(
         )
         .await
     } else {
-        spawn_windows_sandbox_session_legacy(
+        backends::legacy::spawn_windows_sandbox_session_legacy(
             request.permission_profile,
             request.workspace_roots,
             request.codex_home,
-            request.command,
+            request.launch,
             request.cwd,
             request.env_map,
             request.timeout_ms,
@@ -86,79 +87,6 @@ pub async fn spawn_windows_sandbox_session_for_level(
         )
         .await
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn spawn_windows_sandbox_session_legacy(
-    permission_profile: &PermissionProfile,
-    workspace_roots: &[AbsolutePathBuf],
-    codex_home: &Path,
-    command: Vec<String>,
-    cwd: &Path,
-    env_map: HashMap<String, String>,
-    timeout_ms: Option<u64>,
-    additional_deny_read_paths: &[AbsolutePathBuf],
-    additional_deny_write_paths: &[AbsolutePathBuf],
-    tty: bool,
-    stdin_open: bool,
-    use_private_desktop: bool,
-) -> Result<SpawnedProcess> {
-    backends::legacy::spawn_windows_sandbox_session_legacy(
-        permission_profile,
-        workspace_roots,
-        codex_home,
-        command,
-        cwd,
-        env_map,
-        timeout_ms,
-        additional_deny_read_paths,
-        additional_deny_write_paths,
-        tty,
-        stdin_open,
-        use_private_desktop,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
-    permission_profile: &PermissionProfile,
-    workspace_roots: &[AbsolutePathBuf],
-    codex_home: &Path,
-    command: Vec<String>,
-    cwd: &Path,
-    env_map: HashMap<String, String>,
-    proxy_enforced: bool,
-    timeout_ms: Option<u64>,
-    read_roots_override: Option<&[PathBuf]>,
-    read_roots_include_platform_defaults: bool,
-    write_roots_override: Option<&[PathBuf]>,
-    deny_read_paths_override: &[AbsolutePathBuf],
-    deny_write_paths_override: &[AbsolutePathBuf],
-    tty: bool,
-    stdin_open: bool,
-    use_private_desktop: bool,
-) -> Result<SpawnedProcess> {
-    backends::elevated::spawn_windows_sandbox_session_elevated_for_permission_profile(
-        permission_profile,
-        workspace_roots,
-        codex_home,
-        command,
-        cwd,
-        env_map,
-        proxy_enforced,
-        crate::WindowsSandboxProxySettingsMode::Reconcile,
-        timeout_ms,
-        read_roots_override,
-        read_roots_include_platform_defaults,
-        write_roots_override,
-        deny_read_paths_override,
-        deny_write_paths_override,
-        tty,
-        stdin_open,
-        use_private_desktop,
-    )
-    .await
 }
 
 #[cfg(test)]

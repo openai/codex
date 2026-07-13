@@ -6,6 +6,7 @@ use crate::logging::log_failure;
 use crate::logging::log_success;
 use crate::process::StderrMode;
 use crate::process::StdinMode;
+use crate::process::WindowsProcessLaunch;
 use crate::process::read_handle_loop;
 use crate::process::spawn_process_with_pipes;
 use crate::spawn_prep::LegacyAclSids;
@@ -58,7 +59,7 @@ struct LegacyProcessHandles {
 #[allow(clippy::too_many_arguments)]
 fn spawn_legacy_process(
     h_token: HANDLE,
-    command: &[String],
+    launch: &WindowsProcessLaunch,
     cwd: &Path,
     env_map: &HashMap<String, String>,
     use_private_desktop: bool,
@@ -72,7 +73,7 @@ fn spawn_legacy_process(
     let (pi, output_join, writer_handle, hpc, conpty_owner, desktop) = if tty {
         let (pi, mut conpty) = spawn_conpty_process_as_user(
             h_token,
-            command,
+            launch,
             cwd,
             env_map,
             use_private_desktop,
@@ -89,7 +90,7 @@ fn spawn_legacy_process(
     } else {
         let pipe_handles = spawn_process_with_pipes(
             h_token,
-            command,
+            launch,
             cwd,
             env_map,
             if stdin_open {
@@ -273,7 +274,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
-    command: Vec<String>,
+    launch: WindowsProcessLaunch,
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
@@ -289,7 +290,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         codex_home,
         cwd,
         &mut env_map,
-        &command,
+        &launch.command,
         SpawnPrepOptions {
             inherit_path: false,
             add_git_safe_directory: false,
@@ -354,7 +355,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         desktop,
     } = match spawn_legacy_process(
         security.h_token,
-        &command,
+        &launch,
         cwd,
         &env_map,
         use_private_desktop,
@@ -377,7 +378,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
 
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
     let wait_handle = Arc::clone(&process_handle);
-    let command_for_wait = command.clone();
+    let command_for_wait = launch.command.clone();
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
         let _desktop = desktop;

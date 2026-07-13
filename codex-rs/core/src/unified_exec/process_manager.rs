@@ -1019,47 +1019,34 @@ impl UnifiedExecProcessManager {
                 .windows_sandbox_filesystem_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.write_roots_override.clone());
-            let spawned = match request.windows_sandbox_level {
-                codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile(
-                        &request.permission_profile,
-                        request.windows_sandbox_workspace_roots.as_slice(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        native_cwd.as_path(),
-                        request.env.clone(),
-                        request.network.is_some(),
-                        None,
-                        elevated_read_roots_override.as_deref(),
+            let spawned = codex_windows_sandbox::spawn_windows_sandbox_session_for_level(
+                codex_windows_sandbox::WindowsSandboxSessionRequest {
+                    permission_profile: &request.permission_profile,
+                    workspace_roots: request.windows_sandbox_workspace_roots.as_slice(),
+                    codex_home: codex_home.as_ref(),
+                    launch: codex_windows_sandbox::WindowsProcessLaunch {
+                        application_path: None,
+                        command: request.command.clone(),
+                    },
+                    cwd: native_cwd.as_path(),
+                    env_map: request.env.clone(),
+                    windows_sandbox_level: request.windows_sandbox_level,
+                    proxy_enforced: request.network.is_some(),
+                    proxy_settings_mode:
+                        codex_windows_sandbox::WindowsSandboxProxySettingsMode::Reconcile,
+                    timeout_ms: None,
+                    read_roots_override: elevated_read_roots_override.as_deref(),
+                    read_roots_include_platform_defaults:
                         elevated_read_roots_include_platform_defaults,
-                        elevated_write_roots_override.as_deref(),
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
-                | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
-                        &request.permission_profile,
-                        request.windows_sandbox_workspace_roots.as_slice(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        native_cwd.as_path(),
-                        request.env.clone(),
-                        None,
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-            };
+                    write_roots_override: elevated_write_roots_override.as_deref(),
+                    deny_read_paths_override: &additional_deny_read_paths,
+                    deny_write_paths_override: &additional_deny_write_paths,
+                    tty,
+                    stdin_open: tty,
+                    use_private_desktop: request.windows_sandbox_private_desktop,
+                },
+            )
+            .await;
             spawn_lifecycle.after_spawn();
             return UnifiedExecProcess::from_spawned(
                 spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,

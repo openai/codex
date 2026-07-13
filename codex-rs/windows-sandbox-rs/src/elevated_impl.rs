@@ -43,6 +43,7 @@ mod windows_impl {
     use crate::logging::log_failure;
     use crate::logging::log_start;
     use crate::logging::log_success;
+    use crate::process::WindowsProcessLaunch;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use crate::runner_client::retry_runner_spawn_once;
     use crate::runner_client::spawn_runner_transport;
@@ -182,7 +183,10 @@ mod windows_impl {
 
         (|| -> Result<CaptureResult> {
             let spawn_request = SpawnRequest {
-                command: command.clone(),
+                launch: WindowsProcessLaunch {
+                    application_path: None,
+                    command: command.clone(),
+                },
                 cwd: cwd.to_path_buf(),
                 env: env_map.clone(),
                 permission_profile: permission_profile.clone(),
@@ -197,7 +201,7 @@ mod windows_impl {
             };
             let transport = retry_runner_spawn_once(
                 sandbox_creds,
-                &spawn_request.command,
+                &spawn_request.launch.command,
                 |sandbox_creds| {
                     spawn_runner_transport(
                         codex_home,
