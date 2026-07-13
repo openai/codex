@@ -279,34 +279,31 @@ impl Subscriber for LockContentionSubscriber {
 fn complete_after_store_lock_contention<T>(
     codex_home: &std::path::Path,
     store: OAuthStore,
+    while_locked: impl FnOnce() -> Result<()>,
     operation: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
-    let held_lock =
-        OAuthStoreLock::acquire_in(codex_home, store, Duration::from_millis(/*millis*/ 100))?;
-    let (contended_tx, contended_rx) = mpsc::channel();
-    let (result_tx, result_rx) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        tracing::subscriber::with_default(LockContentionSubscriber { contended_tx }, || {
-            result_tx
-                .send(operation())
-                .expect("send contending OAuth store operation result");
+    std::thread::scope(|scope| {
+        let held_lock =
+            OAuthStoreLock::acquire_in(codex_home, store, Duration::from_millis(/*millis*/ 100))?;
+        let (contended_tx, contended_rx) = mpsc::channel();
+        let worker = scope.spawn(move || {
+            tracing::subscriber::with_default(LockContentionSubscriber { contended_tx }, operation)
         });
-    });
 
-    // This event is emitted only after `try_lock()` returns WouldBlock, so the test fails if the
-    // operation stops acquiring the aggregate-store lock.
-    contended_rx
-        .recv_timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT)
-        .context("timed out waiting for actual OAuth store lock contention")?;
-    drop(held_lock);
-    let result = result_rx.recv_timeout(Duration::from_secs(/*secs*/ 10))??;
-    worker
-        .join()
-        .expect("contending OAuth store worker should finish");
-    Ok(result)
+        // This event is emitted only after `try_lock()` returns WouldBlock, so the test fails if the
+        // operation stops acquiring the aggregate-store lock.
+        contended_rx
+            .recv_timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT)
+            .context("timed out waiting for actual OAuth store lock contention")?;
+        while_locked()?;
+        drop(held_lock);
+        worker
+            .join()
+            .expect("contending OAuth store worker should finish")
+    })
 }
 
 #[test]
@@ -317,29 +314,13 @@ fn file_store_lock_preserves_updates_for_different_servers() -> Result<()> {
     second.server_name = "second-server".to_string();
     second.url = "https://second.example.test".to_string();
 
-    let held_lock = OAuthStoreLock::acquire_in(
+    let second_for_writer = second.clone();
+    complete_after_store_lock_contention(
         env.path(),
         OAuthStore::File,
-        Duration::from_millis(/*millis*/ 100),
+        || save_oauth_tokens_to_file_with_lock_held(&first),
+        move || save_oauth_tokens_to_file(&second_for_writer),
     )?;
-    let (contended_tx, contended_rx) = mpsc::channel();
-    let (result_tx, result_rx) = mpsc::channel();
-    let second_for_writer = second.clone();
-    let writer = std::thread::spawn(move || {
-        tracing::subscriber::with_default(LockContentionSubscriber { contended_tx }, || {
-            result_tx
-                .send(save_oauth_tokens_to_file(&second_for_writer))
-                .expect("send writer result");
-        });
-    });
-
-    contended_rx
-        .recv_timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT)
-        .context("timed out waiting for actual OAuth store lock contention")?;
-    save_oauth_tokens_to_file_with_lock_held(&first)?;
-    drop(held_lock);
-    result_rx.recv_timeout(Duration::from_secs(/*secs*/ 10))??;
-    writer.join().expect("file store writer should finish");
 
     let loaded_first = load_oauth_tokens_from_file(&first.server_name, &first.url)?
         .expect("first server tokens should remain stored");
@@ -358,16 +339,22 @@ fn file_store_load_and_delete_observe_aggregate_lock() -> Result<()> {
 
     let server_name = tokens.server_name.clone();
     let url = tokens.url.clone();
-    let loaded = complete_after_store_lock_contention(env.path(), OAuthStore::File, move || {
-        load_oauth_tokens_from_file(&server_name, &url)
-    })?
+    let loaded = complete_after_store_lock_contention(
+        env.path(),
+        OAuthStore::File,
+        || Ok(()),
+        move || load_oauth_tokens_from_file(&server_name, &url),
+    )?
     .expect("file credentials should remain readable after contention");
     assert_tokens_match_without_expiry(&loaded, &tokens);
 
     let key = crate::oauth::compute_store_key(&tokens.server_name, &tokens.url)?;
-    let removed = complete_after_store_lock_contention(env.path(), OAuthStore::File, move || {
-        crate::oauth::delete_oauth_tokens_from_file(&key)
-    })?;
+    let removed = complete_after_store_lock_contention(
+        env.path(),
+        OAuthStore::File,
+        || Ok(()),
+        move || crate::oauth::delete_oauth_tokens_from_file(&key),
+    )?;
     assert!(removed);
     assert!(load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?.is_none());
     Ok(())
@@ -382,41 +369,29 @@ fn secrets_store_lock_preserves_updates_for_different_servers() -> Result<()> {
     second.server_name = "second-server".to_string();
     second.url = "https://second.example.test".to_string();
 
-    let held_lock = OAuthStoreLock::acquire_in(
-        env.path(),
-        OAuthStore::Secrets,
-        Duration::from_millis(/*millis*/ 100),
-    )?;
-    let (contended_tx, contended_rx) = mpsc::channel();
-    let (result_tx, result_rx) = mpsc::channel();
     let store_for_writer = keyring_store.clone();
     let second_for_writer = second.clone();
-    let writer = std::thread::spawn(move || {
-        tracing::subscriber::with_default(LockContentionSubscriber { contended_tx }, || {
-            result_tx
-                .send(save_oauth_tokens_with_keyring(
-                    &store_for_writer,
-                    AuthKeyringBackendKind::Secrets,
-                    &second_for_writer.server_name,
-                    &second_for_writer,
-                ))
-                .expect("send writer result");
-        });
-    });
-
-    contended_rx
-        .recv_timeout(STORE_LOCK_CONTENTION_EVENT_TIMEOUT)
-        .context("timed out waiting for actual OAuth store lock contention")?;
-    let first_serialized = serde_json::to_string(&first)?;
-    save_oauth_tokens_to_secrets_keyring_with_lock_held(
-        &keyring_store,
-        &first.server_name,
-        &first,
-        &first_serialized,
+    complete_after_store_lock_contention(
+        env.path(),
+        OAuthStore::Secrets,
+        || {
+            let first_serialized = serde_json::to_string(&first)?;
+            save_oauth_tokens_to_secrets_keyring_with_lock_held(
+                &keyring_store,
+                &first.server_name,
+                &first,
+                &first_serialized,
+            )
+        },
+        move || {
+            save_oauth_tokens_with_keyring(
+                &store_for_writer,
+                AuthKeyringBackendKind::Secrets,
+                &second_for_writer.server_name,
+                &second_for_writer,
+            )
+        },
     )?;
-    drop(held_lock);
-    result_rx.recv_timeout(Duration::from_secs(/*secs*/ 10))??;
-    writer.join().expect("secrets store writer should finish");
 
     let loaded_first = load_oauth_tokens_from_keyring(
         &keyring_store,
@@ -452,29 +427,37 @@ fn secrets_store_load_and_delete_observe_aggregate_lock() -> Result<()> {
     let store_for_load = keyring_store.clone();
     let server_name = tokens.server_name.clone();
     let url = tokens.url.clone();
-    let loaded =
-        complete_after_store_lock_contention(env.path(), OAuthStore::Secrets, move || {
+    let loaded = complete_after_store_lock_contention(
+        env.path(),
+        OAuthStore::Secrets,
+        || Ok(()),
+        move || {
             Ok(load_oauth_tokens_from_keyring(
                 &store_for_load,
                 AuthKeyringBackendKind::Secrets,
                 &server_name,
                 &url,
             )?)
-        })?
-        .expect("encrypted credentials should remain readable after contention");
+        },
+    )?
+    .expect("encrypted credentials should remain readable after contention");
     assert_tokens_match_without_expiry(&loaded, &tokens);
 
     let store_for_delete = keyring_store.clone();
     let server_name = tokens.server_name.clone();
     let url = tokens.url.clone();
-    let removed =
-        complete_after_store_lock_contention(env.path(), OAuthStore::Secrets, move || {
+    let removed = complete_after_store_lock_contention(
+        env.path(),
+        OAuthStore::Secrets,
+        || Ok(()),
+        move || {
             crate::oauth::delete_oauth_tokens_from_secrets_keyring(
                 &store_for_delete,
                 &server_name,
                 &url,
             )
-        })?;
+        },
+    )?;
     assert!(removed);
     assert!(
         load_oauth_tokens_from_keyring(
