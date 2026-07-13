@@ -180,6 +180,7 @@ async fn implicit_core_and_native_read_invocations_share_turn_local_recording() 
                 call_id: call_id.to_string(),
                 tool_name: read_tool.tool_name(),
                 model: "gpt-test".to_string(),
+                codex_turn_metadata: None,
                 truncation_policy: TruncationPolicy::Bytes(1_024),
                 conversation_history: ConversationHistory::default(),
                 turn_item_emitter: Arc::new(NoopTurnItemEmitter),
