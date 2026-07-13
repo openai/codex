@@ -33,6 +33,10 @@
 //! Whitespace and atomic-element edges delimit occurrences, while nested sigils do not. This
 //! preserves dismissal across offset-only edits without suppressing a later identical token.
 //!
+//! Slash-command dismissal is tracked separately. Pressing `Esc` while the command popup is active
+//! records the first-line `/name` token and keeps the popup closed while that token is unchanged.
+//! Editing the command token clears the dismissal and allows the popup to reopen.
+//!
 //! # History Navigation (↑/↓)
 //!
 //! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
@@ -3552,6 +3556,18 @@ impl ChatComposer {
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
     fn sync_command_popup(&mut self, allow: bool) {
+        let text = self.draft.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let first_line = &text[..first_line_end];
+        // Keep an explicitly dismissed popup closed until the command token changes.
+        let command_token = slash_input::command_popup_filter_text(first_line, /*cursor*/ 0);
+        if let Some(command_token) = command_token.as_deref()
+            && self.popups.dismissed_command_token.as_deref() == Some(command_token)
+        {
+            return;
+        }
+        self.popups.dismissed_command_token = None;
+
         if !allow {
             if matches!(self.popups.active, ActivePopup::Command(_)) {
                 self.popups.active = ActivePopup::None;
@@ -3559,9 +3575,6 @@ impl ChatComposer {
             return;
         }
         // Determine whether the caret is inside the initial '/name' token on the first line.
-        let text = self.draft.textarea.text();
-        let first_line_end = text.find('\n').unwrap_or(text.len());
-        let first_line = &text[..first_line_end];
         let cursor = self.draft.textarea.cursor();
         let caret_on_first_line = cursor <= first_line_end;
 
