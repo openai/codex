@@ -79,7 +79,7 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
-        true
+        false
     }
 
     fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
