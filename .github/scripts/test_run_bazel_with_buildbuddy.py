@@ -16,7 +16,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         self,
         temp_dir: str,
         *,
-        repository: str = "openai/codex",
+        repository: str = "openai/codex-internal",
         fork: bool = False,
         event_name: str = "pull_request",
     ) -> dict[str, str]:
@@ -79,6 +79,32 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                     "--",
                     "//codex-rs/cli:codex",
                 ],
+            )
+
+    def test_codex_internal_ci_selects_openai_rbe(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env = self.github_env(
+                temp_dir,
+                repository="openai/codex-internal",
+                event_name="push",
+            )
+
+            self.assertEqual(
+                run_bazel_with_buildbuddy.remote_config(
+                    ["build", "--config=ci-linux"], env
+                ),
+                "buildbuddy-openai-rbe",
+            )
+
+    def test_codex_ci_cannot_select_openai_host(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            env = self.github_env(temp_dir, repository="openai/codex")
+
+            self.assertEqual(
+                run_bazel_with_buildbuddy.remote_config(
+                    ["build", "--config=ci-v8"], env
+                ),
+                "buildbuddy-generic-rbe",
             )
 
     def test_windows_cross_ci_configuration_follows_remote_configuration(self) -> None:
@@ -161,7 +187,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 "BUILDBUDDY_API_KEY": "token",
                 "GITHUB_ACTIONS": "true",
                 "GITHUB_EVENT_NAME": "pull_request",
-                "GITHUB_REPOSITORY": "openai/codex",
+                "GITHUB_REPOSITORY": "openai/codex-internal",
             }
             if event_path is not None:
                 env["GITHUB_EVENT_PATH"] = event_path

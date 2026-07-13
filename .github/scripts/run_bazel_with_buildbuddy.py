@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 
-OPENAI_REPOSITORY = "openai/codex"
+OPENAI_REPOSITORY = "openai/codex-internal"
 # Remote configurations select cache/BES/download endpoints. Their -rbe forms
 # also select the matching remote executor endpoint.
 GENERIC_REMOTE_CONFIG = "buildbuddy-generic"
@@ -74,8 +74,9 @@ def is_trusted_upstream_run(env: Mapping[str, str]) -> bool:
         or env.get("GITHUB_REPOSITORY") != OPENAI_REPOSITORY
     ):
         return False
-    # Non-PR workflow runs in `openai/codex` execute upstream refs, so they are
-    # trusted. Fork code reaches these workflows only through pull requests.
+    # Non-PR workflow runs in `openai/codex-internal` execute upstream refs,
+    # so they are trusted. Fork code reaches these workflows only through pull
+    # requests.
     if env.get("GITHUB_EVENT_NAME") != "pull_request":
         return True
 
