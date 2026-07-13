@@ -69,6 +69,30 @@ pub struct PendingEnvironmentRegistration(oneshot::Sender<Result<String, String>
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
 pub const REMOTE_ENVIRONMENT_ID: &str = "remote";
 
+/// Non-mutating connection status observed by an environment owner.
+///
+/// Computing this status never starts, waits for, or reconnects an exec-server
+/// transport. Already-ready remote environments may receive a fail-fast probe
+/// over their existing connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvironmentObservedStatus {
+    /// A local environment, or a remote environment whose existing connection answered a probe.
+    Ready,
+    /// The configured environment has no ready connection and no observed connection failure.
+    ///
+    /// This includes lazy transports that have never been started and initial startup that has
+    /// not finished. Computing status does not start the environment or wait for startup.
+    Pending,
+    /// A connection attempt, prior connection, or fail-fast status probe observed a failure.
+    ///
+    /// This does not promise that the failure is terminal: later normal environment use may
+    /// recover the connection. Computing status itself does not trigger recovery.
+    Disconnected {
+        /// Human-readable reason recorded by the failed connection attempt or probe.
+        error: String,
+    },
+}
+
 impl EnvironmentManager {
     /// Builds a test-only manager without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
@@ -273,6 +297,19 @@ impl EnvironmentManager {
         environment_ids
     }
 
+    /// Returns every configured environment id in deterministic order.
+    pub fn environment_ids(&self) -> Vec<String> {
+        let mut environment_ids = self
+            .environments
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        environment_ids.sort_unstable();
+        environment_ids
+    }
+
     /// Returns the local environment instance when one is configured.
     pub fn try_local_environment(&self) -> Option<Arc<Environment>> {
         self.local_environment.as_ref().map(Arc::clone)
@@ -291,6 +328,15 @@ impl EnvironmentManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(environment_id)
             .cloned()
+    }
+
+    /// Returns the current status of one named environment when it is configured.
+    pub async fn get_environment_status(
+        &self,
+        environment_id: &str,
+    ) -> Option<EnvironmentObservedStatus> {
+        let environment = self.get_environment(environment_id)?;
+        Some(environment.status().await)
     }
 
     /// Adds or replaces a named remote environment without changing the
@@ -645,6 +691,19 @@ impl Environment {
         }
     }
 
+    /// Returns the environment's status without starting or recovering it.
+    ///
+    /// Local environments are always ready. Remote environments with an
+    /// already-ready cached connection receive a fail-fast `environment/status`
+    /// probe; other remote states are returned from cached connection state
+    /// without waiting for startup or recovery.
+    pub async fn status(&self) -> EnvironmentObservedStatus {
+        match &self.remote_client {
+            Some(client) => client.status().await,
+            None => EnvironmentObservedStatus::Ready,
+        }
+    }
+
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
     }
@@ -674,6 +733,7 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
+    use super::EnvironmentObservedStatus;
     use super::LOCAL_ENVIRONMENT_ID;
     use super::REMOTE_ENVIRONMENT_ID;
     use super::noise_environment_config_from_values;
@@ -1092,6 +1152,28 @@ mod tests {
             .await
             .expect("environment should start connecting when registered")
             .expect("accept connection");
+    }
+
+    #[tokio::test]
+    async fn environment_status_keeps_stdio_environment_pending() {
+        let environment = Environment::remote_with_transport(
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "codex-missing-exec-server-for-test".to_string(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                },
+                initialize_timeout: Duration::from_secs(1),
+            },
+            /*local_runtime_paths*/ None,
+        );
+
+        assert_eq!(
+            environment.status().await,
+            EnvironmentObservedStatus::Pending
+        );
+        assert!(!environment.startup_finished());
     }
 
     #[tokio::test]

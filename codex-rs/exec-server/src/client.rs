@@ -39,6 +39,7 @@ use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
 use crate::process::ExecProcessEventReceiver;
 use crate::protocol::ENVIRONMENT_INFO_METHOD;
+use crate::protocol::ENVIRONMENT_STATUS_METHOD;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
@@ -48,6 +49,7 @@ use crate::protocol::EXEC_SIGNAL_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::EnvironmentInfo;
+use crate::protocol::EnvironmentStatus;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
@@ -114,6 +116,7 @@ mod recovery;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const ENVIRONMENT_INFO_TIMEOUT: Duration = Duration::from_secs(30);
+const ENVIRONMENT_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
 const MAX_PENDING_PROCESS_EVENTS: usize = 256;
@@ -300,6 +303,30 @@ impl LazyRemoteExecServerClient {
             Ok(client) => client.readiness_result(),
             Err(error) => Some(Err(ExecServerError::ConnectionAttempt(Arc::clone(error)))),
         })
+    }
+
+    pub(crate) async fn status(&self) -> crate::EnvironmentObservedStatus {
+        // Fail-fast lookup preserves the non-mutating contract: never start or recover a client.
+        let client = match self.fail_fast().get().await {
+            Ok(client) => client,
+            Err(error) => {
+                // Without a completed startup attempt, there is no exec-server connection to probe.
+                if self.cached_client().is_none() && self.startup.get().is_none() {
+                    return crate::EnvironmentObservedStatus::Pending;
+                }
+                // A known connection failure is reported without retrying it as part of status.
+                return crate::EnvironmentObservedStatus::Disconnected {
+                    error: error.to_string(),
+                };
+            }
+        };
+        // Every callable client is probed so callers never receive a cached health result.
+        match client.environment_status().await {
+            Ok(_) => crate::EnvironmentObservedStatus::Ready,
+            Err(error) => crate::EnvironmentObservedStatus::Disconnected {
+                error: error.to_string(),
+            },
+        }
     }
 
     pub(crate) fn fail_fast(&self) -> Self {
@@ -600,6 +627,16 @@ impl ExecServerClient {
         map_rpc_call_result(
             rpc_client
                 .call_with_timeout(ENVIRONMENT_INFO_METHOD, &(), ENVIRONMENT_INFO_TIMEOUT)
+                .await,
+        )
+    }
+
+    pub async fn environment_status(&self) -> Result<EnvironmentStatus, ExecServerError> {
+        // Health checks only reuse an existing RPC connection and never initiate recovery.
+        let rpc_client = self.rpc_client_without_recovery()?;
+        map_rpc_call_result(
+            rpc_client
+                .call_with_timeout(ENVIRONMENT_STATUS_METHOD, &(), ENVIRONMENT_STATUS_TIMEOUT)
                 .await,
         )
     }
@@ -1432,6 +1469,7 @@ mod tests {
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
     use super::LazyRemoteExecServerClient;
+    use crate::EnvironmentObservedStatus;
     use crate::ProcessId;
     #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
@@ -2411,6 +2449,10 @@ mod tests {
             Ok(_) => panic!("burned environment should stay failed"),
             Err(error) => error,
         };
+        assert!(matches!(
+            client.status().await,
+            EnvironmentObservedStatus::Disconnected { .. }
+        ));
 
         let (
             super::ExecServerError::ConnectionAttempt(first),

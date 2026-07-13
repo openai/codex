@@ -308,10 +308,13 @@ mod tests {
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
     use crate::protocol::ENVIRONMENT_INFO_METHOD;
+    use crate::protocol::ENVIRONMENT_STATUS_METHOD;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_TERMINATE_METHOD;
     use crate::protocol::EnvironmentInfo;
+    use crate::protocol::EnvironmentStatus;
+    use crate::protocol::EnvironmentStatusKind;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
     use crate::protocol::INITIALIZE_METHOD;
@@ -394,9 +397,16 @@ mod tests {
 
         send_request(&mut writer, /*id*/ 2, ENVIRONMENT_INFO_METHOD, &()).await;
         send_request(&mut writer, /*id*/ 3, ENVIRONMENT_INFO_METHOD, &()).await;
+        send_request(&mut writer, /*id*/ 4, ENVIRONMENT_STATUS_METHOD, &()).await;
 
         let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 2).await;
         let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 3).await;
+        assert_eq!(
+            read_response::<EnvironmentStatus>(&mut lines, /*expected_id*/ 4).await,
+            EnvironmentStatus {
+                status: EnvironmentStatusKind::Ready,
+            }
+        );
 
         drop(writer);
         drop(lines);

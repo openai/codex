@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::protocol::ENVIRONMENT_INFO_METHOD;
+use crate::protocol::ENVIRONMENT_STATUS_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_SIGNAL_METHOD;
@@ -70,6 +71,10 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     router.request(
         ENVIRONMENT_INFO_METHOD,
         |handler: Arc<ExecServerHandler>, _params: ()| async move { handler.environment_info() },
+    );
+    router.request(
+        ENVIRONMENT_STATUS_METHOD,
+        |handler: Arc<ExecServerHandler>, _params: ()| async move { handler.environment_status() },
     );
     router.request(
         EXEC_READ_METHOD,

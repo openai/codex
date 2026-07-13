@@ -15,6 +15,8 @@ use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::EnvironmentInfo;
+use crate::protocol::EnvironmentStatus;
+use crate::protocol::EnvironmentStatusKind;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCanonicalizeParams;
@@ -164,6 +166,13 @@ impl ExecServerHandler {
     pub(crate) fn environment_info(&self) -> Result<EnvironmentInfo, JSONRPCErrorError> {
         self.require_initialized_for("environment info")?;
         Ok(EnvironmentInfo::local())
+    }
+
+    pub(crate) fn environment_status(&self) -> Result<EnvironmentStatus, JSONRPCErrorError> {
+        self.require_initialized_for("environment status")?;
+        Ok(EnvironmentStatus {
+            status: EnvironmentStatusKind::Ready,
+        })
     }
 
     pub(crate) async fn exec_read(
