@@ -651,6 +651,7 @@ subagent_usage_hint_text = "Subagent guidance."
 multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
+expose_spawn_agent_model_overrides = true
 non_code_mode_only = true
 "#,
     )
@@ -675,6 +676,7 @@ non_code_mode_only = true
             multi_agent_mode_hint_text: Some("Custom mode guidance.".to_string()),
             tool_namespace: Some("agents".to_string()),
             hide_spawn_agent_metadata: Some(true),
+            expose_spawn_agent_model_overrides: Some(true),
             non_code_mode_only: Some(true),
         }))
     );
