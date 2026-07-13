@@ -23,6 +23,7 @@ use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
@@ -35,6 +36,12 @@ pub struct CreatedProcess {
     pub process_info: PROCESS_INFORMATION,
     pub startup_info: STARTUPINFOW,
     _desktop: LaunchDesktop,
+}
+
+/// Controls console creation for pipe-backed child processes.
+pub enum ConsoleMode {
+    Inherit,
+    NoWindow,
 }
 
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
@@ -76,6 +83,8 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
 /// # Safety
 /// Caller must provide a valid primary token handle (`h_token`) with appropriate access,
 /// and the `argv`, `cwd`, and `env_map` must remain valid for the duration of the call.
+// Low-level CreateProcessAsUserW wrapper mirrors the Windows API shape.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
@@ -83,6 +92,7 @@ pub unsafe fn create_process_as_user(
     env_map: &HashMap<String, String>,
     logs_base_dir: Option<&Path>,
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
+    console_mode: ConsoleMode,
     use_private_desktop: bool,
 ) -> Result<CreatedProcess> {
     let cmdline_str = argv_to_command_line(argv);
@@ -120,7 +130,12 @@ pub unsafe fn create_process_as_user(
             attrs.set_handle_list(inherited_handles)?;
             si.lpAttributeList = attrs.as_mut_ptr();
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+            let creation_flags = CREATE_UNICODE_ENVIRONMENT
+                | EXTENDED_STARTUPINFO_PRESENT
+                | match console_mode {
+                    ConsoleMode::Inherit => 0,
+                    ConsoleMode::NoWindow => CREATE_NO_WINDOW,
+                };
             let ok = CreateProcessAsUserW(
                 h_token,
                 std::ptr::null(),
@@ -232,6 +247,7 @@ pub fn spawn_process_with_pipes(
     env_map: &HashMap<String, String>,
     stdin_mode: StdinMode,
     stderr_mode: StderrMode,
+    console_mode: ConsoleMode,
     use_private_desktop: bool,
     logs_base_dir: Option<&Path>,
 ) -> Result<PipeSpawnHandles> {
@@ -275,6 +291,7 @@ pub fn spawn_process_with_pipes(
             env_map,
             logs_base_dir,
             stdio,
+            console_mode,
             use_private_desktop,
         )
     };

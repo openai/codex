@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -517,6 +518,13 @@ impl TurnRequestProcessor {
                 },
             )
             .await?;
+        let parent_permission_profile_override =
+            thread_settings.permission_profile.clone().or_else(|| {
+                thread_settings
+                    .sandbox_policy
+                    .as_ref()
+                    .map(PermissionProfile::from_legacy_sandbox_policy)
+            });
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_op = Op::UserInput {
@@ -541,12 +549,15 @@ impl TurnRequestProcessor {
 
         if turn_has_input {
             let config_snapshot = thread.config_snapshot().await;
+            let parent_permission_profile =
+                parent_permission_profile_override.unwrap_or(config_snapshot.permission_profile);
             codex_memories_write::start_memories_startup_task(
                 Arc::clone(&self.thread_manager),
                 Arc::clone(&self.auth_manager),
                 thread_id,
                 Arc::clone(&thread),
                 thread.config().await,
+                parent_permission_profile,
                 &config_snapshot.session_source,
             );
         }

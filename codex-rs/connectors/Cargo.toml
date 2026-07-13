@@ -9,18 +9,22 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 codex-config = { workspace = true }
+codex-login = { workspace = true }
+codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
+codex-protocol = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
+tempfile = { workspace = true }
 tracing = { workspace = true }
 urlencoding = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lib]

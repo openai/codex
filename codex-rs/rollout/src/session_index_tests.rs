@@ -23,6 +23,7 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
     let timestamp = "2024-01-01T00-00-00Z".to_string();
     let line = RolloutLine {
         timestamp: timestamp.clone(),
+        ordinal: None,
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
@@ -231,6 +232,40 @@ fn scan_index_returns_none_when_entry_missing() -> std::io::Result<()> {
 
     let missing_id = scan_index_from_end_by_id(&path, &ThreadId::new())?;
     assert_eq!(missing_id, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reverse_lookup_accepts_valid_eof_json_and_skips_invalid() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let path = session_index_path(temp.path());
+    let expected = SessionIndexEntry {
+        id: ThreadId::new(),
+        thread_name: "expected".to_string(),
+        updated_at: "2024-01-01T00:00:00Z".to_string(),
+    };
+    let unterminated = SessionIndexEntry {
+        id: ThreadId::new(),
+        thread_name: "unterminated".to_string(),
+        updated_at: "2024-01-02T00:00:00Z".to_string(),
+    };
+    std::fs::write(
+        &path,
+        format!(
+            "{}\nnot-json\n{}",
+            serde_json::to_string(&expected)?,
+            serde_json::to_string(&unterminated)?
+        ),
+    )?;
+
+    assert_eq!(
+        find_thread_name_by_id(temp.path(), &unterminated.id).await?,
+        Some("unterminated".to_string())
+    );
+    assert_eq!(
+        find_thread_name_by_id(temp.path(), &expected.id).await?,
+        Some("expected".to_string())
+    );
     Ok(())
 }
 

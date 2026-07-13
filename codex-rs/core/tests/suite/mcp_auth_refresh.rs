@@ -89,7 +89,6 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         &mcp_servers,
         OAuthCredentialsStoreMode::default(),
         AuthKeyringBackendKind::default(),
-        HashMap::new(),
         &approval_policy,
         "test".to_string(),
         tx_event,

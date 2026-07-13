@@ -7,6 +7,7 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::unified_exec::format_output_omission_marker;
 use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -17,10 +18,13 @@ use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
+use codex_utils_output_truncation::truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -319,6 +323,8 @@ pub struct ExecCommandToolOutput {
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
+    /// Bytes omitted by the output collection cap before model-facing truncation.
+    pub output_omitted_bytes: Option<NonZeroUsize>,
     pub hook_command: Option<String>,
 }
 
@@ -406,7 +412,32 @@ impl ExecCommandToolOutput {
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
+        let policy = TruncationPolicy::Tokens(max_tokens);
+        let Some(omitted_bytes) = self.output_omitted_bytes else {
+            return formatted_truncate_text(&text, policy);
+        };
+
+        let marker = format_output_omission_marker(omitted_bytes.get());
+        if text.len() <= policy.byte_budget() {
+            return if text.contains(&marker) {
+                text
+            } else {
+                format!("{marker}\n{text}")
+            };
+        }
+
+        let original_token_count = self
+            .original_token_count
+            .unwrap_or_else(|| approx_token_count(&text));
+        let truncated = truncate_text(&text, policy);
+        let omission_notice = if truncated.contains(&marker) {
+            String::new()
+        } else {
+            format!("{marker}\n")
+        };
+        format!(
+            "Warning: truncated output (original token count: {original_token_count})\n{omission_notice}\n{truncated}"
+        )
     }
 
     fn response_text(&self) -> String {

@@ -51,7 +51,6 @@ fn remote_model_with_visibility(
             "priority": priority,
             "upgrade": null,
             "base_instructions": "base instructions",
-            "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,

@@ -1,4 +1,6 @@
 use super::*;
+use codex_connectors::ConnectorRuntimeManager;
+use codex_mcp::ToolInfo;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -284,7 +286,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
-        codex_apps_tools_cache: codex_mcp::CodexAppsToolsCache,
+        codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     ) {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
@@ -304,7 +306,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
-        codex_apps_tools_cache: codex_mcp::CodexAppsToolsCache,
+        codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,

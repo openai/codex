@@ -23,6 +23,7 @@ use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
+use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
 use crate::state::SkillsThreadState;
 
@@ -37,11 +38,13 @@ pub(crate) fn skill_tools(
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
+    shadow_selection: Arc<ShadowSelectionExperiment>,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let context = SkillToolContext {
         providers,
         mcp_resources,
         thread_state,
+        shadow_selection,
     };
     vec![
         Arc::new(list::ListTool {
@@ -56,6 +59,7 @@ struct SkillToolContext {
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
+    shadow_selection: Arc<ShadowSelectionExperiment>,
 }
 
 impl SkillToolContext {

@@ -14,6 +14,11 @@ pub use runtime::McpRuntimeContext;
 pub use runtime::SandboxState;
 pub use tools::ToolInfo;
 
+/// Backward-compatible name for the shared Codex Apps tools runtime.
+pub type CodexAppsToolsCache = codex_connectors::ConnectorRuntimeManager<ToolInfo>;
+/// Backward-compatible name for the Codex Apps runtime context key.
+pub type CodexAppsToolsCacheKey = codex_connectors::ConnectorRuntimeContextKey;
+
 pub use catalog::McpCatalogBuilder;
 pub use catalog::McpPluginAttribution;
 pub use catalog::McpServerConflict;
@@ -37,9 +42,8 @@ pub use auth_elicitation::auth_elicitation_id;
 pub use auth_elicitation::build_auth_elicitation;
 pub use auth_elicitation::build_auth_elicitation_plan;
 pub use auth_elicitation::connector_auth_failure_from_tool_result;
-pub use codex_apps_cache::CodexAppsToolsCache;
-pub use codex_apps_cache::CodexAppsToolsCacheKey;
-pub use codex_apps_cache::codex_apps_tools_cache_key;
+/// Backward-compatible name for the Codex Apps runtime context key builder.
+pub use codex_connectors::connector_runtime_context_key as codex_apps_tools_cache_key;
 pub use mcp::codex_apps_mcp_server_config;
 pub use mcp::configured_mcp_servers;
 pub use mcp::effective_mcp_servers;
@@ -78,7 +82,6 @@ pub use mcp::qualified_mcp_tool_name_prefix;
 pub(crate) mod auth_elicitation;
 mod catalog;
 pub(crate) mod codex_apps;
-pub(crate) mod codex_apps_cache;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;

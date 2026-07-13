@@ -205,6 +205,21 @@ impl SessionTelemetry {
         }
     }
 
+    fn record_duration_ms_f64(&self, name: &str, duration_ms: f64, tags: &[(&str, &str)]) {
+        let res: MetricsResult<()> = (|| {
+            let Some(metrics) = &self.metrics else {
+                return Ok(());
+            };
+
+            let tags = self.tags_with_metadata(tags)?;
+            metrics.record_duration_ms_f64(name, duration_ms, &tags)
+        })();
+
+        if let Err(e) = res {
+            tracing::warn!("metrics duration [{name}] failed: {e}");
+        }
+    }
+
     /// Records a coarse startup phase for production latency breakdowns.
     pub fn record_startup_phase(
         &self,
@@ -1170,16 +1185,20 @@ impl SessionTelemetry {
 
         let engine_iapi_tbt_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_IAPI_TBT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_iapi_tbt_value) {
-            self.record_duration(RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC, duration, &[]);
+        if let Some(duration_ms) = f64_ms_value(engine_iapi_tbt_value) {
+            self.record_duration_ms_f64(
+                RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC,
+                duration_ms,
+                &[],
+            );
         }
 
         let engine_service_tbt_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_SERVICE_TBT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_service_tbt_value) {
-            self.record_duration(
+        if let Some(duration_ms) = f64_ms_value(engine_service_tbt_value) {
+            self.record_duration_ms_f64(
                 RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC,
-                duration,
+                duration_ms,
                 &[],
             );
         }
@@ -1234,6 +1253,11 @@ impl SessionTelemetry {
 }
 
 fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration> {
+    let ms = f64_ms_value(value)?;
+    Some(Duration::from_millis(ms.round() as u64))
+}
+
+fn f64_ms_value(value: Option<&serde_json::Value>) -> Option<f64> {
     let value = value?;
     let ms = value
         .as_f64()
@@ -1242,6 +1266,5 @@ fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration>
     if !ms.is_finite() || ms < 0.0 {
         return None;
     }
-    let clamped = ms.min(u64::MAX as f64);
-    Some(Duration::from_millis(clamped.round() as u64))
+    Some(ms.min(u64::MAX as f64))
 }

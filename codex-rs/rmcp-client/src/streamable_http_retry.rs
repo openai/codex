@@ -37,7 +37,7 @@ impl RmcpClient {
             PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => true,
         };
-        let retry_deadline = timeout.map(|duration| Instant::now() + duration);
+        let mut retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);
 
         for (attempt, retry_delay_ms) in STREAMABLE_HTTP_RETRY_DELAYS_MS
@@ -62,6 +62,18 @@ impl RmcpClient {
                     }
                 }
             };
+            if let PendingTransport::StreamableHttpWithOAuth {
+                oauth_persistor, ..
+            } = &transport
+            {
+                // OAuth refresh has its own lock and provider request bounds. Exclude it from the
+                // MCP handshake budget, and finish persistence before attempting initialize.
+                let refresh_started_at = Instant::now();
+                oauth_persistor.refresh_if_needed().await?;
+                if let Some(deadline) = retry_deadline.as_mut() {
+                    *deadline += refresh_started_at.elapsed();
+                }
+            }
             let attempt_timeout = remaining_initialize_timeout(timeout, retry_deadline)?;
 
             match Self::connect_pending_transport(

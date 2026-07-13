@@ -110,7 +110,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         ],
         vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg-1", "done"),
+            ev_assistant_message("msg_1", "done"),
             ev_completed("resp-2"),
         ],
     ]])
@@ -155,7 +155,7 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "hello"),
+            ev_assistant_message("msg_1", "hello"),
             ev_completed("resp-1"),
         ],
     ]])
@@ -213,7 +213,7 @@ async fn websocket_first_turn_handles_handshake_delay_with_startup_prewarm() -> 
             vec![ev_response_created("warm-1"), ev_completed("warm-1")],
             vec![
                 ev_response_created("resp-1"),
-                ev_assistant_message("msg-1", "hello"),
+                ev_assistant_message("msg_1", "hello"),
                 ev_completed("resp-1"),
             ],
         ],
@@ -268,7 +268,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
         ],
         vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg-1", "done"),
+            ev_assistant_message("msg_1", "done"),
             ev_completed("resp-2"),
         ],
     ]])
@@ -347,7 +347,7 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "fast"),
+            ev_assistant_message("msg_1", "fast"),
             ev_completed("resp-1"),
         ],
     ]])
@@ -402,7 +402,7 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "standard"),
+            ev_assistant_message("msg_1", "standard"),
             ev_completed("resp-1"),
         ],
     ]])
@@ -458,12 +458,12 @@ async fn websocket_v2_next_turn_uses_updated_service_tier() -> Result<()> {
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "fast"),
+            ev_assistant_message("msg_1", "fast"),
             ev_completed("resp-1"),
         ],
         vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg-2", "standard"),
+            ev_assistant_message("msg_2", "standard"),
             ev_completed("resp-2"),
         ],
     ]])

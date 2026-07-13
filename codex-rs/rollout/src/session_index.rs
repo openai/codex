@@ -2,15 +2,14 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::ErrorKind;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
+use crate::reverse_jsonl_scanner::ReverseJsonlScanner;
+use crate::reverse_jsonl_scanner::ScanOutcome;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionMetaLine;
 use serde::Deserialize;
@@ -18,7 +17,6 @@ use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
-const READ_CHUNK_SIZE: usize = 8192;
 static SESSION_INDEX_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -245,62 +243,16 @@ fn scan_index_from_end_for_each<F>(
 where
     F: FnMut(&SessionIndexEntry) -> std::io::Result<Option<SessionIndexEntry>>,
 {
-    let mut file = File::open(path)?;
-    let mut remaining = file.metadata()?.len();
-    let mut line_rev: Vec<u8> = Vec::new();
-    let mut buf = vec![0u8; READ_CHUNK_SIZE];
-
-    while remaining > 0 {
-        let read_size = usize::try_from(remaining.min(READ_CHUNK_SIZE as u64))
-            .map_err(std::io::Error::other)?;
-        remaining -= read_size as u64;
-        file.seek(SeekFrom::Start(remaining))?;
-        file.read_exact(&mut buf[..read_size])?;
-
-        for &byte in buf[..read_size].iter().rev() {
-            if byte == b'\n' {
-                if let Some(entry) = parse_line_from_rev(&mut line_rev, &mut visit_entry)? {
-                    return Ok(Some(entry));
-                }
-                continue;
-            }
-            line_rev.push(byte);
+    let mut scanner = ReverseJsonlScanner::new(File::open(path)?)?;
+    while let Some(outcome) = scanner.scan_next::<SessionIndexEntry>()? {
+        let ScanOutcome::Parsed(entry) = outcome else {
+            continue;
+        };
+        if let Some(entry) = visit_entry(&entry)? {
+            return Ok(Some(entry));
         }
     }
-
-    if let Some(entry) = parse_line_from_rev(&mut line_rev, &mut visit_entry)? {
-        return Ok(Some(entry));
-    }
-
     Ok(None)
-}
-
-fn parse_line_from_rev<F>(
-    line_rev: &mut Vec<u8>,
-    visit_entry: &mut F,
-) -> std::io::Result<Option<SessionIndexEntry>>
-where
-    F: FnMut(&SessionIndexEntry) -> std::io::Result<Option<SessionIndexEntry>>,
-{
-    if line_rev.is_empty() {
-        return Ok(None);
-    }
-    line_rev.reverse();
-    let line = std::mem::take(line_rev);
-    let Ok(mut line) = String::from_utf8(line) else {
-        return Ok(None);
-    };
-    if line.ends_with('\r') {
-        line.pop();
-    }
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
-        return Ok(None);
-    };
-    visit_entry(&entry)
 }
 
 #[cfg(test)]

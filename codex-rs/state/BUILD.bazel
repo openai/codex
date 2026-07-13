@@ -7,6 +7,7 @@ codex_rust_crate(
         "logs_migrations/**",
         "memory_migrations/**",
         "migrations/**",
+        "thread_history_migrations/**",
     ]),
     crate_name = "codex_state",
 )

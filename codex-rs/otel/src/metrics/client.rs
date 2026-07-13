@@ -46,8 +46,10 @@ const METER_NAME: &str = "codex";
 const MILLISECOND_DURATION_UNIT: &str = "ms";
 const MILLISECOND_DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
 const MILLISECOND_DURATION_BOUNDARIES: &[f64] = &[
-    0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0,
-    10000.0,
+    0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1_000.0, 1_250.0, 1_500.0,
+    1_750.0, 2_000.0, 2_250.0, 2_500.0, 3_000.0, 3_500.0, 4_000.0, 4_500.0, 5_000.0, 6_000.0,
+    7_000.0, 7_500.0, 8_000.0, 9_000.0, 10_000.0, 12_000.0, 15_000.0, 20_000.0, 30_000.0, 60_000.0,
+    120_000.0,
 ];
 const SECOND_DURATION_UNIT: &str = "s";
 const SECOND_DURATION_BOUNDARIES: &[f64] = &[
@@ -394,6 +396,23 @@ impl MetricsClient {
         self.0.duration_histogram(
             name,
             duration.as_millis().min(i64::MAX as u128) as f64,
+            MILLISECOND_DURATION_UNIT,
+            MILLISECOND_DURATION_DESCRIPTION,
+            MILLISECOND_DURATION_BOUNDARIES,
+            tags,
+        )
+    }
+
+    /// Record a duration supplied as fractional milliseconds using a histogram.
+    pub(crate) fn record_duration_ms_f64(
+        &self,
+        name: &str,
+        duration_ms: f64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        self.0.duration_histogram(
+            name,
+            duration_ms,
             MILLISECOND_DURATION_UNIT,
             MILLISECOND_DURATION_DESCRIPTION,
             MILLISECOND_DURATION_BOUNDARIES,

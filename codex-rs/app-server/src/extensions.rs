@@ -84,13 +84,17 @@ where
         .with_orchestrator_provider(Arc::new(
             codex_skills_extension::OrchestratorSkillProvider::new(),
         ));
-    codex_skills_extension::install_with_providers(
+    codex_skills_extension::install_with_providers_and_metrics(
         &mut builder,
         skill_providers,
+        codex_otel::global(),
         |config: &Config| codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             bundled_skills_enabled: config.bundled_skills_enabled(),
             orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+            shadow_selection_enabled: config
+                .features
+                .enabled(codex_features::Feature::SkillSearch),
         },
     );
     Arc::new(builder.build())

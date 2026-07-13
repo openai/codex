@@ -11,6 +11,9 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
+use codex_extension_api::SkillInvocationContributor;
+use codex_extension_api::SkillInvocationInput;
+use codex_extension_api::SkillInvocationKind;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
@@ -21,6 +24,7 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
+use codex_otel::MetricsClient;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -34,6 +38,7 @@ use crate::catalog::SkillSourceKind;
 use crate::fragments::SkillInstructions;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
+use crate::provider::SkillProvider;
 use crate::provider::SkillReadRequest;
 use crate::render::MAX_SKILL_NAME_BYTES;
 use crate::render::MAX_SKILL_PATH_BYTES;
@@ -41,6 +46,7 @@ use crate::render::available_skills_fragment;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::selection::collect_explicit_skill_mentions;
+use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
 use crate::state::ExecutorSkillsStepState;
 use crate::state::SkillsThreadState;
@@ -52,6 +58,7 @@ struct SkillsExtension<C> {
     providers: SkillProviders,
     event_sink: Arc<dyn ExtensionEventSink>,
     config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
+    shadow_selection: Arc<ShadowSelectionExperiment>,
 }
 
 impl<C> ThreadLifecycleContributor<C> for SkillsExtension<C>
@@ -201,7 +208,34 @@ where
             self.providers.clone(),
             session_store.get::<McpResourceClient>(),
             thread_state,
+            Arc::clone(&self.shadow_selection),
         )
+    }
+}
+
+impl<C> SkillInvocationContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn on_skill_invocation<'a>(
+        &'a self,
+        input: SkillInvocationInput<'a>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            match input.kind {
+                SkillInvocationKind::Implicit => {
+                    if let Some(state) = input
+                        .thread_store
+                        .get::<SkillsThreadState>()
+                        .and_then(|state| state.shadow_selection_turn(input.turn_id))
+                    {
+                        self.shadow_selection
+                            .record_invocation(&state, input.skill_resource);
+                    }
+                }
+                SkillInvocationKind::Explicit => {}
+            }
+        })
     }
 }
 
@@ -232,6 +266,7 @@ where
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                 mcp_resources: session_store.get::<McpResourceClient>(),
             };
+            let host_query = query.clone();
             let mut catalog = self.list_skills(query, &thread_state).await;
             if let Some(executor_skills) = turn_store.get::<ExecutorSkillsStepState>() {
                 catalog.extend(executor_skills.0.clone());
@@ -241,6 +276,24 @@ where
             }
 
             let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
+            let shadow_selection_turn = if config.shadow_selection_enabled {
+                // App-server leaves host discovery in core, so its configured providers omit the
+                // host snapshot. Extend only the experiment catalog to keep rendered context intact.
+                let mut shadow_catalog = catalog.clone();
+                if host_snapshot.is_some()
+                    && let Ok(host_catalog) = HostSkillProvider::new().list(host_query).await
+                {
+                    shadow_catalog.extend(host_catalog);
+                }
+                Some(
+                    self.shadow_selection
+                        .run(&input.user_input, &shadow_catalog),
+                )
+            } else {
+                None
+            };
+            thread_state
+                .replace_shadow_selection_turn(input.turn_id.clone(), shadow_selection_turn);
             let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
             if config.include_instructions {
                 let mut turn_catalog = catalog.clone();
@@ -407,14 +460,32 @@ pub fn install_with_providers<C>(
 ) where
     C: Send + Sync + 'static,
 {
+    install_with_providers_and_metrics(
+        registry,
+        providers,
+        /*metrics_client*/ None,
+        config_from_host,
+    );
+}
+
+pub fn install_with_providers_and_metrics<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    providers: SkillProviders,
+    metrics_client: Option<MetricsClient>,
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(SkillsExtension {
         providers,
         event_sink: registry.event_sink(),
         config_from_host: Arc::new(config_from_host),
+        shadow_selection: Arc::new(ShadowSelectionExperiment::new(metrics_client)),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.prompt_contributor(extension.clone());
     registry.turn_input_contributor(extension.clone());
+    registry.skill_invocation_contributor(extension.clone());
     registry.tool_contributor(extension);
 }

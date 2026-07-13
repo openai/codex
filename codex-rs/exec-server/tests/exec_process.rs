@@ -13,26 +13,26 @@ use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteStatus;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_protocol::permissions::FileSystemAccessMode;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_protocol::permissions::FileSystemPath;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_protocol::permissions::FileSystemSandboxEntry;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_protocol::permissions::FileSystemSpecialPath;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -237,6 +237,56 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
         output,
         ("allowed".to_string(), String::new(), Some(0), true)
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_process_preserves_empty_workspace_roots() -> Result<()> {
+    if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
+        eprintln!("skipping bwrap test: {warning}");
+        return Ok(());
+    }
+
+    let context = create_process_context(/*use_remote*/ true).await?;
+    let tmp = TempDir::new()?;
+    let file = tmp.path().join("excluded.txt");
+    std::fs::write(&file, b"excluded")?;
+    let cwd = PathUri::from_host_native_path(tmp.path())?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd.clone(),
+    );
+    sandbox.workspace_roots.clear();
+
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-empty-workspace-roots"),
+            argv: vec!["/bin/cat".to_string(), file.to_string_lossy().into_owned()],
+            cwd,
+            env_policy: None,
+            env: HashMap::new(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: Some(sandbox),
+            enforce_managed_network: false,
+            managed_network: None,
+        })
+        .await?;
+    let (stdout, _stderr, exit_code, closed) =
+        collect_process_output_from_events(session.process).await?;
+
+    assert!(!stdout.contains("excluded"), "unexpected stdout: {stdout}");
+    assert_ne!(exit_code, Some(0));
+    assert!(closed);
     Ok(())
 }
 

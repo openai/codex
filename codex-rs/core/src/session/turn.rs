@@ -80,6 +80,7 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root_with_fs;
+use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -1919,13 +1920,11 @@ fn assign_missing_streamed_response_item_id(
     item: &mut ResponseItem,
     active_item: Option<&TurnItem>,
 ) {
-    if item.id().is_some() {
+    if item.id().is_some_and(|id| !id.is_empty()) {
         return;
     }
 
-    let active_item_id = active_item
-        .map(TurnItem::id)
-        .filter(|item_id| !item_id.is_empty());
+    let active_item_id = active_item.map(|item| ResponseItemId::from_server(item.id()));
     item.set_id(active_item_id);
     Session::assign_missing_response_item_id(item);
 }

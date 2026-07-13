@@ -45,6 +45,34 @@ pub async fn reset_memory_workspace_baseline(root: &Path) -> anyhow::Result<()> 
     reset_git_repository(root).await
 }
 
+/// Verifies that a completed consolidation run left the required memory artifacts in place.
+pub async fn validate_consolidation_artifacts(root: &Path) -> anyhow::Result<()> {
+    let memory_path = root.join("MEMORY.md");
+    let memory_metadata = tokio::fs::metadata(&memory_path).await.with_context(|| {
+        format!(
+            "read consolidated memory artifact {}",
+            memory_path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        memory_metadata.is_file(),
+        "consolidated memory artifact is not a file: {}",
+        memory_path.display()
+    );
+
+    let summary_path = root.join("memory_summary.md");
+    let summary = tokio::fs::read_to_string(&summary_path)
+        .await
+        .with_context(|| format!("read memory summary artifact {}", summary_path.display()))?;
+    anyhow::ensure!(
+        summary.lines().next() == Some("v1"),
+        "memory summary artifact does not start with v1: {}",
+        summary_path.display()
+    );
+
+    Ok(())
+}
+
 /// Removes the generated `phase2_workspace_diff.md` prompt artifact.
 ///
 /// This does not remove `.git/`, reset the baseline, or delete memory content. It is used before

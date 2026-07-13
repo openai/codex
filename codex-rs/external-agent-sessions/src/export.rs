@@ -81,8 +81,13 @@ fn rollout_items_from_messages(messages: Vec<ConversationMessage>) -> Vec<Rollou
     for message in messages {
         match message.role {
             MessageRole::User => {
-                if let Some(turn_id) = current_turn.take() {
-                    items.push(turn_complete_item(turn_id, /*completed_at*/ None));
+                let started_at = message.timestamp;
+                if let Some((turn_id, previous_started_at)) = current_turn.take() {
+                    items.push(turn_complete_item(
+                        turn_id,
+                        previous_started_at,
+                        /*completed_at*/ None,
+                    ));
                 }
                 user_turn_count += 1;
                 let turn_id = format!("external-import-turn-{user_turn_count}");
@@ -90,7 +95,7 @@ fn rollout_items_from_messages(messages: Vec<ConversationMessage>) -> Vec<Rollou
                     TurnStartedEvent {
                         turn_id: turn_id.clone(),
                         trace_id: None,
-                        started_at: message.timestamp,
+                        started_at,
                         model_context_window: None,
                         collaboration_mode_kind: Default::default(),
                     },
@@ -104,7 +109,7 @@ fn rollout_items_from_messages(messages: Vec<ConversationMessage>) -> Vec<Rollou
                 response_item_bytes =
                     response_item_bytes.saturating_add(message_byte_count(&message));
                 items.push(RolloutItem::ResponseItem(response_item(message)));
-                current_turn = Some(turn_id);
+                current_turn = Some((turn_id, started_at));
             }
             MessageRole::Assistant => {
                 if current_turn.is_none() {
@@ -125,10 +130,10 @@ fn rollout_items_from_messages(messages: Vec<ConversationMessage>) -> Vec<Rollou
         }
     }
 
-    if let Some(turn_id) = current_turn {
+    if let Some((turn_id, started_at)) = current_turn {
         items.push(external_session_imported_marker_item());
         items.push(token_count_item(last_model_visible_tokens));
-        items.push(turn_complete_item(turn_id, completed_at));
+        items.push(turn_complete_item(turn_id, started_at, completed_at));
     }
 
     items
@@ -178,10 +183,16 @@ fn token_count_item(last_model_visible_tokens: i64) -> RolloutItem {
     }))
 }
 
-fn turn_complete_item(turn_id: String, completed_at: Option<i64>) -> RolloutItem {
+fn turn_complete_item(
+    turn_id: String,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id,
         last_agent_message: None,
+        error: None,
+        started_at,
         completed_at,
         duration_ms: None,
         time_to_first_token_ms: None,

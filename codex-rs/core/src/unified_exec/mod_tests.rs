@@ -22,12 +22,13 @@ use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::approx_token_count;
+use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_env as remote_test_env;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -154,7 +155,7 @@ async fn exec_command_with_tty(
         cancellation_token,
     } = process.output_handles();
     let deadline = started_at + Duration::from_millis(yield_time_ms);
-    let collected = UnifiedExecProcessManager::collect_output_until_deadline(
+    let collected_output = UnifiedExecProcessManager::collect_output_until_deadline(
         &output_buffer,
         &output_notify,
         &output_closed,
@@ -165,7 +166,12 @@ async fn exec_command_with_tty(
     )
     .await;
     let wall_time = Instant::now().saturating_duration_since(started_at);
-    let text = String::from_utf8_lossy(&collected).to_string();
+    let original_token_count = usize::try_from(approx_tokens_from_byte_count(
+        collected_output.total_bytes(),
+    ))
+    .unwrap_or(usize::MAX);
+    let output_omitted_bytes = NonZeroUsize::new(collected_output.omitted_bytes());
+    let collected = collected_output.to_bytes_with_omission_marker();
     let has_exited = process.has_exited();
     let exit_code = process.exit_code();
     let response_process_id = if process_started_alive && !has_exited {
@@ -196,7 +202,8 @@ async fn exec_command_with_tty(
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
-        original_token_count: Some(approx_token_count(&text)),
+        original_token_count: Some(original_token_count),
+        output_omitted_bytes,
         hook_command: Some(cmd.to_string()),
     })
 }
@@ -327,17 +334,11 @@ fn push_chunk_preserves_prefix_and_suffix() {
 
     assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
     let snapshot = buffer.snapshot_chunks();
-
-    let first = snapshot.first().expect("expected at least one chunk");
-    assert_eq!(first.first(), Some(&b'a'));
-    assert!(snapshot.iter().any(|chunk| chunk.as_slice() == b"b"));
-    assert_eq!(
-        snapshot
-            .last()
-            .expect("expected at least one chunk")
-            .as_slice(),
-        b"c"
-    );
+    let head_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 2;
+    let tail_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES - head_bytes;
+    let mut expected_tail = vec![b'a'; tail_bytes - 2];
+    expected_tail.extend_from_slice(b"bc");
+    assert_eq!(snapshot, vec![vec![b'a'; head_bytes], expected_tail]);
 }
 
 #[test]
@@ -876,7 +877,8 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
         /*pause_state*/ None,
         Instant::now() + Duration::from_millis(2_500),
     )
-    .await;
+    .await
+    .to_bytes_with_omission_marker();
 
     assert!(String::from_utf8_lossy(&collected).contains("remote-unified-exec"));
     Ok(())

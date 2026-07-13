@@ -235,6 +235,93 @@ fn initial_exec_yield_time_has_no_platform_floor() {
 }
 
 #[tokio::test]
+async fn output_collection_stays_bounded_across_repeated_drains() {
+    let output_buffer = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+    let output_notify = Arc::new(Notify::new());
+    let output_closed = Arc::new(AtomicBool::new(false));
+    let output_closed_notify = Arc::new(Notify::new());
+    let cancellation_token = CancellationToken::new();
+
+    let collect = UnifiedExecProcessManager::collect_output_until_deadline(
+        &output_buffer,
+        &output_notify,
+        &output_closed,
+        &output_closed_notify,
+        &cancellation_token,
+        /*pause_state*/ None,
+        Instant::now() + Duration::from_secs(5),
+    );
+    let produce = async {
+        for byte in [b'a', b'b', b'c'] {
+            output_buffer.lock().await.push_chunk(
+                vec![byte; crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES],
+            );
+            output_notify.notify_one();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if output_buffer.lock().await.retained_bytes() == 0 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("collector should drain each chunk");
+        }
+
+        output_closed.store(true, Ordering::Release);
+        cancellation_token.cancel();
+        output_closed_notify.notify_waiters();
+        output_notify.notify_waiters();
+    };
+
+    let (collected, ()) = tokio::join!(collect, produce);
+    let mut expected = HeadTailBuffer::default();
+    for byte in [b'a', b'b', b'c'] {
+        expected.push_chunk(vec![
+            byte;
+            crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES
+        ]);
+    }
+    assert_eq!(collected, expected);
+}
+
+#[tokio::test]
+async fn output_collection_preserves_omissions_from_drained_buffer() {
+    let mut buffered_output = HeadTailBuffer::default();
+    buffered_output.push_chunk(vec![
+        b'a';
+        crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES
+    ]);
+    buffered_output.push_chunk(b"overflow".to_vec());
+    let mut expected = HeadTailBuffer::default();
+    expected.push_chunk(vec![
+        b'a';
+        crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES
+    ]);
+    expected.push_chunk(b"overflow".to_vec());
+    let output_buffer = Arc::new(tokio::sync::Mutex::new(buffered_output));
+    let output_notify = Arc::new(Notify::new());
+    let output_closed = Arc::new(AtomicBool::new(true));
+    let output_closed_notify = Arc::new(Notify::new());
+    let cancellation_token = CancellationToken::new();
+    cancellation_token.cancel();
+
+    let collected = UnifiedExecProcessManager::collect_output_until_deadline(
+        &output_buffer,
+        &output_notify,
+        &output_closed,
+        &output_closed_notify,
+        &cancellation_token,
+        /*pause_state*/ None,
+        Instant::now() + Duration::from_secs(1),
+    )
+    .await;
+
+    assert_eq!(collected, expected);
+}
+
+#[tokio::test]
 async fn network_denial_fallback_message_names_sandbox_network_proxy() {
     let message = network_denial_message_for_session(/*session*/ None, /*deferred*/ None).await;
 

@@ -650,6 +650,9 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
+            "skill_search": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -1732,6 +1735,10 @@
           "type": "integer"
         },
         "enabled": {
+          "type": "boolean"
+        },
+        "expose_spawn_agent_model_overrides": {
+          "description": "Exposes `model` and `reasoning_effort` on the multi-agent v2 spawn tool and adds corresponding guidance to root and subagent usage hints.",
           "type": "boolean"
         },
         "hide_spawn_agent_metadata": {
@@ -5022,6 +5029,9 @@
         "skill_mcp_dependency_install": {
           "type": "boolean"
         },
+        "skill_search": {
+          "type": "boolean"
+        },
         "sqlite": {
           "type": "boolean"
         },
@@ -5291,10 +5301,6 @@
     },
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"
-    },
-    "model_supports_reasoning_summaries": {
-      "description": "Override to force-enable reasoning summaries for the configured model.",
-      "type": "boolean"
     },
     "model_verbosity": {
       "allOf": [

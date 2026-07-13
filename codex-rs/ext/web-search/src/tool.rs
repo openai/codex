@@ -4,6 +4,7 @@ use codex_api::SearchCommands;
 use codex_api::SearchQuery;
 use codex_api::SearchRequest;
 use codex_api::SearchSettings;
+use codex_core::X_CODEX_TURN_METADATA_HEADER;
 use codex_core::web_search_action_detail;
 use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
@@ -28,6 +29,7 @@ use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExposure;
 use codex_tools::default_namespace_description;
 use http::HeaderMap;
+use http::HeaderValue;
 use url::Url;
 
 use crate::history::recent_input;
@@ -113,6 +115,12 @@ impl WebSearchTool {
                 u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
             ),
         };
+        let mut extra_headers = HeaderMap::new();
+        if let Some(turn_metadata) = call.codex_turn_metadata.as_deref()
+            && let Ok(header_value) = HeaderValue::from_str(turn_metadata)
+        {
+            extra_headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value);
+        }
         call.turn_item_emitter
             .emit_started(extension_turn_item(
                 WebSearchItem {
@@ -126,7 +134,7 @@ impl WebSearchTool {
             ))
             .await;
         let response = client
-            .search(&request, HeaderMap::new())
+            .search(&request, extra_headers)
             .await
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
         let legacy_action = match &command_action {

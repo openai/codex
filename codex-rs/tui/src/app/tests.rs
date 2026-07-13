@@ -1,5 +1,7 @@
 //! App-level orchestration tests for the TUI.
 
+#[path = "tests/advanced_reasoning_tests.rs"]
+mod advanced_reasoning_tests;
 mod model_catalog;
 mod plugin_catalog;
 mod session_summary;

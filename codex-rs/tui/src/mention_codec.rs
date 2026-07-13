@@ -251,7 +251,7 @@ fn is_mention_name_char_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')
 }
 
-fn is_common_env_var(name: &str) -> bool {
+pub(crate) fn is_common_env_var(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     matches!(
         upper.as_str(),

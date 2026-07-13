@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
+use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
@@ -444,7 +445,11 @@ pub(crate) async fn handle_non_tool_response_item(
         ResponseItem::ContextCompaction { .. } => "context_compaction",
         ResponseItem::Other => "other",
     };
-    debug!(item_type, item_id = item.id(), "Output item");
+    debug!(
+        item_type,
+        item_id = item.id().map(ResponseItemId::as_str),
+        "Output item"
+    );
 
     match item {
         ResponseItem::Message { .. }

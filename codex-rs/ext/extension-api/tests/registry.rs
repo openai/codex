@@ -13,6 +13,7 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::PromptSlot;
+use codex_extension_api::SkillInvocationContributor;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCall;
@@ -52,6 +53,8 @@ impl TurnLifecycleContributor for AllContributors {}
 impl ConfigContributor<()> for AllContributors {}
 
 impl TokenUsageContributor for AllContributors {}
+
+impl SkillInvocationContributor for AllContributors {}
 
 impl TurnInputContributor for AllContributors {
     fn contribute<'a>(
@@ -117,6 +120,7 @@ async fn build_round_trips_every_contributor_category() {
     builder.turn_lifecycle_contributor(contributor.clone());
     builder.config_contributor(contributor.clone());
     builder.token_usage_contributor(contributor.clone());
+    builder.skill_invocation_contributor(contributor.clone());
     builder.prompt_contributor(contributor.clone());
     builder.turn_input_contributor(contributor.clone());
     builder.tool_contributor(contributor.clone());
@@ -129,6 +133,7 @@ async fn build_round_trips_every_contributor_category() {
     assert_eq!(registry.turn_lifecycle_contributors().len(), 1);
     assert_eq!(registry.config_contributors().len(), 1);
     assert_eq!(registry.token_usage_contributors().len(), 1);
+    assert_eq!(registry.skill_invocation_contributors().len(), 1);
     assert_eq!(registry.context_contributors().len(), 1);
     assert_eq!(registry.turn_input_contributors().len(), 1);
     assert_eq!(registry.tool_contributors().len(), 1);

@@ -6,8 +6,8 @@ expression: popup
 
   1. Low               Fast responses with lighter reasoning
   2. Medium (default)  Balances speed and reasoning depth for everyday tasks
-  3. Max               Maximum available reasoning
-› 4. High (current)    Greater reasoning depth for complex problems
-  5. Extra high        Extra high reasoning depth for complex problems
+› 3. High (current)    Greater reasoning depth for complex problems
+  4. Extra high        Extra high reasoning depth for complex problems
+  5. More reasoning…   Max and Ultra consume usage limits faster
 
   Press enter to confirm or esc to go back

@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
+use futures::future::Shared;
+use tokio::sync::oneshot;
 
 use crate::ExecServerError;
 use crate::HttpRequestParams;
@@ -88,6 +90,8 @@ pub(crate) struct StdioExecServerCommand {
     pub cwd: Option<PathBuf>,
 }
 
+pub(crate) type PendingExecServerUrl = Shared<oneshot::Receiver<Result<String, String>>>;
+
 /// Parameters used to connect to a remote exec-server environment.
 #[derive(Clone)]
 pub(crate) enum ExecServerTransportParams {
@@ -96,6 +100,7 @@ pub(crate) enum ExecServerTransportParams {
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
+    PendingWebSocketUrl(PendingExecServerUrl),
     NoiseRendezvous {
         provider: Arc<dyn NoiseRendezvousConnectProvider>,
         identity: NoiseChannelIdentity,
@@ -120,6 +125,9 @@ impl std::fmt::Debug for ExecServerTransportParams {
                 .field("connect_timeout", connect_timeout)
                 .field("initialize_timeout", initialize_timeout)
                 .finish(),
+            Self::PendingWebSocketUrl(..) => {
+                f.debug_tuple("PendingWebSocketUrl").finish_non_exhaustive()
+            }
             Self::NoiseRendezvous { .. } => {
                 f.debug_struct("NoiseRendezvous").finish_non_exhaustive()
             }

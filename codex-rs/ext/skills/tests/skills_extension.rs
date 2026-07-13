@@ -69,7 +69,8 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
             .ok_or("skill path should have a parent")?,
     )?;
     std::fs::write(&skill_path, DEMO_SKILL_CONTENTS)?;
-    let config = default_config();
+    let mut config = default_config();
+    config.shadow_selection_enabled = true;
 
     let mut builder = ExtensionRegistryBuilder::new();
     install(&mut builder, skills_extension_config);
@@ -437,6 +438,7 @@ async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResu
             call_id: "call-1".to_string(),
             tool_name: list_tool.tool_name(),
             model: "gpt-test".to_string(),
+            codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1_024),
             conversation_history: ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
@@ -781,6 +783,7 @@ struct TestConfig {
     include_instructions: bool,
     bundled_skills_enabled: bool,
     orchestrator_skills_enabled: bool,
+    shadow_selection_enabled: bool,
 }
 
 fn default_config() -> TestConfig {
@@ -788,6 +791,7 @@ fn default_config() -> TestConfig {
         include_instructions: true,
         bundled_skills_enabled: true,
         orchestrator_skills_enabled: true,
+        shadow_selection_enabled: false,
     }
 }
 
@@ -796,6 +800,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         bundled_skills_enabled: config.bundled_skills_enabled,
         orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+        shadow_selection_enabled: config.shadow_selection_enabled,
     }
 }
 

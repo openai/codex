@@ -9,6 +9,7 @@ use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
 use crate::NoopExtensionEventSink;
+use crate::SkillInvocationContributor;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
@@ -24,6 +25,7 @@ pub struct ExtensionRegistryBuilder<C: Sync> {
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
+    skill_invocation_contributors: Vec<Arc<dyn SkillInvocationContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
@@ -41,6 +43,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
             token_usage_contributors: Vec::new(),
+            skill_invocation_contributors: Vec::new(),
             approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
             mcp_server_contributors: Vec::new(),
@@ -99,6 +102,14 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.token_usage_contributors.push(contributor);
     }
 
+    /// Registers one skill-invocation contributor.
+    pub fn skill_invocation_contributor(
+        &mut self,
+        contributor: Arc<dyn SkillInvocationContributor>,
+    ) {
+        self.skill_invocation_contributors.push(contributor);
+    }
+
     /// Registers one prompt contributor.
     pub fn prompt_contributor(&mut self, contributor: Arc<dyn ContextContributor>) {
         self.context_contributors.push(contributor);
@@ -137,6 +148,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
             token_usage_contributors: self.token_usage_contributors,
+            skill_invocation_contributors: self.skill_invocation_contributors,
             approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
             mcp_server_contributors: self.mcp_server_contributors,
@@ -155,6 +167,7 @@ pub struct ExtensionRegistry<C: Sync> {
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
+    skill_invocation_contributors: Vec<Arc<dyn SkillInvocationContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
@@ -188,6 +201,11 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered token-usage contributors.
     pub fn token_usage_contributors(&self) -> &[Arc<dyn TokenUsageContributor>] {
         &self.token_usage_contributors
+    }
+
+    /// Returns the registered skill-invocation contributors.
+    pub fn skill_invocation_contributors(&self) -> &[Arc<dyn SkillInvocationContributor>] {
+        &self.skill_invocation_contributors
     }
 
     /// Claims the first rendered approval-review prompt accepted by an

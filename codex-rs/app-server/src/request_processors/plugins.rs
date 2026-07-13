@@ -36,6 +36,8 @@ pub(crate) struct PluginRequestProcessor {
     analytics_events_client: AnalyticsEventsClient,
     config_manager: ConfigManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    on_effective_plugins_changed:
+        Arc<dyn Fn(codex_core_plugins::EffectivePluginsChange) + Send + Sync>,
 }
 
 fn plugin_skills_to_info(
@@ -358,6 +360,9 @@ impl PluginRequestProcessor {
         analytics_events_client: AnalyticsEventsClient,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        on_effective_plugins_changed: Arc<
+            dyn Fn(codex_core_plugins::EffectivePluginsChange) + Send + Sync,
+        >,
     ) -> Self {
         Self {
             auth_manager,
@@ -366,6 +371,7 @@ impl PluginRequestProcessor {
             analytics_events_client,
             config_manager,
             workspace_settings_cache,
+            on_effective_plugins_changed,
         }
     }
 
@@ -468,36 +474,14 @@ impl PluginRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) fn effective_plugins_changed_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
-        let thread_manager = Arc::clone(&self.thread_manager);
-        let config_manager = self.config_manager.clone();
-        Arc::new(move || {
-            Self::spawn_effective_plugins_changed_task(
-                Arc::clone(&thread_manager),
-                config_manager.clone(),
-            );
-        })
+    pub(crate) fn effective_plugins_changed_callback(
+        &self,
+    ) -> Arc<dyn Fn(codex_core_plugins::EffectivePluginsChange) + Send + Sync> {
+        Arc::clone(&self.on_effective_plugins_changed)
     }
 
     fn on_effective_plugins_changed(&self) {
-        Self::spawn_effective_plugins_changed_task(
-            Arc::clone(&self.thread_manager),
-            self.config_manager.clone(),
-        );
-    }
-
-    fn spawn_effective_plugins_changed_task(
-        thread_manager: Arc<ThreadManager>,
-        config_manager: ConfigManager,
-    ) {
-        tokio::spawn(async move {
-            thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_service().clear_cache();
-            if thread_manager.list_thread_ids().await.is_empty() {
-                return;
-            }
-            crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
-        });
+        (self.on_effective_plugins_changed)(Default::default());
     }
 
     fn clear_plugin_related_caches(&self) {
@@ -1130,6 +1114,7 @@ impl PluginRequestProcessor {
                     apps: app_summaries,
                     app_templates: Vec::new(),
                     mcp_servers: outcome.plugin.mcp_server_names,
+                    scheduled_tasks: None,
                 }
             }
             Err(remote_marketplace_name) => {
@@ -2288,6 +2273,7 @@ fn remote_plugin_detail_to_info(
         apps,
         app_templates,
         mcp_servers: detail.mcp_servers,
+        scheduled_tasks: detail.scheduled_tasks,
     }
 }
 

@@ -543,7 +543,12 @@ pub struct ThreadMetadataPatch {
     /// Latest observed model.
     pub model: Option<String>,
     /// Latest observed reasoning effort.
-    pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub reasoning_effort: ClearableField<ReasoningEffort>,
     /// Creation timestamp when known.
     pub created_at: Option<DateTime<Utc>>,
     /// Last update timestamp for this metadata observation.
@@ -741,6 +746,7 @@ mod tests {
     fn thread_metadata_patch_round_trips_optional_clears() {
         let patch = ThreadMetadataPatch {
             name: Some(None),
+            reasoning_effort: Some(None),
             thread_source: Some(None),
             agent_nickname: Some(None),
             agent_role: Some(None),
@@ -750,6 +756,7 @@ mod tests {
 
         let value = serde_json::to_value(&patch).expect("serialize patch");
         assert_eq!(value["name"], json!(null));
+        assert_eq!(value["reasoning_effort"], json!(null));
         assert_eq!(value["thread_source"], json!(null));
         assert_eq!(value["agent_nickname"], json!(null));
         assert_eq!(value["agent_role"], json!(null));
@@ -758,6 +765,7 @@ mod tests {
         let decoded: ThreadMetadataPatch =
             serde_json::from_value(value).expect("deserialize patch");
         assert_eq!(decoded.name, Some(None));
+        assert_eq!(decoded.reasoning_effort, Some(None));
         assert_eq!(decoded.thread_source, Some(None));
         assert_eq!(decoded.agent_nickname, Some(None));
         assert_eq!(decoded.agent_role, Some(None));

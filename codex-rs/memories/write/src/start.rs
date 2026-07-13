@@ -11,6 +11,7 @@ use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
 use tracing::warn;
@@ -25,6 +26,7 @@ pub fn start_memories_startup_task(
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
     config: Arc<Config>,
+    parent_permission_profile: PermissionProfile,
     source: &SessionSource,
 ) {
     if config.ephemeral
@@ -74,6 +76,6 @@ pub fn start_memories_startup_task(
         // Run phase 1.
         phase1::run(Arc::clone(&context), Arc::clone(&config)).await;
         // Run phase 2.
-        phase2::run(context, config).await;
+        phase2::run(context, config, parent_permission_profile).await;
     });
 }

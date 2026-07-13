@@ -76,3 +76,18 @@ fn previous_char_boundary_handles_multibyte_text() {
     let text = "aé";
     assert_eq!(previous_char_boundary(text, /*max_bytes*/ 2), 1);
 }
+
+#[tokio::test]
+async fn validate_consolidation_artifacts_rejects_invalid_summary() {
+    let home = TempDir::new().expect("tempdir");
+    let root = home.path().join("memories");
+    fs::create_dir_all(&root).expect("create memory root");
+    fs::write(root.join("MEMORY.md"), "memory").expect("write memory");
+    fs::write(root.join("memory_summary.md"), "outdated\n").expect("write summary");
+
+    let err = validate_consolidation_artifacts(&root)
+        .await
+        .expect_err("invalid summary should fail validation");
+
+    assert!(err.to_string().contains("does not start with v1"));
+}

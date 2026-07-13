@@ -5,6 +5,7 @@
 //! loop.
 
 use super::*;
+use codex_config::ConfigLayerSource;
 #[cfg(target_os = "windows")]
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -22,6 +23,36 @@ async fn build_config_on_runtime_worker(
         Ok(build_result) => build_result.wrap_err(error_context),
         Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
         Err(err) => Err(err).wrap_err_with(|| format!("{error_context} task failed")),
+    }
+}
+
+pub(super) fn resume_model_settings_for_overrides(
+    config: &Config,
+    harness_overrides: &ConfigOverrides,
+) -> crate::app_server_session::ResumeModelSettings {
+    let has_layer_override = config
+        .config_layer_stack
+        .layers_high_to_low()
+        .into_iter()
+        .any(|layer| {
+            matches!(
+                &layer.name,
+                ConfigLayerSource::SessionFlags
+                    | ConfigLayerSource::User {
+                        profile: Some(_),
+                        ..
+                    }
+            ) && ["model", "model_provider", "model_reasoning_effort"]
+                .iter()
+                .any(|key| layer.config.get(*key).is_some())
+        });
+    if harness_overrides.model.is_some()
+        || harness_overrides.model_provider.is_some()
+        || has_layer_override
+    {
+        crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig
+    } else {
+        crate::app_server_session::ResumeModelSettings::RestoreFromThread
     }
 }
 
@@ -734,10 +765,89 @@ impl App {
     }
 
     pub(super) fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        let clear_ephemeral_plan_effort = effort != Some(ReasoningEffortConfig::Ultra)
+            && self.chat_widget.config_ref().plan_mode_reasoning_effort
+                == Some(ReasoningEffortConfig::Ultra)
+            && self.config.plan_mode_reasoning_effort != Some(ReasoningEffortConfig::Ultra);
         // TODO(aibrahim): Remove this and don't use config as a state object.
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
         self.config.model_reasoning_effort = effort.clone();
-        self.chat_widget.set_reasoning_effort(effort);
+        self.chat_widget.set_reasoning_effort(effort.clone());
+        if clear_ephemeral_plan_effort {
+            self.chat_widget.set_plan_mode_reasoning_effort(effort);
+        }
+    }
+
+    pub(super) fn on_update_plan_mode_reasoning_effort(
+        &mut self,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        let clear_ephemeral_default_effort = effort != Some(ReasoningEffortConfig::Ultra)
+            && self
+                .chat_widget
+                .current_collaboration_mode()
+                .reasoning_effort()
+                == Some(ReasoningEffortConfig::Ultra)
+            && self.config.model_reasoning_effort != Some(ReasoningEffortConfig::Ultra);
+        self.config.plan_mode_reasoning_effort = effort.clone();
+        self.chat_widget
+            .set_plan_mode_reasoning_effort(effort.clone());
+        if clear_ephemeral_default_effort {
+            self.chat_widget.set_reasoning_effort(effort);
+        }
+    }
+
+    pub(super) fn on_apply_advanced_reasoning(
+        &mut self,
+        model: &str,
+        effort: ReasoningEffortConfig,
+    ) -> Option<ReasoningEffortConfig> {
+        let default_effort = self.default_reasoning_effort_for_conversation_model(model);
+        if let Some(default_effort) = default_effort.as_ref() {
+            self.config.model = Some(model.to_string());
+            self.config.model_reasoning_effort = Some(default_effort.clone());
+        }
+        self.chat_widget.set_model(model);
+        self.chat_widget.set_reasoning_effort(Some(effort.clone()));
+        self.chat_widget
+            .set_plan_mode_reasoning_effort(Some(effort));
+        default_effort
+    }
+
+    fn default_reasoning_effort_for_conversation_model(
+        &self,
+        model: &str,
+    ) -> Option<ReasoningEffortConfig> {
+        let configured_effort = self
+            .config
+            .model_reasoning_effort
+            .as_ref()
+            .filter(|effort| **effort != ReasoningEffortConfig::Ultra);
+        let preset = self
+            .model_catalog
+            .try_list_models()
+            .ok()?
+            .into_iter()
+            .find(|preset| preset.model == model)?;
+        let supported = &preset.supported_reasoning_efforts;
+
+        configured_effort
+            .filter(|effort| supported.iter().any(|option| option.effort == **effort))
+            .cloned()
+            .or_else(|| {
+                (preset.default_reasoning_effort != ReasoningEffortConfig::Ultra)
+                    .then_some(preset.default_reasoning_effort)
+            })
+            .or_else(|| {
+                supported
+                    .iter()
+                    .find(|option| option.effort != ReasoningEffortConfig::Ultra)
+                    .map(|option| option.effort.clone())
+            })
+    }
+
+    pub(super) fn resume_model_settings(&self) -> crate::app_server_session::ResumeModelSettings {
+        resume_model_settings_for_overrides(&self.config, &self.harness_overrides)
     }
 
     pub(super) fn on_update_personality(&mut self, personality: Personality) {
@@ -1059,12 +1169,19 @@ fn windows_toml_from_json(value: &serde_json::Value) -> Option<WindowsToml> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
     use crate::legacy_core::config::edit::ConfigEdit;
     use crate::test_support::PathBufExt;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerStack;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::openai_models::ReasoningEffortPreset;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -1083,6 +1200,249 @@ mod tests {
         assert_eq!(
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_reasoning_uses_compatible_default_for_new_threads() {
+        for (configured_effort, expected_default_effort) in [
+            (ReasoningEffortConfig::Low, ReasoningEffortConfig::Low),
+            (
+                ReasoningEffortConfig::Custom("unsupported".to_string()),
+                ReasoningEffortConfig::Medium,
+            ),
+            (ReasoningEffortConfig::Ultra, ReasoningEffortConfig::Medium),
+        ] {
+            let mut app = make_test_app().await;
+            app.config.model = Some("gpt-5.4".to_string());
+            app.config.model_reasoning_effort = Some(configured_effort.clone());
+            app.chat_widget
+                .set_reasoning_effort(Some(configured_effort));
+
+            let default_effort =
+                app.on_apply_advanced_reasoning("gpt-5.4", ReasoningEffortConfig::Ultra);
+            let new_thread_config = app.fresh_session_config();
+
+            assert_eq!(default_effort, Some(expected_default_effort.clone()));
+            assert_eq!(app.chat_widget.current_model(), "gpt-5.4");
+            assert_eq!(
+                app.chat_widget.current_reasoning_effort(),
+                Some(ReasoningEffortConfig::Ultra)
+            );
+            assert_eq!(
+                (
+                    new_thread_config.model.as_deref(),
+                    new_thread_config.model_reasoning_effort,
+                ),
+                (Some("gpt-5.4"), Some(expected_default_effort))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conversation_reasoning_keeps_previous_default_for_ultra_only_model() {
+        let mut app = make_test_app().await;
+        app.config.model = Some("gpt-5.4".to_string());
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+        let mut preset = app
+            .model_catalog
+            .try_list_models()
+            .expect("model catalog is infallible")
+            .into_iter()
+            .find(|preset| preset.model == "gpt-5.4")
+            .expect("gpt-5.4 preset");
+        preset.model = "ultra-only".to_string();
+        preset.default_reasoning_effort = ReasoningEffortConfig::Ultra;
+        preset.supported_reasoning_efforts = vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Ultra,
+            description: "Ultra reasoning".to_string(),
+        }];
+        app.model_catalog = Arc::new(ModelCatalog::new(vec![preset]));
+
+        let default_effort =
+            app.on_apply_advanced_reasoning("ultra-only", ReasoningEffortConfig::Ultra);
+        let new_thread_config = app.fresh_session_config();
+
+        assert_eq!(default_effort, None);
+        assert_eq!(app.chat_widget.current_model(), "ultra-only");
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::Ultra)
+        );
+        assert_eq!(
+            (
+                new_thread_config.model.as_deref(),
+                new_thread_config.model_reasoning_effort,
+            ),
+            (Some("gpt-5.4"), Some(ReasoningEffortConfig::Low))
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_reasoning_updates_active_plan_without_changing_plan_default() {
+        let mut app = make_test_app().await;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+        app.config.plan_mode_reasoning_effort = Some(ReasoningEffortConfig::High);
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+        app.chat_widget
+            .set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+        let default_effort =
+            app.on_apply_advanced_reasoning("gpt-5.4", ReasoningEffortConfig::Ultra);
+
+        assert_eq!(default_effort, Some(ReasoningEffortConfig::Low));
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::Ultra)
+        );
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::Ultra)
+        );
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::Ultra)
+        );
+        assert_eq!(
+            (
+                app.config.model_reasoning_effort.clone(),
+                app.config.plan_mode_reasoning_effort.clone(),
+            ),
+            (
+                Some(ReasoningEffortConfig::Low),
+                Some(ReasoningEffortConfig::High),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn leaving_conversation_ultra_in_default_clears_the_ephemeral_plan_effort() {
+        let mut app = make_test_app().await;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+        app.config.plan_mode_reasoning_effort = Some(ReasoningEffortConfig::High);
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+        app.chat_widget
+            .set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+        app.on_apply_advanced_reasoning("gpt-5.4", ReasoningEffortConfig::Ultra);
+        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            app.config.plan_mode_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn leaving_conversation_ultra_in_plan_clears_the_ephemeral_default_effort() {
+        let mut app = make_test_app().await;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+        app.config.plan_mode_reasoning_effort = Some(ReasoningEffortConfig::High);
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+        app.chat_widget
+            .set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+        app.on_apply_advanced_reasoning("gpt-5.4", ReasoningEffortConfig::Ultra);
+        app.on_update_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            app.config.model_reasoning_effort,
+            Some(ReasoningEffortConfig::Low)
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_model_settings_preserves_only_explicit_model_overrides() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread
+        );
+        let profile_path = test_path_buf("/tmp/work.config.toml").abs();
+        let profile = "work"
+            .parse::<codex_config::ProfileV2Name>()
+            .expect("valid profile name");
+        for (key, expected) in [
+            (
+                "model",
+                crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+            ),
+            (
+                "model_provider",
+                crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+            ),
+            (
+                "model_reasoning_effort",
+                crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+            ),
+            (
+                "sandbox_mode",
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+            ),
+        ] {
+            let config = TomlValue::Table(toml::map::Map::from_iter([(
+                key.to_string(),
+                TomlValue::String("value".to_string()),
+            )]));
+            app.config.config_layer_stack = ConfigLayerStack::new(
+                vec![ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    config.clone(),
+                )],
+                Default::default(),
+                Default::default(),
+            )
+            .expect("session flags layer stack");
+            assert_eq!(app.resume_model_settings(), expected);
+
+            app.config.config_layer_stack = ConfigLayerStack::default().with_user_config_profile(
+                &profile_path,
+                Some(&profile),
+                config,
+            );
+            assert_eq!(app.resume_model_settings(), expected);
+        }
+
+        app.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+            &profile_path,
+            TomlValue::Table(toml::map::Map::from_iter([(
+                "model_reasoning_effort".to_string(),
+                TomlValue::String("high".to_string()),
+            )])),
+        );
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread
+        );
+
+        app.harness_overrides.model_provider = Some("custom-provider".to_string());
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig
         );
     }
 

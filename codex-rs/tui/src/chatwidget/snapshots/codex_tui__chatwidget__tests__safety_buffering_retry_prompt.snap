@@ -7,7 +7,8 @@ expression: popup
   may be less capable of handling complex requests.
 
 › 1. Retry with a faster model
-  2. Keep waiting
+  2. Dismiss and keep waiting
   3. Learn more
 
-  Press enter to confirm or esc to go back
+  No action is required. Codex will keep waiting, and this menu will close when
+  the response is ready.

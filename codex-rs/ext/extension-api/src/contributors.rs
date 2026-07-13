@@ -14,6 +14,7 @@ use crate::ExtensionData;
 mod context;
 mod mcp;
 mod prompt;
+mod skill_invocation;
 mod thread_lifecycle;
 mod tool_lifecycle;
 mod turn_input;
@@ -25,6 +26,8 @@ pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use skill_invocation::SkillInvocationInput;
+pub use skill_invocation::SkillInvocationKind;
 pub use thread_lifecycle::ThreadIdleInput;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
@@ -243,6 +246,23 @@ pub trait TokenUsageContributor: Send + Sync {
         Box::pin(async move {
             let _self = self;
             let _inputs = (_session_store, _thread_store, _turn_store, _token_usage);
+        })
+    }
+}
+
+/// Contributor for skill invocations observed by the host or an owning extension.
+///
+/// Implementations should treat the skill resource as an opaque identity and keep this callback
+/// cheap because it runs inline with skill loading or command dispatch.
+pub trait SkillInvocationContributor: Send + Sync {
+    /// Called after one explicit skill load or deduplicated implicit skill invocation is observed.
+    fn on_skill_invocation<'a>(
+        &'a self,
+        _input: SkillInvocationInput<'a>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = _input;
         })
     }
 }

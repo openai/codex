@@ -740,6 +740,7 @@ impl Session {
             turn_context.config.memories.use_memories,
             turn_had_memory_citation,
         );
+        let started_at = turn_context.turn_timing_state.started_at_unix_secs().await;
         let (completed_at, duration_ms) = turn_context
             .turn_timing_state
             .completed_at_and_duration_ms()
@@ -756,6 +757,7 @@ impl Session {
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(turn_context.sub_id.clone()),
                 reason,
+                started_at,
                 completed_at,
                 duration_ms,
             })
@@ -764,11 +766,14 @@ impl Session {
                 .turn_timing_state
                 .time_to_first_token_ms()
                 .await;
+            let error = turn_context.terminal_error.lock().await.clone();
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
                 .await;
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn_context.sub_id.clone(),
                 last_agent_message,
+                error,
+                started_at,
                 completed_at,
                 duration_ms,
                 time_to_first_token_ms,
@@ -877,6 +882,11 @@ impl Session {
             }
         }
 
+        let started_at = task
+            .turn_context
+            .turn_timing_state
+            .started_at_unix_secs()
+            .await;
         let (completed_at, duration_ms) = task
             .turn_context
             .turn_timing_state
@@ -891,6 +901,7 @@ impl Session {
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
+            started_at,
             completed_at,
             duration_ms,
         });

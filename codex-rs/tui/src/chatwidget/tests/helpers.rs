@@ -276,7 +276,6 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",
-        "supports_reasoning_summaries": false,
         "default_reasoning_summary": "none",
         "support_verbosity": false,
         "default_verbosity": null,
@@ -1504,6 +1503,7 @@ pub(super) fn plugins_test_detail(
             .collect(),
         app_templates: Vec::new(),
         mcp_servers: mcp_servers.iter().map(|name| (*name).to_string()).collect(),
+        scheduled_tasks: None,
     }
 }
 
@@ -1523,6 +1523,7 @@ pub(super) fn plugins_test_remote_detail(
         apps: Vec::new(),
         app_templates: Vec::new(),
         mcp_servers: Vec::new(),
+        scheduled_tasks: None,
     }
 }
 

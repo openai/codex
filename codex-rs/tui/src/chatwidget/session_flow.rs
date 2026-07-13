@@ -83,6 +83,9 @@ impl ChatWidget {
             Some(session.reasoning_effort.clone()),
             /*developer_instructions*/ None,
         );
+        if session.reasoning_effort == Some(ReasoningEffortConfig::Ultra) {
+            self.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Ultra));
+        }
         match session.collaboration_mode.as_deref() {
             Some(collaboration_mode) => {
                 self.set_effective_collaboration_mode(collaboration_mode.clone());

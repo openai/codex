@@ -136,16 +136,18 @@ pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<St
         }
         parts.push(format!("TTFT: {}", ttft_parts.join(" ")));
     }
-    if summary.responses_api_engine_iapi_tbt_ms > 0
-        || summary.responses_api_engine_service_tbt_ms > 0
+    if summary.responses_api_engine_iapi_tbt_ms > 0.0
+        || summary.responses_api_engine_service_tbt_ms > 0.0
     {
         let mut tbt_parts = Vec::new();
-        if summary.responses_api_engine_iapi_tbt_ms > 0 {
-            let duration = format_duration_ms(summary.responses_api_engine_iapi_tbt_ms);
+        if summary.responses_api_engine_iapi_tbt_ms > 0.0 {
+            let duration =
+                format_duration_ms(summary.responses_api_engine_iapi_tbt_ms.round() as u64);
             tbt_parts.push(format!("{duration} (iapi)"));
         }
-        if summary.responses_api_engine_service_tbt_ms > 0 {
-            let duration = format_duration_ms(summary.responses_api_engine_service_tbt_ms);
+        if summary.responses_api_engine_service_tbt_ms > 0.0 {
+            let duration =
+                format_duration_ms(summary.responses_api_engine_service_tbt_ms.round() as u64);
             tbt_parts.push(format!("{duration} (service)"));
         }
         parts.push(format!("TBT: {}", tbt_parts.join(" ")));

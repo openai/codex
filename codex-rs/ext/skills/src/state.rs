@@ -20,6 +20,7 @@ use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
+use crate::shadow_selection_experiment::ShadowSelectionTurnState;
 use crate::sources::SkillProviders;
 
 const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
@@ -30,6 +31,7 @@ pub(crate) struct SkillsThreadState {
     orchestrator_skills_available: bool,
     executor_cache: Mutex<Vec<CachedExecutorCatalog>>,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
+    shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
 }
 
 impl SkillsThreadState {
@@ -39,6 +41,7 @@ impl SkillsThreadState {
             orchestrator_skills_available,
             executor_cache: Mutex::new(Vec::new()),
             orchestrator_cache: Mutex::new(None),
+            shadow_selection_turn: Mutex::new(None),
         }
     }
 
@@ -58,6 +61,33 @@ impl SkillsThreadState {
 
     pub(crate) fn orchestrator_skills_enabled(&self) -> bool {
         self.orchestrator_skills_available && self.config().orchestrator_skills_enabled
+    }
+
+    pub(crate) fn replace_shadow_selection_turn(
+        &self,
+        turn_id: String,
+        state: Option<ShadowSelectionTurnState>,
+    ) {
+        *self
+            .shadow_selection_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            state.map(|state| ShadowSelectionTurn {
+                turn_id,
+                state: Arc::new(state),
+            });
+    }
+
+    pub(crate) fn shadow_selection_turn(
+        &self,
+        turn_id: &str,
+    ) -> Option<Arc<ShadowSelectionTurnState>> {
+        self.shadow_selection_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|turn| turn.turn_id == turn_id)
+            .map(|turn| Arc::clone(&turn.state))
     }
 
     /// Returns catalogs for stable selected roots.
@@ -194,6 +224,11 @@ impl SkillsThreadState {
         });
         discovered
     }
+}
+
+struct ShadowSelectionTurn {
+    turn_id: String,
+    state: Arc<ShadowSelectionTurnState>,
 }
 
 struct CachedExecutorCatalog {

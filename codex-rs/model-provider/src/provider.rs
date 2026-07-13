@@ -421,7 +421,6 @@ mod tests {
             "priority": 0,
             "upgrade": null,
             "base_instructions": "base instructions",
-            "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
@@ -673,25 +672,40 @@ mod tests {
         assert_eq!(
             models,
             vec![
-                ("openai.gpt-5.5", "GPT-5.5"),
-                ("openai.gpt-5.4", "GPT-5.4"),
                 ("openai.gpt-5.6-sol", "GPT-5.6 Sol"),
                 ("openai.gpt-5.6-terra", "GPT-5.6 Terra"),
                 ("openai.gpt-5.6-luna", "GPT-5.6 Luna"),
+                ("openai.gpt-5.5", "GPT-5.5"),
+                ("openai.gpt-5.4", "GPT-5.4"),
             ]
         );
 
-        let default_model = manager
+        let available_models = manager
             .list_models(
                 RefreshStrategy::Online,
                 HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             )
-            .await
-            .into_iter()
+            .await;
+        assert_eq!(
+            available_models
+                .iter()
+                .map(|preset| preset.model.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "openai.gpt-5.6-sol",
+                "openai.gpt-5.6-terra",
+                "openai.gpt-5.6-luna",
+                "openai.gpt-5.5",
+                "openai.gpt-5.4",
+            ]
+        );
+
+        let default_model = available_models
+            .iter()
             .find(|preset| preset.is_default)
             .expect("Bedrock catalog should have a default model");
 
-        assert_eq!(default_model.model, "openai.gpt-5.5");
+        assert_eq!(default_model.model, "openai.gpt-5.6-sol");
     }
 
     #[tokio::test]

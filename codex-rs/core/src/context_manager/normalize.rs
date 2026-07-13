@@ -1,3 +1,4 @@
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -132,12 +133,12 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
 /// outputs, so the namespace and name format must remain stable across retries
 /// and resumes to preserve prompt-cache reuse. Returning `None` when the source
 /// call has no ID preserves the legacy behavior for older history items.
-fn synthetic_output_id(prefix: &str, item_id: Option<&str>) -> Option<String> {
+fn synthetic_output_id(prefix: &str, item_id: Option<&str>) -> Option<ResponseItemId> {
     let source_id = item_id.filter(|id| !id.is_empty())?;
     let name = format!("{prefix}:{source_id}");
-    Some(format!(
-        "{prefix}_{}",
-        Uuid::new_v5(&SYNTHETIC_OUTPUT_ID_NAMESPACE, name.as_bytes())
+    Some(ResponseItemId::with_suffix(
+        prefix,
+        Uuid::new_v5(&SYNTHETIC_OUTPUT_ID_NAMESPACE, name.as_bytes()),
     ))
 }
 
