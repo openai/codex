@@ -1,5 +1,5 @@
 [package]
-name = "codex-rg"
+name = "codex-rg-shim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,25 +13,16 @@ name = "codex_rg"
 path = "src/lib.rs"
 doctest = false
 
-[features]
-manager = [
-    "dep:notify",
-    "dep:tempfile",
-    "dep:tokio",
-    "dep:tracing",
-    "dep:uuid",
-]
-
 [lints]
 workspace = true
 
 [dependencies]
-notify = { workspace = true, optional = true }
+notify = { workspace = true }
 sha2 = { workspace = true }
-tempfile = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync"], optional = true }
-tracing = { workspace = true, optional = true }
-uuid = { workspace = true, features = ["v4"], optional = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

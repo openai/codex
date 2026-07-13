@@ -88,7 +88,7 @@ impl RgCacheManager {
         drop(repositories);
 
         let manager = self.clone();
-        let worker_root = repository_root.clone();
+        let worker_root = repository_root;
         tokio::spawn(async move {
             if let Err(error) = manager.run_repository(worker_root.clone()).await {
                 warn!(

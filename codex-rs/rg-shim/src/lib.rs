@@ -64,9 +64,7 @@ pub(crate) fn find_repository_root(cwd: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-#[cfg(feature = "manager")]
 mod manager;
-#[cfg(feature = "manager")]
 pub use manager::RgCacheManager;
 
 #[cfg(test)]

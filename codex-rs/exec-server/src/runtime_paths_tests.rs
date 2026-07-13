@@ -1,5 +1,6 @@
 use super::ExecServerRuntimePaths;
 use super::prepend_package_path;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -20,15 +21,12 @@ fn discovers_package_path_from_codex_executable() {
     let runtime_paths =
         ExecServerRuntimePaths::new(codex_exe, /*codex_linux_sandbox_exe*/ None)
             .expect("runtime paths");
-    let package_path_dir = fs::canonicalize(package_path_dir).expect("canonical package path");
+    let package_path_dir = AbsolutePathBuf::from_absolute_path(
+        fs::canonicalize(package_path_dir).expect("canonical package path"),
+    )
+    .expect("absolute package path");
 
-    assert_eq!(
-        runtime_paths
-            .package_path_dir
-            .as_ref()
-            .map(|path| path.as_path()),
-        Some(package_path_dir.as_path())
-    );
+    assert_eq!(runtime_paths.package_path_dir, Some(package_path_dir));
 }
 
 #[test]
