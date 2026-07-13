@@ -1,5 +1,9 @@
+use codex_rg::CACHE_ROOT_ENV;
+use codex_rg::open_file_inventory;
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -9,9 +13,7 @@ const PATH_DIRNAME: &str = "codex-path";
 const RESOURCES_DIRNAME: &str = "codex-resources";
 
 fn main() {
-    let result = std::env::current_exe()
-        .and_then(|current_exe| real_rg_path(&current_exe))
-        .and_then(run_real_rg);
+    let result = run();
     match result {
         Ok(exit_code) => std::process::exit(exit_code),
         Err(error) => {
@@ -19,6 +21,33 @@ fn main() {
             std::process::exit(127);
         }
     }
+}
+
+fn run() -> io::Result<i32> {
+    let current_exe = std::env::current_exe()?;
+    let real_rg = real_rg_path(&current_exe)?;
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if is_default_files_request(&args)
+        && std::env::var_os("RIPGREP_CONFIG_PATH").is_none()
+        && let Some(cache_root) = std::env::var_os(CACHE_ROOT_ENV)
+        && let Some(mut inventory) =
+            open_file_inventory(Path::new(&cache_root), &std::env::current_dir()?)
+    {
+        let mut stdout = io::stdout().lock();
+        return match io::copy(&mut inventory, &mut stdout) {
+            Ok(_) => {
+                stdout.flush()?;
+                Ok(0)
+            }
+            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(0),
+            Err(error) => Err(error),
+        };
+    }
+    run_real_rg(real_rg, args)
+}
+
+fn is_default_files_request(args: &[OsString]) -> bool {
+    args == [OsStr::new("--files")]
 }
 
 fn real_rg_path(current_exe: &Path) -> io::Result<PathBuf> {
@@ -60,19 +89,15 @@ fn real_rg_path(current_exe: &Path) -> io::Result<PathBuf> {
 }
 
 #[cfg(unix)]
-fn run_real_rg(real_rg: PathBuf) -> io::Result<i32> {
+fn run_real_rg(real_rg: PathBuf, args: Vec<OsString>) -> io::Result<i32> {
     use std::os::unix::process::CommandExt;
 
-    Err(Command::new(real_rg)
-        .args(std::env::args_os().skip(1))
-        .exec())
+    Err(Command::new(real_rg).args(args).exec())
 }
 
 #[cfg(windows)]
-fn run_real_rg(real_rg: PathBuf) -> io::Result<i32> {
-    let status = Command::new(real_rg)
-        .args(std::env::args_os().skip(1))
-        .status()?;
+fn run_real_rg(real_rg: PathBuf, args: Vec<OsString>) -> io::Result<i32> {
+    let status = Command::new(real_rg).args(args).status()?;
     Ok(status.code().unwrap_or(1))
 }
 

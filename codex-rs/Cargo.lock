@@ -3813,11 +3813,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-rg"
+name = "codex-rg-shim"
 version = "0.0.0"
 dependencies = [
+ "notify",
  "pretty_assertions",
+ "sha2 0.10.9",
  "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
