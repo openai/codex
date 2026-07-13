@@ -289,6 +289,7 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 - Timestamps should be integer Unix seconds (`i64`) and named `*_at` (for example, `created_at`, `updated_at`, `resets_at`).
 - For experimental API surface area:
   use `#[experimental("method/or/field")]`, derive `ExperimentalApi` when field-level gating is needed, and use `inspect_params: true` in `common.rs` when only some fields of a method are experimental.
+- Calls from app-server to exec-server should be aggressively pipelined and batched to avoid head-of-line blocking.
 
 ### Client->server request payloads (`*Params`)
 
