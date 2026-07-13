@@ -810,6 +810,13 @@
         "includeHome": {
           "description": "If true, include detection under the user's home directory.",
           "type": "boolean"
+        },
+        "source": {
+          "description": "Optional import-source selector. Missing or unrecognized values use the default source for backwards compatibility.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -823,7 +830,7 @@
           "type": "array"
         },
         "source": {
-          "description": "Source product that produced the migration items. Missing means unspecified.",
+          "description": "Import-source selector used to produce the migration items. Pass the same value to detection and import; missing or unrecognized values use the default source for backwards compatibility.",
           "type": [
             "string",
             "null"

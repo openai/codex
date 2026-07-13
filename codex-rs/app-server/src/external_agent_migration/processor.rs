@@ -1,20 +1,10 @@
 use std::sync::Arc;
 
-use crate::config::external_agent_config::ExternalAgentConfigDetectOptions;
-use crate::config::external_agent_config::ExternalAgentConfigImportItemResult as CoreImportItemResult;
-use crate::config::external_agent_config::ExternalAgentConfigImportOutcome as CoreImportOutcome;
-use crate::config::external_agent_config::ExternalAgentConfigImportRawError as CoreImportRawError;
-use crate::config::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
-use crate::config::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
-use crate::config::external_agent_config::ExternalAgentConfigService;
-use crate::config::external_agent_config::NamedMigration as CoreNamedMigration;
-use crate::config::external_agent_config::PendingPluginImport;
-use crate::config::external_agent_config::PluginImportOutcome;
-use crate::config::external_agent_config::record_import_error;
 use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::request_processors::ConfigRequestProcessor;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::ExternalAgentConfigImportCompletedInput;
 use codex_analytics::ExternalAgentConfigImportFailureInput;
@@ -41,7 +31,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillMigration;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
-use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
+use codex_external_agent_migration::sessions::ExternalAgentSessionMigration as CoreSessionMigration;
 use codex_rollout::StateDbHandle;
 use codex_state::ExternalAgentConfigImportFailureRecord;
 use codex_state::ExternalAgentConfigImportSuccessRecord;
@@ -49,8 +39,18 @@ use codex_thread_store::ThreadStore;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use super::ConfigRequestProcessor;
-use super::external_agent_session_import::ExternalAgentSessionImporter;
+use super::service::ExternalAgentConfigDetectOptions;
+use super::service::ExternalAgentConfigImportItemResult as CoreImportItemResult;
+use super::service::ExternalAgentConfigImportOutcome as CoreImportOutcome;
+use super::service::ExternalAgentConfigImportRawError as CoreImportRawError;
+use super::service::ExternalAgentConfigMigrationItem as CoreMigrationItem;
+use super::service::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
+use super::service::ExternalAgentConfigService;
+use super::service::NamedMigration as CoreNamedMigration;
+use super::service::PendingPluginImport;
+use super::service::PluginImportOutcome;
+use super::service::record_import_error;
+use super::session_importer::ExternalAgentSessionImporter;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -487,15 +487,13 @@ impl ExternalAgentConfigRequestProcessor {
                         description: migration_item.description,
                         cwd: migration_item.cwd,
                         details: migration_item.details.map(|details| {
-                            crate::config::external_agent_config::MigrationDetails {
+                            super::service::MigrationDetails {
                                 plugins: details
                                     .plugins
                                     .into_iter()
-                                    .map(|plugin| {
-                                        crate::config::external_agent_config::PluginsMigration {
-                                            marketplace_name: plugin.marketplace_name,
-                                            plugin_names: plugin.plugin_names,
-                                        }
+                                    .map(|plugin| super::service::PluginsMigration {
+                                        marketplace_name: plugin.marketplace_name,
+                                        plugin_names: plugin.plugin_names,
                                     })
                                     .collect(),
                                 skills: details
@@ -832,7 +830,7 @@ fn protocol_import_type_result(item_result: &CoreImportItemResult) -> ProtocolIm
 }
 
 fn protocol_import_success(
-    success: &crate::config::external_agent_config::ExternalAgentConfigImportSuccess,
+    success: &super::service::ExternalAgentConfigImportSuccess,
 ) -> ProtocolImportSuccess {
     ProtocolImportSuccess {
         item_type: protocol_migration_item_type(success.item_type),
@@ -898,5 +896,5 @@ fn migration_items_need_runtime_refresh(items: &[ExternalAgentConfigMigrationIte
 }
 
 #[cfg(test)]
-#[path = "external_agent_config_processor_tests.rs"]
-mod external_agent_config_processor_tests;
+#[path = "processor_tests.rs"]
+mod tests;

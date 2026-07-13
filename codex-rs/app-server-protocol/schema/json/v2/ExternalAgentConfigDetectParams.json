@@ -14,6 +14,13 @@
     "includeHome": {
       "description": "If true, include detection under the user's home directory.",
       "type": "boolean"
+    },
+    "source": {
+      "description": "Optional import-source selector. Missing or unrecognized values use the default source for backwards compatibility.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "ExternalAgentConfigDetectParams",

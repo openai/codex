@@ -1,6 +1,6 @@
 //! Parsing and export helpers for external-agent session histories.
 
-mod detect;
+mod detect_cla;
 mod export;
 mod ledger;
 mod records;
@@ -11,7 +11,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub use detect::detect_recent_sessions;
+pub use detect_cla::detect_recent_cla_sessions;
 use export::load_session_for_import_with_content_sha256;
 pub use ledger::CompletedExternalAgentSessionImport;
 pub use ledger::has_current_session_been_imported;

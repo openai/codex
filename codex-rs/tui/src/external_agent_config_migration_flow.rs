@@ -216,6 +216,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt(
         .external_agent_config_detect(ExternalAgentConfigDetectParams {
             include_home: true,
             cwds: Some(vec![cwd.clone()]),
+            source: Some("claude-code".to_string()),
         })
         .await
     {

@@ -1,7 +1,8 @@
 //! Migration helpers for importing external-agent configuration into Codex.
 
-use codex_hooks::HOOK_EVENT_NAMES;
-use codex_hooks::HOOK_EVENT_NAMES_WITH_MATCHERS;
+mod hooks_cla;
+pub mod sessions;
+
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;
@@ -12,12 +13,82 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+pub use hooks_cla::hook_migration_event_names_cla;
+pub use hooks_cla::hooks_migration_description_cla;
+pub use hooks_cla::import_hooks_cla;
+
 const SOURCE_EXTERNAL_AGENT_NAME: &str = "claude";
 const EXTERNAL_AGENT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
 const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
+
+/// Describes source-specific terms that should be rewritten in migrated artifacts.
+#[derive(Clone, Copy)]
+pub struct RewriteProfile {
+    doc_file_name: &'static str,
+    term_variants: &'static [&'static str],
+    case_sensitive_term_variants: &'static [&'static str],
+}
+
+impl RewriteProfile {
+    pub const fn new(doc_file_name: &'static str, term_variants: &'static [&'static str]) -> Self {
+        Self {
+            doc_file_name,
+            term_variants,
+            case_sensitive_term_variants: &[],
+        }
+    }
+
+    pub const fn with_case_sensitive_term_variants(
+        mut self,
+        term_variants: &'static [&'static str],
+    ) -> Self {
+        self.case_sensitive_term_variants = term_variants;
+        self
+    }
+
+    pub const fn doc_file_name(self) -> &'static str {
+        self.doc_file_name
+    }
+
+    pub const fn term_variants(self) -> &'static [&'static str] {
+        self.term_variants
+    }
+
+    pub const fn case_sensitive_term_variants(self) -> &'static [&'static str] {
+        self.case_sensitive_term_variants
+    }
+}
+
+/// Controls how migrated commands obtain the description required by a Codex skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandDescriptionMode {
+    /// Skip source commands that do not declare a non-empty frontmatter description.
+    RequireFrontmatter,
+    /// Derive a stable description from the source command name when frontmatter is absent.
+    UseSourceNameFallback,
+}
+
+/// Describes source-specific command migration behavior.
+#[derive(Clone, Copy)]
+pub struct CommandMigrationProfile {
+    rewrite_profile: RewriteProfile,
+    description_mode: CommandDescriptionMode,
+}
+
+impl CommandMigrationProfile {
+    pub const fn new(
+        rewrite_profile: RewriteProfile,
+        description_mode: CommandDescriptionMode,
+    ) -> Self {
+        Self {
+            rewrite_profile,
+            description_mode,
+        }
+    }
+}
 
 #[derive(Debug)]
 struct ParsedDocument {
@@ -46,6 +117,25 @@ pub fn build_mcp_config_from_external(
     settings: Option<&JsonValue>,
 ) -> io::Result<TomlValue> {
     let mcp_servers = read_external_mcp_servers(source_root, external_agent_home)?;
+    build_mcp_config(mcp_servers, settings)
+}
+
+pub fn build_mcp_config_from_json_file(source_file: &Path) -> io::Result<TomlValue> {
+    if !source_file.is_file() {
+        return Ok(TomlValue::Table(Default::default()));
+    }
+    let raw = fs::read_to_string(source_file)?;
+    let parsed: JsonValue = serde_json::from_str(&raw)
+        .map_err(|err| invalid_data_error(format!("invalid MCP config: {err}")))?;
+    let mut mcp_servers = BTreeMap::new();
+    append_mcp_servers_from_value(&parsed, &mut mcp_servers, McpServerMerge::Overwrite);
+    build_mcp_config(mcp_servers, /*settings*/ None)
+}
+
+fn build_mcp_config(
+    mcp_servers: BTreeMap<String, JsonValue>,
+    settings: Option<&JsonValue>,
+) -> io::Result<TomlValue> {
     if mcp_servers.is_empty() {
         return Ok(TomlValue::Table(Default::default()));
     }
@@ -82,54 +172,6 @@ pub fn build_mcp_config_from_external(
     Ok(TomlValue::Table(root))
 }
 
-pub fn hooks_migration_description(
-    source_external_agent_dir: &Path,
-    target_hooks: &Path,
-) -> io::Result<Option<String>> {
-    if hook_migration_event_names(source_external_agent_dir, target_hooks)?.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(format!(
-        "Migrate hooks from {} to {}",
-        source_external_agent_dir.display(),
-        target_hooks.display()
-    )))
-}
-
-pub fn hook_migration_event_names(
-    source_external_agent_dir: &Path,
-    target_hooks: &Path,
-) -> io::Result<Vec<String>> {
-    let migration = hook_migration(source_external_agent_dir, target_hooks.parent())?;
-    Ok(migration.keys().cloned().collect())
-}
-
-pub fn import_hooks(source_external_agent_dir: &Path, target_hooks: &Path) -> io::Result<bool> {
-    let Some(parent) = target_hooks.parent() else {
-        return Err(invalid_data_error("hooks target path has no parent"));
-    };
-    let migration = hook_migration(source_external_agent_dir, Some(parent))?;
-    if migration.is_empty() {
-        return Ok(false);
-    }
-
-    fs::create_dir_all(parent)?;
-
-    let mut wrote_active_hooks = false;
-    if is_missing_or_empty_text_file(target_hooks)? {
-        copy_hook_scripts(source_external_agent_dir, parent)?;
-        let mut payload = serde_json::Map::new();
-        payload.insert("hooks".to_string(), JsonValue::Object(migration));
-        let rendered = serde_json::to_string_pretty(&JsonValue::Object(payload))
-            .map_err(|err| invalid_data_error(format!("failed to serialize hooks.json: {err}")))?;
-        fs::write(target_hooks, format!("{rendered}\n"))?;
-        wrote_active_hooks = true;
-    }
-
-    Ok(wrote_active_hooks)
-}
-
 pub fn count_missing_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
     Ok(missing_subagent_names(source_agents, target_agents)?.len())
 }
@@ -154,7 +196,11 @@ pub fn missing_subagent_names(
     Ok(names)
 }
 
-pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<Vec<String>> {
+pub fn import_subagents_with_rewrite_profile(
+    source_agents: &Path,
+    target_agents: &Path,
+    rewrite_profile: RewriteProfile,
+) -> io::Result<Vec<String>> {
     if !source_agents.is_dir() {
         return Ok(Vec::new());
     }
@@ -172,36 +218,52 @@ pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Resul
         let Some(metadata) = agent_metadata(&document) else {
             continue;
         };
-        fs::write(&target, render_agent_toml(&document.body, &metadata)?)?;
+        fs::write(
+            &target,
+            render_agent_toml(&document.body, &metadata, rewrite_profile)?,
+        )?;
         imported.push(metadata.name);
     }
 
     Ok(imported)
 }
 
-pub fn count_missing_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
-    Ok(missing_command_names(source_commands, target_skills)?.len())
-}
-
-pub fn missing_command_names(
+pub fn count_missing_commands_with_profile(
     source_commands: &Path,
     target_skills: &Path,
-) -> io::Result<Vec<String>> {
-    Ok(unique_supported_command_sources(source_commands)?
-        .into_iter()
-        .filter(|(_source_file, name)| !target_skills.join(name).exists())
-        .map(|(_source_file, name)| name)
-        .collect())
+    profile: CommandMigrationProfile,
+) -> io::Result<usize> {
+    Ok(missing_command_names_with_profile(source_commands, target_skills, profile)?.len())
 }
 
-pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<Vec<String>> {
+pub fn missing_command_names_with_profile(
+    source_commands: &Path,
+    target_skills: &Path,
+    profile: CommandMigrationProfile,
+) -> io::Result<Vec<String>> {
+    Ok(
+        unique_supported_command_sources(source_commands, profile.description_mode)?
+            .into_iter()
+            .filter(|(_source_file, name)| !target_skills.join(name).exists())
+            .map(|(_source_file, name)| name)
+            .collect(),
+    )
+}
+
+pub fn import_commands_with_profile(
+    source_commands: &Path,
+    target_skills: &Path,
+    profile: CommandMigrationProfile,
+) -> io::Result<Vec<String>> {
     if !source_commands.is_dir() {
         return Ok(Vec::new());
     }
 
     fs::create_dir_all(target_skills)?;
     let mut imported = Vec::new();
-    for (source_file, name) in unique_supported_command_sources(source_commands)? {
+    for (source_file, name) in
+        unique_supported_command_sources(source_commands, profile.description_mode)?
+    {
         let document = parse_document(&source_file)?;
         let target_dir = target_skills.join(&name);
         if target_dir.exists() {
@@ -209,12 +271,20 @@ pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Resu
         }
         fs::create_dir_all(&target_dir)?;
         let source_name = command_source_name(source_commands, &source_file);
-        let Some(description) = command_skill_description(&document, &source_name) else {
+        let Some(description) =
+            command_skill_description(&document, &source_name, profile.description_mode)
+        else {
             continue;
         };
         fs::write(
             target_dir.join("SKILL.md"),
-            render_command_skill(&document.body, &name, &description, &source_name),
+            render_command_skill(
+                &document.body,
+                &name,
+                &description,
+                &source_name,
+                profile.rewrite_profile,
+            ),
         )?;
         imported.push(name);
     }
@@ -501,164 +571,32 @@ fn contains_env_placeholder(value: &str) -> bool {
     value.contains("${")
 }
 
-fn hook_migration(
+fn write_hook_migration(
     source_external_agent_dir: &Path,
-    target_config_dir: Option<&Path>,
-) -> io::Result<serde_json::Map<String, JsonValue>> {
-    let mut settings_files = Vec::new();
-    let mut disable_all_hooks = None;
-    for settings_name in ["settings.json", "settings.local.json"] {
-        let settings_file = source_external_agent_dir.join(settings_name);
-        if !settings_file.is_file() {
-            continue;
-        }
-        let raw = fs::read_to_string(&settings_file)?;
-        let settings: JsonValue = serde_json::from_str(&raw)
-            .map_err(|err| invalid_data_error(format!("invalid hooks settings: {err}")))?;
-        if let Some(disabled) = settings.get("disableAllHooks").and_then(JsonValue::as_bool) {
-            disable_all_hooks = Some(disabled);
-        }
-        settings_files.push(settings);
+    target_hooks: &Path,
+    migration: serde_json::Map<String, JsonValue>,
+) -> io::Result<bool> {
+    if migration.is_empty() || !is_missing_or_empty_text_file(target_hooks)? {
+        return Ok(false);
     }
-
-    if disable_all_hooks.unwrap_or(false) {
-        return Ok(serde_json::Map::new());
-    }
-
-    let mut migration = serde_json::Map::new();
-    for settings in settings_files {
-        append_convertible_hook_groups(&settings, &mut migration, target_config_dir);
-    }
-
-    Ok(migration)
-}
-
-fn append_convertible_hook_groups(
-    settings: &JsonValue,
-    hooks_payload: &mut serde_json::Map<String, JsonValue>,
-    target_config_dir: Option<&Path>,
-) {
-    let Some(hooks_config) = settings.get("hooks").and_then(JsonValue::as_object) else {
-        return;
+    let Some(parent) = target_hooks.parent() else {
+        return Err(invalid_data_error("hooks target path has no parent"));
     };
-
-    for event_name in HOOK_EVENT_NAMES {
-        let Some(groups) = hooks_config.get(event_name).and_then(JsonValue::as_array) else {
-            continue;
-        };
-        for group in groups {
-            let Some(group_object) = group.as_object() else {
-                continue;
-            };
-            if group_object.contains_key("if")
-                || group_object
-                    .keys()
-                    .any(|key| !matches!(key.as_str(), "matcher" | "hooks"))
-            {
-                continue;
-            }
-            let mut hook_commands = Vec::new();
-            if let Some(hooks) = group_object.get("hooks").and_then(JsonValue::as_array) {
-                for hook in hooks {
-                    let Some(hook_object) = hook.as_object() else {
-                        continue;
-                    };
-                    let hook_type = hook_object
-                        .get("type")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or("command");
-                    if hook_type != "command" {
-                        continue;
-                    }
-                    if hook_object.keys().any(|key| {
-                        !matches!(
-                            key.as_str(),
-                            "type"
-                                | "command"
-                                | "timeout"
-                                | "timeoutSec"
-                                | "statusMessage"
-                                | "async"
-                        )
-                    }) {
-                        continue;
-                    }
-                    if hook_object
-                        .get("async")
-                        .and_then(JsonValue::as_bool)
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    if ["asyncRewake", "shell", "once"]
-                        .into_iter()
-                        .any(|field| hook_object.contains_key(field))
-                    {
-                        continue;
-                    }
-                    let Some(command) = hook_object
-                        .get("command")
-                        .and_then(JsonValue::as_str)
-                        .map(str::trim)
-                        .filter(|command| !command.is_empty())
-                    else {
-                        continue;
-                    };
-
-                    let mut command_payload = serde_json::Map::new();
-                    command_payload
-                        .insert("type".to_string(), JsonValue::String("command".to_string()));
-                    command_payload.insert(
-                        "command".to_string(),
-                        JsonValue::String(rewrite_hook_command(command, target_config_dir)),
-                    );
-                    if let Some(timeout) = hook_object
-                        .get("timeout")
-                        .or_else(|| hook_object.get("timeoutSec"))
-                        .and_then(json_u64)
-                    {
-                        command_payload.insert(
-                            "timeout".to_string(),
-                            JsonValue::Number(serde_json::Number::from(timeout)),
-                        );
-                    }
-                    if let Some(status_message) =
-                        hook_object.get("statusMessage").and_then(JsonValue::as_str)
-                    {
-                        command_payload.insert(
-                            "statusMessage".to_string(),
-                            JsonValue::String(rewrite_external_agent_terms(status_message)),
-                        );
-                    }
-                    hook_commands.push(JsonValue::Object(command_payload));
-                }
-            }
-            if hook_commands.is_empty() {
-                continue;
-            }
-
-            let mut group_payload = serde_json::Map::new();
-            if HOOK_EVENT_NAMES_WITH_MATCHERS.contains(&event_name)
-                && let Some(matcher) = group_object.get("matcher").and_then(JsonValue::as_str)
-            {
-                group_payload.insert(
-                    "matcher".to_string(),
-                    JsonValue::String(matcher.to_string()),
-                );
-            }
-            group_payload.insert("hooks".to_string(), JsonValue::Array(hook_commands));
-            if let Some(groups) = hooks_payload
-                .entry(event_name.to_string())
-                .or_insert_with(|| JsonValue::Array(Vec::new()))
-                .as_array_mut()
-            {
-                groups.push(JsonValue::Object(group_payload));
-            }
-        }
-    }
+    fs::create_dir_all(parent)?;
+    copy_hook_scripts(source_external_agent_dir, parent)?;
+    let mut payload = serde_json::Map::new();
+    payload.insert("hooks".to_string(), JsonValue::Object(migration));
+    let rendered = serde_json::to_string_pretty(&JsonValue::Object(payload))
+        .map_err(|err| invalid_data_error(format!("failed to serialize hooks.json: {err}")))?;
+    fs::write(target_hooks, format!("{rendered}\n"))?;
+    Ok(true)
 }
 
-fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> String {
+fn rewrite_hook_command_for_source(
+    command: &str,
+    target_config_dir: Option<&Path>,
+    source_external_agent_dir: &Path,
+) -> String {
     let Some(target_config_dir) = target_config_dir else {
         return command.to_string();
     };
@@ -666,10 +604,12 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
         return command.to_string();
     }
     let target_hooks_dir = target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR);
-    let source_hooks_path = format!(
-        "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/",
-        external_agent_config_dir()
-    );
+    let source_config_dir = source_external_agent_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(external_agent_config_dir);
+    let source_hooks_path = format!("{source_config_dir}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/");
     let command = replace_quoted_hook_paths(command, '\'', &source_hooks_path, &target_hooks_dir);
     let command = replace_quoted_hook_paths(&command, '"', &source_hooks_path, &target_hooks_dir);
     replace_unquoted_hook_paths(&command, &source_hooks_path, &target_hooks_dir)
@@ -918,12 +858,19 @@ fn command_source_files(source_commands: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn unique_supported_command_sources(source_commands: &Path) -> io::Result<Vec<(PathBuf, String)>> {
+fn unique_supported_command_sources(
+    source_commands: &Path,
+    description_mode: CommandDescriptionMode,
+) -> io::Result<Vec<(PathBuf, String)>> {
     let mut by_name = BTreeMap::<String, Vec<PathBuf>>::new();
     for source_file in command_source_files(source_commands)? {
         let document = parse_document(&source_file)?;
-        let Some(name) = command_skill_name_if_supported(source_commands, &source_file, &document)
-        else {
+        let Some(name) = command_skill_name_if_supported(
+            source_commands,
+            &source_file,
+            &document,
+            description_mode,
+        ) else {
             continue;
         };
         by_name.entry(name).or_default().push(source_file);
@@ -1069,12 +1016,19 @@ fn agent_metadata(document: &ParsedDocument) -> Option<AgentMetadata> {
     })
 }
 
-fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String> {
+fn render_agent_toml(
+    body: &str,
+    metadata: &AgentMetadata,
+    rewrite_profile: RewriteProfile,
+) -> io::Result<String> {
     let mut document = toml::map::Map::new();
     document.insert("name".to_string(), TomlValue::String(metadata.name.clone()));
     document.insert(
         "description".to_string(),
-        TomlValue::String(rewrite_external_agent_terms(&metadata.description)),
+        TomlValue::String(rewrite_external_agent_terms(
+            &metadata.description,
+            rewrite_profile,
+        )),
     );
     if let Some(effort) = metadata.effort.as_ref()
         && let Some(effort) = map_agent_reasoning_effort(effort)
@@ -1096,7 +1050,7 @@ fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String>
     }
     document.insert(
         "developer_instructions".to_string(),
-        TomlValue::String(render_agent_body(body)),
+        TomlValue::String(render_agent_body(body, rewrite_profile)),
     );
 
     let serialized = toml::to_string_pretty(&TomlValue::Table(document))
@@ -1104,8 +1058,8 @@ fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String>
     Ok(format!("{}\n", serialized.trim_end()))
 }
 
-fn render_agent_body(body: &str) -> String {
-    let body = rewrite_external_agent_terms(body.trim());
+fn render_agent_body(body: &str, rewrite_profile: RewriteProfile) -> String {
+    let body = rewrite_external_agent_terms(body.trim(), rewrite_profile);
     if body.is_empty() {
         "No subagent instructions were found.".to_string()
     } else {
@@ -1124,12 +1078,13 @@ fn command_skill_name_if_supported(
     source_commands: &Path,
     source_file: &Path,
     document: &ParsedDocument,
+    description_mode: CommandDescriptionMode,
 ) -> Option<String> {
     if source_file.file_stem().and_then(|stem| stem.to_str()) == Some("README") {
         return None;
     }
     let source_name = command_source_name(source_commands, source_file);
-    command_skill_description(document, &source_name)?;
+    command_skill_description(document, &source_name, description_mode)?;
     let name = command_skill_name(source_commands, source_file);
     if name.chars().count() > MAX_SKILL_NAME_LEN {
         return None;
@@ -1140,13 +1095,23 @@ fn command_skill_name_if_supported(
     Some(name)
 }
 
-fn command_skill_description(document: &ParsedDocument, _source_name: &str) -> Option<String> {
-    document
+fn command_skill_description(
+    document: &ParsedDocument,
+    source_name: &str,
+    description_mode: CommandDescriptionMode,
+) -> Option<String> {
+    let frontmatter_description = document
         .frontmatter
         .get("description")
         .and_then(FrontmatterValue::as_scalar)
         .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
+        .map(ToOwned::to_owned);
+    frontmatter_description.or_else(|| match description_mode {
+        CommandDescriptionMode::RequireFrontmatter => None,
+        CommandDescriptionMode::UseSourceNameFallback => {
+            Some(format!("Migrated source command `{source_name}`"))
+        }
+    })
 }
 
 fn command_source_name(source_commands: &Path, source_file: &Path) -> String {
@@ -1160,8 +1125,14 @@ fn command_source_name(source_commands: &Path, source_file: &Path) -> String {
         .join("-")
 }
 
-fn render_command_skill(body: &str, name: &str, description: &str, source_name: &str) -> String {
-    let body = rewrite_external_agent_terms(body.trim());
+fn render_command_skill(
+    body: &str,
+    name: &str,
+    description: &str,
+    source_name: &str,
+    rewrite_profile: RewriteProfile,
+) -> String {
+    let body = rewrite_external_agent_terms(body.trim(), rewrite_profile);
     let template_body = if body.is_empty() {
         "No command template body was found.".to_string()
     } else {
@@ -1170,7 +1141,7 @@ fn render_command_skill(body: &str, name: &str, description: &str, source_name: 
     format!(
         "---\nname: {}\ndescription: {}\n---\n\n# {name}\n\nUse this skill when the user asks to run the migrated source command `{source_name}`.\n\n## Command Template\n\n{template_body}\n",
         yaml_string(name),
-        yaml_string(&rewrite_external_agent_terms(description)),
+        yaml_string(&rewrite_external_agent_terms(description, rewrite_profile)),
     )
 }
 
@@ -1291,16 +1262,52 @@ fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
     Ok(fs::read_to_string(path)?.trim().is_empty())
 }
 
-fn rewrite_external_agent_terms(content: &str) -> String {
+fn rewrite_external_agent_terms(content: &str, rewrite_profile: RewriteProfile) -> String {
     let mut rewritten = replace_case_insensitive_with_boundaries(
         content,
-        &external_agent_doc_file_name(),
+        rewrite_profile.doc_file_name,
         "AGENTS.md",
     );
-    for from in external_agent_term_variants() {
-        rewritten = replace_case_insensitive_with_boundaries(&rewritten, &from, "Codex");
+    for from in rewrite_profile.term_variants {
+        rewritten = replace_case_insensitive_with_boundaries(&rewritten, from, "Codex");
+    }
+    for from in rewrite_profile.case_sensitive_term_variants {
+        rewritten = replace_with_boundaries(&rewritten, from, "Codex");
     }
     rewritten
+}
+
+fn replace_with_boundaries(input: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() {
+        return input.to_string();
+    }
+
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len());
+    let mut last_emitted = 0usize;
+    let mut search_start = 0usize;
+
+    while let Some(relative_pos) = input[search_start..].find(needle) {
+        let start = search_start + relative_pos;
+        let end = start + needle.len();
+        let boundary_before = start == 0 || !is_word_byte(bytes[start - 1]);
+        let boundary_after = end == bytes.len() || !is_word_byte(bytes[end]);
+
+        if boundary_before && boundary_after {
+            output.push_str(&input[last_emitted..start]);
+            output.push_str(replacement);
+            last_emitted = end;
+        }
+
+        search_start = end;
+    }
+
+    if last_emitted == 0 {
+        return input.to_string();
+    }
+
+    output.push_str(&input[last_emitted..]);
+    output
 }
 
 fn replace_case_insensitive_with_boundaries(
@@ -1365,847 +1372,6 @@ fn external_agent_project_dir_env_var() -> String {
     )
 }
 
-fn external_agent_doc_file_name() -> String {
-    format!("{SOURCE_EXTERNAL_AGENT_NAME}.md")
-}
-
-fn external_agent_term_variants() -> [String; 5] {
-    [
-        format!("{SOURCE_EXTERNAL_AGENT_NAME} code"),
-        format!("{SOURCE_EXTERNAL_AGENT_NAME}-code"),
-        format!("{SOURCE_EXTERNAL_AGENT_NAME}_code"),
-        format!("{SOURCE_EXTERNAL_AGENT_NAME}code"),
-        SOURCE_EXTERNAL_AGENT_NAME.to_string(),
-    ]
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
-
-    fn source_path(relative_path: &str) -> PathBuf {
-        Path::new("/repo")
-            .join(external_agent_config_dir())
-            .join(relative_path)
-    }
-
-    fn source_hook_command(script_name: &str) -> String {
-        format!(
-            "python3 {}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/{script_name}",
-            external_agent_config_dir()
-        )
-    }
-
-    fn source_hook_command_with_project_dir(script_name: &str) -> String {
-        format!(
-            "python3 \"${}\"/{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/{script_name}",
-            external_agent_project_dir_env_var(),
-            external_agent_config_dir()
-        )
-    }
-
-    fn migrated_hook_command(script_name: &str) -> String {
-        migrated_quoted_hook_command(script_name)
-    }
-
-    fn migrated_quoted_hook_command(script_name: &str) -> String {
-        let hook_path = Path::new("/repo/.codex")
-            .join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR)
-            .join(script_name);
-        format!(
-            "python3 {}",
-            shell_single_quote(hook_path.to_string_lossy().as_ref())
-        )
-    }
-
-    #[test]
-    fn env_placeholder_accepts_defaults() {
-        assert_eq!(
-            parse_env_placeholder("${TOKEN:-fallback}"),
-            Some("TOKEN".to_string())
-        );
-    }
-
-    #[test]
-    fn mcp_migration_skips_placeholder_args() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        fs::write(
-            root.path().join(".mcp.json"),
-            r#"{"mcpServers":{"db":{"command":"db-server","args":["${DATABASE_URL}"]}}}"#,
-        )
-        .expect("write mcp");
-
-        assert_eq!(
-            build_mcp_config_from_external(
-                root.path(),
-                /*external_agent_home*/ None,
-                /*settings*/ None,
-            )
-            .unwrap(),
-            TomlValue::Table(Default::default())
-        );
-    }
-
-    #[test]
-    fn mcp_migration_prefers_command_transport_for_mixed_server_config() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        fs::write(
-            root.path().join(".mcp.json"),
-            r#"{
-              "mcpServers": {
-                "mixedTransport": {
-                  "command": "mcp-remote-proxy",
-                  "args": [
-                    "https://example.com/mixed-transport",
-                    "--transport",
-                    "http"
-                  ],
-                  "url": "https://example.com/mixed-transport"
-                }
-              }
-            }"#,
-        )
-        .expect("write mcp");
-
-        assert_eq!(
-            build_mcp_config_from_external(
-                root.path(),
-                /*external_agent_home*/ None,
-                /*settings*/ None,
-            )
-            .unwrap(),
-            toml::from_str(
-                r#"
-[mcp_servers.mixedTransport]
-command = "mcp-remote-proxy"
-args = [
-  "https://example.com/mixed-transport",
-  "--transport",
-  "http",
-]
-"#
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn mcp_migration_skips_unsupported_transports() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        fs::write(
-            root.path().join(".mcp.json"),
-            r#"{
-              "mcpServers": {
-                "legacy-sse": {"type": "sse", "url": "https://example.invalid/sse"},
-                "vault": {
-                  "url": "https://example.invalid/vault",
-                  "headers": {"Authorization": "Bearer ${VAULT_TOKEN:-dev-token}"}
-                }
-              }
-            }"#,
-        )
-        .expect("write mcp");
-
-        assert_eq!(
-            build_mcp_config_from_external(
-                root.path(),
-                /*external_agent_home*/ None,
-                /*settings*/ None,
-            )
-            .unwrap(),
-            toml::from_str(
-                r#"
-[mcp_servers.vault]
-url = "https://example.invalid/vault"
-bearer_token_env_var = "VAULT_TOKEN"
-"#
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn mcp_migration_reads_matching_project_entries_from_repo_external_project_config() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        let project = root.path().join("repo");
-        fs::create_dir_all(&project).expect("create repo");
-        let other = root.path().join("other");
-        fs::create_dir_all(&other).expect("create other");
-        fs::write(
-            project.join(external_agent_project_config_file()),
-            serde_json::json!({
-                "mcpServers": {
-                    "top": {"command": "top-server"}
-                },
-                "projects": {
-                    project.display().to_string(): {
-                        "mcpServers": {
-                            "repo": {"command": "repo-server"}
-                        }
-                    },
-                    other.display().to_string(): {
-                        "mcpServers": {
-                            "other": {"command": "other-server"}
-                        }
-                    }
-                }
-            })
-            .to_string(),
-        )
-        .expect("write external agent project config");
-
-        assert_eq!(
-            build_mcp_config_from_external(
-                &project, /*external_agent_home*/ None, /*settings*/ None,
-            )
-            .unwrap(),
-            toml::from_str(
-                r#"
-[mcp_servers.repo]
-command = "repo-server"
-
-[mcp_servers.top]
-command = "top-server"
-"#
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn mcp_migration_reads_matching_project_entries_from_home_external_project_config() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        let project = root.path().join("repo");
-        fs::create_dir_all(&project).expect("create repo");
-        let external_agent_home = root.path().join(external_agent_config_dir());
-        fs::create_dir_all(&external_agent_home).expect("create external agent home");
-        fs::write(
-            root.path().join(external_agent_project_config_file()),
-            serde_json::json!({
-                "projects": {
-                    project.display().to_string(): {
-                        "mcpServers": {
-                            "repo": {"command": "repo-server"}
-                        }
-                    }
-                }
-            })
-            .to_string(),
-        )
-        .expect("write external agent project config");
-
-        assert_eq!(
-            build_mcp_config_from_external(
-                &project,
-                Some(&external_agent_home),
-                /*settings*/ None,
-            )
-            .unwrap(),
-            toml::from_str(
-                r#"
-[mcp_servers.repo]
-command = "repo-server"
-"#
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn mcp_migration_preserves_repo_servers_over_home_project_entries() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        let project = root.path().join("repo");
-        fs::create_dir_all(&project).expect("create repo");
-        let external_agent_home = root.path().join(external_agent_config_dir());
-        fs::create_dir_all(&external_agent_home).expect("create external agent home");
-        fs::write(
-            project.join(EXTERNAL_AGENT_MCP_CONFIG_FILE),
-            serde_json::json!({
-                "mcpServers": {
-                    "shared": {"command": "repo-server"}
-                }
-            })
-            .to_string(),
-        )
-        .expect("write repo mcp");
-        fs::write(
-            root.path().join(external_agent_project_config_file()),
-            serde_json::json!({
-                "projects": {
-                    project.display().to_string(): {
-                        "mcpServers": {
-                            "home-only": {"command": "home-only-server"},
-                            "shared": {"command": "home-server"}
-                        }
-                    }
-                }
-            })
-            .to_string(),
-        )
-        .expect("write external agent project config");
-
-        assert_eq!(
-            build_mcp_config_from_external(
-                &project,
-                Some(&external_agent_home),
-                /*settings*/ None,
-            )
-            .unwrap(),
-            toml::from_str(
-                r#"
-[mcp_servers.home-only]
-command = "home-only-server"
-
-[mcp_servers.shared]
-command = "repo-server"
-"#
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn mcp_migration_skips_disabled_servers() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        fs::write(
-            root.path().join(".mcp.json"),
-            r#"{
-              "mcpServers": {
-                "enabled": {"command": "enabled-server"},
-                "explicit-disabled": {"command": "disabled-server", "disabled": true},
-                "not-enabled": {"command": "not-enabled-server"}
-              }
-            }"#,
-        )
-        .expect("write mcp");
-        let settings = serde_json::json!({
-            "enabledMcpjsonServers": ["enabled"],
-            "disabledMcpjsonServers": ["explicit-disabled"]
-        });
-
-        assert_eq!(
-            build_mcp_config_from_external(
-                root.path(),
-                /*external_agent_home*/ None,
-                Some(&settings),
-            )
-            .unwrap(),
-            toml::from_str(
-                r#"
-[mcp_servers.enabled]
-command = "enabled-server"
-"#
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn command_skill_names_include_nested_paths() {
-        let root = source_path("commands");
-        let file = source_path("commands/pr/review.md");
-
-        assert_eq!(command_skill_name(&root, &file), "source-command-pr-review");
-    }
-
-    #[test]
-    fn command_skill_names_must_fit_codex_skill_loader_limit() {
-        let root = source_path("commands");
-        let file = source_path("commands/this/is/a/deeply/nested/command/with/a/very/long/name.md");
-        let document = parse_document_content("---\ndescription: Review PR\n---\nReview\n");
-
-        assert!(command_skill_name_if_supported(&root, &file, &document).is_none());
-    }
-
-    #[test]
-    fn commands_with_overlong_descriptions_are_preserved() {
-        let root = source_path("commands");
-        let file = source_path("commands/review.md");
-        let description = "x".repeat(MAX_SKILL_DESCRIPTION_LEN + 1);
-        let document =
-            parse_document_content(&format!("---\ndescription: {description}\n---\nReview\n"));
-
-        assert_eq!(
-            command_skill_name_if_supported(&root, &file, &document),
-            Some("source-command-review".to_string())
-        );
-
-        let rendered = render_command_skill(
-            &document.body,
-            "source-command-review",
-            &description,
-            "review",
-        );
-        let rendered_document = parse_document_content(&rendered);
-        assert_eq!(
-            rendered_document
-                .frontmatter
-                .get("description")
-                .and_then(FrontmatterValue::as_scalar),
-            Some(description.as_str())
-        );
-    }
-
-    #[test]
-    fn commands_with_provider_runtime_expansion_are_skipped() {
-        let root = source_path("commands");
-        let file = source_path("commands/deploy.md");
-        let document = parse_document_content(
-            "---\ndescription: Deploy\n---\nDeploy $ARGUMENTS from @release.yaml\n",
-        );
-
-        assert!(command_skill_name_if_supported(&root, &file, &document).is_none());
-    }
-
-    #[test]
-    fn commands_without_description_are_skipped() {
-        let root = source_path("commands");
-        let file = source_path("commands/README.md");
-        let document = parse_document_content("# Notes\n\nThis documents commands.\n");
-
-        assert!(command_skill_name_if_supported(&root, &file, &document).is_none());
-    }
-
-    #[test]
-    fn command_slug_collisions_are_skipped() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        let commands = root.path().join("commands");
-        fs::create_dir_all(&commands).expect("create commands");
-        fs::write(
-            commands.join("foo-bar.md"),
-            "---\ndescription: First\n---\nRun the first command.\n",
-        )
-        .expect("write first command");
-        fs::write(
-            commands.join("foo_bar.md"),
-            "---\ndescription: Second\n---\nRun the second command.\n",
-        )
-        .expect("write second command");
-
-        assert_eq!(
-            unique_supported_command_sources(&commands).unwrap(),
-            Vec::<(PathBuf, String)>::new()
-        );
-    }
-
-    #[test]
-    fn subagent_accepts_yaml_block_lists_by_ignoring_unsupported_fields() {
-        let document = parse_document_content(
-            "---\nname: cloud-incident\ndescription: Debug incidents\nskills:\n  - runbook-reader\ntools:\n  - Read\n  - Bash\ndisallowedTools:\n  - Write\n---\nInvestigate carefully.\n",
-        );
-
-        assert!(agent_metadata(&document).is_some());
-    }
-
-    #[test]
-    fn subagent_requires_minimum_codex_agent_fields() {
-        let missing_description =
-            parse_document_content("---\nname: incomplete\n---\nInvestigate carefully.\n");
-        let missing_body =
-            parse_document_content("---\nname: incomplete\ndescription: Missing body\n---\n");
-
-        assert!(agent_metadata(&missing_description).is_none());
-        assert!(agent_metadata(&missing_body).is_none());
-    }
-
-    #[test]
-    fn subagent_preserves_default_model_when_source_model_is_present() {
-        let document = parse_document_content(
-            "---\nname: reviewer\ndescription: Review code\nmodel: source-opus\neffort: max\n---\nReview carefully.\n",
-        );
-        let metadata = agent_metadata(&document).expect("metadata");
-        let rendered: TomlValue =
-            toml::from_str(&render_agent_toml(&document.body, &metadata).expect("render agent"))
-                .expect("parse rendered agent");
-        let expected: TomlValue = toml::from_str(
-            r#"
-name = "reviewer"
-description = "Review code"
-model_reasoning_effort = "xhigh"
-developer_instructions = """
-Review carefully."""
-"#,
-        )
-        .expect("parse expected agent");
-
-        assert_eq!(rendered, expected);
-    }
-
-    #[test]
-    fn subagent_target_preserves_dotted_file_stem() {
-        let target_agents = Path::new("/repo/.codex/agents");
-        let source_file = source_path("agents/security.audit.md");
-
-        assert_eq!(
-            subagent_target_file(&source_file, target_agents),
-            Some(PathBuf::from("/repo/.codex/agents/security.audit.toml"))
-        );
-    }
-
-    #[test]
-    fn frontmatter_accepts_crlf_delimiters() {
-        let document = parse_document_content(
-            "---\r\nname: reviewer\r\ndescription: Review code\r\n---\r\nReview carefully.\r\n",
-        );
-
-        assert_eq!(
-            (
-                document
-                    .frontmatter
-                    .get("name")
-                    .and_then(FrontmatterValue::as_scalar),
-                document
-                    .frontmatter
-                    .get("description")
-                    .and_then(FrontmatterValue::as_scalar),
-                document.body.as_str(),
-            ),
-            (
-                Some("reviewer"),
-                Some("Review code"),
-                "Review carefully.\r\n"
-            )
-        );
-    }
-
-    #[test]
-    fn hook_migration_ignores_unsupported_handlers() {
-        let settings = serde_json::json!({
-            "hooks": {
-                "PreToolUse": [{
-                    "matcher": "Bash",
-                    "if": "tool_input.command contains 'rm'",
-                    "hooks": [{
-                        "type": "command",
-                        "command": source_hook_command("policy_gate.py")
-                    }]
-                }, {
-                    "matcher": "Edit",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "if": "Bash(rm *)",
-                            "command": source_hook_command("policy_gate.py")
-                        },
-                        {
-                            "type": "http",
-                            "url": "https://example.invalid/hook"
-                        }
-                    ]
-                }],
-                "PermissionRequest": [{
-                    "matcher": "Bash",
-                    "hooks": [{
-                        "type": "command",
-                        "command": source_hook_command("approve.py")
-                    }]
-                }],
-                "SubagentStart": [{
-                    "matcher": "worker",
-                    "hooks": [{"type": "prompt", "prompt": "check"}]
-                }]
-            }
-        });
-        let mut migration = serde_json::Map::new();
-        append_convertible_hook_groups(&settings, &mut migration, Some(Path::new("/repo/.codex")));
-
-        assert_eq!(
-            migration,
-            serde_json::json!({
-                "PermissionRequest": [{
-                    "matcher": "Bash",
-                    "hooks": [{
-                        "type": "command",
-                        "command": migrated_hook_command("approve.py")
-                    }]
-                }]
-            })
-            .as_object()
-            .cloned()
-            .expect("object")
-        );
-    }
-
-    #[test]
-    fn hook_migration_honors_disable_all_hooks() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        fs::write(
-            root.path().join("settings.json"),
-            r#"{
-              "disableAllHooks": true,
-              "hooks": {
-                "SessionStart": [{
-                  "matcher": "startup",
-                  "hooks": [{"type": "command", "command": "echo setup"}]
-                }]
-              }
-            }"#,
-        )
-        .expect("write settings");
-
-        assert_eq!(
-            hook_migration(root.path(), /*target_config_dir*/ None).unwrap(),
-            serde_json::Map::new()
-        );
-    }
-
-    #[test]
-    fn hook_migration_honors_settings_local_disable_override() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        fs::write(
-            root.path().join("settings.json"),
-            r#"{
-              "disableAllHooks": true,
-              "hooks": {
-                "SessionStart": [{
-                  "matcher": "project",
-                  "hooks": [{"type": "command", "command": "echo project"}]
-                }]
-              }
-            }"#,
-        )
-        .expect("write project settings");
-        fs::write(
-            root.path().join("settings.local.json"),
-            r#"{
-              "disableAllHooks": false,
-              "hooks": {
-                "SessionStart": [{
-                  "matcher": "local",
-                  "hooks": [{"type": "command", "command": "echo local"}]
-                }]
-              }
-            }"#,
-        )
-        .expect("write local settings");
-
-        assert_eq!(
-            hook_migration(root.path(), /*target_config_dir*/ None).unwrap(),
-            serde_json::json!({
-                "SessionStart": [{
-                    "matcher": "project",
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo project"
-                    }]
-                }, {
-                    "matcher": "local",
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo local"
-                    }]
-                }]
-            })
-            .as_object()
-            .cloned()
-            .expect("object")
-        );
-    }
-
-    #[test]
-    fn hook_command_paths_rewrite_to_target_hook_dir() {
-        let project_dir_env_var = external_agent_project_dir_env_var();
-        let plugin_root_env_var = format!(
-            "{}_PLUGIN_ROOT",
-            SOURCE_EXTERNAL_AGENT_NAME.to_ascii_uppercase()
-        );
-        let source_hooks_path = format!(
-            "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}",
-            external_agent_config_dir()
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &source_hook_command_with_project_dir("check.py"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            migrated_hook_command("check.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("\"${project_dir_env_var}\"/{source_hooks_path}/check-style.sh"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            shell_single_quote(
-                Path::new("/repo/.codex")
-                    .join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR)
-                    .join("check-style.sh")
-                    .to_string_lossy()
-                    .as_ref()
-            )
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &source_hook_command("check.py"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            migrated_hook_command("check.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 ./{source_hooks_path}/check.py"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            migrated_hook_command("check.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 '${{{project_dir_env_var}}}/{source_hooks_path}/check.py'"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            migrated_quoted_hook_command("check.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 \"${{{project_dir_env_var}}}/{source_hooks_path}/check.py\""),
-                Some(Path::new("/repo/.codex")),
-            ),
-            migrated_quoted_hook_command("check.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("bash -lc \"python3 {source_hooks_path}/check.py\""),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!("bash -lc \"python3 {source_hooks_path}/check.py\"")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!(
-                    "HOOK=${{{project_dir_env_var}}}/{source_hooks_path}/check.py python3 \"$HOOK\""
-                ),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!(
-                "HOOK=${{{project_dir_env_var}}}/{source_hooks_path}/check.py python3 \"$HOOK\""
-            )
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 {source_hooks_path}/${{SCRIPT}}.py"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!("python3 {source_hooks_path}/${{SCRIPT}}.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 {source_hooks_path}/{{lint,fmt}}.sh"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!("python3 {source_hooks_path}/{{lint,fmt}}.sh")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 {source_hooks_path}/my\\ script.py"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!("python3 {source_hooks_path}/my\\ script.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 .{SOURCE_EXTERNAL_AGENT_NAME}\\hooks\\check.py"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!("python3 .{}\\hooks\\check.py", SOURCE_EXTERNAL_AGENT_NAME)
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!(
-                    "python3 \"%{}%\\{}\\hooks\\check.py\"",
-                    project_dir_env_var,
-                    external_agent_config_dir()
-                ),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!(
-                "python3 \"%{}%\\{}\\hooks\\check.py\"",
-                project_dir_env_var,
-                external_agent_config_dir()
-            )
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("python3 '${{{project_dir_env_var}}}/{source_hooks_path}/my script.py'"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            migrated_quoted_hook_command("my script.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                &format!("/repo/{source_hooks_path}/check.py 2>/dev/null || true"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            format!(
-                "{} 2>/dev/null || true",
-                shell_single_quote(
-                    Path::new("/repo/.codex")
-                        .join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR)
-                        .join("check.py")
-                        .to_string_lossy()
-                        .as_ref()
-                )
-            )
-        );
-        let plugin_script_command = format!("${{{plugin_root_env_var}}}/scripts/format.sh");
-        assert_eq!(
-            rewrite_hook_command(&plugin_script_command, Some(Path::new("/repo/.codex")),),
-            plugin_script_command
-        );
-    }
-
-    #[test]
-    fn hook_script_copy_keeps_existing_target_scripts() {
-        let root = tempfile::TempDir::new().expect("tempdir");
-        let source_external_agent_dir = root.path().join(external_agent_config_dir());
-        let source_hooks = source_external_agent_dir.join(EXTERNAL_AGENT_HOOKS_SUBDIR);
-        let target_config_dir = root.path().join(".codex");
-        let target_hooks = target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR);
-        fs::create_dir_all(&source_hooks).expect("create source hooks");
-        fs::create_dir_all(&target_hooks).expect("create target hooks");
-        fs::write(source_hooks.join("check.py"), "new script").expect("write source hook");
-        fs::write(target_hooks.join("check.py"), "existing script").expect("write target hook");
-
-        copy_hook_scripts(&source_external_agent_dir, &target_config_dir).expect("copy hooks");
-
-        assert_eq!(
-            fs::read_to_string(target_hooks.join("check.py")).expect("read target hook"),
-            "existing script"
-        );
-    }
-
-    #[test]
-    fn hook_migration_drops_negative_timeouts() {
-        let settings = serde_json::json!({
-            "hooks": {
-                "SessionStart": [{
-                    "matcher": "startup",
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo setup",
-                        "timeout": -1
-                    }]
-                }]
-            }
-        });
-        let mut migration = serde_json::Map::new();
-        append_convertible_hook_groups(&settings, &mut migration, /*target_config_dir*/ None);
-
-        assert_eq!(
-            migration,
-            serde_json::json!({
-                "SessionStart": [{
-                    "matcher": "startup",
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo setup"
-                    }]
-                }]
-            })
-            .as_object()
-            .cloned()
-            .expect("object")
-        );
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

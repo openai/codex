@@ -1,4 +1,4 @@
-use crate::now_unix_seconds;
+use super::now_unix_seconds;
 use codex_protocol::ThreadId;
 use serde::Deserialize;
 use serde::Serialize;

@@ -10,4 +10,9 @@ includeHome?: boolean,
 /**
  * Zero or more working directories to include for repo-scoped detection.
  */
-cwds?: Array<string> | null, };
+cwds?: Array<string> | null,
+/**
+ * Optional import-source selector. Missing or unrecognized values use the default source for
+ * backwards compatibility.
+ */
+source?: string | null, };

@@ -1,10 +1,10 @@
-use crate::ConversationMessage;
-use crate::ExternalAgentSessionMigration;
-use crate::MessageRole;
-use crate::title::IMPORTED_SESSION_FALLBACK_TITLE;
-use crate::title::SessionTitleCandidates;
-use crate::title::fallback_title_from_user_message;
-use crate::truncate;
+use super::ConversationMessage;
+use super::ExternalAgentSessionMigration;
+use super::MessageRole;
+use super::title::IMPORTED_SESSION_FALLBACK_TITLE;
+use super::title::SessionTitleCandidates;
+use super::title::fallback_title_from_user_message;
+use super::truncate;
 use serde_json::Value as JsonValue;
 use sha2::Digest;
 use sha2::Sha256;
@@ -422,13 +422,13 @@ mod tests {
     fn converts_tool_result_blocks_to_bounded_external_agent_tags() {
         let block = serde_json::json!({
             "type": "tool_result",
-            "content": "codex-rs/external-agent-sessions/src/records.rs"
+            "content": "codex-rs/external-agent-migration/src/sessions/records.rs"
         });
 
         assert_eq!(
             tool_result_note(&block),
             "[external_agent_tool_result]\n\
-             codex-rs/external-agent-sessions/src/records.rs\n\
+             codex-rs/external-agent-migration/src/sessions/records.rs\n\
              [/external_agent_tool_result]"
         );
     }

@@ -1192,10 +1192,12 @@ async fn detect_home_skips_skills_when_all_skill_directories_exist() {
 }
 
 #[tokio::test]
-async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
+async fn import_repo_agents_md_from_nested_cwd_rewrites_terms_and_skips_non_empty_targets() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo-a");
+    let nested_cwd = repo_root.join("nested");
     let repo_with_existing_target = root.path().join("repo-b");
+    fs::create_dir_all(&nested_cwd).expect("create nested cwd");
     fs::create_dir_all(repo_root.join(".git")).expect("create git");
     fs::create_dir_all(repo_with_existing_target.join(".git")).expect("create git");
     fs::write(
@@ -1224,7 +1226,7 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: String::new(),
-            cwd: Some(repo_root.clone()),
+            cwd: Some(nested_cwd.clone()),
             details: None,
         },
         ExternalAgentConfigMigrationItem {
@@ -1242,12 +1244,12 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
             ExternalAgentConfigImportItemResult {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: String::new(),
-                cwd: Some(repo_root.clone()),
+                cwd: Some(nested_cwd.clone()),
                 success_count: 1,
                 error_count: 0,
                 successes: vec![import_success(
                     ExternalAgentConfigMigrationItemType::AgentsMd,
-                    Some(repo_root.clone()),
+                    Some(nested_cwd),
                     repo_root
                         .join(EXTERNAL_AGENT_CONFIG_MD)
                         .display()
@@ -1830,7 +1832,7 @@ async fn detect_home_uses_materialized_known_marketplace_for_inline_npm_source()
 
 #[test]
 fn marketplace_import_sources_prefers_scoped_source_over_registry_name_collision() {
-    let (root, external_agent_home, codex_home) = fixture_paths();
+    let (root, external_agent_home, _codex_home) = fixture_paths();
     let source_root = root.path().join("repo");
     let scoped_marketplace = source_root.join("repo-marketplace");
     let cached_marketplace = external_agent_home.join("plugins/marketplaces/debug");
@@ -1861,8 +1863,8 @@ fn marketplace_import_sources_prefers_scoped_source_over_registry_name_collision
         }
     });
 
-    let import_sources = service_for_paths(external_agent_home, codex_home)
-        .marketplace_import_sources(&settings, &source_root);
+    let import_sources =
+        source_cla::marketplace_import_sources(&settings, &external_agent_home, &source_root);
 
     assert_eq!(
         import_sources.get("debug"),
@@ -1875,7 +1877,7 @@ fn marketplace_import_sources_prefers_scoped_source_over_registry_name_collision
 
 #[test]
 fn marketplace_import_sources_prefers_supported_declaration_over_materialization() {
-    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let (_root, external_agent_home, _codex_home) = fixture_paths();
     let cached_marketplace = external_agent_home.join("plugins/marketplaces/acme-tools");
     fs::create_dir_all(&cached_marketplace).expect("create cached marketplace");
     fs::write(
@@ -1894,8 +1896,11 @@ fn marketplace_import_sources_prefers_supported_declaration_over_materialization
     )
     .expect("write known marketplaces");
 
-    let import_sources = service_for_paths(external_agent_home.clone(), codex_home)
-        .marketplace_import_sources(&serde_json::json!({}), &external_agent_home);
+    let import_sources = source_cla::marketplace_import_sources(
+        &serde_json::json!({}),
+        &external_agent_home,
+        &external_agent_home,
+    );
 
     assert_eq!(
         import_sources.get("acme-tools"),

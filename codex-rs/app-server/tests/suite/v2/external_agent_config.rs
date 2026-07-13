@@ -43,12 +43,57 @@ use super::analytics::wait_for_analytics_event;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn external_agent_home(codex_home: &Path) -> PathBuf {
-    codex_home.join(concat!(".", "cl", "aude"))
+    codex_home.join(concat!(".", "cla", "ude"))
 }
 
 fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String {
     assert!(!response.import_id.is_empty());
     response.import_id
+}
+
+#[tokio::test]
+async fn external_agent_config_detect_accepts_source_selection_and_defaults_unknown_values()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source_home = external_agent_home(codex_home.path());
+    std::fs::create_dir_all(&source_home)?;
+    std::fs::write(source_home.join("CLAUDE.md"), "project instructions")?;
+
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let mut responses = Vec::new();
+    for source in [None, Some("claude-code"), Some("unknown-source")] {
+        let mut params = serde_json::json!({ "includeHome": true });
+        if let Some(source) = source {
+            params["source"] = serde_json::json!(source);
+        }
+        let request_id = mcp
+            .send_raw_request("externalAgentConfig/detect", Some(params))
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        responses.push(to_response::<ExternalAgentConfigDetectResponse>(response)?);
+    }
+
+    assert_eq!(responses[0].items.len(), 1);
+    assert_eq!(
+        responses[0].items[0].item_type,
+        ExternalAgentConfigMigrationItemType::AgentsMd
+    );
+    let expected = responses[0].clone();
+    assert_eq!(responses, vec![expected; 3]);
+
+    Ok(())
 }
 
 #[tokio::test]

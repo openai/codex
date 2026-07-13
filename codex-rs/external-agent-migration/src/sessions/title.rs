@@ -1,5 +1,5 @@
-use crate::SESSION_TITLE_MAX_LEN;
-use crate::truncate;
+use super::SESSION_TITLE_MAX_LEN;
+use super::truncate;
 
 pub(super) const IMPORTED_SESSION_FALLBACK_TITLE: &str = "Imported session";
 const RECOGNIZED_CONTROL_WRAPPERS: [(&str, &str); 10] = [
