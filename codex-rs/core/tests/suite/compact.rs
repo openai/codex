@@ -289,6 +289,17 @@ fn invalid_request_response(message: impl Into<String>) -> wiremock::ResponseTem
     }))
 }
 
+fn model_not_found_response(model: &str) -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(/*status*/ 404).set_body_json(json!({
+        "error": {
+            "message": format!("Model not found {model}"),
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": null,
+        }
+    }))
+}
+
 fn write_global_file(
     home: &TempDir,
     filename: &str,
@@ -2385,6 +2396,146 @@ async fn pre_sampling_compact_falls_back_from_retired_previous_model_after_renam
     .await;
 
     let model_provider = openai_model_provider(&server);
+    let mut resumed_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(retired_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let resumed = resumed_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .expect("resume codex");
+
+    resumed
+        .codex
+        .submit(disabled_permission_user_turn(
+            "after switch",
+            resumed.cwd.path().to_path_buf(),
+            renamed_model.to_string(),
+        ))
+        .await
+        .expect("submit renamed-model turn");
+    assert_compaction_uses_turn_lifecycle_id(&resumed.codex).await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        4,
+        "the renamed-model turn should retry compaction and then sample"
+    );
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+    assert_eq!(
+        requests[1].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+    assert_eq!(
+        requests[2].body_json()["model"].as_str(),
+        Some(renamed_model)
+    );
+    assert_eq!(
+        requests[3].body_json()["model"].as_str(),
+        Some(renamed_model)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_falls_back_when_previous_model_is_not_found() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let retired_model = "gpt-5.5";
+    let previous_model_family = "gpt-5.5";
+    let renamed_model = "gpt-5.6";
+    let mut previous_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-a"));
+    previous_model_info.slug = previous_model_family.to_string();
+    let mut renamed_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-b"));
+    renamed_model_info.slug = renamed_model.to_string();
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![previous_model_info, renamed_model_info],
+        },
+    )
+    .await;
+
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ])),
+            model_not_found_response(retired_model),
+            sse_response(sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "RETIRED_MODEL_SUMMARY",
+                    }
+                }),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
+            ])),
+            sse_response(sse(vec![
+                ev_assistant_message("m3", "after switch"),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ])),
+        ],
+    )
+    .await;
+
+    let model_provider = openai_model_provider(&server);
+    let mut initial_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(retired_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let initial = initial_builder
+        .build(&server)
+        .await
+        .expect("build initial test codex");
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial
+        .codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            initial.cwd.path().to_path_buf(),
+            retired_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    initial
+        .codex
+        .submit(Op::Shutdown)
+        .await
+        .expect("shutdown initial session");
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let mut model_provider = openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(0);
     let mut resumed_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(retired_model)
