@@ -3419,6 +3419,12 @@ allow_local_binding = true
         policy_contents.contains(&expected_rule),
         "unexpected policy contents: {policy_contents}"
     );
+    assert!(first_results.requests().iter().any(|request| {
+        request.body_contains_text(&format!(
+            "Denied network rule saved in execpolicy (denylist): {}",
+            deny_network_amendment.host
+        ))
+    }));
 
     let first_output = parse_result(
         &first_results

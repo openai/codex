@@ -415,14 +415,6 @@ impl NetworkApprovalService {
         (created, true)
     }
 
-    async fn record_outcome_for_single_active_call(&self, outcome: NetworkApprovalOutcome) {
-        let Some(owner_call) = self.resolve_single_active_call().await else {
-            return;
-        };
-        self.record_call_outcome(&owner_call.registration_id, outcome)
-            .await;
-    }
-
     #[cfg(test)]
     async fn take_call_outcome(&self, registration_id: &str) -> Option<NetworkApprovalOutcome> {
         let mut calls = self.calls.lock().await;
@@ -467,12 +459,29 @@ impl NetworkApprovalService {
             return;
         };
 
-        let outcome = NetworkApprovalOutcome::DeniedByPolicy(message);
-        if let Some(execution_id) = blocked.execution_id.as_deref() {
-            self.record_call_outcome(execution_id, outcome).await;
+        let owner_call = if let Some(execution_id) = blocked.execution_id.as_deref() {
+            self.resolve_active_call_by_execution_id(execution_id).await
         } else {
-            self.record_outcome_for_single_active_call(outcome).await;
+            self.resolve_single_active_call().await
+        };
+        let Some(owner_call) = owner_call else {
+            return;
+        };
+
+        let mut calls = self.calls.lock().await;
+        if calls
+            .call_outcomes
+            .contains_key(&owner_call.registration_id)
+        {
+            return;
         }
+        calls.call_outcomes.insert(
+            owner_call.registration_id.clone(),
+            NetworkApprovalOutcome::DeniedByPolicy(message),
+        );
+
+        drop(calls);
+        owner_call.cancellation_token.cancel();
     }
 
     async fn active_turn_context(

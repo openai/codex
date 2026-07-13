@@ -2316,6 +2316,38 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
 
 #[tokio::test]
 async fn permission_request_hook_allows_network_approval_without_prompt() -> Result<()> {
+    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=2).read().decode(errors='replace'))""#;
+    run_network_permission_hook_test(
+        "allow",
+        PERMISSION_REQUEST_ALLOW_REASON,
+        "permissionrequest-network-approval",
+        command,
+        /*expected_denial*/ None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn permission_request_hook_denies_network_approval_with_custom_message() -> Result<()> {
+    let denial = "network access denied by the integration-test hook";
+    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); opener.open('http://codex-network-test.invalid', timeout=2).read()""#;
+    run_network_permission_hook_test(
+        "deny",
+        denial,
+        "permissionrequest-network-denied",
+        command,
+        Some(denial),
+    )
+    .await
+}
+
+async fn run_network_permission_hook_test(
+    hook_mode: &'static str,
+    hook_reason: &'static str,
+    call_id: &'static str,
+    command: &'static str,
+    expected_denial: Option<&'static str>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2333,21 +2365,19 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let call_id = "permissionrequest-network-approval";
-    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=2).read().decode(errors='replace'))""#;
     let args = serde_json::json!({ "command": command });
-    let _responses = mount_sse_sequence(
+    let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
-                ev_response_created("resp-1"),
+                ev_response_created("resp-network-hook-1"),
                 ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
-                ev_completed("resp-1"),
+                ev_completed("resp-network-hook-1"),
             ]),
             sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "permission request hook allowed network access"),
-                ev_completed("resp-2"),
+                ev_response_created("resp-network-hook-2"),
+                ev_assistant_message("msg-network-hook", "done"),
+                ev_completed("resp-network-hook-2"),
             ]),
         ],
     )
@@ -2358,13 +2388,19 @@ allow_local_binding = true
     let permission_profile_for_config = permission_profile.clone();
     let test = test_codex()
         .with_home(Arc::clone(&home))
-        .with_pre_build_hook(|home| {
-            install_allow_permission_request_hook(home)
-                .expect("failed to write permission request hook test fixture");
+        .with_pre_build_hook(move |home| {
+            write_permission_request_hook(
+                home,
+                Some(PERMISSION_REQUEST_HOOK_MATCHER),
+                hook_mode,
+                hook_reason,
+            )
+            .expect("failed to write permission request hook test fixture");
         })
         .with_cloud_config_bundle(managed_network_requirements_loader())
         .with_config(move |config| {
             trust_discovered_hooks(config);
+            config.approvals_reviewer = codex_config::types::ApprovalsReviewer::AutoReview;
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
                 .permissions
@@ -2373,65 +2409,71 @@ allow_local_binding = true
         })
         .build(&server)
         .await?;
-    assert!(
-        test.config.managed_network_requirements_enabled(),
-        "expected managed network requirements to be enabled"
-    );
-    assert!(
-        test.config.permissions.network.is_some(),
-        "expected managed network proxy config to be present"
-    );
-    test.session_configured
-        .network_proxy
-        .as_ref()
-        .expect("expected runtime managed network proxy addresses");
 
     test.submit_turn_with_approval_and_permission_profile(
-        "run the shell command after network hook approval",
+        "run the shell command after the network permission hook",
         approval_policy,
         permission_profile,
     )
     .await?;
-
-    timeout(Duration::from_secs(10), async {
-        loop {
-            if test
-                .codex_home_path()
-                .join("permission_request_hook_log.jsonl")
-                .exists()
-            {
-                break;
+    if expected_denial.is_none() {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                if test
+                    .codex_home_path()
+                    .join("permission_request_hook_log.jsonl")
+                    .exists()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(100)).await;
             }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .expect("expected network approval hook to run");
-
-    assert!(
-        timeout(
-            Duration::from_secs(2),
-            wait_for_event(&test.codex, |event| matches!(
-                event,
-                EventMsg::ExecApprovalRequest(_)
-            ))
-        )
+        })
         .await
-        .is_err(),
-        "expected the network approval hook to bypass the approval prompt"
-    );
+        .expect("expected network approval hook to run");
+        assert!(
+            timeout(
+                Duration::from_secs(2),
+                wait_for_event(&test.codex, |event| matches!(
+                    event,
+                    EventMsg::ExecApprovalRequest(_)
+                ))
+            )
+            .await
+            .is_err(),
+            "expected the network approval hook to bypass the approval prompt"
+        );
+    }
 
     assert_single_permission_request_hook_input(
         test.codex_home_path(),
         command,
         Some("network-access http://codex-network-test.invalid:80"),
     )?;
-
-    test.codex.submit(Op::Shutdown {}).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ShutdownComplete)
-    })
-    .await;
+    let requests = responses.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.body_json()["client_metadata"]["x-openai-subagent"].as_str()
+                    == Some("guardian")
+            })
+            .count(),
+        0
+    );
+    if let Some(expected_denial) = expected_denial {
+        let tool_output = requests
+            .iter()
+            .find_map(|request| request.function_call_output_text(call_id))
+            .expect("expected denied tool output");
+        assert!(tool_output.contains(expected_denial));
+    } else {
+        test.codex.submit(Op::Shutdown {}).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::ShutdownComplete)
+        })
+        .await;
+    }
 
     Ok(())
 }

@@ -387,12 +387,15 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
 }
 
 #[tokio::test]
-async fn blocked_request_policy_does_not_override_user_denial_outcome() {
+async fn blocked_request_does_not_override_recorded_approval_outcome() {
     let service = NetworkApprovalService::default();
     register_call_with_default_shell_trigger(&service, "registration-1").await;
 
     service
-        .record_call_outcome("registration-1", NetworkApprovalOutcome::DeniedByUser)
+        .record_call_outcome(
+            "registration-1",
+            NetworkApprovalOutcome::DeniedByPolicy("custom approval rejection".to_string()),
+        )
         .await;
     service
         .record_blocked_request(denied_blocked_request("example.com"))
@@ -400,7 +403,32 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
 
     assert_eq!(
         service.take_call_outcome("registration-1").await,
-        Some(NetworkApprovalOutcome::DeniedByUser)
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "custom approval rejection".to_string()
+        ))
+    );
+}
+
+#[tokio::test]
+async fn specific_approval_outcome_replaces_earlier_blocked_request() {
+    let service = NetworkApprovalService::default();
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+
+    service
+        .record_blocked_request(denied_blocked_request("example.com"))
+        .await;
+    service
+        .record_call_outcome(
+            "registration-1",
+            NetworkApprovalOutcome::DeniedByPolicy("specific approval rejection".to_string()),
+        )
+        .await;
+
+    assert_eq!(
+        service.take_call_outcome("registration-1").await,
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "specific approval rejection".to_string()
+        ))
     );
 }
 
