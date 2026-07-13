@@ -26,7 +26,7 @@ pub(crate) fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bo
     }
 }
 
-fn shell_script_for_invocation(invocation: &ToolInvocation) -> Option<String> {
+pub(crate) fn shell_script_for_invocation(invocation: &ToolInvocation) -> Option<String> {
     let ToolPayload::Function { arguments } = &invocation.payload else {
         return None;
     };
