@@ -125,6 +125,32 @@ pub async fn determine_streamable_http_auth_status_with_http_client(
     )
 }
 
+/// Determine authentication status using only configured and stored credentials.
+///
+/// Returns `None` when determining the status would require OAuth metadata discovery.
+pub fn determine_streamable_http_auth_status_from_credentials(
+    server_name: &str,
+    url: &str,
+    bearer_token_env_var: Option<&str>,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<Option<McpAuthState>> {
+    match auth_status_before_discovery(
+        server_name,
+        url,
+        bearer_token_env_var,
+        http_headers,
+        env_http_headers,
+        store_mode,
+        keyring_backend_kind,
+    )? {
+        AuthStatusCheck::Complete(status) => Ok(Some(status)),
+        AuthStatusCheck::Discover(_) => Ok(None),
+    }
+}
+
 fn auth_status_before_discovery(
     server_name: &str,
     url: &str,

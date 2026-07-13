@@ -1439,7 +1439,6 @@ async fn host_owned_codex_apps_manager(
         &mcp_servers,
         turn_context.config.mcp_oauth_credentials_store_mode,
         turn_context.config.auth_keyring_backend_kind(),
-        HashMap::new(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
         tx_event,

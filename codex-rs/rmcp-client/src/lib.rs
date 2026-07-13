@@ -17,6 +17,7 @@ pub use auth_status::McpAuthState;
 pub use auth_status::McpLoginRequirement;
 pub use auth_status::StreamableHttpOAuthDiscovery;
 pub use auth_status::determine_streamable_http_auth_status;
+pub use auth_status::determine_streamable_http_auth_status_from_credentials;
 pub use auth_status::determine_streamable_http_auth_status_with_http_client;
 pub use auth_status::discover_streamable_http_oauth;
 pub use auth_status::discover_streamable_http_oauth_with_http_client;

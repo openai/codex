@@ -38,7 +38,6 @@ use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
-use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::tool_plugin_provenance;
 
@@ -235,14 +234,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
 
     let runtime_context =
         McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
-    let auth_status_entries = compute_auth_statuses(
-        mcp_servers.iter(),
-        config.mcp_oauth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-        auth.as_ref(),
-        &runtime_context,
-    )
-    .await;
 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
@@ -255,7 +246,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        auth_status_entries,
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,

@@ -310,14 +310,6 @@ pub async fn read_mcp_resource(
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
     mcp_servers.retain(|name, _| name == server);
-    let auth_statuses = compute_auth_statuses(
-        mcp_servers.iter(),
-        config.mcp_oauth_credentials_store_mode,
-        config.auth_keyring_backend_kind,
-        auth,
-        &runtime_context,
-    )
-    .await;
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
     let cancel_token = CancellationToken::new();
@@ -325,7 +317,6 @@ pub async fn read_mcp_resource(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
-        auth_statuses,
         &config.approval_policy,
         String::new(),
         tx_event,
@@ -404,7 +395,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
-        auth_status_entries.clone(),
         &config.approval_policy,
         submit_id,
         tx_event,
