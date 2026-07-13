@@ -15,9 +15,6 @@ use std::time::Instant;
 
 use crate::McpAuthStatusEntry;
 use crate::codex_apps::prepare_openai_file_params_for_model;
-use crate::codex_apps_cache::CodexAppsToolsCache;
-use crate::codex_apps_cache::CodexAppsToolsCacheKey;
-use crate::codex_apps_cache::CodexAppsToolsFetchSource;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
@@ -47,6 +44,9 @@ use codex_config::McpServerAuth;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_connectors::ConnectorRuntimeContextKey;
+use codex_connectors::ConnectorRuntimeFetchSource;
+use codex_connectors::ConnectorRuntimeManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
@@ -135,8 +135,8 @@ impl McpConnectionManager {
         initial_permission_profile: PermissionProfile,
         runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
-        codex_apps_tools_cache: CodexAppsToolsCache,
-        codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
+        codex_apps_tools_cache_key: ConnectorRuntimeContextKey,
         prefix_mcp_tool_names: bool,
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
@@ -564,10 +564,13 @@ impl McpConnectionManager {
             .context("failed to get client")?;
 
         let list_start = Instant::now();
-        let fetch_ticket = managed_client
-            .codex_apps_tools_cache_context
-            .as_ref()
-            .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh));
+        let fetch_ticket =
+            managed_client
+                .codex_apps_tools_cache_context
+                .as_ref()
+                .map(|cache_context| {
+                    cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh)
+                });
         let tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
             /*is_codex_apps_mcp_server*/ true,

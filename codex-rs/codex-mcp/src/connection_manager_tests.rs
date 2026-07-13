@@ -1,6 +1,4 @@
 use super::*;
-use crate::codex_apps_cache::CodexAppsToolsCache;
-use crate::codex_apps_cache::CodexAppsToolsCacheContext;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
@@ -24,6 +22,10 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_connectors::ConnectorRuntimeContext;
+use codex_connectors::ConnectorRuntimeContextKey;
+use codex_connectors::ConnectorRuntimeFetchSource;
+use codex_connectors::ConnectorRuntimeManager;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
@@ -72,15 +74,22 @@ fn create_codex_apps_tools_cache_context(
     codex_home: PathBuf,
     account_id: Option<&str>,
     chatgpt_user_id: Option<&str>,
-) -> CodexAppsToolsCacheContext {
-    CodexAppsToolsCache::default().context(
+) -> ConnectorRuntimeContext<ToolInfo> {
+    ConnectorRuntimeManager::<ToolInfo>::default().context(
         codex_home,
-        CodexAppsToolsCacheKey {
-            account_id: account_id.map(ToOwned::to_owned),
-            chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
-            is_workspace_account: false,
-        },
+        ConnectorRuntimeContextKey::personal(
+            account_id.map(ToOwned::to_owned),
+            chatgpt_user_id.map(ToOwned::to_owned),
+        ),
     )
+}
+
+fn store_current_tools(cache_context: &ConnectorRuntimeContext<ToolInfo>, tools: Vec<ToolInfo>) {
+    let _ = cache_context.publish_if_newest_accepted(
+        cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        &create_test_server_info("Codex Apps"),
+        tools,
+    );
 }
 
 fn create_test_server_info(title: &str) -> McpServerInfo {
@@ -157,7 +166,7 @@ fn create_test_manager_with_failed_apps_startup(
         Some("reconnect-test-account"),
         Some("reconnect-test-user"),
     );
-    cache_context.store_current_tools_for_test(cached_tools);
+    store_current_tools(&cache_context, cached_tools);
     let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
@@ -689,10 +698,13 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
         Some("account-one"),
         Some("user-one"),
     );
-    cache_context.store_current_tools_for_test(vec![create_test_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "calendar_create_event",
-    )]);
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_create_event",
+        )],
+    );
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -865,6 +877,22 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tools() {
 }
 
 #[tokio::test]
+async fn cancelling_startup_does_not_disable_a_ready_client() {
+    let client = create_ready_async_managed_client(vec![create_test_tool("ready", "search")]).await;
+
+    client.cancel_token.cancel();
+
+    let managed = client
+        .client()
+        .await
+        .expect("startup cancellation should not disable a ready client");
+    assert_eq!(
+        model_tool_names(&managed.tools),
+        HashSet::from([ToolName::namespaced("ready", "search")])
+    );
+}
+
+#[tokio::test]
 async fn shutdown_cancels_pending_tool_listing() {
     let cancel_token = CancellationToken::new();
     let cancel_token_for_startup = cancel_token.clone();
@@ -972,7 +1000,7 @@ async fn list_all_tools_does_not_block_when_shared_codex_apps_cache_is_empty() {
         Some("account-one"),
         Some("user-one"),
     );
-    cache_context.store_current_tools_for_test(Vec::new());
+    store_current_tools(&cache_context, Vec::new());
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -1012,10 +1040,13 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
         Some("account-one"),
         Some("user-one"),
     );
-    cache_context.store_current_tools_for_test(vec![create_test_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "calendar_create_event",
-    )]);
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_create_event",
+        )],
+    );
     let server_info = create_test_server_info("Codex Apps");
     let failed_client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
         StartupOutcomeError::Failed {
@@ -1472,12 +1503,10 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             PathBuf::from("/tmp"),
         ),
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCache::default(),
-        CodexAppsToolsCacheKey {
-            account_id: None,
-            chatgpt_user_id: None,
-            is_workspace_account: false,
-        },
+        ConnectorRuntimeManager::<ToolInfo>::default(),
+        ConnectorRuntimeContextKey::personal(
+            /*account_id*/ None, /*chatgpt_user_id*/ None,
+        ),
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,

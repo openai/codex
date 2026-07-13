@@ -2590,8 +2590,12 @@ name = "codex-connectors"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "codex-config",
+ "codex-login",
+ "codex-otel",
  "codex-plugin",
+ "codex-protocol",
  "indexmap 2.14.0",
  "pretty_assertions",
  "serde",

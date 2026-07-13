@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use codex_config::McpServerConfig;
+use codex_connectors::ConnectorRuntimeManager;
 use codex_connectors::ConnectorSnapshot;
 use codex_connectors::PluginConnectorSource;
 use codex_core_plugins::PluginsManager;
@@ -13,11 +14,11 @@ use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::CodexAppsToolsCache;
 use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
+use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
@@ -49,7 +50,7 @@ enum OrderedMcpOverlay {
 pub struct McpManager {
     plugins_manager: Arc<PluginsManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
-    codex_apps_tools_cache: CodexAppsToolsCache,
+    codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
 }
 
 impl McpManager {
@@ -68,11 +69,11 @@ impl McpManager {
         Self {
             plugins_manager,
             extensions,
-            codex_apps_tools_cache: CodexAppsToolsCache::default(),
+            codex_apps_tools_cache: ConnectorRuntimeManager::default(),
         }
     }
 
-    pub fn codex_apps_tools_cache(&self) -> CodexAppsToolsCache {
+    pub fn codex_apps_tools_cache(&self) -> ConnectorRuntimeManager<ToolInfo> {
         self.codex_apps_tools_cache.clone()
     }
 

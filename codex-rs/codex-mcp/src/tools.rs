@@ -19,9 +19,6 @@ use tracing::warn;
 
 use crate::mcp::sanitize_responses_api_tool_name;
 
-pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
-    "codex.mcp.tools.cache_write.duration_ms";
-
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

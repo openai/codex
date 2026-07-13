@@ -1,35 +1,35 @@
+use super::persistence::CODEX_APPS_TOOLS_CACHE_MAX_BYTES;
+use super::persistence::CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION;
+use super::persistence::read_cached_codex_apps_tools;
+use super::persistence::write_cached_codex_apps_tools;
+use super::persistence::write_cached_codex_apps_tools_for_test;
 use super::*;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use crate::tools::ToolInfo;
-use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use pretty_assertions::assert_eq;
-use rmcp::model::JsonObject;
-use rmcp::model::Tool;
-use std::collections::HashSet;
+use serde::Deserialize;
+use serde::Serialize;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
-    ToolInfo {
+const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TestTool {
+    server_name: String,
+    callable_name: String,
+    connector_id: Option<String>,
+    connector_name: Option<String>,
+}
+
+fn create_test_tool(server_name: &str, tool_name: &str) -> TestTool {
+    TestTool {
         server_name: server_name.to_string(),
-        supports_parallel_tool_calls: false,
-        server_origin: None,
         callable_name: tool_name.to_string(),
-        callable_namespace: server_name.to_string(),
-        namespace_description: None,
-        tool: Tool::new(
-            tool_name.to_string(),
-            format!("Test tool: {tool_name}"),
-            Arc::new(JsonObject::default()),
-        ),
-        openai_file_input_optional_fields: Default::default(),
         connector_id: None,
         connector_name: None,
-        plugin_display_names: Vec::new(),
     }
 }
 
@@ -38,7 +38,7 @@ fn create_test_tool_with_connector(
     tool_name: &str,
     connector_id: &str,
     connector_name: Option<&str>,
-) -> ToolInfo {
+) -> TestTool {
     let mut tool = create_test_tool(server_name, tool_name);
     tool.connector_id = Some(connector_id.to_string());
     tool.connector_name = connector_name.map(ToOwned::to_owned);
@@ -49,10 +49,10 @@ fn create_codex_apps_tools_cache_context(
     codex_home: PathBuf,
     account_id: Option<&str>,
     chatgpt_user_id: Option<&str>,
-) -> CodexAppsToolsCacheContext {
-    CodexAppsToolsCache::default().context(
+) -> ConnectorRuntimeContext<TestTool> {
+    ConnectorRuntimeManager::<TestTool>::default().context(
         codex_home,
-        CodexAppsToolsCacheKey {
+        ConnectorRuntimeContextKey {
             account_id: account_id.map(ToOwned::to_owned),
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
@@ -69,13 +69,6 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
         icons: None,
         website_url: None,
     }
-}
-
-fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
-    tools
-        .iter()
-        .map(ToolInfo::canonical_tool_name)
-        .collect::<HashSet<_>>()
 }
 
 #[test]
@@ -238,7 +231,7 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
     let startup_tools = cache_context
         .current_tools()
         .expect("expected startup snapshot to load from cache");
-    let cached_server_info = load_startup_cached_codex_apps_server_info(&cache_context);
+    let cached_server_info = cache_context.cached_server_info();
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
@@ -273,7 +266,7 @@ fn startup_cached_codex_apps_tools_loads_without_server_info_cache() {
     let startup_tools = cache_context
         .current_tools()
         .expect("legacy startup snapshot should remain available");
-    let cached_server_info = load_startup_cached_codex_apps_server_info(&cache_context);
+    let cached_server_info = cache_context.cached_server_info();
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].callable_name, "calendar_search");
@@ -315,7 +308,7 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
     );
 
     assert_eq!(
-        load_startup_cached_codex_apps_server_info(&startup_cache_context),
+        startup_cache_context.cached_server_info(),
         Some(server_info)
     );
     assert!(startup_cache_context.current_tools().is_none());
@@ -355,10 +348,10 @@ fn codex_apps_tools_cache_context_does_not_reread_disk_after_creation() {
 #[test]
 fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
     let codex_home = tempdir().expect("tempdir");
-    let cache = CodexAppsToolsCache::default();
+    let cache = ConnectorRuntimeManager::<TestTool>::default();
     let cache_context_1 = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
+        ConnectorRuntimeContextKey {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
@@ -366,28 +359,21 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
     );
     let cache_context_2 = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
+        ConnectorRuntimeContextKey {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
         },
     );
-    let older_ticket = cache_context_1.begin_fetch(CodexAppsToolsFetchSource::Startup);
-    let newer_ticket = cache_context_2.begin_fetch(CodexAppsToolsFetchSource::HardRefresh);
+    let older_ticket = cache_context_1.begin_fetch(ConnectorRuntimeFetchSource::Startup);
+    let newer_ticket = cache_context_2.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh);
     let server_info = create_test_server_info("Codex Apps");
     let newer_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "newer")];
     let older_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "older")];
 
     let published_tools =
         cache_context_2.publish_if_newest_accepted(newer_ticket, &server_info, newer_tools);
-    assert_eq!(
-        model_tool_names(&published_tools),
-        model_tool_names(
-            &cache_context_1
-                .current_tools()
-                .expect("new snapshot should publish")
-        )
-    );
+    assert_eq!(cache_context_1.current_tools(), Some(published_tools));
     let current_tools =
         cache_context_1.publish_if_newest_accepted(older_ticket, &server_info, older_tools);
 
@@ -408,9 +394,9 @@ fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
     let codex_home = tempdir().expect("tempdir");
     let codex_home_file = codex_home.path().join("not-a-directory");
     std::fs::write(&codex_home_file, b"occupied").expect("create codex home file");
-    let cache_context = CodexAppsToolsCache::default().context(
+    let cache_context = ConnectorRuntimeManager::<TestTool>::default().context(
         codex_home_file,
-        CodexAppsToolsCacheKey {
+        ConnectorRuntimeContextKey {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
@@ -418,16 +404,13 @@ fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
     );
     let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "live")];
     let published_tools = cache_context.publish_if_newest_accepted(
-        cache_context.begin_fetch(CodexAppsToolsFetchSource::HardRefresh),
+        cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
         &create_test_server_info("Codex Apps"),
         tools.clone(),
     );
 
-    assert_eq!(model_tool_names(&published_tools), model_tool_names(&tools));
-    assert_eq!(
-        model_tool_names(&cache_context.current_tools().expect("live snapshot")),
-        model_tool_names(&tools)
-    );
+    assert_eq!(published_tools, tools);
+    assert_eq!(cache_context.current_tools(), Some(tools));
 }
 
 #[cfg(unix)]
@@ -436,10 +419,10 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
     let codex_home = PathBuf::from(std::ffi::OsString::from_vec(
         b"/tmp/codex-home-\xff".to_vec(),
     ));
-    let cache = CodexAppsToolsCache::default();
+    let cache = ConnectorRuntimeManager::<TestTool>::default();
     let user_one_context = cache.context(
         codex_home.clone(),
-        CodexAppsToolsCacheKey {
+        ConnectorRuntimeContextKey {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
@@ -447,7 +430,7 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
     );
     let user_two_context = cache.context(
         codex_home,
-        CodexAppsToolsCacheKey {
+        ConnectorRuntimeContextKey {
             account_id: Some("account-two".to_string()),
             chatgpt_user_id: Some("user-two".to_string()),
             is_workspace_account: false,
@@ -458,8 +441,264 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
         user_two_context.tools_cache_path(),
     ];
 
-    assert_eq!(
-        cache_paths.iter().collect::<HashSet<_>>().len(),
-        cache_paths.len()
+    assert_ne!(cache_paths[0], cache_paths[1]);
+}
+
+#[test]
+fn contexts_for_different_identities_keep_isolated_snapshots() {
+    let codex_home = tempdir().expect("tempdir");
+    let manager = ConnectorRuntimeManager::<TestTool>::default();
+    let context_a = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-a".to_string()),
+            chatgpt_user_id: Some("user-a".to_string()),
+            is_workspace_account: false,
+        },
     );
+    let tools_a = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "tool-a")];
+    let snapshot_a = context_a.publish_runtime_if_newest_accepted(
+        context_a.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        &create_test_server_info("Codex Apps"),
+        tools_a.clone(),
+    );
+    let older_ticket_a = context_a.begin_fetch(ConnectorRuntimeFetchSource::Startup);
+    let context_b = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-b".to_string()),
+            chatgpt_user_id: Some("user-b".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let same_context_a = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-a".to_string()),
+            chatgpt_user_id: Some("user-a".to_string()),
+            is_workspace_account: false,
+        },
+    );
+
+    assert!(Arc::ptr_eq(
+        &snapshot_a,
+        &same_context_a
+            .current_snapshot()
+            .expect("context A snapshot")
+    ));
+    assert!(context_b.current_snapshot().is_none());
+
+    let tools_b = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "tool-b")];
+    let snapshot_b = context_b.publish_runtime_if_newest_accepted(
+        context_b.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        &create_test_server_info("Codex Apps"),
+        tools_b.clone(),
+    );
+    let newer_tools_a = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "newer-a")];
+    let newer_snapshot_a = same_context_a.publish_runtime_if_newest_accepted(
+        same_context_a.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        &create_test_server_info("Codex Apps"),
+        newer_tools_a.clone(),
+    );
+    let stale_snapshot_a = context_a.publish_runtime_if_newest_accepted(
+        older_ticket_a,
+        &create_test_server_info("Codex Apps"),
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "stale-a")],
+    );
+
+    assert_eq!(snapshot_a.tools(), &tools_a);
+    assert_eq!(snapshot_b.tools(), &tools_b);
+    assert_eq!(newer_snapshot_a.tools(), &newer_tools_a);
+    assert!(Arc::ptr_eq(&newer_snapshot_a, &stale_snapshot_a));
+    assert!(Arc::ptr_eq(
+        &newer_snapshot_a,
+        &context_a.current_snapshot().expect("context A snapshot")
+    ));
+    assert!(Arc::ptr_eq(
+        &snapshot_b,
+        &context_b.current_snapshot().expect("context B snapshot")
+    ));
+}
+
+#[test]
+fn oversized_tools_cache_is_ignored_during_initial_load() {
+    let codex_home = tempdir().expect("tempdir");
+    let context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let cache_path = context.tools_cache_path();
+    std::fs::create_dir_all(cache_path.parent().expect("cache parent"))
+        .expect("create cache parent");
+    let file = std::fs::File::create(cache_path).expect("create oversized cache");
+    file.set_len(CODEX_APPS_TOOLS_CACHE_MAX_BYTES + 1)
+        .expect("size oversized cache");
+
+    let reloaded = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+
+    assert!(reloaded.current_snapshot().is_none());
+}
+
+#[test]
+fn cold_loaded_snapshot_uses_cache_modification_time() {
+    let codex_home = tempdir().expect("tempdir");
+    let writer = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "cached")];
+    write_cached_codex_apps_tools(&writer, &tools).expect("write tools cache");
+    let modified_at = std::fs::metadata(writer.tools_cache_path())
+        .and_then(|metadata| metadata.modified())
+        .expect("cache modification time");
+
+    let reloaded = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let snapshot = reloaded.current_snapshot().expect("cold-loaded snapshot");
+
+    assert_eq!(snapshot.tools(), &tools);
+    assert_eq!(snapshot.refreshed_at(), modified_at);
+}
+#[test]
+fn accepted_generations_finish_persistence_in_order() {
+    let codex_home = tempdir().expect("tempdir");
+    let context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let older_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::Startup);
+    let newer_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh);
+    let (older_persisting_tx, older_persisting_rx) = std::sync::mpsc::channel();
+    let (release_older_tx, release_older_rx) = std::sync::mpsc::channel();
+    let older_context = context.clone();
+    let older_publish = std::thread::spawn(move || {
+        older_context.publish_runtime_if_newest_accepted_with(
+            older_ticket,
+            &create_test_server_info("Codex Apps"),
+            vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "older")],
+            move |_, _, _| {
+                older_persisting_tx
+                    .send(())
+                    .expect("signal older persistence");
+                release_older_rx.recv().expect("release older persistence");
+            },
+        )
+    });
+    older_persisting_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("older generation should enter persistence");
+
+    let (newer_persisting_tx, newer_persisting_rx) = std::sync::mpsc::channel();
+    let newer_context = context;
+    let newer_publish = std::thread::spawn(move || {
+        newer_context.publish_runtime_if_newest_accepted_with(
+            newer_ticket,
+            &create_test_server_info("Codex Apps"),
+            vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "newer")],
+            move |_, _, _| {
+                newer_persisting_tx
+                    .send(())
+                    .expect("signal newer persistence");
+            },
+        )
+    });
+
+    assert!(
+        newer_persisting_rx
+            .recv_timeout(Duration::from_millis(20))
+            .is_err()
+    );
+    release_older_tx
+        .send(())
+        .expect("allow older persistence to finish");
+    newer_persisting_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("newer generation should persist after older generation");
+
+    older_publish.join().expect("join older publish");
+    let newer_snapshot = newer_publish.join().expect("join newer publish");
+    assert_eq!(newer_snapshot.tools()[0].callable_name, "newer");
+}
+
+#[test]
+fn personal_and_workspace_contexts_are_distinct_even_with_matching_ids() {
+    let codex_home = tempdir().expect("tempdir");
+    let manager = ConnectorRuntimeManager::<TestTool>::default();
+    let personal_context = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account".to_string()),
+            chatgpt_user_id: Some("user".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let personal_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "personal")];
+    let _ = personal_context.publish_runtime_if_newest_accepted(
+        personal_context.begin_fetch(ConnectorRuntimeFetchSource::Startup),
+        &create_test_server_info("Codex Apps"),
+        personal_tools.clone(),
+    );
+
+    let workspace_context = manager.context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account".to_string()),
+            chatgpt_user_id: Some("user".to_string()),
+            is_workspace_account: true,
+        },
+    );
+
+    let workspace_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "workspace")];
+    let _ = workspace_context.publish_runtime_if_newest_accepted(
+        workspace_context.begin_fetch(ConnectorRuntimeFetchSource::Startup),
+        &create_test_server_info("Codex Apps"),
+        workspace_tools.clone(),
+    );
+
+    assert_eq!(personal_context.current_tools(), Some(personal_tools));
+    assert_eq!(workspace_context.current_tools(), Some(workspace_tools));
+    assert_ne!(
+        personal_context.tools_cache_path(),
+        workspace_context.tools_cache_path()
+    );
+}
+
+#[test]
+fn live_publish_sets_timestamp_and_stale_publish_preserves_it() {
+    let codex_home = tempdir().expect("tempdir");
+    let context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let stale_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::Startup);
+    let current_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh);
+    let before = SystemTime::now();
+    let current = context.publish_runtime_if_newest_accepted(
+        current_ticket,
+        &create_test_server_info("Codex Apps"),
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "current")],
+    );
+    let after = SystemTime::now();
+
+    assert!(current.refreshed_at() >= before);
+    assert!(current.refreshed_at() <= after);
+
+    let stale = context.publish_runtime_if_newest_accepted(
+        stale_ticket,
+        &create_test_server_info("Codex Apps"),
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "stale")],
+    );
+    assert!(Arc::ptr_eq(&current, &stale));
+    assert_eq!(stale.refreshed_at(), current.refreshed_at());
 }
