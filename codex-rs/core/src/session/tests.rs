@@ -16,6 +16,7 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
+use anyhow::Context;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
@@ -178,7 +179,9 @@ use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use std::path::Path;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -7839,6 +7842,58 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
         codex_mcp::configured_mcp_servers(new_runtime.config()),
         refreshed_mcp_servers
     );
+}
+
+#[tokio::test]
+async fn refresh_mcp_servers_does_not_wait_for_optional_http_auth_discovery() -> anyhow::Result<()>
+{
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mcp_addr = listener.local_addr()?;
+    let (connection_started_tx, connection_started_rx) = oneshot::channel();
+    let blackhole_server = tokio::spawn(async move {
+        let Ok((connection, _)) = listener.accept().await else {
+            return;
+        };
+        let _ = connection_started_tx.send(());
+        let _connection = connection;
+        std::future::pending::<()>().await;
+    });
+
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let mut refresh_config = turn_context.config.as_ref().clone();
+    let refreshed_mcp_servers =
+        serde_json::from_value::<HashMap<String, McpServerConfig>>(json!({
+            "optional_http": {
+                "url": format!("http://{mcp_addr}/mcp"),
+                "startup_timeout_sec": 60
+            }
+        }))?;
+    refresh_config
+        .mcp_servers
+        .set(refreshed_mcp_servers.clone())?;
+
+    let refresh_result = timeout(
+        Duration::from_secs(10),
+        session.refresh_mcp_servers_now(
+            &turn_context,
+            &refresh_config,
+            /*elicitation_reviewer*/ None,
+        ),
+    )
+    .await;
+    let connection_result = timeout(Duration::from_secs(10), connection_started_rx).await;
+    blackhole_server.abort();
+
+    refresh_result.context("MCP refresh waited for optional HTTP auth discovery")?;
+    connection_result.context("optional HTTP MCP never attempted a connection")??;
+    let configured_mcp_servers =
+        codex_mcp::configured_mcp_servers(session.services.latest_mcp_runtime().config());
+    assert_eq!(
+        configured_mcp_servers.get("optional_http"),
+        refreshed_mcp_servers.get("optional_http")
+    );
+    Ok(())
 }
 
 #[tokio::test]
