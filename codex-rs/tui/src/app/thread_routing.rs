@@ -1201,7 +1201,7 @@ impl App {
         }
 
         match app_server
-            .resume_thread(self.config.clone(), thread_id)
+            .resume_thread(self.config.clone(), thread_id, self.resume_model_settings())
             .await
         {
             Ok(started) => {
@@ -1325,6 +1325,10 @@ impl App {
         let suppress_replay_notices =
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);
         if let Some(session) = snapshot.session {
+            if session.reasoning_effort != Some(ReasoningEffortConfig::Ultra) {
+                self.chat_widget
+                    .set_plan_mode_reasoning_effort(self.config.plan_mode_reasoning_effort.clone());
+            }
             if self.side_threads.contains_key(&session.thread_id) {
                 self.chat_widget.handle_side_thread_session(session);
             } else if suppress_replay_notices {

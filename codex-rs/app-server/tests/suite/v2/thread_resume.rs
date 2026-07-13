@@ -59,10 +59,14 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::Settings;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ImageGenerationEndEvent;
@@ -529,21 +533,30 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_preserves_acknowledged_approvals_reviewer_update() -> Result<()> {
+async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewer_update()
+-> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config_toml = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config_toml.replace(
+            "model = \"gpt-5.4\"",
+            "model = \"gpt-5.4\"\nmodel_reasoning_effort = \"high\"",
+        ),
+    )?;
 
     let thread_id = {
         let mut mcp = TestAppServer::builder()
             .with_codex_home(codex_home.path())
-            .without_auto_env()
             .build()
             .await?;
         timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
         let start_id = mcp
-            .send_thread_start_request(ThreadStartParams {
+            .send_thread_start_request_with_auto_env(ThreadStartParams {
                 model: Some("gpt-5.4".to_string()),
                 ..Default::default()
             })
@@ -580,6 +593,8 @@ async fn thread_resume_preserves_acknowledged_approvals_reviewer_update() -> Res
         let update_id = mcp
             .send_thread_settings_update_request(ThreadSettingsUpdateParams {
                 thread_id: thread.id.clone(),
+                model: Some("gpt-5.2-codex".to_string()),
+                effort: Some(ReasoningEffort::Ultra),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 ..Default::default()
             })
@@ -601,7 +616,60 @@ async fn thread_resume_preserves_acknowledged_approvals_reviewer_update() -> Res
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        model,
+        reasoning_effort,
+        approvals_reviewer,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(model, "gpt-5.2-codex");
+    assert_eq!(reasoning_effort, Some(ReasoningEffort::Ultra));
+    assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+
+    let update_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5.2-codex".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+    let _: ThreadSettingsUpdateResponse = to_response(update_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/settings/updated"),
+    )
+    .await??;
+    drop(mcp);
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -617,10 +685,10 @@ async fn thread_resume_preserves_acknowledged_approvals_reviewer_update() -> Res
     )
     .await??;
     let ThreadResumeResponse {
-        approvals_reviewer, ..
+        reasoning_effort, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(reasoning_effort, None);
 
     Ok(())
 }

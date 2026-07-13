@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Select Reasoning Level for gpt-5.4
+
+› 1. More reasoning…  Ultra consumes usage limits faster
+
+  Press enter to confirm or esc to go back

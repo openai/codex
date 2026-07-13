@@ -266,7 +266,7 @@ async fn apply_metadata_update(
                 metadata.model = Some(model);
             }
             if let Some(reasoning_effort) = patch.reasoning_effort {
-                metadata.reasoning_effort = Some(reasoning_effort);
+                metadata.reasoning_effort = reasoning_effort;
             }
             if let Some(created_at) = patch.created_at {
                 metadata.created_at = created_at;
@@ -717,6 +717,7 @@ fn rollout_path_is_archived(store: &LocalThreadStore, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::ThreadHistoryMode;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
@@ -1008,7 +1009,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_thread_metadata_sets_permission_profile() {
+    async fn update_thread_metadata_updates_permission_profile_and_reasoning_effort() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
@@ -1027,6 +1028,7 @@ mod tests {
                 thread_id,
                 patch: ThreadMetadataPatch {
                     permission_profile: Some(PermissionProfile::Disabled),
+                    reasoning_effort: Some(Some(ReasoningEffort::Ultra)),
                     ..Default::default()
                 },
                 include_archived: false,
@@ -1035,6 +1037,19 @@ mod tests {
             .expect("set permission profile");
 
         assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    reasoning_effort: Some(None),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("clear reasoning effort");
+
+        assert_eq!(thread.reasoning_effort, None);
         let metadata = runtime
             .get_thread(thread_id)
             .await
@@ -1045,6 +1060,7 @@ mod tests {
             metadata.sandbox_policy,
             serde_json::to_string(&permission_profile).expect("serialize profile")
         );
+        assert_eq!(metadata.reasoning_effort, None);
     }
 
     #[tokio::test]
