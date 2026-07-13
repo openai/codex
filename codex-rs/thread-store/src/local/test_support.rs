@@ -111,15 +111,17 @@ pub(super) fn write_session_file_with_fork(
         },
     });
     writeln!(file, "{meta}")?;
-    let user_event = serde_json::json!({
-        "timestamp": ts,
-        "type": "event_msg",
-        "payload": {
-            "type": "user_message",
-            "message": first_user_message,
-            "kind": "plain",
-        },
-    });
-    writeln!(file, "{user_event}")?;
+    if matches!(history_mode, ThreadHistoryMode::Legacy) {
+        let user_event = serde_json::json!({
+            "timestamp": ts,
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": first_user_message,
+                "kind": "plain",
+            },
+        });
+        writeln!(file, "{user_event}")?;
+    }
     Ok(path)
 }

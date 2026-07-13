@@ -27,6 +27,7 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::StoredModelContext;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
@@ -368,6 +369,7 @@ pub struct InMemoryThreadStoreCalls {
     pub shutdown_thread: usize,
     pub discard_thread: usize,
     pub load_history: usize,
+    pub load_latest_model_context: usize,
     pub read_thread: usize,
     pub read_thread_with_history: usize,
     pub read_thread_by_rollout_path: usize,
@@ -521,6 +523,25 @@ impl InMemoryThreadStore {
         })
     }
 
+    async fn load_latest_model_context(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreResult<StoredModelContext> {
+        let mut state = self.state.lock().await;
+        state.calls.load_latest_model_context += 1;
+        let items =
+            state
+                .histories
+                .get(&params.thread_id)
+                .ok_or(ThreadStoreError::ThreadNotFound {
+                    thread_id: params.thread_id,
+                })?;
+        Ok(StoredModelContext {
+            thread_id: params.thread_id,
+            items: items.clone(),
+        })
+    }
+
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
         let mut state = self.state.lock().await;
         state.calls.read_thread += 1;
@@ -657,6 +678,13 @@ impl ThreadStore for InMemoryThreadStore {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredThreadHistory> {
         Box::pin(InMemoryThreadStore::load_history(self, params))
+    }
+
+    fn load_latest_model_context(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, StoredModelContext> {
+        Box::pin(InMemoryThreadStore::load_latest_model_context(self, params))
     }
 
     fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreFuture<'_, StoredThread> {

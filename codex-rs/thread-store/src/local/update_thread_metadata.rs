@@ -820,6 +820,7 @@ mod tests {
             ThreadHistoryMode::Paginated,
         )
         .expect("session file");
+        let original_rollout = std::fs::read_to_string(&path).expect("read rollout");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
             config.default_model_provider_id.clone(),
@@ -845,7 +846,10 @@ mod tests {
             }
         ));
 
-        assert_eq!(last_rollout_item(path.as_path())["type"], "event_msg");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read rollout"),
+            original_rollout
+        );
         assert_eq!(
             runtime
                 .get_thread_memory_mode(thread_id)
