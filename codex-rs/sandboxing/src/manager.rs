@@ -532,8 +532,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
 
     let inner_command = std::mem::take(&mut request.command);
     let proxy_enforced = request.network.is_some();
-    let use_elevated =
-        windows_sandbox_uses_elevated_backend(request.windows_sandbox_level, proxy_enforced);
+    let use_elevated = windows_sandbox_uses_elevated_backend(request.windows_sandbox_level);
     let overrides = if use_elevated {
         resolve_windows_elevated_filesystem_overrides(
             request.sandbox,

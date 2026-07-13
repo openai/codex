@@ -936,7 +936,10 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     let (session, _turn_context) = make_session_and_context().await;
     let initial_permission_profile = PermissionProfile::workspace_write();
 
-    let mut network_config = NetworkProxyConfig::default();
+    let mut network_config = NetworkProxyConfig {
+        enabled: true,
+        ..Default::default()
+    };
     network_config.set_allowed_domains(vec!["evil.com".to_string()]);
     let requirements = NetworkConstraints {
         domains: Some(NetworkDomainPermissionsToml {
@@ -1187,6 +1190,34 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
 
     let turn_context = session.new_default_turn().await;
     assert!(turn_context.network.is_some());
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn workspace_write_turns_do_not_expose_disabled_managed_network_proxy() -> anyhow::Result<()>
+{
+    let permission_profile = PermissionProfile::workspace_write();
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(false),
+            ..Default::default()
+        }),
+        &permission_profile,
+    )?;
+
+    let session = make_session_with_config(move |config| {
+        config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .expect("test setup should allow permission profile");
+        config.permissions.network = Some(network_spec);
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+    assert!(turn_context.network.is_none());
     Ok(())
 }
 
@@ -4839,9 +4870,17 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
         codex_home.path().join(codex_config::CONFIG_TOML_FILE),
         toml::to_string(&base_config).expect("serialize config"),
     )?;
+    let elevated_only_windows_sandbox_requirement = || {
+        codex_config::test_support::CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"[windows]
+allowed_sandbox_implementations = ["elevated"]
+"#,
+        )
+    };
     let locked_config = Arc::new(
         ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .cloud_config_bundle(elevated_only_windows_sandbox_requirement())
             .harness_overrides(ConfigOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 ..Default::default()
@@ -4860,6 +4899,7 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
     );
     let selected_config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(elevated_only_windows_sandbox_requirement())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
             default_permissions: Some("web-enabled".to_string()),
@@ -8012,17 +8052,32 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
 }
 
 #[tokio::test]
-async fn record_context_updates_emits_environment_item_for_network_changes() {
-    let (session, previous_context) = make_session_and_context().await;
-    let previous_context = Arc::new(previous_context);
-    let mut current_context = previous_context
-        .with_model(
-            previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+async fn record_context_updates_emits_disabled_network_transition() {
+    let (session, mut previous_context) = make_session_and_context().await;
+    let permission_profile = PermissionProfile::workspace_write();
+    let network_config = NetworkProxyConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        network_config,
+        /*requirements*/ None,
+        &permission_profile,
+    )
+    .expect("build network proxy spec");
+    let started_proxy = network_spec
+        .start_proxy(
+            &permission_profile,
+            /*policy_decider*/ None,
+            /*blocked_request_observer*/ None,
+            /*enable_network_approval_flow*/ false,
+            crate::config::NetworkProxyAuditMetadata::default(),
         )
-        .await;
+        .await
+        .expect("start network proxy");
+    previous_context.network = Some(started_proxy.proxy());
 
-    let mut config = (*current_context.config).clone();
+    let mut config = (*previous_context.config).clone();
     let mut requirements = config.config_layer_stack.requirements().clone();
     requirements.network = Some(Sourced::new(
         NetworkConstraints {
@@ -8057,7 +8112,15 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
         config.config_layer_stack.requirements_toml().clone(),
     )
     .expect("rebuild config layer stack with network requirements");
-    current_context.config = Arc::new(config);
+    previous_context.config = Arc::new(config);
+    let previous_context = Arc::new(previous_context);
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context.network = None;
 
     let update_items =
         record_context_update_items(&session, previous_context, current_context).await;
@@ -8066,9 +8129,7 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
         .into_iter()
         .find(|text| text.contains("<environment_context>"))
         .expect("environment update item should be emitted");
-    assert!(environment_update.contains(
-        "<network enabled=\"true\"><allowed>api.example.com</allowed><denied>blocked.example.com</denied></network>"
-    ));
+    assert!(environment_update.contains("<network enabled=\"false\"></network>"));
 }
 
 #[tokio::test]

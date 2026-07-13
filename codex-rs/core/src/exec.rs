@@ -17,6 +17,7 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::validate_windows_sandbox_network_proxy_compatibility;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -411,10 +412,13 @@ pub fn build_exec_request(
             )
         })
         .map_err(CodexErr::from)?;
-    let use_windows_elevated_backend = windows_sandbox_uses_elevated_backend(
+    validate_windows_sandbox_network_proxy_compatibility(
         exec_req.windows_sandbox_level,
         exec_req.network.is_some(),
-    );
+    )
+    .map_err(CodexErr::Io)?;
+    let use_windows_elevated_backend =
+        windows_sandbox_uses_elevated_backend(exec_req.windows_sandbox_level);
     exec_req.windows_sandbox_filesystem_overrides = if use_windows_elevated_backend {
         resolve_windows_elevated_filesystem_overrides(
             exec_req.sandbox,
@@ -658,7 +662,9 @@ async fn exec_windows_sandbox(
     let command_path = command.first().cloned();
     let sandbox_level = windows_sandbox_level;
     let proxy_enforced = network.is_some();
-    let use_elevated = windows_sandbox_uses_elevated_backend(sandbox_level, proxy_enforced);
+    validate_windows_sandbox_network_proxy_compatibility(sandbox_level, proxy_enforced)
+        .map_err(CodexErr::Io)?;
+    let use_elevated = windows_sandbox_uses_elevated_backend(sandbox_level);
     let additional_deny_write_paths = windows_sandbox_filesystem_overrides
         .map(|overrides| overrides.additional_deny_write_paths.clone())
         .unwrap_or_default();

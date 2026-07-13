@@ -980,6 +980,15 @@ impl UnifiedExecProcessManager {
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        #[cfg(target_os = "windows")]
+        if !environment.is_remote() {
+            crate::config::validate_windows_sandbox_network_proxy_compatibility(
+                request.windows_sandbox_level,
+                request.network.is_some(),
+            )
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        }
+
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
         #[cfg(target_os = "windows")]

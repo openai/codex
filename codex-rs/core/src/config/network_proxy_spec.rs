@@ -73,7 +73,7 @@ impl ConfigReloader for StaticNetworkProxyReloader {
 }
 
 impl NetworkProxySpec {
-    pub(crate) fn enabled(&self) -> bool {
+    pub fn enabled(&self) -> bool {
         self.config.enabled
     }
 

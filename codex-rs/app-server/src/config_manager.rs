@@ -24,6 +24,12 @@ use toml::Value as TomlValue;
 use tracing::instrument;
 use tracing::warn;
 
+#[derive(Clone, Copy)]
+enum ConfigLoadPhase {
+    CloudConfigBootstrap,
+    Authoritative,
+}
+
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
 pub(crate) struct ConfigManager {
@@ -148,6 +154,17 @@ impl ConfigManager {
         .await
     }
 
+    pub(crate) async fn load_config_for_cloud_config_bootstrap(&self) -> std::io::Result<Config> {
+        self.load_with_cli_overrides_inner(
+            &self.current_cli_overrides(),
+            /*request_overrides*/ None,
+            ConfigOverrides::default(),
+            /*fallback_cwd*/ None,
+            ConfigLoadPhase::CloudConfigBootstrap,
+        )
+        .await
+    }
+
     pub(crate) async fn load_latest_config_for_thread(
         &self,
         thread_config: &Config,
@@ -218,8 +235,26 @@ impl ConfigManager {
         &self,
         cli_overrides: &[(String, TomlValue)],
         request_overrides: Option<HashMap<String, serde_json::Value>>,
+        typesafe_overrides: ConfigOverrides,
+        fallback_cwd: Option<PathBuf>,
+    ) -> std::io::Result<Config> {
+        self.load_with_cli_overrides_inner(
+            cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            fallback_cwd,
+            ConfigLoadPhase::Authoritative,
+        )
+        .await
+    }
+
+    async fn load_with_cli_overrides_inner(
+        &self,
+        cli_overrides: &[(String, TomlValue)],
+        request_overrides: Option<HashMap<String, serde_json::Value>>,
         mut typesafe_overrides: ConfigOverrides,
         fallback_cwd: Option<PathBuf>,
+        load_phase: ConfigLoadPhase,
     ) -> std::io::Result<Config> {
         let mut request_overrides = request_overrides.unwrap_or_default();
         if let Some(value) = request_overrides.remove("bypass_hook_trust") {
@@ -240,7 +275,7 @@ impl ConfigManager {
             )
             .collect::<Vec<_>>();
 
-        let mut config = codex_core::config::ConfigBuilder::default()
+        let builder = codex_core::config::ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
             .cli_overrides(merged_cli_overrides)
             .loader_overrides(self.loader_overrides.clone())
@@ -248,9 +283,13 @@ impl ConfigManager {
             .harness_overrides(typesafe_overrides)
             .fallback_cwd(fallback_cwd)
             .cloud_config_bundle(self.current_cloud_config_bundle())
-            .thread_config_loader(self.current_thread_config_loader())
-            .build()
-            .await?;
+            .thread_config_loader(self.current_thread_config_loader());
+        let mut config = match load_phase {
+            ConfigLoadPhase::CloudConfigBootstrap => {
+                builder.build_for_cloud_config_bootstrap().await?
+            }
+            ConfigLoadPhase::Authoritative => builder.build().await?,
+        };
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
         Ok(config)
