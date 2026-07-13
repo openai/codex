@@ -10,6 +10,7 @@ use codex_otel::MetricsClient;
 use codex_protocol::user_input::UserInput;
 
 use crate::catalog::SkillCatalog;
+use crate::catalog::SkillSourceKind;
 use crate::dynamic_skill_selector::CheapSkillSelection;
 use crate::dynamic_skill_selector::CheapSkillSelector;
 use crate::dynamic_skill_selector::SkillSelectionDocument;
@@ -50,7 +51,16 @@ impl ShadowSelectionExperiment {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| entry.enabled && entry.prompt_visible)
+            .filter(|(_, entry)| {
+                entry.enabled
+                    && entry.prompt_visible
+                    // Invocation observation currently exists only for host shell use and
+                    // orchestrator reads. Keep the candidate set aligned with that universe.
+                    && matches!(
+                        &entry.authority.kind,
+                        SkillSourceKind::Host | SkillSourceKind::Orchestrator
+                    )
+            })
             .map(|(id, entry)| SkillSelectionDocument {
                 id,
                 name: entry.name.as_str(),

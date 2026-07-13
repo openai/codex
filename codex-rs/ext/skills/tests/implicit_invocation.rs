@@ -15,9 +15,12 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnInputContext;
+use codex_extension_api::WorldStateContributionInput;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TruncationPolicy;
@@ -39,6 +42,7 @@ use codex_skills_extension::provider::SkillProviderFuture;
 use codex_skills_extension::provider::SkillReadRequest;
 use codex_skills_extension::provider::SkillSearchRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
@@ -72,6 +76,40 @@ impl SkillProvider for OrchestratorProvider {
         Box::pin(std::future::ready(Ok(SkillReadResult {
             resource: request.resource,
             contents: "# Demo\n\nUse the demo skill.".to_string(),
+        })))
+    }
+
+    fn search(&self, _request: SkillSearchRequest) -> SkillProviderFuture<'_, SkillSearchResult> {
+        Box::pin(std::future::ready(Ok(SkillSearchResult::default())))
+    }
+}
+
+#[derive(Clone)]
+struct ExecutorProvider;
+
+impl SkillProvider for ExecutorProvider {
+    fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+        Box::pin(std::future::ready(Ok(SkillCatalog {
+            entries: (0..5)
+                .map(|index| {
+                    let resource = format!("skill://executor/demo-{index}/SKILL.md");
+                    SkillCatalogEntry::new(
+                        SkillPackageId(format!("executor/demo-{index}")),
+                        SkillAuthority::new(SkillSourceKind::Executor, "executor"),
+                        "演示文稿",
+                        "创建演示文稿。",
+                        SkillResourceId::new(resource),
+                    )
+                })
+                .collect(),
+            warnings: Vec::new(),
+        })))
+    }
+
+    fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
+        Box::pin(std::future::ready(Ok(SkillReadResult {
+            resource: request.resource,
+            contents: "# 演示文稿".to_string(),
         })))
     }
 
@@ -174,7 +212,7 @@ async fn implicit_core_and_native_read_invocations_share_turn_local_recording() 
 }
 
 #[tokio::test]
-async fn host_snapshot_is_available_only_to_shadow_selection() -> TestResult {
+async fn shadow_selection_uses_host_snapshot_and_excludes_executor_candidates() -> TestResult {
     let metrics = MetricsClient::new(
         MetricsConfig::in_memory(
             "test",
@@ -187,7 +225,7 @@ async fn host_snapshot_is_available_only_to_shadow_selection() -> TestResult {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     install_with_providers_and_metrics(
         &mut builder,
-        SkillProviders::new(),
+        SkillProviders::new().with_executor_provider(Arc::new(ExecutorProvider)),
         Some(metrics.clone()),
         |_| SkillsExtensionConfig {
             include_instructions: true,
@@ -230,6 +268,24 @@ async fn host_snapshot_is_available_only_to_shadow_selection() -> TestResult {
     });
     let turn_store = ExtensionData::new("turn-host");
     turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
+    let selected_roots = [SelectedCapabilityRoot {
+        id: "executor-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "executor".to_string(),
+            path: PathUri::parse("file:///skills").expect("executor skill root URI"),
+        },
+    }];
+    registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-host",
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
 
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
