@@ -1401,6 +1401,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
+        defer_server_overloaded_retries: bool,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
@@ -1456,7 +1457,8 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
-            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+            .with_telemetry(Some(request_telemetry), Some(sse_telemetry))
+            .with_deferred_server_overload_retries(defer_server_overloaded_retries);
             let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
@@ -1782,6 +1784,33 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
+        self.stream_with_deferred_server_overload_retries(
+            prompt,
+            model_info,
+            session_telemetry,
+            effort,
+            summary,
+            service_tier,
+            responses_metadata,
+            /*defer_server_overloaded_retries*/ false,
+            inference_trace,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn stream_with_deferred_server_overload_retries(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
+        defer_server_overloaded_retries: bool,
+        inference_trace: &InferenceTraceContext,
+    ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
@@ -1817,6 +1846,7 @@ impl ModelClientSession {
                     summary,
                     service_tier,
                     responses_metadata,
+                    defer_server_overloaded_retries,
                     inference_trace,
                 )
                 .await

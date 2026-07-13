@@ -34,7 +34,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
@@ -188,6 +190,7 @@ async fn run_compact_task_inner(
         input,
         initial_context_injection,
         compaction_metadata,
+        phase,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -223,6 +226,7 @@ async fn run_compact_task_inner_impl(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    phase: CompactionPhase,
 ) -> CodexResult<String> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -311,7 +315,9 @@ async fn run_compact_task_inner_impl(
                     continue;
                 } else {
                     sess.track_turn_codex_error(turn_context.as_ref(), &e);
-                    let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                    let event = EventMsg::Error(compaction_error_event(
+                        &e, phase, /*message_prefix*/ None,
+                    ));
                     sess.send_event(&turn_context, event).await;
                     return Err(e);
                 }
@@ -469,6 +475,18 @@ pub(crate) fn compaction_status_from_result<T>(result: &CodexResult<T>) -> Compa
         Err(CodexErr::Interrupted | CodexErr::TurnAborted) => CompactionStatus::Interrupted,
         Err(_) => CompactionStatus::Failed,
     }
+}
+
+pub(crate) fn compaction_error_event(
+    error: &CodexErr,
+    phase: CompactionPhase,
+    message_prefix: Option<String>,
+) -> ErrorEvent {
+    let mut event = error.to_error_event(message_prefix);
+    if matches!(phase, CompactionPhase::PreTurn) && matches!(error, CodexErr::ServerOverloaded) {
+        event.codex_error_info = Some(CodexErrorInfo::ServerOverloadedBeforeInput);
+    }
+    event
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {

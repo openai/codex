@@ -1,3 +1,4 @@
+use crate::api_bridge::is_server_overloaded_transport_error;
 use crate::auth::SharedAuthProvider;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -107,6 +108,7 @@ impl<T: HttpTransport> EndpointSession<T> {
                     transport.execute(req).await
                 }
             },
+            |_| true,
         )
         .await?;
 
@@ -125,6 +127,7 @@ impl<T: HttpTransport> EndpointSession<T> {
         path: &str,
         extra_headers: HeaderMap,
         body: Option<EncodedJsonBody>,
+        defer_server_overloaded_retries: bool,
         configure: C,
     ) -> Result<StreamResponse, ApiError>
     where
@@ -148,6 +151,7 @@ impl<T: HttpTransport> EndpointSession<T> {
                     transport.stream(req).await
                 }
             },
+            |err| !defer_server_overloaded_retries || !is_server_overloaded_transport_error(err),
         )
         .await?;
 

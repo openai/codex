@@ -14,6 +14,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -65,6 +66,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -682,6 +684,147 @@ async fn summarize_context_three_requests_and_instructions() {
         saw_compacted_summary,
         "expected a Compacted entry containing the summarizer output"
     );
+}
+
+#[tokio::test]
+async fn local_compact_keeps_provider_server_overload_retries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ])),
+            ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "server_is_overloaded",
+                    "message": "temporary compact failure"
+                }
+            })),
+            sse_response(sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ])),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.request_max_retries = Some(1);
+    model_provider.stream_max_retries = Some(0);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello before compact retry".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(responses.requests().len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_pre_turn_capacity_exhaustion_marks_input_uncommitted() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let overloaded = || {
+        sse_response(sse_failed(
+            "compact-overloaded",
+            "server_is_overloaded",
+            "selected model is at capacity",
+        ))
+    };
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ])),
+            overloaded(),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.request_max_retries = Some(0);
+    model_provider.stream_max_retries = Some(0);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await?
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let incoming = "prompt that must survive local capacity exhaustion";
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: incoming.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let error_info = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(error) => error.codex_error_info.clone(),
+        _ => None,
+    })
+    .await;
+    assert_eq!(error_info, CodexErrorInfo::ServerOverloadedBeforeInput);
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests[1..] {
+        assert!(!request.body_json().to_string().contains(incoming));
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2533,6 +2676,120 @@ async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on
     );
     assert_eq!(requests[2].body_json()["model"].as_str(), Some(next_model));
     assert_eq!(requests[3].body_json()["model"].as_str(), Some(next_model));
+}
+
+#[tokio::test]
+async fn pre_sampling_compact_reports_capacity_exhaustion_from_fallback_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let retired_model = "gpt-5.6";
+    let previous_model_family = "gpt-5.6";
+    let next_model = "gpt-5.5";
+    let mut previous_model_info =
+        model_info_with_context_window("gpt-5.4", /*context_window*/ 273_000);
+    previous_model_info.slug = previous_model_family.to_string();
+    let mut next_model_info =
+        model_info_with_context_window("gpt-5.4", /*context_window*/ 125_000);
+    next_model_info.slug = next_model.to_string();
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![previous_model_info, next_model_info],
+        },
+    )
+    .await;
+    let overloaded = || {
+        ResponseTemplate::new(/*status*/ 503).set_body_json(json!({
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "selected model is at capacity",
+            }
+        }))
+    };
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
+            ])),
+            invalid_request_response("previous-model compaction was rejected"),
+            overloaded(),
+            overloaded(),
+            overloaded(),
+            overloaded(),
+        ],
+    )
+    .await;
+
+    let model_provider = openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(retired_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            retired_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    tokio::time::pause();
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "input that must remain uncommitted",
+            test.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit smaller-model turn");
+    let mut terminal_error_info = None;
+    loop {
+        match test.codex.next_event().await.expect("next event").msg {
+            EventMsg::StreamError(_) => {
+                tokio::time::advance(std::time::Duration::from_secs(600)).await
+            }
+            EventMsg::Error(error) => terminal_error_info = error.codex_error_info,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    tokio::time::resume();
+
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        terminal_error_info,
+        Some(CodexErrorInfo::ServerOverloadedBeforeInput)
+    );
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 6);
+    assert_eq!(
+        requests[1].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+    for request in &requests[2..] {
+        assert_eq!(request.body_json()["model"].as_str(), Some(next_model));
+        assert!(
+            !request
+                .body_json()
+                .to_string()
+                .contains("input that must remain uncommitted")
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

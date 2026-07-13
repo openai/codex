@@ -34,6 +34,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
     compaction_trace: &CompactionTraceContext,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<RemoteCompactV2Attempt> {
     let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
@@ -65,12 +66,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
 
     let trace_input_history = history.raw_items().to_vec();
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let tool_router = built_tools(
-        sess.as_ref(),
-        step_context.as_ref(),
-        &CancellationToken::new(),
-    )
-    .await?;
+    let tool_router = built_tools(sess.as_ref(), step_context.as_ref(), cancellation_token).await?;
     let mut input = prompt_input.clone();
     input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {
@@ -105,6 +101,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         client_session,
         &prompt,
         &responses_metadata,
+        cancellation_token,
     )
     .await;
     trace_attempt.record_result(

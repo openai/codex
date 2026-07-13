@@ -1742,6 +1742,8 @@ pub enum CodexErrorInfo {
     SessionBudgetExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
+    /// Capacity failure before the incoming user input was recorded in thread history.
+    ServerOverloadedBeforeInput,
     CyberPolicy,
     HttpConnectionFailed {
         http_status_code: Option<u16>,
@@ -1780,6 +1782,7 @@ impl CodexErrorInfo {
             | Self::SessionBudgetExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
+            | Self::ServerOverloadedBeforeInput
             | Self::CyberPolicy
             | Self::HttpConnectionFailed { .. }
             | Self::ResponseStreamConnectionFailed { .. }

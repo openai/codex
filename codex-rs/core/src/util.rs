@@ -85,8 +85,18 @@ pub(crate) fn emit_feedback_auth_recovery_tags(
 pub fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
     let base = (INITIAL_DELAY_MS as f64 * exp) as u64;
+    jitter(Duration::from_millis(base))
+}
+
+pub(crate) fn jitter(delay: Duration) -> Duration {
     let jitter = rand::rng().random_range(0.9..1.1);
-    Duration::from_millis((base as f64 * jitter) as u64)
+    delay.mul_f64(jitter)
+}
+
+/// Adds positive jitter without allowing a retry earlier than the base delay.
+pub(crate) fn positive_jitter(delay: Duration) -> Duration {
+    let jitter = rand::rng().random_range(1.0..2.0);
+    delay.mul_f64(jitter)
 }
 
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {

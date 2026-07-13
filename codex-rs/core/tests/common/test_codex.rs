@@ -307,6 +307,7 @@ pub struct TestCodexBuilder {
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     code_mode_host_program: Option<PathBuf>,
+    session_source: Option<SessionSource>,
 }
 
 impl TestCodexBuilder {
@@ -328,6 +329,11 @@ impl TestCodexBuilder {
         self.with_config(move |config| {
             config.model = Some(new_model);
         })
+    }
+
+    pub fn with_session_source(mut self, session_source: SessionSource) -> Self {
+        self.session_source = Some(session_source);
+        self
     }
 
     pub fn with_model_info_override<T>(self, model: &str, override_model_info: T) -> Self
@@ -697,7 +703,7 @@ impl TestCodexBuilder {
                         allow_provider_model_fallback: false,
                         initial_history: InitialHistory::New,
                         history_mode: None,
-                        session_source: None,
+                        session_source: self.session_source.clone(),
                         thread_source: None,
                         dynamic_tools: Vec::new(),
                         metrics_service_name: None,
@@ -1259,6 +1265,7 @@ pub fn test_codex() -> TestCodexBuilder {
         supports_openai_form_elicitation: false,
         external_time_provider: None,
         code_mode_host_program: None,
+        session_source: None,
     }
 }
 

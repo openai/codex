@@ -931,6 +931,7 @@ fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
             GuardianReviewError::Session {
                 error_info: Some(
                     CodexErrorInfo::ServerOverloaded
+                        | CodexErrorInfo::ServerOverloadedBeforeInput
                         | CodexErrorInfo::HttpConnectionFailed { .. }
                         | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
                         | CodexErrorInfo::InternalServerError
@@ -986,6 +987,7 @@ mod review_tests {
         };
         let transient_error_info = [
             CodexErrorInfo::ServerOverloaded,
+            CodexErrorInfo::ServerOverloadedBeforeInput,
             CodexErrorInfo::HttpConnectionFailed {
                 http_status_code: Some(502),
             },

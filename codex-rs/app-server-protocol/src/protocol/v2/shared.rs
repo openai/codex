@@ -73,6 +73,8 @@ pub enum CodexErrorInfo {
     SessionBudgetExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
+    /// Capacity failure before the incoming user input was recorded in thread history.
+    ServerOverloadedBeforeInput,
     CyberPolicy,
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
@@ -119,6 +121,9 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             CoreCodexErrorInfo::SessionBudgetExceeded => CodexErrorInfo::SessionBudgetExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
             CoreCodexErrorInfo::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
+            CoreCodexErrorInfo::ServerOverloadedBeforeInput => {
+                CodexErrorInfo::ServerOverloadedBeforeInput
+            }
             CoreCodexErrorInfo::CyberPolicy => CodexErrorInfo::CyberPolicy,
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
