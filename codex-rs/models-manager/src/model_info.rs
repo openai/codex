@@ -112,7 +112,7 @@ fn clear_instruction_messages(model: &mut ModelInfo) {
     if let Some(model_messages) = &mut model.model_messages {
         model_messages.instructions_template = None;
         model_messages.instructions_variables = None;
-        if model_messages.approvals.is_none() {
+        if model_messages.approvals.is_none() && model_messages.auto_review.is_none() {
             model.model_messages = None;
         }
     }
@@ -176,6 +176,7 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
                 personality_pragmatic: Some(LOCAL_PRAGMATIC_TEMPLATE.to_string()),
             }),
             approvals: None,
+            auto_review: None,
         }),
         _ => None,
     }

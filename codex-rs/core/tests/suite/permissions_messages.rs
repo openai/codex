@@ -51,6 +51,7 @@ fn model_with_approval_messages(
             on_request: Some(on_request.to_string()),
             on_request_auto_review: Some(on_request_auto_review.to_string()),
         }),
+        auto_review: None,
     });
     model
 }

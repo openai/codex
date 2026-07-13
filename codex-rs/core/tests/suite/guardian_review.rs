@@ -4,6 +4,8 @@ use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::openai_models::AutoReviewMessages;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -36,6 +38,20 @@ use tempfile::TempDir;
 async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let catalog_policy = "Use the catalog-provided Guardian policy.";
+    let mut review_model = codex_models_manager::bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == "codex-auto-review")
+        .expect("bundled auto-review model");
+    let model_messages = review_model
+        .model_messages
+        .as_mut()
+        .expect("auto-review model messages");
+    model_messages.auto_review = Some(AutoReviewMessages {
+        policy: Some(catalog_policy.to_string()),
+    });
+
     let tool_args = json!({
         "cmd": "true",
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
@@ -56,7 +72,10 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         ]],
     ])
     .await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_catalog = Some(ModelsResponse {
+            models: vec![review_model],
+        });
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     });
@@ -77,6 +96,11 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         })
         .expect("guardian startup prewarm request");
     assert_eq!(guardian_prewarm["generate"].as_bool(), Some(false));
+    assert!(
+        guardian_prewarm["instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.contains(catalog_policy))
+    );
     let guardian_thread_id = guardian_prewarm["client_metadata"]["thread_id"]
         .as_str()
         .expect("guardian thread id");

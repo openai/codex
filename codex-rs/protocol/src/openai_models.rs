@@ -505,12 +505,18 @@ pub struct ModelMessages {
     pub instructions_template: Option<String>,
     pub instructions_variables: Option<ModelInstructionsVariables>,
     pub approvals: Option<ApprovalMessages>,
+    pub auto_review: Option<AutoReviewMessages>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ApprovalMessages {
     pub on_request: Option<String>,
     pub on_request_auto_review: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct AutoReviewMessages {
+    pub policy: Option<String>,
 }
 
 impl ModelMessages {
@@ -834,6 +840,7 @@ mod tests {
             instructions_template: Some("Hello {{ personality }}".to_string()),
             instructions_variables: Some(personality_variables()),
             approvals: None,
+            auto_review: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
@@ -851,6 +858,7 @@ mod tests {
                 personality_pragmatic: None,
             }),
             approvals: None,
+            auto_review: None,
         }));
         assert_eq!(
             model.get_model_instructions(Some(Personality::Friendly)),
@@ -877,6 +885,7 @@ mod tests {
                 personality_pragmatic: None,
             }),
             approvals: None,
+            auto_review: None,
         }));
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Friendly)),
@@ -906,6 +915,7 @@ mod tests {
                 personality_pragmatic: None,
             }),
             approvals: None,
+            auto_review: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
