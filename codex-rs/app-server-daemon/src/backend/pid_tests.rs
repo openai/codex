@@ -1,3 +1,4 @@
+use std::process::Stdio;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -10,6 +11,7 @@ use super::PidCommandKind;
 use super::PidFileState;
 use super::PidLogTail;
 use super::PidRecord;
+use super::read_process_start_time;
 use super::read_stderr_log_tail;
 use super::stderr_log_file_for_pid_file;
 use super::try_lock_file;
@@ -145,6 +147,45 @@ async fn stale_record_cleanup_preserves_replacement_record() {
             .expect("cleanup"),
         PidFileState::Running(replacement)
     );
+}
+
+#[tokio::test]
+async fn stop_reaps_untracked_app_server_child() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let pid_file = temp_dir.path().join("app-server.pid");
+    let mut child = std::process::Command::new("sleep")
+        .arg("5")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn app-server shim");
+    let pid = child.id();
+    let record = PidRecord {
+        pid,
+        process_start_time: read_process_start_time(pid).await.expect("start time"),
+    };
+    tokio::fs::write(
+        &pid_file,
+        serde_json::to_vec(&record).expect("serialize pid"),
+    )
+    .await
+    .expect("write pid file");
+    let backend = PidBackend::new(
+        temp_dir.path().join("codex"),
+        pid_file.clone(),
+        /*remote_control_enabled*/ false,
+    );
+
+    let result = tokio::time::timeout(Duration::from_secs(2), backend.stop()).await;
+    if matches!(child.try_wait(), Ok(None)) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    // `sleep` is not tracked by Tokio, so stop must reap it instead of leaving a zombie.
+    result.expect("stop timed out").expect("stop");
+    assert!(!pid_file.exists());
 }
 
 #[test]

@@ -254,12 +254,22 @@ impl PidBackend {
             let started_at = tokio::time::Instant::now();
             let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
             let mut forced = false;
-            while tokio::time::Instant::now() < deadline {
+            loop {
+                #[cfg(unix)]
+                if let Ok(raw_pid) = libc::pid_t::try_from(pid)
+                    && raw_pid > 0
+                {
+                    // A previous updater may have started this child; reap it if it has exited.
+                    unsafe { libc::waitpid(raw_pid, std::ptr::null_mut(), libc::WNOHANG) };
+                }
                 if !self.record_is_active(&record).await? {
                     match self.refresh_after_stale_record(&record).await? {
                         PidFileState::Missing => return Ok(()),
                         PidFileState::Starting | PidFileState::Running(_) => break,
                     }
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break;
                 }
                 if !forced && started_at.elapsed() >= STOP_GRACE_PERIOD {
                     self.force_terminate_process(pid)?;
