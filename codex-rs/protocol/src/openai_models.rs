@@ -21,7 +21,7 @@ use serde::de::DeserializeOwned;
 use serde::de::Error;
 use strum_macros::Display;
 use strum_macros::EnumIter;
-use tracing::warn;
+use tracing::trace;
 use ts_rs::TS;
 
 use crate::config_types::Personality;
@@ -480,7 +480,7 @@ impl ModelInfo {
         } else {
             match personality {
                 Some(personality @ (Personality::Friendly | Personality::Pragmatic)) => {
-                    warn!(
+                    trace!(
                         model = %self.slug,
                         %personality,
                         "Model personality requested but model_messages is missing, falling back to base instructions."
