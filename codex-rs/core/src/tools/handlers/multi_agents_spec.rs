@@ -1,4 +1,7 @@
+use super::multi_agents_common::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
+use super::multi_agents_common::model_supports_multi_agent_backend;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -16,16 +19,29 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
     "Model override for the new agent. Omit unless an explicit override is needed.";
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
-const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
 const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SpawnAgentToolOptions {
     pub available_models: Vec<ModelPreset>,
     pub agent_type_description: String,
     pub hide_agent_type_model_reasoning: bool,
     pub expose_spawn_agent_model_overrides: bool,
+    pub multi_agent_version: MultiAgentVersion,
     pub usage_hint_text: Option<String>,
+}
+
+impl Default for SpawnAgentToolOptions {
+    fn default() -> Self {
+        Self {
+            available_models: Vec::new(),
+            agent_type_description: String::new(),
+            hide_agent_type_model_reasoning: false,
+            expose_spawn_agent_model_overrides: false,
+            multi_agent_version: MultiAgentVersion::Disabled,
+            usage_hint_text: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,8 +62,9 @@ impl Default for WaitAgentTimeoutOptions {
 }
 
 pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
-    let available_models_description = (!options.hide_agent_type_model_reasoning)
-        .then(|| spawn_agent_models_description(&options.available_models));
+    let available_models_description = (!options.hide_agent_type_model_reasoning).then(|| {
+        spawn_agent_models_description(&options.available_models, options.multi_agent_version)
+    });
     let inherited_model_guidance =
         (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
     let return_value_description =
@@ -77,9 +94,9 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
 }
 
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
-    let available_models_description = options
-        .expose_spawn_agent_model_overrides
-        .then(|| spawn_agent_models_description(&options.available_models));
+    let available_models_description = options.expose_spawn_agent_model_overrides.then(|| {
+        spawn_agent_models_description(&options.available_models, options.multi_agent_version)
+    });
     let inherited_model_guidance = (options.expose_spawn_agent_model_overrides
         && !options.hide_agent_type_model_reasoning)
         .then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
@@ -748,11 +765,15 @@ Note that passing `fork_turns="none"` will not pass any surrounding context to t
     tool_description
 }
 
-fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
+fn spawn_agent_models_description(
+    models: &[ModelPreset],
+    multi_agent_version: MultiAgentVersion,
+) -> String {
     let visible_models: Vec<&ModelPreset> = models
         .iter()
         .filter(|model| model.show_in_picker)
-        .take(MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION)
+        .filter(|model| model_supports_multi_agent_backend(model, multi_agent_version))
+        .take(MAX_SPAWN_AGENT_MODEL_OVERRIDES)
         .collect();
     if visible_models.is_empty() {
         return "No picker-visible model overrides are currently loaded.".to_string();

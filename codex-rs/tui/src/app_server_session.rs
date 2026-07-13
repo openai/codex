@@ -1272,6 +1272,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
+        multi_agent_version: None,
         availability_nux: model.availability_nux.map(|nux| ModelAvailabilityNux {
             message: nux.message,
         }),
