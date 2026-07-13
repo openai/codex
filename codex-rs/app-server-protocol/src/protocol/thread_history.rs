@@ -634,6 +634,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: String::new(),
             action: None,
+            results: None,
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -643,6 +644,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: payload.query.clone(),
             action: Some(web_search_action_from_core(payload.action.clone())),
+            results: payload.results.clone(),
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -2664,6 +2666,11 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 },
+                results: Some(vec![serde_json::json!({
+                    "type": "text_result",
+                    "ref_id": "turn0search0",
+                    "url": "https://example.com/codex",
+                })]),
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-1".into(),
@@ -2720,6 +2727,11 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 }),
+                results: Some(vec![serde_json::json!({
+                    "type": "text_result",
+                    "ref_id": "turn0search0",
+                    "url": "https://example.com/codex",
+                })]),
             })
         );
         assert_eq!(
@@ -4195,6 +4207,7 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 },
+                results: None,
             }),
         ));
         assert_eq!(
@@ -4209,6 +4222,7 @@ mod tests {
                             query: Some("codex".into()),
                             queries: None,
                         }),
+                        results: None,
                     }),
                 }],
                 changed_turns: Vec::new(),
@@ -4330,6 +4344,7 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 },
+                results: None,
             })),
         ]);
         assert_eq!(
@@ -4344,6 +4359,7 @@ mod tests {
                             query: Some("codex".into()),
                             queries: None,
                         }),
+                        results: None,
                     }),
                 }],
                 changed_turns: vec![ThreadHistoryTurnChange {

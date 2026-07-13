@@ -46,6 +46,7 @@ fn web_search_item_preserves_stable_wire_shape() {
             query: Some("docs".to_string()),
             queries: None,
         }),
+        results: None,
     });
     let value = serde_json::to_value(&item).expect("serialize extension item");
 
@@ -60,10 +61,25 @@ fn web_search_item_preserves_stable_wire_shape() {
                 "query": "docs",
                 "queries": null,
             },
+            "results": null,
         })
     );
     assert_eq!(
         serde_json::from_value::<ExtensionItem>(value).expect("deserialize extension item"),
+        item
+    );
+    assert_eq!(
+        serde_json::from_value::<ExtensionItem>(json!({
+            "kind": "web.search",
+            "id": "search-1",
+            "query": "docs",
+            "action": {
+                "type": "search",
+                "query": "docs",
+                "queries": null,
+            },
+        }))
+        .expect("deserialize legacy extension item without results"),
         item
     );
 }

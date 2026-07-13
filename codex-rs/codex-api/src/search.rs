@@ -3,6 +3,7 @@ use codex_protocol::models::ResponseItem;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SearchRequest {
@@ -297,4 +298,8 @@ pub enum AllowedCaller {
 pub struct SearchResponse {
     pub encrypted_output: Option<String>,
     pub output: String,
+    /// Structured result DTOs are passed to clients out-of-band from `output`.
+    /// Keep them opaque here so newer result variants remain forward-compatible.
+    #[serde(default)]
+    pub results: Option<Vec<JsonValue>>,
 }

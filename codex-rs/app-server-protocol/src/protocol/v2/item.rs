@@ -902,6 +902,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: search.id,
                 query: search.query,
                 action: Some(web_search_action_from_core(search.action)),
+                results: search.results,
             }),
             CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
                 id: image.id,

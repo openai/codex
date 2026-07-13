@@ -411,6 +411,7 @@ impl WebSearchItem {
             call_id: self.id.clone(),
             query: self.query.clone(),
             action: self.action.clone(),
+            results: self.results.clone(),
         })
     }
 }

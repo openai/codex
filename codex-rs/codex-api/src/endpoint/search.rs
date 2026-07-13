@@ -139,6 +139,12 @@ mod tests {
             serde_json::to_vec(&json!({
                 "encrypted_output": "ciphertext",
                 "output": "search result",
+                "results": [{
+                    "type": "text_result",
+                    "ref_id": "turn0search0",
+                    "url": "https://example.com/result",
+                    "future_field": {"preserved": true},
+                }],
             }))
             .expect("serialize response"),
         );
@@ -209,6 +215,12 @@ mod tests {
             SearchResponse {
                 encrypted_output: Some("ciphertext".to_string()),
                 output: "search result".to_string(),
+                results: Some(vec![json!({
+                    "type": "text_result",
+                    "ref_id": "turn0search0",
+                    "url": "https://example.com/result",
+                    "future_field": {"preserved": true},
+                })]),
             }
         );
 
@@ -265,6 +277,42 @@ mod tests {
                 },
                 "max_output_tokens": 2500
             })
+        );
+    }
+    #[test]
+    fn search_response_defaults_missing_results_for_older_endpoints() {
+        let response: SearchResponse = serde_json::from_value(json!({
+            "encrypted_output": null,
+            "output": "search result",
+        }))
+        .expect("response without results should deserialize");
+
+        assert_eq!(
+            response,
+            SearchResponse {
+                encrypted_output: None,
+                output: "search result".to_string(),
+                results: None,
+            }
+        );
+    }
+
+    #[test]
+    fn search_response_preserves_supported_empty_results() {
+        let response: SearchResponse = serde_json::from_value(json!({
+            "encrypted_output": null,
+            "output": "search result",
+            "results": [],
+        }))
+        .expect("response with empty results should deserialize");
+
+        assert_eq!(
+            response,
+            SearchResponse {
+                encrypted_output: None,
+                output: "search result".to_string(),
+                results: Some(Vec::new()),
+            }
         );
     }
 }

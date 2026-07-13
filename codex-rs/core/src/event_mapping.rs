@@ -206,6 +206,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 id: id.as_deref().unwrap_or_default().to_string(),
                 query,
                 action,
+                results: None,
             }))
         }
         ResponseItem::ImageGenerationCall {

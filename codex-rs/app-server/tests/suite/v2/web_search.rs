@@ -162,6 +162,10 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     let search_body = search_request
         .body_json::<Value>()
         .context("search request body should be JSON")?;
+    assert!(
+        search_body.get("result_fields").is_none(),
+        "standalone search should use the endpoint's default result projection"
+    );
     assert_eq!(search_body["model"], json!("mock-model"));
     assert_eq!(
         search_body["commands"],
@@ -228,6 +232,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
             id: call_id.to_string(),
             query: String::new(),
             action: None,
+            results: None,
         })
     );
     let expected_completed_item = ThreadItem::WebSearch(WebSearchItem {
@@ -237,6 +242,14 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
             query: Some("standalone web search".to_string()),
             queries: None,
         }),
+        results: Some(vec![json!({
+            "type": "text_result",
+            "ref_id": "turn0search0",
+            "url": "https://example.com/search-result",
+            "title": "Search Result",
+            "snippet": "A result snippet",
+            "future_field": {"preserved": true},
+        })]),
     });
     assert_eq!(completed.item, expected_completed_item);
 
@@ -310,6 +323,14 @@ async fn mount_search_response(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "encrypted_output": "ciphertext",
             "output": "Search result",
+            "results": [{
+                "type": "text_result",
+                "ref_id": "turn0search0",
+                "url": "https://example.com/search-result",
+                "title": "Search Result",
+                "snippet": "A result snippet",
+                "future_field": {"preserved": true},
+            }],
         })))
         .expect(1)
         .mount(server)
