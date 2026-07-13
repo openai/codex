@@ -1043,6 +1043,7 @@ fn is_mcp_client_startup_timeout_error(error: &StartupOutcomeError) -> bool {
         StartupOutcomeError::Failed { error, .. } => {
             error.contains("request timed out")
                 || error.contains("timed out handshaking with MCP server")
+                || error.contains("MCP client startup timed out")
         }
         _ => false,
     }

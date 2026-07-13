@@ -302,6 +302,10 @@ impl ManagedClientStartup {
             .configured_config()
             .map(ToolFilter::from_config)
             .unwrap_or_default();
+        let startup_timeout = server
+            .configured_config()
+            .and_then(|config| config.startup_timeout_sec)
+            .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
         let cancel_token_for_fut = cancel_token;
         async move {
             let refresh_start = is_codex_apps_mcp_server.then(Instant::now);
@@ -310,7 +314,8 @@ impl ManagedClientStartup {
                     return Err(error.into());
                 }
 
-                let client = Arc::new(
+                let client = match tokio::time::timeout(
+                    startup_timeout,
                     make_rmcp_client(
                         &server_name,
                         server.clone(),
@@ -318,18 +323,23 @@ impl ManagedClientStartup {
                         keyring_backend_kind,
                         runtime_context,
                         runtime_auth_provider,
-                    )
-                    .await?,
-                );
+                    ),
+                )
+                .await
+                {
+                    Ok(result) => Arc::new(result?),
+                    Err(_) => {
+                        return Err(StartupOutcomeError::from(anyhow!(
+                            "MCP client startup timed out after {startup_timeout:?}"
+                        )));
+                    }
+                };
                 start_server_task(
                     server_name,
                     client,
                     StartServerTaskParams {
                         is_codex_apps_mcp_server,
-                        startup_timeout: server
-                            .configured_config()
-                            .and_then(|config| config.startup_timeout_sec)
-                            .or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                        startup_timeout: Some(startup_timeout),
                         tool_timeout: server
                             .configured_config()
                             .and_then(|config| config.tool_timeout_sec)
