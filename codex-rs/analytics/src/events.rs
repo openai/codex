@@ -674,6 +674,7 @@ pub(crate) struct CodexMcpToolCallEventParams {
     pub(crate) mcp_tool_name: String,
     pub(crate) mcp_error_present: bool,
     pub(crate) plugin_id: Option<String>,
+    pub(crate) connector_id: Option<String>,
 }
 
 #[derive(Serialize)]

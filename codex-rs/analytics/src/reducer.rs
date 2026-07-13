@@ -1884,6 +1884,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
             error,
             duration_ms,
             plugin_id,
+            app_context,
             ..
         } => {
             let (terminal_status, failure_kind) = mcp_tool_call_outcome(status)?;
@@ -1915,6 +1916,9 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                         mcp_tool_name: tool.clone(),
                         mcp_error_present: error.is_some(),
                         plugin_id: plugin_id.clone(),
+                        connector_id: app_context
+                            .as_ref()
+                            .map(|app_context| app_context.connector_id.clone()),
                     },
                 },
             ))

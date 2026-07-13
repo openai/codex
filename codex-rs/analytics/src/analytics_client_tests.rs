@@ -111,6 +111,7 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::NonSteerableTurnKind;
 use codex_app_server_protocol::PatchApplyStatus;
@@ -4353,7 +4354,14 @@ async fn turn_event_counts_completed_tool_items() {
         tool: "search".to_string(),
         status,
         arguments: json!({}),
-        app_context: None,
+        app_context: Some(McpToolCallAppContext {
+            connector_id: "connector-test".to_string(),
+            link_id: None,
+            resource_uri: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
+        }),
         mcp_app_resource_uri: None,
         plugin_id: Some("sample@test".to_string()),
         result: None,
@@ -4445,6 +4453,10 @@ async fn turn_event_counts_completed_tool_items() {
         .expect("MCP tool call event should be emitted");
     let payload = serde_json::to_value(mcp_tool_call_event).expect("serialize MCP tool call event");
     assert_eq!(payload["event_params"]["plugin_id"], json!("sample@test"));
+    assert_eq!(
+        payload["event_params"]["connector_id"],
+        json!("connector-test")
+    );
 
     reducer
         .ingest(
