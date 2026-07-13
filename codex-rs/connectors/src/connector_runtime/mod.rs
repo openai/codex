@@ -6,6 +6,7 @@
 //! owned by the connector metadata store, not by this module.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -73,6 +74,15 @@ pub fn connector_runtime_context_key(auth: Option<&CodexAuth>) -> ConnectorRunti
     } else {
         ConnectorRuntimeContextKey::personal(account_id, chatgpt_user_id)
     }
+}
+
+/// Returns the persisted connector runtime tools cache path for the active auth identity.
+pub fn connector_runtime_cache_path(codex_home: &Path, auth: Option<&CodexAuth>) -> PathBuf {
+    let identity = ConnectorRuntimeIdentity {
+        codex_home: codex_home.to_path_buf(),
+        key: connector_runtime_context_key(auth),
+    };
+    tools_cache_path(&identity)
 }
 
 /// One atomically published connector runtime state.

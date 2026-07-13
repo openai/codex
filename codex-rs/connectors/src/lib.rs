@@ -36,6 +36,7 @@ pub use connector_runtime::ConnectorRuntimeFetchTicket;
 pub use connector_runtime::ConnectorRuntimeManager;
 pub use connector_runtime::ConnectorRuntimePayload;
 pub use connector_runtime::ConnectorRuntimeSnapshot;
+pub use connector_runtime::connector_runtime_cache_path;
 pub use connector_runtime::connector_runtime_context_key;
 pub use directory_cache::ConnectorDirectoryCacheContext;
 pub use plugin_config::parse_plugin_app_config;

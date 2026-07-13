@@ -26,7 +26,8 @@ impl ConnectorDirectoryCacheContext {
         }
     }
 
-    pub(crate) fn cache_path(&self) -> PathBuf {
+    /// Returns the persisted connector directory cache path for this identity.
+    pub fn cache_path(&self) -> PathBuf {
         let cache_key_json = serde_json::to_string(&self.cache_key).unwrap_or_default();
         let cache_key_hash = sha1_hex(&cache_key_json);
         self.codex_home
