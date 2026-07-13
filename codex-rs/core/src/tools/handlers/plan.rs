@@ -81,7 +81,7 @@ impl PlanHandler {
             }
         };
 
-        if turn.collaboration_mode.mode == ModeKind::Plan {
+        if turn.mode == ModeKind::Plan {
             return Err(FunctionCallError::RespondToModel(
                 "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
             ));

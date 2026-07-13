@@ -52,7 +52,7 @@ impl SessionTask for RegularTask {
                 trace_id: ctx.trace_id.clone(),
                 started_at: ctx.turn_timing_state.started_at_unix_secs().await,
                 model_context_window: ctx.model_context_window(),
-                collaboration_mode_kind: ctx.collaboration_mode.mode,
+                collaboration_mode_kind: ctx.mode,
             });
             sess.send_event(ctx.as_ref(), event).await;
             sess.set_server_reasoning_included(/*included*/ false).await;

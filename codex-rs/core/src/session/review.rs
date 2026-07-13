@@ -130,7 +130,10 @@ pub(super) async fn spawn_review_thread(
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
-        collaboration_mode: parent_turn_context.collaboration_mode.clone(),
+        mode: parent_turn_context.mode,
+        collaboration_mode_developer_instructions: parent_turn_context
+            .collaboration_mode_developer_instructions
+            .clone(),
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
