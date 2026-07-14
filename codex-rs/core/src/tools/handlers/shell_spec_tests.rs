@@ -29,6 +29,11 @@ fn exec_command_tool_matches_expected_spec() {
         "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
             .to_string()
     };
+    let yield_time_ms_description = if cfg!(windows) {
+        "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Set a shorter value only when intentionally starting a long-lived or interactive process and you want a session ID promptly."
+    } else {
+        "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms."
+    };
 
     let mut properties = BTreeMap::from([
         (
@@ -57,9 +62,7 @@ fn exec_command_tool_matches_expected_spec() {
         ),
         (
             "yield_time_ms".to_string(),
-            JsonSchema::number(Some(
-                    "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.".to_string(),
-                )),
+            JsonSchema::number(Some(yield_time_ms_description.to_string())),
         ),
         (
             "max_output_tokens".to_string(),
