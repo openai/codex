@@ -40,6 +40,7 @@ use rmcp::transport::Transport;
 use serde_json::from_slice;
 use serde_json::to_vec;
 use tokio::runtime::Handle;
+use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
 use tracing::debug;
 use tracing::info;
@@ -162,6 +163,10 @@ pub(super) struct ExecutorProcessTransport {
     /// closes the transport.
     process: Arc<dyn ExecProcess>,
 
+    /// Prevents concurrent rmcp send futures from issuing overlapping stdin writes.
+    /// The single-slot semaphore gives mutex semantics while its permit can safely cross `.await`.
+    stdin_write_semaphore: Arc<Semaphore>,
+
     /// Pushed output/lifecycle stream for the process.
     ///
     /// The executor process API still supports retained-output reads, but MCP
@@ -204,6 +209,7 @@ impl ExecutorProcessTransport {
         let events = process.subscribe_events();
         Self {
             process,
+            stdin_write_semaphore: Arc::new(Semaphore::new(1)),
             events,
             program_name,
             stdout: LineBuffer::default(),
@@ -231,7 +237,12 @@ impl Transport<RoleClient> for ExecutorProcessTransport {
         item: TxJsonRpcMessage<RoleClient>,
     ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send + 'static {
         let process = Arc::clone(&self.process);
+        let stdin_write_semaphore = Arc::clone(&self.stdin_write_semaphore);
         async move {
+            let _stdin_write_permit = stdin_write_semaphore
+                .acquire()
+                .await
+                .map_err(io::Error::other)?;
             // rmcp hands us a structured JSON-RPC message. Stdio transport on
             // the wire is JSON plus one newline delimiter.
             let mut bytes = to_vec(&item).map_err(io::Error::other)?;
