@@ -1004,6 +1004,7 @@ pub(crate) struct CodexPluginInstallFailedMetadata {
     pub(crate) plugin: CodexPluginMetadata,
     pub(crate) source: crate::facts::PluginInstallSource,
     pub(crate) error_type: String,
+    pub(crate) sub_error_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1037,6 +1038,7 @@ pub(crate) struct CodexOnboardingExternalAgentImportFailureMetadata {
     pub(crate) item_type: String,
     pub(crate) failure_stage: String,
     pub(crate) error_type: String,
+    pub(crate) sub_error_type: Option<String>,
     pub(crate) product_client_id: Option<String>,
 }
 

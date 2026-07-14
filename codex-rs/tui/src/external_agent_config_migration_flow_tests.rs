@@ -123,6 +123,7 @@ fn completed_notification() -> ExternalAgentConfigImportCompletedNotification {
                 failures: vec![ExternalAgentConfigImportItemTypeFailure {
                     item_type: ExternalAgentConfigMigrationItemType::Plugins,
                     error_type: Some("plugin_install_failed".to_string()),
+                    sub_error_type: Some("failed_to_copy_plugin_file".to_string()),
                     failure_stage: "plugin_import".to_string(),
                     message: "install failed".to_string(),
                     cwd: Some(PathBuf::from("/workspace/project")),

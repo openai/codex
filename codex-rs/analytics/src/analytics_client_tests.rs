@@ -3251,6 +3251,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
             plugin: codex_plugin_metadata(sample_plugin_metadata()),
             source: PluginInstallSource::Manual,
             error_type: "store_io".to_string(),
+            sub_error_type: Some("failed_to_copy_plugin_file".to_string()),
         },
     });
 
@@ -3270,7 +3271,8 @@ fn plugin_install_failed_event_serializes_expected_shape() {
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
                 "source": "manual",
-                "error_type": "store_io"
+                "error_type": "store_io",
+                "sub_error_type": "failed_to_copy_plugin_file"
             }
         })
     );
@@ -3703,6 +3705,7 @@ async fn reducer_ingests_plugin_install_failed_fact() {
                     plugin: sample_plugin_metadata(),
                     source: PluginInstallSource::ExternalAgentMigration,
                     error_type: "invalid_plugin".to_string(),
+                    sub_error_type: Some("failed_to_copy_plugin_file".to_string()),
                 },
             )),
             &mut events,
@@ -3724,7 +3727,8 @@ async fn reducer_ingests_plugin_install_failed_fact() {
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
                 "source": "external_agent_migration",
-                "error_type": "invalid_plugin"
+                "error_type": "invalid_plugin",
+                "sub_error_type": "failed_to_copy_plugin_file"
             }
         }])
     );
@@ -3747,6 +3751,7 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
                     plugin,
                     source: PluginInstallSource::Manual,
                     error_type: "remote_catalog_unexpected_status".to_string(),
+                    sub_error_type: None,
                 },
             )),
             &mut events,
@@ -3768,7 +3773,8 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
                 "connector_ids": null,
                 "product_client_id": originator().value,
                 "source": "manual",
-                "error_type": "remote_catalog_unexpected_status"
+                "error_type": "remote_catalog_unexpected_status",
+                "sub_error_type": null
             }
         }])
     );
@@ -3819,9 +3825,10 @@ fn external_agent_config_import_failure_event_serializes_expected_shape() {
             event_params: CodexOnboardingExternalAgentImportFailureMetadata {
                 import_id: "import-1".to_string(),
                 source: "app_server".to_string(),
-                item_type: "SESSIONS".to_string(),
-                failure_stage: "session_missing".to_string(),
-                error_type: "session_missing".to_string(),
+                item_type: "PLUGINS".to_string(),
+                failure_stage: "plugin_import".to_string(),
+                error_type: "plugin_import".to_string(),
+                sub_error_type: Some("failed_to_copy_plugin_file".to_string()),
                 product_client_id: Some(originator().value),
             },
         },
@@ -3836,9 +3843,10 @@ fn external_agent_config_import_failure_event_serializes_expected_shape() {
             "event_params": {
                 "import_id": "import-1",
                 "source": "app_server",
-                "type": "SESSIONS",
-                "failure_stage": "session_missing",
-                "error_type": "session_missing",
+                "type": "PLUGINS",
+                "failure_stage": "plugin_import",
+                "error_type": "plugin_import",
+                "sub_error_type": "failed_to_copy_plugin_file",
                 "product_client_id": originator().value,
             }
         })
@@ -3856,9 +3864,10 @@ async fn reducer_ingests_external_agent_config_import_failure_fact() {
                 ExternalAgentConfigImportFailureInput {
                     import_id: "import-1".to_string(),
                     source: "app_server".to_string(),
-                    item_type: "SESSIONS".to_string(),
-                    failure_stage: "session_missing".to_string(),
-                    error_type: "session_missing".to_string(),
+                    item_type: "PLUGINS".to_string(),
+                    failure_stage: "plugin_import".to_string(),
+                    error_type: "plugin_import".to_string(),
+                    sub_error_type: Some("failed_to_copy_plugin_file".to_string()),
                 },
             )),
             &mut events,
@@ -3873,9 +3882,10 @@ async fn reducer_ingests_external_agent_config_import_failure_fact() {
             "event_params": {
                 "import_id": "import-1",
                 "source": "app_server",
-                "type": "SESSIONS",
-                "failure_stage": "session_missing",
-                "error_type": "session_missing",
+                "type": "PLUGINS",
+                "failure_stage": "plugin_import",
+                "error_type": "plugin_import",
+                "sub_error_type": "failed_to_copy_plugin_file",
                 "product_client_id": originator().value,
             }
         }])

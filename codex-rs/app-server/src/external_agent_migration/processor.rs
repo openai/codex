@@ -640,6 +640,7 @@ fn track_completed_import_notification(
                     item_type: item_type.clone(),
                     failure_stage: failure.failure_stage.clone(),
                     error_type: import_failure_error_type(failure),
+                    sub_error_type: failure.sub_error_type.clone(),
                 },
             );
         }
@@ -692,6 +693,7 @@ async fn record_completed_import_notification(
             Ok(ExternalAgentConfigImportFailureRecord {
                 item_type: serde_json::from_value(serde_json::to_value(failure.item_type)?)?,
                 error_type: failure.error_type.clone(),
+                sub_error_type: failure.sub_error_type.clone(),
                 failure_stage: failure.failure_stage.clone(),
                 message: failure.message.clone(),
                 cwd: failure.cwd.clone(),
@@ -747,6 +749,7 @@ fn protocol_import_failure_record(
     Ok(ProtocolImportFailure {
         item_type: protocol_import_record_item_type(record.item_type)?,
         error_type: record.error_type,
+        sub_error_type: record.sub_error_type,
         failure_stage: record.failure_stage,
         message: record.message,
         cwd: record.cwd,
@@ -844,6 +847,7 @@ fn protocol_import_raw_error(raw_error: &CoreImportRawError) -> ProtocolImportFa
     ProtocolImportFailure {
         item_type: protocol_migration_item_type(raw_error.item_type),
         error_type: raw_error.error_type.clone(),
+        sub_error_type: raw_error.sub_error_type.clone(),
         failure_stage: raw_error.failure_stage.clone(),
         message: raw_error.message.clone(),
         cwd: raw_error.cwd.clone(),
