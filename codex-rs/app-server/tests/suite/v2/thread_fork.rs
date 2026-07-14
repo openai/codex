@@ -692,6 +692,68 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_fork_rejects_paginated_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = codex_home
+        .path()
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("05")
+        .join(format!(
+            "rollout-2025-01-05T12-00-00-{conversation_id}.jsonl"
+        ));
+    let mut lines = std::fs::read_to_string(&rollout_path)?
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    lines[0]["payload"]["history_mode"] = json!("paginated");
+    let contents = lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&rollout_path, format!("{contents}\n"))?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+
+    assert_eq!(fork_err.error.code, -32601);
+    assert_eq!(
+        fork_err.error.message,
+        "paginated_threads is not supported yet"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_fork_with_empty_path_uses_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

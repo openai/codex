@@ -3473,6 +3473,16 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
+        let source_thread = self
+            .read_stored_thread_for_resume(
+                &thread_id,
+                path.as_ref(),
+                /*include_history*/ false,
+            )
+            .await?;
+        if matches!(source_thread.history_mode, ThreadHistoryMode::Paginated) {
+            return Err(method_not_found("paginated_threads is not supported yet"));
+        }
         let mut source_thread = self
             .read_stored_thread_for_resume(&thread_id, path.as_ref(), /*include_history*/ true)
             .await?;
