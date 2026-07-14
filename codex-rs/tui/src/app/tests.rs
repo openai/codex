@@ -8,7 +8,7 @@ mod session_summary;
 mod startup;
 
 use super::*;
-use crate::app_backtrack::BacktrackSelection;
+use crate::app::session_lifecycle::ThreadAttachPresentation;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
 
@@ -196,6 +196,91 @@ fn bypass_hook_trust_startup_warning_snapshot() {
 
     assert_app_snapshot!("bypass_hook_trust_startup_warning", rendered);
 }
+
+fn app_event_history_text(event: &AppEvent) -> Option<String> {
+    let AppEvent::InsertHistoryCell(cell) = event else {
+        return None;
+    };
+    Some(lines_to_single_string(&cell.display_lines(/*width*/ 120)))
+}
+
+#[tokio::test]
+async fn prompt_edit_notice_is_queued_after_replayed_history() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let mut session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    session.forked_from_id = Some(ThreadId::new());
+
+    app.enqueue_primary_thread_session_with_presentation(
+        session,
+        vec![test_turn(
+            "turn-1",
+            TurnStatus::Completed,
+            vec![ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                client_id: None,
+                content: vec![AppServerUserInput::Text {
+                    text: "retained prompt".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+        )],
+        ThreadAttachPresentation::PromptEdit,
+    )
+    .await?;
+
+    let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+    let end_index = events
+        .iter()
+        .position(|event| matches!(event, AppEvent::EndInitialHistoryReplayBuffer))
+        .expect("replay should end");
+    let prompt_index = events
+        .iter()
+        .position(|event| {
+            app_event_history_text(event).is_some_and(|text| text.contains("retained prompt"))
+        })
+        .expect("retained prompt should be replayed");
+    let notice_index = events
+        .iter()
+        .position(|event| {
+            app_event_history_text(event)
+                .is_some_and(|text| text.contains("You’re continuing from this point"))
+        })
+        .expect("prompt edit notice should be emitted");
+
+    assert!(prompt_index < end_index);
+    assert!(end_index < notice_index);
+    assert!(!events.iter().any(|event| {
+        app_event_history_text(event).is_some_and(|text| text.contains("Thread forked from"))
+    }));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn prompt_edit_notice_is_shown_before_the_first_prompt() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+    app.enqueue_primary_thread_session_with_presentation(
+        test_thread_session(ThreadId::new(), test_path_buf("/tmp/project")),
+        Vec::new(),
+        ThreadAttachPresentation::PromptEdit,
+    )
+    .await?;
+
+    let notice = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .filter_map(|event| app_event_history_text(&event))
+        .find(|text| text.contains("You’re continuing from this point"))
+        .expect("first-prompt edit should emit a branch notice");
+
+    assert_eq!(
+        notice,
+        "• You’re continuing from this point in a new conversation"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -3909,6 +3994,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
 
     let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
         Arc::new(UserHistoryCell {
+            turn_id: None,
             message: text.to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
@@ -4608,6 +4694,7 @@ async fn height_shrink_schedules_resize_reflow() {
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: turn_id.to_string(),
+        is_forkable: true,
         items_view: codex_app_server_protocol::TurnItemsView::Full,
         items,
         status,
@@ -4988,15 +5075,46 @@ async fn fresh_session_config_uses_current_service_tier() {
 }
 
 #[tokio::test]
-async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+async fn locally_rendered_prompt_anchor_only_updates_latest_user_cell() {
+    let mut app = make_test_app().await;
+    let user_cell = |turn_id: Option<&str>, message: &str| -> Arc<dyn HistoryCell> {
+        Arc::new(UserHistoryCell {
+            turn_id: turn_id.map(str::to_string),
+            message: message.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        })
+    };
+    app.transcript_cells = vec![
+        user_cell(/*turn_id*/ None, "older unanchored"),
+        user_cell(/*turn_id*/ None, "current local prompt"),
+    ];
 
-    let user_cell = |text: &str,
+    app.anchor_latest_user_history_cell("turn-current".to_string());
+    app.anchor_latest_user_history_cell("turn-unrelated".to_string());
+
+    let turn_ids: Vec<Option<&str>> = app
+        .transcript_cells
+        .iter()
+        .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+        .map(|cell| cell.turn_id.as_deref())
+        .collect();
+    assert_eq!(turn_ids, vec![None, Some("turn-current")]);
+}
+
+#[tokio::test]
+async fn backtrack_selection_targets_predecessor_and_preserves_selected_prompt() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+    let user_cell = |turn_id: &str,
+                     text: &str,
                      text_elements: Vec<TextElement>,
                      local_image_paths: Vec<PathBuf>,
                      remote_image_urls: Vec<String>|
      -> Arc<dyn HistoryCell> {
         Arc::new(UserHistoryCell {
+            turn_id: Some(turn_id.to_string()),
             message: text.to_string(),
             text_elements,
             local_image_paths,
@@ -5057,14 +5175,33 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
     // and an edited turn appended after a session header boundary.
     app.transcript_cells = vec![
         make_header(true),
-        user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
-        agent_cell("answer first"),
-        user_cell("follow-up", Vec::new(), Vec::new(), Vec::new()),
-        agent_cell("answer follow-up"),
-        make_header(false),
-        user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
+        user_cell(
+            "old-turn-1",
+            "first question",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
         agent_cell("answer first"),
         user_cell(
+            "old-turn-2",
+            "follow-up",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+        agent_cell("answer follow-up"),
+        make_header(false),
+        user_cell(
+            "turn-1",
+            "first question",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+        agent_cell("answer first"),
+        user_cell(
+            "turn-2",
             &edited_text,
             edited_text_elements.clone(),
             edited_local_image_paths.clone(),
@@ -5107,69 +5244,87 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
     let selection = app
         .confirm_backtrack_from_main()
         .expect("backtrack selection");
-    assert_eq!(selection.nth_user_message, 1);
-    assert_eq!(selection.prefill, edited_text);
-    assert_eq!(selection.text_elements, edited_text_elements);
-    assert_eq!(selection.local_image_paths, edited_local_image_paths);
     assert_eq!(
-        selection.remote_image_urls,
-        vec!["https://example.com/backtrack.png".to_string()]
-    );
-
-    app.apply_backtrack_rollback(selection);
-    assert_eq!(
-        app.chat_widget.remote_image_urls(),
-        vec!["https://example.com/backtrack.png".to_string()]
-    );
-
-    let mut rollback_turns = None;
-    while let Ok(op) = op_rx.try_recv() {
-        if let Op::ThreadRollback { num_turns } = op {
-            rollback_turns = Some(num_turns);
+        selection,
+        crate::app_backtrack::BacktrackSelection {
+            thread_id: base_id,
+            last_turn_id: Some("turn-1".to_string()),
+            prompt: crate::chatwidget::UserMessage {
+                text: edited_text,
+                local_images: vec![crate::bottom_pane::LocalImageAttachment {
+                    placeholder: placeholder.to_string(),
+                    path: edited_local_image_paths[0].clone(),
+                }],
+                remote_image_urls: vec!["https://example.com/backtrack.png".to_string()],
+                text_elements: edited_text_elements,
+                mention_bindings: Vec::new(),
+            },
         }
-    }
-
-    assert_eq!(rollback_turns, Some(1));
+    );
 }
 
 #[tokio::test]
-async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-
+async fn backtrack_selection_starts_fresh_before_first_prompt() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let base_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        base_id,
+        test_path_buf("/home/user/project"),
+    ));
     app.transcript_cells = vec![Arc::new(UserHistoryCell {
-        message: "original".to_string(),
+        turn_id: Some("turn-1".to_string()),
+        message: "first question".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
         remote_image_urls: Vec::new(),
     }) as Arc<dyn HistoryCell>];
-    app.chat_widget
-        .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+    app.backtrack.base_id = Some(base_id);
+    app.backtrack.primed = true;
+    app.backtrack.nth_user_message = 0;
 
-    let remote_image_url = "https://example.com/remote-only.png".to_string();
-    app.apply_backtrack_rollback(BacktrackSelection {
-        nth_user_message: 0,
-        prefill: String::new(),
-        text_elements: Vec::new(),
-        local_image_paths: Vec::new(),
-        remote_image_urls: vec![remote_image_url.clone()],
-    });
+    let selection = app
+        .confirm_backtrack_from_main()
+        .expect("backtrack selection");
 
-    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
-    assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
-
-    let mut rollback_turns = None;
-    while let Ok(op) = op_rx.try_recv() {
-        if let Op::ThreadRollback { num_turns } = op {
-            rollback_turns = Some(num_turns);
+    assert_eq!(
+        selection,
+        crate::app_backtrack::BacktrackSelection {
+            thread_id: base_id,
+            last_turn_id: None,
+            prompt: crate::chatwidget::UserMessage::from("first question"),
         }
-    }
-    assert_eq!(rollback_turns, Some(1));
+    );
+}
+
+#[tokio::test]
+async fn backtrack_branch_failure_restores_selected_prompt() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let prompt = crate::chatwidget::UserMessage::from("edit this prompt");
+
+    app.restore_backtrack_prompt_after_branch_error(prompt, "branch unavailable");
+
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "edit this prompt"
+    );
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    assert_eq!(
+        cell.display_lines(/*width*/ 80)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>(),
+        vec!["■ Failed to branch before the selected prompt: branch unavailable"]
+    );
 }
 
 #[tokio::test]
 async fn cancelled_turn_edit_restores_prompt_and_rolls_back_latest_turn() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.transcript_cells = vec![Arc::new(UserHistoryCell {
+        turn_id: None,
         message: "original".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -5222,8 +5377,8 @@ async fn first_cancelled_turn_edit_restores_prompt_without_local_history() {
 }
 
 #[tokio::test]
-async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+async fn backtrack_selection_preserves_data_image_urls() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
     let thread_id = ThreadId::new();
     app.chat_widget
@@ -5252,41 +5407,21 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
 
     let data_image_url = "data:image/png;base64,abc123".to_string();
     app.transcript_cells = vec![Arc::new(UserHistoryCell {
+        turn_id: Some("turn-1".to_string()),
         message: "please inspect this".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
         remote_image_urls: vec![data_image_url.clone()],
     }) as Arc<dyn HistoryCell>];
+    app.backtrack.base_id = Some(thread_id);
+    app.backtrack.primed = true;
+    app.backtrack.nth_user_message = 0;
 
-    app.apply_backtrack_rollback(BacktrackSelection {
-        nth_user_message: 0,
-        prefill: "please inspect this".to_string(),
-        text_elements: Vec::new(),
-        local_image_paths: Vec::new(),
-        remote_image_urls: vec![data_image_url.clone()],
-    });
+    let selection = app
+        .confirm_backtrack_from_main()
+        .expect("backtrack selection");
 
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    let mut saw_rollback = false;
-    let mut submitted_items: Option<Vec<UserInput>> = None;
-    while let Ok(op) = op_rx.try_recv() {
-        match op {
-            Op::ThreadRollback { .. } => saw_rollback = true,
-            Op::UserTurn { items, .. } => submitted_items = Some(items),
-            _ => {}
-        }
-    }
-
-    assert!(saw_rollback);
-    let items = submitted_items.expect("expected user turn after backtrack resubmit");
-    assert!(items.iter().any(|item| {
-        matches!(
-            item,
-            UserInput::Image { url, .. } if url == &data_image_url
-        )
-    }));
+    assert_eq!(selection.prompt.remote_image_urls, vec![data_image_url]);
 }
 
 #[tokio::test]
@@ -5302,6 +5437,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
             turns: vec![
                 Turn {
                     id: "turn-1".to_string(),
+                    is_forkable: true,
                     items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![ThreadItem::UserMessage {
                         id: "user-1".to_string(),
@@ -5319,6 +5455,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                 },
                 Turn {
                     id: "turn-2".to_string(),
+                    is_forkable: true,
                     items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
                         ThreadItem::UserMessage {
@@ -5522,6 +5659,7 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
     let mut app = make_test_app().await;
     app.transcript_cells = vec![
         Arc::new(UserHistoryCell {
+            turn_id: Some("turn-1".to_string()),
             message: "first".to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
@@ -5532,6 +5670,7 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
             /*is_first_line*/ false,
         )) as Arc<dyn HistoryCell>,
         Arc::new(UserHistoryCell {
+            turn_id: Some("turn-2".to_string()),
             message: "second".to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
@@ -6130,6 +6269,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     app.chat_widget
         .apply_external_edit("draft prompt".to_string());
     app.transcript_cells = vec![Arc::new(UserHistoryCell {
+        turn_id: None,
         message: "old message".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),

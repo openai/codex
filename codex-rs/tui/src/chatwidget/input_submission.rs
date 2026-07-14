@@ -413,7 +413,7 @@ impl ChatWidget {
             )
         });
         if let Some(display) = display_user_message {
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, /*turn_id*/ None);
         }
 
         self.transcript.needs_final_message_separator = false;

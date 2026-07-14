@@ -47,7 +47,11 @@ pub(crate) fn thread_to_transcript_cells(
 ) -> TranscriptCells {
     let cwd = thread.cwd.as_path();
     let mut cells: TranscriptCells = Vec::new();
-    for item in thread.turns.iter().flat_map(|turn| turn.items.iter()) {
+    for (turn, item) in thread
+        .turns
+        .iter()
+        .flat_map(|turn| turn.items.iter().map(move |item| (turn, item)))
+    {
         match item {
             ThreadItem::UserMessage {
                 id,
@@ -64,6 +68,7 @@ pub(crate) fn thread_to_transcript_cells(
                         .collect(),
                 };
                 cells.push(Arc::new(UserHistoryCell {
+                    turn_id: turn.is_forkable.then(|| turn.id.clone()),
                     message: item.message(),
                     text_elements: item.text_elements(),
                     local_image_paths: item.local_image_paths(),

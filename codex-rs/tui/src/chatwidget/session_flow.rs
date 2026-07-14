@@ -3,11 +3,10 @@
 use super::*;
 
 impl ChatWidget {
-    fn on_session_configured_with_display_and_fork_parent_title(
+    fn on_session_configured_with_display(
         &mut self,
         session: ThreadSessionState,
         display: SessionConfiguredDisplay,
-        fork_parent_title: Option<String>,
     ) {
         self.transcript.reset_copy_history();
         let history_metadata = session.message_history.unwrap_or_default();
@@ -76,7 +75,6 @@ impl ChatWidget {
         self.config.approvals_reviewer = session.approvals_reviewer;
         self.config.personality = session.personality;
         self.status_line_project_root_name_cache = None;
-        let forked_from_id = session.forked_from_id;
         let default_model = session.model.clone();
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(default_model.clone()),
@@ -140,11 +138,6 @@ impl ChatWidget {
             self.prefetch_connectors();
         }
         self.submit_initial_user_message_if_pending();
-        if display == SessionConfiguredDisplay::Normal
-            && let Some(forked_from_id) = forked_from_id
-        {
-            self.emit_forked_thread_event(forked_from_id, fork_parent_title);
-        }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
@@ -152,34 +145,23 @@ impl ChatWidget {
 
     pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
-        let fork_parent_title = session.fork_parent_title.clone();
-        self.on_session_configured_with_display_and_fork_parent_title(
-            session,
-            SessionConfiguredDisplay::Normal,
-            fork_parent_title,
-        );
+        self.on_session_configured_with_display(session, SessionConfiguredDisplay::Normal);
     }
 
     pub(crate) fn handle_thread_session_quiet(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
-        self.on_session_configured_with_display_and_fork_parent_title(
-            session,
-            SessionConfiguredDisplay::Quiet,
-            /*fork_parent_title*/ None,
-        );
+        self.on_session_configured_with_display(session, SessionConfiguredDisplay::Quiet);
     }
 
     pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
-        let fork_parent_title = session.fork_parent_title.clone();
-        self.on_session_configured_with_display_and_fork_parent_title(
+        self.on_session_configured_with_display(
             session,
             SessionConfiguredDisplay::SideConversation,
-            fork_parent_title,
         );
     }
 
-    pub(super) fn emit_forked_thread_event(
+    pub(crate) fn emit_forked_thread_event(
         &mut self,
         forked_from_id: ThreadId,
         fork_parent_title: Option<String>,
@@ -205,6 +187,17 @@ impl ChatWidget {
             ]
             .into()
         };
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            PlainHistoryCell::new(vec![line]),
+        )));
+    }
+
+    pub(crate) fn emit_prompt_edit_thread_event(&mut self) {
+        let line: Line<'static> = vec![
+            "• ".dim(),
+            "You’re continuing from this point in a new conversation".into(),
+        ]
+        .into();
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             PlainHistoryCell::new(vec![line]),
         )));

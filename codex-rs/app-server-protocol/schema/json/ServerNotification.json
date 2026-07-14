@@ -5216,6 +5216,11 @@
           "description": "Identifier for this turn. Codex-generated turn IDs are UUIDv7.",
           "type": "string"
         },
+        "isForkable": {
+          "default": false,
+          "description": "Whether this turn has a persisted canonical boundary that can be used as `lastTurnId` for `thread/fork` once the turn is no longer in progress.\n\nLegacy rollouts can contain synthetic turns without a stable raw rollout boundary. Those turns remain visible in history but are not forkable.",
+          "type": "boolean"
+        },
         "items": {
           "description": "Thread items currently included in this turn payload.",
           "items": {

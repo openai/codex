@@ -58,7 +58,14 @@ impl ChatWidget {
                 self.on_thread_settings_updated(notification);
             }
             ServerNotification::TurnStarted(notification) => {
-                self.turn_lifecycle.last_turn_id = Some(notification.turn.id);
+                let turn_id = notification.turn.id;
+                if self.input_queue.user_turn_pending_start {
+                    self.app_event_tx
+                        .send(AppEvent::AnchorLatestUserHistoryCell {
+                            turn_id: turn_id.clone(),
+                        });
+                }
+                self.turn_lifecycle.last_turn_id = Some(turn_id);
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
                     self.on_task_started();
@@ -333,7 +340,8 @@ impl ChatWidget {
     ) {
         self.handle_thread_item(
             notification.item,
-            notification.turn_id,
+            notification.turn_id.clone(),
+            Some(notification.turn_id),
             replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
         );
     }

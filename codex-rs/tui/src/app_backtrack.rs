@@ -3,18 +3,16 @@
 //! This file owns backtrack mode (Esc/Enter navigation in the transcript overlay) and also
 //! mediates a key rendering boundary for the transcript overlay.
 //!
-//! Overall goal: keep the main chat view and the transcript overlay in sync while allowing
-//! users to "rewind" to an earlier user message. We stage a rollback request, wait for core to
-//! confirm it, then trim the local transcript to the matching history boundary. This avoids UI
-//! state diverging from the agent if a rollback fails or targets a different thread.
+//! Overall goal: keep the main chat view and the transcript overlay in sync while allowing users
+//! to edit a prompt from a completed turn. Confirming a selection forks through the immediately
+//! preceding canonical turn, switches the TUI to the branch, and restores the selected prompt in
+//! the composer without changing the source thread.
 //!
 //! Backtrack operates as a small state machine:
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
-//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message when
-//!   there is a rewind target.
-//! - `Enter` requests a rollback from core and records a `pending_rollback` guard.
-//! - On rollback completion, we either finish an in-flight backtrack request or queue a
-//!   rollback trim so it runs in event order with transcript inserts.
+//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights one user message
+//!   for each completed canonical turn.
+//! - `Enter` requests a fork before the highlighted turn and reopens its prompt for editing.
 //!
 //! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
 //! tail derived from the current in-flight `ChatWidget.active_cell`.
@@ -25,22 +23,20 @@
 //! both committed history and in-flight activity without changing flush or coalescing behavior.
 
 use std::any::TypeId;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::bottom_pane::LocalImageAttachment;
 use crate::chatwidget::UserMessage;
-#[cfg(test)]
-use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
-use codex_protocol::user_input::TextElement;
+use codex_protocol::models::local_image_label_text;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -55,53 +51,38 @@ pub(crate) const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
 pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
-    /// Session id of the base thread to rollback.
+    /// Session id of the source thread to fork.
     ///
     /// If the current thread changes, backtrack selections become invalid and must be ignored.
     pub(crate) base_id: Option<ThreadId>,
-    /// Index of the currently highlighted user message.
+    /// Index of the currently highlighted completed turn.
     ///
-    /// This is an index into the filtered "user messages since the last session start" view,
-    /// not an index into `transcript_cells`. `usize::MAX` indicates "no selection".
+    /// This is an index into the filtered "canonical turns since the last session start" view,
+    /// not an index into `transcript_cells`. Multiple user messages in one turn (steers) share a
+    /// single entry. `usize::MAX` indicates "no selection".
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
-    /// Pending rollback request awaiting confirmation from core.
+    /// Output-free cancellation rollback awaiting confirmation from app-server.
     ///
-    /// This acts as a guardrail: once we request a rollback, we block additional backtrack
-    /// submissions until core responds with either a success or failure event.
-    pub(crate) pending_rollback: Option<PendingBacktrackRollback>,
+    /// Transcript prompt editing no longer uses rollback, but the legacy early-interrupt path
+    /// remains until the final PR in the stack.
+    pub(crate) pending_rollback: Option<PendingCancelledTurnRollback>,
 }
 
-/// A user-visible backtrack choice that can be confirmed into a rollback request.
-#[derive(Debug, Clone)]
+/// A completed canonical turn selected for editing on a source-preserving branch.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BacktrackSelection {
-    /// The selected user message, counted from the most recent session start.
-    ///
-    /// This value is used both to compute the rollback depth and to trim the local transcript
-    /// after core confirms the rollback.
-    pub(crate) nth_user_message: usize,
-    /// Composer prefill derived from the selected user message.
-    ///
-    /// This is applied immediately on selection confirmation; if the rollback fails, the prefill
-    /// remains as a convenience so the user can retry or edit.
-    pub(crate) prefill: String,
-    /// Text elements associated with the selected user message.
-    pub(crate) text_elements: Vec<TextElement>,
-    /// Local image paths associated with the selected user message.
-    pub(crate) local_image_paths: Vec<PathBuf>,
-    /// Remote image URLs associated with the selected user message.
-    pub(crate) remote_image_urls: Vec<String>,
+    pub(crate) thread_id: ThreadId,
+    /// Canonical turn immediately before the selected prompt, or `None` for the first prompt.
+    pub(crate) last_turn_id: Option<String>,
+    pub(crate) prompt: UserMessage,
 }
 
-/// An in-flight rollback requested from core.
-///
-/// We keep enough information to apply the corresponding local trim only if the response targets
-/// the same active thread we issued the request for.
 #[derive(Debug, Clone)]
-pub(crate) struct PendingBacktrackRollback {
-    pub(crate) selection: BacktrackSelection,
-    pub(crate) thread_id: Option<ThreadId>,
+pub(crate) struct PendingCancelledTurnRollback {
+    nth_user_message: usize,
+    thread_id: Option<ThreadId>,
 }
 
 impl App {
@@ -185,89 +166,21 @@ impl App {
         }
     }
 
-    /// Stage a backtrack and request thread history from the agent.
-    ///
-    /// We send the rollback request immediately, but we only mutate the transcript after core
-    /// confirms success so the UI cannot get ahead of the actual thread state.
-    ///
-    /// The composer prefill is applied immediately as a UX convenience; it does not imply that
-    /// core has accepted the rollback.
-    pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
-        if self.chat_widget.side_conversation_active() {
-            self.reset_backtrack_state();
-            self.chat_widget
-                .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
-            return;
-        }
-
-        let user_total = user_count(&self.transcript_cells);
-        if user_total == 0 {
-            return;
-        }
-
+    /// Preserve the existing output-free cancellation behavior while transcript editing migrates
+    /// to source-preserving forks.
+    pub(crate) fn apply_cancelled_turn_edit(&mut self, prompt: UserMessage) {
         if self.backtrack.pending_rollback.is_some() {
             self.chat_widget
                 .add_error_message("Backtrack rollback already in progress.".to_string());
             return;
         }
 
-        let num_turns = user_total.saturating_sub(selection.nth_user_message);
-        let num_turns = u32::try_from(num_turns).unwrap_or(u32::MAX);
-        if num_turns == 0 {
-            return;
-        }
-
-        let prefill = selection.prefill.clone();
-        let text_elements = selection.text_elements.clone();
-        let local_image_paths = selection.local_image_paths.clone();
-        let remote_image_urls = selection.remote_image_urls.clone();
-        let has_remote_image_urls = !remote_image_urls.is_empty();
-        self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
-            selection,
+        self.backtrack.pending_rollback = Some(PendingCancelledTurnRollback {
+            nth_user_message: user_count(&self.transcript_cells).saturating_sub(1),
             thread_id: self.chat_widget.thread_id(),
         });
         self.chat_widget
-            .submit_op(AppCommand::thread_rollback(num_turns));
-        self.chat_widget.set_remote_image_urls(remote_image_urls);
-        if !prefill.is_empty()
-            || !text_elements.is_empty()
-            || !local_image_paths.is_empty()
-            || has_remote_image_urls
-        {
-            self.chat_widget
-                .set_composer_text(prefill, text_elements, local_image_paths);
-        }
-    }
-
-    pub(crate) fn apply_cancelled_turn_edit(&mut self, prompt: UserMessage) {
-        let user_total = user_count(&self.transcript_cells);
-        let selection = BacktrackSelection {
-            nth_user_message: user_total.saturating_sub(1),
-            prefill: prompt.text.clone(),
-            text_elements: prompt.text_elements.clone(),
-            local_image_paths: prompt
-                .local_images
-                .iter()
-                .map(|image| image.path.clone())
-                .collect(),
-            remote_image_urls: prompt.remote_image_urls.clone(),
-        };
-        if user_total == 0 {
-            if self.backtrack.pending_rollback.is_some() {
-                self.chat_widget
-                    .add_error_message("Backtrack rollback already in progress.".to_string());
-                return;
-            }
-            self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
-                selection,
-                thread_id: self.chat_widget.thread_id(),
-            });
-            self.chat_widget
-                .submit_op(AppCommand::thread_rollback(/*num_turns*/ 1));
-            self.chat_widget.restore_user_message_to_composer(prompt);
-            return;
-        }
-        self.apply_backtrack_rollback(selection);
+            .submit_op(AppCommand::thread_rollback(/*num_turns*/ 1));
         self.chat_widget.restore_user_message_to_composer(prompt);
     }
 
@@ -306,14 +219,14 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.nth_user_message = usize::MAX;
         self.backtrack.base_id = self.chat_widget.thread_id();
-        if has_backtrack_target(&self.transcript_cells) {
+        if has_backtrack_target(&self.transcript_cells, self.chat_widget.active_turn_id()) {
             self.chat_widget.show_esc_backtrack_hint();
         }
     }
 
     /// Open overlay and begin backtrack preview flow (first step + highlight).
     fn open_backtrack_preview(&mut self, tui: &mut tui::Tui) {
-        if !has_backtrack_target(&self.transcript_cells) {
+        if !has_backtrack_target(&self.transcript_cells, self.chat_widget.active_turn_id()) {
             self.reset_backtrack_state();
             self.chat_widget
                 .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
@@ -330,7 +243,7 @@ impl App {
 
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
-        if !has_backtrack_target(&self.transcript_cells) {
+        if !has_backtrack_target(&self.transcript_cells, self.chat_widget.active_turn_id()) {
             self.close_transcript_overlay(tui);
             self.chat_widget
                 .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
@@ -341,16 +254,16 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
-        let count = user_count(&self.transcript_cells);
+        let count = forkable_turn_count(&self.transcript_cells, self.chat_widget.active_turn_id());
         if let Some(last) = count.checked_sub(1) {
             self.apply_backtrack_selection_internal(last);
         }
         tui.frame_requester().schedule_frame();
     }
 
-    /// Step selection to the next older user message and update overlay.
+    /// Step selection to the next older completed turn and update overlay.
     fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = forkable_turn_count(&self.transcript_cells, self.chat_widget.active_turn_id());
         if count == 0 {
             return;
         }
@@ -371,9 +284,9 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    /// Step selection to the next newer user message and update overlay.
+    /// Step selection to the next newer completed turn and update overlay.
     fn step_forward_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = forkable_turn_count(&self.transcript_cells, self.chat_widget.active_turn_id());
         if count == 0 {
             return;
         }
@@ -394,7 +307,12 @@ impl App {
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
-        if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
+        let cell_idx = nth_forkable_turn_position(
+            &self.transcript_cells,
+            nth_user_message,
+            self.chat_widget.active_turn_id(),
+        );
+        if let Some(cell_idx) = cell_idx {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(Some(cell_idx));
@@ -458,13 +376,13 @@ impl App {
         Ok(())
     }
 
-    /// Handle Enter in overlay backtrack preview: confirm selection and reset state.
+    /// Handle Enter in overlay backtrack preview: branch before the selection and reset state.
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
         let nth_user_message = self.backtrack.nth_user_message;
         let selection = self.backtrack_selection(nth_user_message);
         self.close_transcript_overlay(tui);
         if let Some(selection) = selection {
-            self.apply_backtrack_rollback(selection);
+            self.request_backtrack_fork(selection);
             tui.frame_requester().schedule_frame();
         }
     }
@@ -494,7 +412,6 @@ impl App {
     }
 
     /// Confirm a primed backtrack from the main view (no overlay visible).
-    /// Computes the prefill from the selected user message for rollback.
     pub(crate) fn confirm_backtrack_from_main(&mut self) -> Option<BacktrackSelection> {
         let selection = self.backtrack_selection(self.backtrack.nth_user_message);
         self.reset_backtrack_state();
@@ -510,18 +427,77 @@ impl App {
         self.chat_widget.clear_esc_backtrack_hint();
     }
 
+    /// Attach a canonical turn id to the latest locally rendered prompt.
+    pub(crate) fn anchor_latest_user_history_cell(&mut self, turn_id: String) {
+        if turn_id.is_empty() {
+            return;
+        }
+        let Some(index) = self
+            .transcript_cells
+            .iter()
+            .rposition(|cell| cell.as_any().is::<UserHistoryCell>())
+        else {
+            return;
+        };
+        let Some(user_cell) = self.transcript_cells[index]
+            .as_any()
+            .downcast_ref::<UserHistoryCell>()
+        else {
+            return;
+        };
+        if user_cell.turn_id.is_some() {
+            return;
+        }
+        let mut anchored_cell = user_cell.clone();
+        anchored_cell.turn_id = Some(turn_id);
+        self.transcript_cells[index] = Arc::new(anchored_cell);
+        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+            overlay.replace_cells(self.transcript_cells.clone());
+        }
+    }
+
     pub(crate) fn apply_backtrack_selection(
         &mut self,
         tui: &mut tui::Tui,
         selection: BacktrackSelection,
     ) {
-        self.apply_backtrack_rollback(selection);
+        self.request_backtrack_fork(selection);
         tui.frame_requester().schedule_frame();
+    }
+
+    fn request_backtrack_fork(&mut self, selection: BacktrackSelection) {
+        if self.chat_widget.side_conversation_active() {
+            self.reset_backtrack_state();
+            self.chat_widget
+                .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
+            return;
+        }
+
+        if self.chat_widget.thread_id() != Some(selection.thread_id) {
+            return;
+        }
+
+        self.app_event_tx.send(AppEvent::ForkSessionForPromptEdit {
+            thread_id: selection.thread_id,
+            last_turn_id: selection.last_turn_id,
+            prompt: selection.prompt,
+        });
+    }
+
+    pub(crate) fn restore_backtrack_prompt_after_branch_error(
+        &mut self,
+        prompt: UserMessage,
+        err: impl std::fmt::Display,
+    ) {
+        self.chat_widget.restore_user_message_to_composer(prompt);
+        self.chat_widget.add_error_message(format!(
+            "Failed to branch before the selected prompt: {err}"
+        ));
     }
 
     pub(crate) fn handle_backtrack_rollback_succeeded(&mut self, num_turns: u32) {
         if self.backtrack.pending_rollback.is_some() {
-            self.finish_pending_backtrack();
+            self.finish_pending_cancelled_turn_rollback();
         } else {
             self.app_event_tx
                 .send(AppEvent::ApplyThreadRollback { num_turns });
@@ -532,10 +508,7 @@ impl App {
         self.backtrack.pending_rollback = None;
     }
 
-    /// Apply rollback semantics for a confirmed rollback where this TUI does
-    /// not have an in-flight backtrack request (`pending_rollback` is `None`).
-    ///
-    /// Returns `true` when local transcript state changed.
+    /// Apply rollback semantics for legacy TUI consumers that have not migrated to forks yet.
     pub(crate) fn apply_non_pending_thread_rollback(&mut self, num_turns: u32) -> bool {
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
@@ -549,22 +522,14 @@ impl App {
         true
     }
 
-    /// Finish a pending rollback by applying the local trim and scheduling a scrollback refresh.
-    ///
-    /// We ignore events that do not correspond to the currently active thread to avoid applying
-    /// stale updates after a session switch.
-    fn finish_pending_backtrack(&mut self) {
+    fn finish_pending_cancelled_turn_rollback(&mut self) {
         let Some(pending) = self.backtrack.pending_rollback.take() else {
             return;
         };
         if pending.thread_id != self.chat_widget.thread_id() {
-            // Ignore rollbacks targeting a prior thread.
             return;
         }
-        if trim_transcript_cells_to_nth_user(
-            &mut self.transcript_cells,
-            pending.selection.nth_user_message,
-        ) {
+        if trim_transcript_cells_to_nth_user(&mut self.transcript_cells, pending.nth_user_message) {
             self.chat_widget.clear_pending_token_activity_refreshes();
             self.chat_widget.clear_pending_rate_limit_reset_hint();
             self.chat_widget
@@ -574,60 +539,67 @@ impl App {
         }
     }
 
+    fn sync_overlay_after_transcript_trim(&mut self) {
+        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+            overlay.replace_cells(self.transcript_cells.clone());
+        }
+        if self.backtrack.overlay_preview_active {
+            let count =
+                forkable_turn_count(&self.transcript_cells, self.chat_widget.active_turn_id());
+            let next_selection = if count == 0 {
+                usize::MAX
+            } else {
+                self.backtrack.nth_user_message.min(count.saturating_sub(1))
+            };
+            self.apply_backtrack_selection_internal(next_selection);
+        }
+        self.deferred_history_lines.clear();
+    }
+
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
         let base_id = self.backtrack.base_id?;
         if self.chat_widget.thread_id() != Some(base_id) {
             return None;
         }
 
-        let (prefill, text_elements, local_image_paths, remote_image_urls) =
-            nth_user_position(&self.transcript_cells, nth_user_message)
-                .and_then(|idx| self.transcript_cells.get(idx))
-                .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
-                .map(|cell| {
-                    (
-                        cell.message.clone(),
-                        cell.text_elements.clone(),
-                        cell.local_image_paths.clone(),
-                        cell.remote_image_urls.clone(),
-                    )
-                })
-                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new(), Vec::new()));
+        let mut positions =
+            forkable_turn_positions_iter(&self.transcript_cells, self.chat_widget.active_turn_id());
+        let (previous_position, selected_position) = if nth_user_message == 0 {
+            (None, positions.next()?)
+        } else {
+            (
+                positions.nth(nth_user_message.saturating_sub(1)),
+                positions.next()?,
+            )
+        };
+        let last_turn_id = previous_position
+            .and_then(|idx| self.transcript_cells.get(idx))
+            .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+            .and_then(|cell| cell.turn_id.clone());
+        let selected = self.transcript_cells[selected_position]
+            .as_any()
+            .downcast_ref::<UserHistoryCell>()?;
+        let local_images = selected
+            .local_image_paths
+            .iter()
+            .enumerate()
+            .map(|(idx, path)| LocalImageAttachment {
+                placeholder: local_image_label_text(idx + 1),
+                path: path.clone(),
+            })
+            .collect();
 
         Some(BacktrackSelection {
-            nth_user_message,
-            prefill,
-            text_elements,
-            local_image_paths,
-            remote_image_urls,
+            thread_id: base_id,
+            last_turn_id,
+            prompt: UserMessage {
+                text: selected.message.clone(),
+                local_images,
+                remote_image_urls: selected.remote_image_urls.clone(),
+                text_elements: selected.text_elements.clone(),
+                mention_bindings: Vec::new(),
+            },
         })
-    }
-
-    /// Keep transcript-related UI state aligned after `transcript_cells` was trimmed.
-    ///
-    /// This does three things:
-    /// 1. If transcript overlay is open, replace its committed cells so removed turns disappear.
-    /// 2. If backtrack preview is active, clamp/recompute the highlighted user selection.
-    /// 3. Drop deferred transcript lines buffered while overlay was open to avoid flushing lines
-    ///    for cells that were just removed by the trim.
-    fn sync_overlay_after_transcript_trim(&mut self) {
-        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-            t.replace_cells(self.transcript_cells.clone());
-        }
-        if self.backtrack.overlay_preview_active {
-            let total_users = user_count(&self.transcript_cells);
-            let next_selection = if total_users == 0 {
-                usize::MAX
-            } else {
-                self.backtrack
-                    .nth_user_message
-                    .min(total_users.saturating_sub(1))
-            };
-            self.apply_backtrack_selection_internal(next_selection);
-        }
-        // While overlay is open, we buffer rendered history lines and flush them on close.
-        // If rollback trimmed cells meanwhile, those buffered lines can reference removed turns.
-        self.deferred_history_lines.clear();
     }
 }
 
@@ -675,10 +647,6 @@ pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) ->
     user_positions_iter(cells).count()
 }
 
-fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> bool {
-    user_count(cells) > 0
-}
-
 fn nth_user_position(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
     nth: usize,
@@ -707,31 +675,56 @@ fn user_positions_iter(
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
 }
 
-#[cfg(test)]
-fn agent_group_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
-    agent_group_positions_iter(cells).count()
+fn has_backtrack_target(
+    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
+    active_turn_id: Option<&str>,
+) -> bool {
+    forkable_turn_positions_iter(cells, active_turn_id)
+        .next()
+        .is_some()
 }
 
-#[cfg(test)]
-fn agent_group_positions_iter(
+fn forkable_turn_count(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
-) -> impl Iterator<Item = usize> + '_ {
+    active_turn_id: Option<&str>,
+) -> usize {
+    forkable_turn_positions_iter(cells, active_turn_id).count()
+}
+
+fn nth_forkable_turn_position(
+    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
+    nth: usize,
+    active_turn_id: Option<&str>,
+) -> Option<usize> {
+    forkable_turn_positions_iter(cells, active_turn_id).nth(nth)
+}
+
+fn forkable_turn_positions_iter<'a>(
+    cells: &'a [Arc<dyn crate::history_cell::HistoryCell>],
+    active_turn_id: Option<&'a str>,
+) -> impl Iterator<Item = usize> + 'a {
     let session_start_type = TypeId::of::<SessionInfoCell>();
     let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
-
     let start = cells
         .iter()
         .rposition(|cell| type_of(cell) == session_start_type)
         .map_or(0, |idx| idx + 1);
+    let mut seen_turn_ids = std::collections::HashSet::new();
 
     cells
         .iter()
         .enumerate()
         .skip(start)
         .filter_map(move |(idx, cell)| {
-            let is_agent = cell.as_any().downcast_ref::<AgentMessageCell>().is_some();
-            let is_copy_source_group = is_agent && !cell.is_stream_continuation();
-            is_copy_source_group.then_some(idx)
+            let turn_id = cell
+                .as_any()
+                .downcast_ref::<UserHistoryCell>()?
+                .turn_id
+                .as_deref()?;
+            (!turn_id.is_empty()
+                && active_turn_id != Some(turn_id)
+                && seen_turn_ids.insert(turn_id))
+            .then_some(idx)
         })
 }
 
@@ -756,213 +749,74 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn trim_transcript_for_first_user_drops_user_and_newer_cells() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(UserHistoryCell {
-                message: "first user".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("assistant")],
-                /*is_first_line*/ true,
-            )) as Arc<dyn HistoryCell>,
-        ];
-        trim_transcript_cells_to_nth_user(&mut cells, /*nth_user_message*/ 0);
+    fn user_cell(turn_id: &str, message: &str) -> Arc<dyn HistoryCell> {
+        Arc::new(UserHistoryCell {
+            turn_id: Some(turn_id.to_string()),
+            message: message.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        })
+    }
 
-        assert!(cells.is_empty());
+    fn synthetic_user_cell(message: &str) -> Arc<dyn HistoryCell> {
+        Arc::new(UserHistoryCell {
+            turn_id: None,
+            message: message.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        })
     }
 
     #[test]
-    fn trim_transcript_preserves_cells_before_selected_user() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+    fn forkable_turns_group_user_messages_and_steers_by_turn_id() {
+        let cells = vec![
+            user_cell("turn-1", "initial prompt"),
             Arc::new(AgentMessageCell::new(
-                vec![Line::from("intro")],
+                vec![Line::from("working")],
                 /*is_first_line*/ true,
             )) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("after")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
+            user_cell("turn-1", "steer"),
+            user_cell("turn-2", "next prompt"),
         ];
-        trim_transcript_cells_to_nth_user(&mut cells, /*nth_user_message*/ 0);
 
-        assert_eq!(cells.len(), 1);
-        let agent = cells[0]
-            .as_any()
-            .downcast_ref::<AgentMessageCell>()
-            .expect("agent cell");
-        let agent_lines = agent.display_lines(u16::MAX);
-        assert_eq!(agent_lines.len(), 1);
-        let intro_text: String = agent_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(intro_text, "• intro");
+        let positions: Vec<usize> =
+            forkable_turn_positions_iter(&cells, /*active_turn_id*/ None).collect();
+
+        assert_eq!(positions, vec![0, 3]);
+        assert_eq!(forkable_turn_count(&cells, /*active_turn_id*/ None), 2);
     }
 
     #[test]
-    fn trim_transcript_for_later_user_keeps_prior_history() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("intro")],
-                /*is_first_line*/ true,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("between")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "second".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("tail")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
+    fn forkable_turns_exclude_active_turn_but_keep_terminal_prefix() {
+        let cells = vec![
+            user_cell("turn-1", "completed prompt"),
+            user_cell("turn-2", "in-progress prompt"),
         ];
-        trim_transcript_cells_to_nth_user(&mut cells, /*nth_user_message*/ 1);
 
-        assert_eq!(cells.len(), 3);
-        let agent_intro = cells[0]
-            .as_any()
-            .downcast_ref::<AgentMessageCell>()
-            .expect("intro agent");
-        let intro_lines = agent_intro.display_lines(u16::MAX);
-        let intro_text: String = intro_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(intro_text, "• intro");
-
-        let user_first = cells[1]
-            .as_any()
-            .downcast_ref::<UserHistoryCell>()
-            .expect("first user");
-        assert_eq!(user_first.message, "first");
-
-        let agent_between = cells[2]
-            .as_any()
-            .downcast_ref::<AgentMessageCell>()
-            .expect("between agent");
-        let between_lines = agent_between.display_lines(u16::MAX);
-        let between_text: String = between_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(between_text, "  between");
+        assert_eq!(forkable_turn_count(&cells, Some("turn-2")), 1);
+        assert_eq!(
+            nth_forkable_turn_position(&cells, /*nth*/ 0, Some("turn-2")),
+            Some(0)
+        );
+        assert_eq!(
+            nth_forkable_turn_position(&cells, /*nth*/ 1, Some("turn-2")),
+            None
+        );
     }
 
     #[test]
-    fn trim_drop_last_n_user_turns_applies_rollback_semantics() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("after first")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "second".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("after second")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
+    fn forkable_turns_exclude_legacy_synthetic_turns() {
+        let cells = vec![
+            synthetic_user_cell("legacy prompt"),
+            user_cell("turn-1", "canonical prompt"),
         ];
 
-        let changed =
-            trim_transcript_cells_drop_last_n_user_turns(&mut cells, /*num_turns*/ 1);
+        let positions: Vec<usize> =
+            forkable_turn_positions_iter(&cells, /*active_turn_id*/ None).collect();
 
-        assert!(changed);
-        assert_eq!(cells.len(), 2);
-        let first_user = cells[0]
-            .as_any()
-            .downcast_ref::<UserHistoryCell>()
-            .expect("first user");
-        assert_eq!(first_user.message, "first");
-    }
-
-    #[test]
-    fn trim_drop_last_n_user_turns_allows_overflow() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("intro")],
-                /*is_first_line*/ true,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("after")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
-        ];
-
-        let changed = trim_transcript_cells_drop_last_n_user_turns(&mut cells, u32::MAX);
-
-        assert!(changed);
-        assert_eq!(cells.len(), 1);
-        let intro = cells[0]
-            .as_any()
-            .downcast_ref::<AgentMessageCell>()
-            .expect("intro agent");
-        let intro_lines = intro.display_lines(u16::MAX);
-        let intro_text: String = intro_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(intro_text, "• intro");
-    }
-
-    #[test]
-    fn agent_group_count_ignores_context_compacted_marker() {
-        let cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("first")],
-                /*is_first_line*/ true,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(crate::history_cell::new_info_event(
-                "Context compacted".to_string(),
-                /*hint*/ None,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("second")],
-                /*is_first_line*/ true,
-            )) as Arc<dyn HistoryCell>,
-        ];
-
-        assert_eq!(agent_group_count(&cells), 2);
+        assert_eq!(positions, vec![1]);
     }
 
     #[test]
@@ -978,16 +832,17 @@ mod tests {
             )) as Arc<dyn HistoryCell>,
         ];
 
-        assert!(!has_backtrack_target(&cells));
+        assert!(!has_backtrack_target(&cells, /*active_turn_id*/ None));
 
         cells.push(Arc::new(UserHistoryCell {
+            turn_id: Some("turn-1".to_string()),
             message: "hello".to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
         }) as Arc<dyn HistoryCell>);
 
-        assert!(has_backtrack_target(&cells));
+        assert!(has_backtrack_target(&cells, /*active_turn_id*/ None));
     }
 
     #[test]

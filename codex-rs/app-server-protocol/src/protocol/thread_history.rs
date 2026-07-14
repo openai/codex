@@ -1557,6 +1557,7 @@ impl From<PendingTurn> for Turn {
     fn from(value: PendingTurn) -> Self {
         Self {
             id: value.id,
+            is_forkable: value.opened_explicitly,
             items: value.items,
             items_view: TurnItemsView::Full,
             error: value.error,
@@ -1572,6 +1573,7 @@ impl From<&PendingTurn> for Turn {
     fn from(value: &PendingTurn) -> Self {
         Self {
             id: value.id.clone(),
+            is_forkable: value.opened_explicitly,
             items: value.items.clone(),
             items_view: TurnItemsView::Full,
             error: value.error.clone(),
@@ -2263,6 +2265,7 @@ mod tests {
             turns[0],
             Turn {
                 id: "turn-image".into(),
+                is_forkable: true,
                 status: TurnStatus::Completed,
                 error: None,
                 started_at: None,
@@ -2491,6 +2494,8 @@ mod tests {
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].id, "rollout-0");
         assert_eq!(turns[1].id, "rollout-5");
+        assert!(!turns[0].is_forkable);
+        assert!(!turns[1].is_forkable);
         assert_ne!(turns[0].id, turns[1].id);
         assert_eq!(turns[0].status, TurnStatus::Completed);
         assert_eq!(turns[1].status, TurnStatus::Completed);
@@ -3678,6 +3683,7 @@ mod tests {
             turns,
             vec![Turn {
                 id: "turn-compact".into(),
+                is_forkable: true,
                 status: TurnStatus::Completed,
                 error: None,
                 started_at: None,
@@ -3951,6 +3957,7 @@ mod tests {
             turns[0],
             Turn {
                 id: "turn-a".into(),
+                is_forkable: true,
                 status: TurnStatus::Completed,
                 error: None,
                 started_at: None,

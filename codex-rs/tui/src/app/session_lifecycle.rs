@@ -6,6 +6,11 @@
 
 use super::*;
 
+pub(super) enum ThreadAttachPresentation {
+    SessionLineage,
+    PromptEdit,
+}
+
 impl App {
     pub(super) async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
         self.backfill_loaded_subagent_threads(app_server).await;
@@ -513,8 +518,12 @@ impl App {
             .set_queue_submissions_until_session_configured(/*queue*/ false);
         match result {
             Ok(started) => {
-                self.enqueue_primary_thread_session(started.session, started.turns)
-                    .await?;
+                self.enqueue_primary_thread_session_with_presentation(
+                    started.session,
+                    started.turns,
+                    ThreadAttachPresentation::SessionLineage,
+                )
+                .await?;
                 self.chat_widget.maybe_send_next_queued_input();
             }
             Err(err) => {
@@ -571,6 +580,7 @@ impl App {
                         tui,
                         app_server,
                         started,
+                        ThreadAttachPresentation::SessionLineage,
                         initial_user_message,
                     )
                     .await
@@ -605,6 +615,7 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         started: AppServerStartedThread,
+        presentation: ThreadAttachPresentation,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) -> Result<()> {
         // Initial messages are for freshly attached primary threads only. Thread switches and
@@ -617,8 +628,12 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-        self.enqueue_primary_thread_session(started.session, started.turns)
-            .await?;
+        self.enqueue_primary_thread_session_with_presentation(
+            started.session,
+            started.turns,
+            presentation,
+        )
+        .await?;
         self.backfill_loaded_subagent_threads(app_server).await;
         Ok(())
     }
@@ -808,7 +823,11 @@ impl App {
                     .update_search_dir(self.config.cwd.to_path_buf());
                 match self
                     .replace_chat_widget_with_app_server_thread(
-                        tui, app_server, resumed, /*initial_user_message*/ None,
+                        tui,
+                        app_server,
+                        resumed,
+                        ThreadAttachPresentation::SessionLineage,
+                        /*initial_user_message*/ None,
                     )
                     .await
                 {
