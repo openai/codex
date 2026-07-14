@@ -3,9 +3,10 @@
 
 Cloudflare R2 exposes an S3-compatible API, so the built-in AWS CLI uses
 standard AWS credentials and the R2 endpoint from ``AWS_ENDPOINT_URL``.
-Objects are created under ``codex/releases/<version>/`` and read back before
-the run succeeds. The versioned prefix includes every release asset plus
-installer-facing ``release.json`` metadata derived from the verified downloads.
+Objects are created under ``codex/releases/<version>/`` with a validated upload
+checksum and checked using object metadata before the run succeeds. The
+versioned prefix includes every release asset plus installer-facing
+``release.json`` metadata derived from the verified downloads.
 """
 
 import argparse
@@ -25,21 +26,26 @@ PREFIX = "codex"
 REPOSITORY = "openai/codex"
 RELEASE_METADATA_NAME = "release.json"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+)?)?$")
+CRC64_RE = re.compile(r"^[A-Za-z0-9+/]{11}=$")
 
 
 class PublishError(RuntimeError):
     pass
 
 
-def run_command(args: list[str]) -> None:
+def run_command(args: list[str]) -> str:
     result = subprocess.run(
         args,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    if result.stdout:
+        print(result.stdout, end="", file=sys.stderr)
     if result.stderr:
         print(result.stderr, end="", file=sys.stderr)
     result.check_returncode()
+    return result.stdout or ""
 
 
 def download_assets(tag: str, directory: Path) -> list[Path]:
@@ -86,31 +92,25 @@ def raise_s3(
     ) from error
 
 
-def put_immutable(endpoint: str, key: str, path: Path) -> None:
+def put_immutable(endpoint: str, key: str, path: Path, sha256: str) -> None:
     try:
         run_command(
             [
                 "aws",
-                "s3api",
-                "put-object",
-                "--bucket",
-                BUCKET,
-                "--key",
-                key,
-                "--body",
+                "s3",
+                "cp",
                 str(path),
-                "--if-none-match",
-                "*",
+                f"s3://{BUCKET}/{key}",
+                "--no-overwrite",
+                "--checksum-algorithm",
+                "CRC64NVME",
+                "--metadata",
+                f"sha256={sha256}",
                 "--endpoint-url",
                 endpoint,
             ]
         )
     except subprocess.CalledProcessError as error:
-        if any(
-            code in (error.stderr or "")
-            for code in ("PreconditionFailed", "ConditionalRequestConflict")
-        ):
-            return
         raise_s3("upload", key, error, (error.stderr or "").strip())
     except OSError as error:
         raise_s3("upload", key, error)
@@ -121,35 +121,46 @@ def verify_remote(
     key: str,
     expected_size: int,
     expected_sha256: str,
-    path: Path,
 ) -> None:
     try:
-        run_command(
-            [
-                "aws",
-                "s3api",
-                "get-object",
-                "--bucket",
-                BUCKET,
-                "--key",
-                key,
-                "--endpoint-url",
-                endpoint,
-                str(path),
-            ]
+        response = json.loads(
+            run_command(
+                [
+                    "aws",
+                    "s3api",
+                    "head-object",
+                    "--bucket",
+                    BUCKET,
+                    "--key",
+                    key,
+                    "--checksum-mode",
+                    "ENABLED",
+                    "--endpoint-url",
+                    endpoint,
+                ]
+            )
         )
-        with path.open("rb") as source:
-            size, sha256 = stream_digest(source)
     except subprocess.CalledProcessError as error:
-        raise_s3("read back", key, error, (error.stderr or "").strip())
+        raise_s3("inspect", key, error, (error.stderr or "").strip())
     except OSError as error:
-        raise_s3("read back", key, error)
-    finally:
-        path.unlink(missing_ok=True)
-    if size != expected_size or sha256 != expected_sha256:
+        raise_s3("inspect", key, error)
+    except json.JSONDecodeError as error:
+        raise PublishError(f"invalid object metadata for {key}: {error}") from error
+
+    metadata = response.get("Metadata") if isinstance(response, dict) else None
+    size = response.get("ContentLength") if isinstance(response, dict) else None
+    crc64 = response.get("ChecksumCRC64NVME") if isinstance(response, dict) else None
+    sha256 = metadata.get("sha256") if isinstance(metadata, dict) else None
+    if (
+        size != expected_size
+        or sha256 != expected_sha256
+        or not isinstance(crc64, str)
+        or not CRC64_RE.fullmatch(crc64)
+    ):
         raise PublishError(
-            f"read-back mismatch for {key}: expected size={expected_size} "
-            f"sha256={expected_sha256}, got size={size} sha256={sha256}"
+            f"object metadata mismatch for {key}: expected size={expected_size} "
+            f"sha256={expected_sha256}, got size={size} sha256={sha256} "
+            f"crc64nvme={crc64}"
         )
 
 
@@ -176,13 +187,17 @@ def main() -> int:
         with tempfile.TemporaryDirectory() as temp_dir:
             assets_directory = Path(temp_dir) / "assets"
             assets_directory.mkdir()
-            readback_path = Path(temp_dir) / "readback"
             for path in download_assets(args.tag, assets_directory):
                 with path.open("rb") as source:
                     size, sha256 = stream_digest(source)
                 key = f"{PREFIX}/releases/{version}/{path.name}"
-                put_immutable(endpoint, key, path)
-                verify_remote(endpoint, key, size, sha256, readback_path)
+                put_immutable(endpoint, key, path, sha256)
+                verify_remote(endpoint, key, size, sha256)
+                print(
+                    f"published and verified s3://{BUCKET}/{key} "
+                    f"size={size} sha256={sha256}",
+                    file=sys.stderr,
+                )
                 published.append(
                     {
                         "key": key,
@@ -216,13 +231,17 @@ def main() -> int:
             with metadata_path.open("rb") as source:
                 metadata_size, metadata_sha256 = stream_digest(source)
             metadata_key = f"{PREFIX}/releases/{version}/{RELEASE_METADATA_NAME}"
-            put_immutable(endpoint, metadata_key, metadata_path)
+            put_immutable(endpoint, metadata_key, metadata_path, metadata_sha256)
             verify_remote(
                 endpoint,
                 metadata_key,
                 metadata_size,
                 metadata_sha256,
-                readback_path,
+            )
+            print(
+                f"published and verified s3://{BUCKET}/{metadata_key} "
+                f"size={metadata_size} sha256={metadata_sha256}",
+                file=sys.stderr,
             )
 
         print(
