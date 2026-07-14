@@ -57,11 +57,10 @@ pub enum TurnItem {
     /// schema is owned by the web-search extension.
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
-    Sleep(SleepItem),
     /// Item whose schema and lifecycle details are owned by an extension.
     ///
-    /// Standalone image generation and web search use this path. App-server
-    /// wraps the same typed items in their public variants.
+    /// Standalone image generation, sleep, and web search use this path.
+    /// App-server wraps the same typed items in their public variants.
     Extension(ExtensionItem),
     /// Hosted Responses API image-generation item handled directly by core.
     ///
@@ -318,12 +317,6 @@ pub struct ImageViewItem {
     /// This core protocol type is not exposed directly in the app-server API.
     /// App-server converts the path to `LegacyAppPathString` at its boundary.
     pub path: PathUri,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-pub struct SleepItem {
-    pub id: String,
-    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -645,7 +638,6 @@ impl TurnItem {
             TurnItem::SubAgentActivity(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
-            TurnItem::Sleep(item) => item.id.clone(),
             TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::EnteredReviewMode(item) => item.id.clone(),
@@ -660,7 +652,27 @@ impl TurnItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_extension_items::sleep::SleepItem;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn sleep_extension_item_preserves_type_and_kind() {
+        let item = TurnItem::Extension(ExtensionItem::Sleep(SleepItem {
+            id: "sleep-1".to_string(),
+            duration_ms: 1_000,
+        }));
+
+        assert_eq!(
+            serde_json::to_value(item).expect("serialize sleep extension item"),
+            json!({
+                "type": "Extension",
+                "kind": "clock.sleep",
+                "id": "sleep-1",
+                "durationMs": 1_000,
+            })
+        );
+    }
 
     #[test]
     fn hook_prompt_roundtrips_multiple_fragments() {

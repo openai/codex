@@ -7,6 +7,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SleepItem;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -112,10 +113,10 @@ async fn external_sleep_polls_current_time_and_emits_items() -> Result<()> {
     )
     .await??;
 
-    let expected_item = ThreadItem::Sleep {
+    let expected_item = ThreadItem::Sleep(SleepItem {
         id: CALL_ID.to_string(),
         duration_ms: DURATION_MS,
-    };
+    });
     assert!(completed.completed_at_ms >= started.started_at_ms);
     assert_eq!(
         started,
@@ -151,7 +152,7 @@ async fn wait_for_sleep_started(
         .await??;
         let started: ItemStartedNotification =
             serde_json::from_value(notification.params.expect("item/started params"))?;
-        if matches!(&started.item, ThreadItem::Sleep { id, .. } if id == call_id) {
+        if matches!(&started.item, ThreadItem::Sleep(item) if item.id == call_id) {
             return Ok(started);
         }
     }
@@ -169,7 +170,7 @@ async fn wait_for_sleep_completed(
         .await??;
         let completed: ItemCompletedNotification =
             serde_json::from_value(notification.params.expect("item/completed params"))?;
-        if matches!(&completed.item, ThreadItem::Sleep { id, .. } if id == call_id) {
+        if matches!(&completed.item, ThreadItem::Sleep(item) if item.id == call_id) {
             return Ok(completed);
         }
     }

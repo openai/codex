@@ -255,7 +255,6 @@ fn turn_item_type(item: &TurnItem) -> &'static str {
         TurnItem::SubAgentActivity(_) => "sub_agent_activity",
         TurnItem::WebSearch(_) => "web_search",
         TurnItem::ImageView(_) => "image_view",
-        TurnItem::Sleep(_) => "sleep",
         TurnItem::Extension(_) => "extension",
         TurnItem::ImageGeneration(_) => "image_generation",
         TurnItem::EnteredReviewMode(_) => "entered_review_mode",

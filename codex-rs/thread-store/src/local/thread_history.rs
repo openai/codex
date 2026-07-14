@@ -329,7 +329,7 @@ WHERE thread_id = ? AND turn_id = ?
             | ThreadItem::SubAgentActivity { .. }
             | ThreadItem::WebSearch(_)
             | ThreadItem::ImageView { .. }
-            | ThreadItem::Sleep { .. }
+            | ThreadItem::Sleep(_)
             | ThreadItem::ImageGeneration(_)
             | ThreadItem::EnteredReviewMode { .. }
             | ThreadItem::ExitedReviewMode { .. }
