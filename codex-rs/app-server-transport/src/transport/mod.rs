@@ -281,6 +281,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerNotificationEnvelope;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::time::Duration;
@@ -443,14 +444,15 @@ mod tests {
 
         writer_tx
             .send(QueuedOutgoingMessage::new(
-                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
-                    ConfigWarningNotification {
+                OutgoingMessage::AppServerNotification(ServerNotificationEnvelope {
+                    notification: ServerNotification::ConfigWarning(ConfigWarningNotification {
                         summary: "queued".to_string(),
                         details: None,
                         path: None,
                         range: None,
-                    },
-                )),
+                    }),
+                    emitted_at_ms: Some(1_234),
+                }),
             ))
             .await
             .expect("writer queue should accept first message");
@@ -484,6 +486,7 @@ mod tests {
                     "summary": "queued",
                     "details": null,
                 },
+                "emittedAtMs": 1_234,
             })
         );
     }

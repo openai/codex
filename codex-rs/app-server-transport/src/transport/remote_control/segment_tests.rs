@@ -14,6 +14,7 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerNotificationEnvelope;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -74,12 +75,15 @@ fn splits_large_server_messages_into_wire_chunks() {
     let envelope = ServerEnvelope {
         event: ServerEvent::ServerMessage {
             message: Box::new(OutgoingMessage::AppServerNotification(
-                ServerNotification::ConfigWarning(ConfigWarningNotification {
-                    summary: "x".repeat(REMOTE_CONTROL_SEGMENT_MAX_BYTES),
-                    details: None,
-                    path: None,
-                    range: None,
-                }),
+                ServerNotificationEnvelope {
+                    notification: ServerNotification::ConfigWarning(ConfigWarningNotification {
+                        summary: "x".repeat(REMOTE_CONTROL_SEGMENT_MAX_BYTES),
+                        details: None,
+                        path: None,
+                        range: None,
+                    }),
+                    emitted_at_ms: Some(1_234),
+                },
             )),
         },
         client_id: ClientId("client-1".to_string()),

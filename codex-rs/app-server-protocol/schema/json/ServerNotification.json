@@ -7117,5 +7117,12 @@
       "type": "object"
     }
   ],
+  "properties": {
+    "emittedAtMs": {
+      "description": "Unix timestamp (in milliseconds) when app-server emitted this notification.",
+      "format": "int64",
+      "type": "integer"
+    }
+  },
   "title": "ServerNotification"
 }

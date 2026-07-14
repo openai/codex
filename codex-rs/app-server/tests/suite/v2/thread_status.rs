@@ -80,6 +80,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
             JSONRPCMessage::Notification(JSONRPCNotification {
                 method,
                 params: Some(params),
+                ..
             }) if method == "thread/status/changed" => {
                 let notification: ThreadStatusChangedNotification = serde_json::from_value(params)?;
                 if notification.thread_id != thread.id {

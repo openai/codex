@@ -448,6 +448,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerNotificationEnvelope;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::time::timeout;
@@ -588,14 +589,15 @@ mod tests {
 
         writer
             .send(QueuedOutgoingMessage::new(
-                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
-                    ConfigWarningNotification {
+                OutgoingMessage::AppServerNotification(ServerNotificationEnvelope {
+                    notification: ServerNotification::ConfigWarning(ConfigWarningNotification {
                         summary: "test".to_string(),
                         details: None,
                         path: None,
                         range: None,
-                    },
-                )),
+                    }),
+                    emitted_at_ms: Some(1_234),
+                }),
             ))
             .await
             .expect("writer should accept queued message");

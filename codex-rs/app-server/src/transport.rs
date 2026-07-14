@@ -105,15 +105,15 @@ fn should_skip_notification_for_connection(
         return false;
     };
     match message {
-        OutgoingMessage::AppServerNotification(notification) => {
-            if notification.experimental_reason().is_some()
+        OutgoingMessage::AppServerNotification(envelope) => {
+            if envelope.notification.experimental_reason().is_some()
                 && !connection_state
                     .experimental_api_enabled
                     .load(Ordering::Acquire)
             {
                 return true;
             }
-            let method = notification.to_string();
+            let method = envelope.notification.to_string();
             opted_out_notification_methods.contains(method.as_str())
         }
         _ => false,

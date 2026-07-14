@@ -73,6 +73,7 @@ export type { ResponseItem } from "./ResponseItem";
 export type { ResponseItemId } from "./ResponseItemId";
 export type { ReviewDecision } from "./ReviewDecision";
 export type { ServerNotification } from "./ServerNotification";
+export type { ServerNotificationEnvelope } from "./ServerNotificationEnvelope";
 export type { ServerRequest } from "./ServerRequest";
 export type { SessionSource } from "./SessionSource";
 export type { Settings } from "./Settings";

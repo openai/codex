@@ -477,7 +477,7 @@ async fn read_thread_started_notification(
                     continue;
                 };
                 if matches!(
-                    notification,
+                    notification.notification,
                     codex_app_server_protocol::ServerNotification::ThreadStarted(_)
                 ) {
                     return;
@@ -490,7 +490,7 @@ async fn read_thread_started_notification(
                     continue;
                 };
                 if matches!(
-                    notification,
+                    notification.notification,
                     codex_app_server_protocol::ServerNotification::ThreadStarted(_)
                 ) {
                     return;
