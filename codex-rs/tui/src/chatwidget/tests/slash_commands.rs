@@ -401,7 +401,7 @@ async fn queued_slash_menu_cancel_drains_next_input() {
 async fn queued_settings_selection_applies_before_next_input() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
-    let mut preset = get_available_model(&chat, "gpt-5.4");
+    let mut preset = get_available_model(&chat, "gpt-5.6-terra");
     preset.supported_reasoning_efforts.truncate(1);
     let selected_effort = preset.supported_reasoning_efforts[0].effort.clone();
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
@@ -439,7 +439,7 @@ async fn queued_settings_selection_applies_before_next_input() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { model, effort, .. } => assert_eq!(
             (model, effort),
-            ("gpt-5.4".to_string(), Some(selected_effort))
+            ("gpt-5.6-terra".to_string(), Some(selected_effort))
         ),
         other => panic!("expected queued message with updated model, got {other:?}"),
     }

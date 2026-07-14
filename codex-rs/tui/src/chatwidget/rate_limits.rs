@@ -3,7 +3,7 @@
 use super::*;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 
-pub(super) const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
+pub(super) const NUDGE_MODEL_SLUG: &str = "gpt-5.6-luna";
 pub(super) const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 pub(super) const RATE_LIMIT_SWITCH_PROMPT_VIEW_ID: &str = "rate-limit-switch-prompt";
 
