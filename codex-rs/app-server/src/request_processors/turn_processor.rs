@@ -1,4 +1,7 @@
 use super::*;
+use codex_agent_extension::AgentInvocation;
+use codex_agent_extension::AgentRun;
+use codex_agent_extension::AgentRunner;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -7,6 +10,7 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_skills::system_cache_root_dir;
 
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
@@ -68,6 +72,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
+    agent_runner: AgentRunner,
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -136,7 +141,9 @@ impl TurnRequestProcessor {
         thread_list_state_permit: Arc<Semaphore>,
         skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
+        let agent_runner = AgentRunner::new(Arc::downgrade(&thread_manager));
         Self {
+            agent_runner,
             auth_manager,
             thread_manager,
             outgoing,
@@ -352,7 +359,7 @@ impl TurnRequestProcessor {
 
     fn review_request_from_target(
         target: ApiReviewTarget,
-    ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
+    ) -> Result<(ReviewRequest, String, String), JSONRPCErrorError> {
         let cleaned_target = match target {
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => {
@@ -391,6 +398,19 @@ impl TurnRequestProcessor {
             ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
+        let target_prompt = match &core_target {
+            CoreReviewTarget::UncommittedChanges => {
+                "Review the current code changes (staged, unstaged, and untracked files)."
+                    .to_string()
+            }
+            CoreReviewTarget::BaseBranch { branch } => {
+                format!("Review the code changes against the base branch {branch:?}.")
+            }
+            CoreReviewTarget::Commit { sha, .. } => {
+                format!("Review the changes introduced by commit {sha:?}.")
+            }
+            CoreReviewTarget::Custom { instructions } => instructions.clone(),
+        };
 
         let hint = codex_core::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
@@ -398,7 +418,7 @@ impl TurnRequestProcessor {
             user_facing_hint: Some(hint.clone()),
         };
 
-        Ok((review_request, hint))
+        Ok((review_request, hint, target_prompt))
     }
 
     async fn request_trace_context(
@@ -1235,53 +1255,65 @@ impl TurnRequestProcessor {
     async fn start_detached_review(
         &self,
         request_id: &ConnectionRequestId,
-        parent_thread_id: ThreadId,
         parent_thread: Arc<CodexThread>,
-        review_request: ReviewRequest,
-        display_text: &str,
+        prompt: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        parent_thread.ensure_rollout_materialized().await;
-        parent_thread.flush_rollout().await.map_err(|err| {
-            internal_error(format!(
-                "failed to flush parent thread {parent_thread_id}: {err}"
-            ))
-        })?;
-        let parent_history = parent_thread
-            .load_history(/*include_archived*/ true)
-            .await
-            .map_err(|err| {
-                internal_error(format!(
-                    "failed to load parent thread {parent_thread_id}: {err}"
-                ))
-            })?;
-
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
 
-        let NewThread {
+        let AgentRun {
             thread_id,
             thread: review_thread,
-            ..
+            turn_id,
         } = self
-            .thread_manager
-            .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
-                config.clone(),
-                InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: parent_thread_id,
-                    history: Arc::new(parent_history.items),
-                    rollout_path: parent_thread.rollout_path(),
-                }),
-                /*thread_source*/ None,
-                self.request_trace_context(request_id).await,
-                /*supports_openai_form_elicitation*/ false,
+            .agent_runner
+            .start(
+                parent_thread.session_configured().thread_id,
+                AgentInvocation {
+                    config,
+                    prompt: prompt.to_string(),
+                    parent_trace: self.request_trace_context(request_id).await,
+                },
             )
             .await
-            .map_err(|err| {
-                internal_error(format!("error creating detached review thread: {err}"))
-            })?;
+            .map_err(|err| internal_error(format!("failed to start detached review: {err}")))?;
+
+        let fallback_provider = self.config.model_provider_id.as_str();
+        let stored_thread = match review_thread
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ false,
+            )
+            .await
+        {
+            Ok(stored_thread) => {
+                let (thread, _) =
+                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                Some(thread)
+            }
+            Err(err) => {
+                tracing::warn!("failed to load summary for review thread {thread_id}: {err}");
+                None
+            }
+        };
+
+        if let Some(mut thread) = stored_thread {
+            thread.session_id = review_thread.session_configured().session_id.to_string();
+            self.thread_watch_manager
+                .upsert_thread_silently(thread.clone())
+                .await;
+            thread.status = resolve_thread_status(
+                self.thread_watch_manager
+                    .loaded_status_for_thread(&thread.id)
+                    .await,
+                /*has_in_progress_turn*/ false,
+            );
+            let notif = thread_started_notification(thread);
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadStarted(notif))
+                .await;
+        }
 
         log_listener_attach_result(
             self.ensure_conversation_listener(
@@ -1295,48 +1327,7 @@ impl TurnRequestProcessor {
             "review thread",
         );
 
-        let fallback_provider = self.config.model_provider_id.as_str();
-        match review_thread
-            .read_thread(
-                /*include_archived*/ true, /*include_history*/ false,
-            )
-            .await
-        {
-            Ok(stored_thread) => {
-                let (mut thread, _) =
-                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
-                thread.session_id = review_thread.session_configured().session_id.to_string();
-                self.thread_watch_manager
-                    .upsert_thread_silently(thread.clone())
-                    .await;
-                thread.status = resolve_thread_status(
-                    self.thread_watch_manager
-                        .loaded_status_for_thread(&thread.id)
-                        .await,
-                    /*has_in_progress_turn*/ false,
-                );
-                let notif = thread_started_notification(thread);
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadStarted(notif))
-                    .await;
-            }
-            Err(err) => {
-                tracing::warn!("failed to load summary for review thread {thread_id}: {err}");
-            }
-        }
-
-        let turn_id = self
-            .submit_core_op(
-                request_id,
-                review_thread.as_ref(),
-                Op::Review { review_request },
-            )
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to start detached review turn: {err}"))
-            })?;
-
-        let turn = Self::build_review_turn(turn_id, display_text);
+        let turn = Self::build_review_turn(turn_id, prompt);
         let review_thread_id = thread_id.to_string();
         self.emit_review_started(request_id, turn, review_thread_id)
             .await;
@@ -1355,8 +1346,9 @@ impl TurnRequestProcessor {
             delivery,
         } = params;
 
-        let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
-        let (review_request, display_text) = Self::review_request_from_target(target)?;
+        let (_, parent_thread) = self.load_thread(&thread_id).await?;
+        let (review_request, display_text, target_prompt) =
+            Self::review_request_from_target(target)?;
         match delivery.unwrap_or(ApiReviewDelivery::Inline).to_core() {
             CoreReviewDelivery::Inline => {
                 self.start_inline_review(
@@ -1369,14 +1361,19 @@ impl TurnRequestProcessor {
                 .await?;
             }
             CoreReviewDelivery::Detached => {
-                self.start_detached_review(
-                    request_id,
-                    parent_thread_id,
-                    parent_thread,
-                    review_request,
-                    &display_text,
-                )
-                .await?;
+                let review_skill_path = system_cache_root_dir(&self.config.codex_home)
+                    .join("review-agent")
+                    .join("SKILL.md");
+                let prompt = format!(
+                    "Use [$review-agent]({}) for this review.\n\n{target_prompt}",
+                    review_skill_path.display()
+                );
+                let actual_chars = prompt.chars().count();
+                if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+                    return Err(Self::input_too_large_error(actual_chars));
+                }
+                self.start_detached_review(request_id, parent_thread, &prompt)
+                    .await?;
             }
         }
         Ok(())
