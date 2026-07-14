@@ -28,7 +28,7 @@ use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
-use crate::mcp_tool_exposure::build_mcp_tool_exposure;
+use crate::mcp_tool_exposure::build_mcp_tool_runtimes;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
@@ -1222,8 +1222,6 @@ pub(crate) async fn built_tools(
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let turn_context = step_context.turn.as_ref();
-    let mcp_connection_manager = step_context.mcp.manager();
-    let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = step_context
         .mcp_tools()
         .or_cancel(cancellation_token)
@@ -1330,19 +1328,16 @@ pub(crate) async fn built_tools(
             .instrument(trace_span!("built_tools.load_discoverable_tools"))
             .await
         };
-    let mcp_tool_exposure = build_mcp_tool_exposure(
+    let mcp_tool_runtimes = build_mcp_tool_runtimes(
         all_mcp_tools,
         connectors.as_deref(),
         &turn_context.config,
         search_tool_enabled(turn_context),
     );
-    let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
-    let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
     Ok(Arc::new(ToolRouter::from_context(
         step_context,
         ToolRouterParams {
-            mcp_tools,
-            deferred_mcp_tools,
+            tool_runtimes: mcp_tool_runtimes,
             tool_suggest_candidates,
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

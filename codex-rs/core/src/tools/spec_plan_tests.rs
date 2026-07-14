@@ -34,8 +34,11 @@ use crate::config::CurrentTimeReminderConfig;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
+use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::override_tool_exposure;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::ToolSuggestCandidates;
@@ -45,8 +48,7 @@ const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
 #[derive(Default)]
 struct ToolPlanInputs {
-    mcp_tools: Option<Vec<ToolInfo>>,
-    deferred_mcp_tools: Option<Vec<ToolInfo>>,
+    tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
     tool_suggest_candidates: Option<ToolSuggestCandidates>,
     extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     dynamic_tools: Vec<DynamicToolSpec>,
@@ -187,8 +189,7 @@ async fn probe_with(
         step_context.as_ref(),
         ToolRouterParams {
             tool_suggest_candidates: inputs.tool_suggest_candidates,
-            mcp_tools: inputs.mcp_tools,
-            deferred_mcp_tools: inputs.deferred_mcp_tools,
+            tool_runtimes: inputs.tool_runtimes,
             extension_tool_executors: inputs.extension_tool_executors,
             dynamic_tools: inputs.dynamic_tools.as_slice(),
         },
@@ -369,12 +370,16 @@ fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
     }
 }
 
-fn invalid_mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
-    let mut tool = mcp_tool(server, namespace, name);
-    tool.tool.input_schema = Arc::new(rmcp::model::object(json!({
-        "type": "null",
-    })));
-    tool
+fn mcp_runtime(
+    server: &str,
+    namespace: &str,
+    name: &str,
+    exposure: ToolExposure,
+) -> Arc<dyn CoreToolRuntime> {
+    let handler: Arc<dyn CoreToolRuntime> = Arc::new(
+        McpHandler::new(mcp_tool(server, namespace, name)).expect("MCP tool spec should build"),
+    );
+    override_tool_exposure(handler, exposure)
 }
 
 fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> DynamicToolSpec {
@@ -678,8 +683,7 @@ async fn environment_tools_follow_the_step_context() {
     let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
         step_context.as_ref(),
         ToolRouterParams {
-            mcp_tools: None,
-            deferred_mcp_tools: None,
+            tool_runtimes: Vec::new(),
             tool_suggest_candidates: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: &[],
@@ -737,23 +741,28 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},
         ToolPlanInputs {
-            mcp_tools: Some(vec![mcp_tool("direct", "mcp__direct", "lookup")]),
+            tool_runtimes: vec![mcp_runtime(
+                "direct",
+                "mcp__direct",
+                "lookup",
+                ToolExposure::Direct,
+            )],
             ..ToolPlanInputs::default()
         },
     )
     .await;
-    direct_mcp.assert_visible_contains(&[
-        "list_mcp_resources",
-        "list_mcp_resource_templates",
-        "read_mcp_resource",
-    ]);
     assert_eq!(
         direct_mcp.namespace_function_names("mcp__direct"),
         &["lookup".to_string()]
     );
 
     let searchable_mcp = ToolPlanInputs {
-        deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
+        tool_runtimes: vec![mcp_runtime(
+            "searchable",
+            "mcp__searchable",
+            "lookup",
+            ToolExposure::Deferred,
+        )],
         ..ToolPlanInputs::default()
     };
 
@@ -762,7 +771,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
             turn.model_info.supports_search_tool = false;
         },
         ToolPlanInputs {
-            deferred_mcp_tools: searchable_mcp.deferred_mcp_tools.clone(),
+            tool_runtimes: searchable_mcp.tool_runtimes.clone(),
             ..ToolPlanInputs::default()
         },
     )
@@ -787,7 +796,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
             use_bedrock_provider(turn);
         },
         ToolPlanInputs {
-            deferred_mcp_tools: searchable_mcp.deferred_mcp_tools.clone(),
+            tool_runtimes: searchable_mcp.tool_runtimes.clone(),
             ..ToolPlanInputs::default()
         },
     )
@@ -838,8 +847,12 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let first_router = ToolRouter::from_context(
         first_step_context.as_ref(),
         ToolRouterParams {
-            mcp_tools: None,
-            deferred_mcp_tools: Some(vec![mcp_tool("first", "mcp__first", "lookup")]),
+            tool_runtimes: vec![mcp_runtime(
+                "first",
+                "mcp__first",
+                "lookup",
+                ToolExposure::Deferred,
+            )],
             tool_suggest_candidates: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: &[],
@@ -855,8 +868,12 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let second_router = ToolRouter::from_context(
         second_step_context.as_ref(),
         ToolRouterParams {
-            mcp_tools: None,
-            deferred_mcp_tools: Some(vec![mcp_tool("second", "mcp__second", "lookup")]),
+            tool_runtimes: vec![mcp_runtime(
+                "second",
+                "mcp__second",
+                "lookup",
+                ToolExposure::Deferred,
+            )],
             tool_suggest_candidates: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: &[],
@@ -884,21 +901,6 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     };
     assert!(second_description.contains("- second: Tools from second."));
     assert!(!second_description.contains("- first: Tools from first."));
-}
-
-#[tokio::test]
-async fn invalid_mcp_tools_are_not_registered() {
-    let plan = probe_with(
-        |_| {},
-        ToolPlanInputs {
-            mcp_tools: Some(vec![invalid_mcp_tool("invalid", "mcp__invalid", "lookup")]),
-            ..ToolPlanInputs::default()
-        },
-    )
-    .await;
-
-    plan.assert_visible_lacks(&["mcp__invalid"]);
-    plan.assert_registered_lacks(&[&ToolName::namespaced("mcp__invalid", "lookup").to_string()]);
 }
 
 #[tokio::test]
