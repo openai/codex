@@ -63,6 +63,9 @@ use crate::telemetry::ExecServerTelemetry;
 use crate::telemetry::ProcessMetricGuard;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
+// Each process/read chunk needs four JSON values. Keep retained replay below the
+// shared 256K-value JSON-RPC decoder budget even when output arrives in tiny chunks.
+const RETAINED_OUTPUT_CHUNKS_PER_PROCESS: usize = 50_000;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const RETAINED_STDIN_WRITE_IDS_PER_PROCESS: usize = 4096;
@@ -783,7 +786,9 @@ async fn stream_output(
                 stream,
                 chunk: chunk.clone(),
             });
-            while process.retained_bytes > RETAINED_OUTPUT_BYTES_PER_PROCESS {
+            while process.retained_bytes > RETAINED_OUTPUT_BYTES_PER_PROCESS
+                || process.output.len() > RETAINED_OUTPUT_CHUNKS_PER_PROCESS
+            {
                 let Some(evicted) = process.output.pop_front() else {
                     break;
                 };
@@ -977,6 +982,9 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::RequestId;
     use codex_otel::MetricsConfig;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
     use codex_utils_path_uri::PathUri;
@@ -1223,6 +1231,99 @@ mod tests {
             .await
             .expect("closed process should remain readable");
         assert_eq!(replay_after_exit.next_seq, 4);
+        backend.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn process_read_replay_is_bounded_by_chunk_count() {
+        let backend = LocalProcess::default();
+        let process = spawn_test_process(&backend, "proc-chunk-count").await;
+        let retained_chunk_count = RETAINED_OUTPUT_CHUNKS_PER_PROCESS as u64;
+
+        {
+            let mut processes = backend.inner.processes.lock().await;
+            let Some(ProcessEntry::Running(running)) = processes.get_mut(&process.process_id)
+            else {
+                panic!("process should be running");
+            };
+            running.output = (1..=retained_chunk_count)
+                .map(|seq| RetainedOutputChunk {
+                    seq,
+                    stream: ExecOutputStream::Stdout,
+                    chunk: vec![b'x'],
+                })
+                .collect();
+            running.retained_bytes = RETAINED_OUTPUT_CHUNKS_PER_PROCESS;
+            running.next_seq = retained_chunk_count + 1;
+        }
+
+        process
+            .stdout_tx
+            .send(vec![b'y'])
+            .await
+            .expect("send output beyond retained chunk limit");
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let output_recorded = {
+                    let processes = backend.inner.processes.lock().await;
+                    let Some(ProcessEntry::Running(running)) = processes.get(&process.process_id)
+                    else {
+                        panic!("process should be running");
+                    };
+                    running.next_seq == retained_chunk_count + 2
+                };
+                if output_recorded {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("output should be retained");
+
+        let response = backend
+            .exec_read(ReadParams {
+                process_id: process.process_id.clone(),
+                after_seq: None,
+                max_bytes: None,
+                wait_ms: Some(0),
+            })
+            .await
+            .expect("read retained output");
+        let mut expected_chunks = (2..=retained_chunk_count)
+            .map(|seq| ProcessOutputChunk {
+                seq,
+                stream: ExecOutputStream::Stdout,
+                chunk: vec![b'x'].into(),
+            })
+            .collect::<Vec<_>>();
+        expected_chunks.push(ProcessOutputChunk {
+            seq: retained_chunk_count + 1,
+            stream: ExecOutputStream::Stdout,
+            chunk: vec![b'y'].into(),
+        });
+        assert_eq!(
+            response,
+            ReadResponse {
+                chunks: expected_chunks,
+                next_seq: retained_chunk_count + 2,
+                exited: false,
+                exit_code: None,
+                closed: false,
+                failure: None,
+                sandbox_denied: false,
+            }
+        );
+
+        let message = JSONRPCMessage::Response(JSONRPCResponse {
+            id: RequestId::Integer(1),
+            result: serde_json::to_value(response).expect("serialize process/read response"),
+        });
+        let encoded = serde_json::to_string(&message).expect("encode JSON-RPC response");
+        let decoded = serde_json::from_str::<JSONRPCMessage>(&encoded)
+            .expect("retained process/read response should fit the JSON value budget");
+        assert_eq!(decoded, message);
+
         backend.shutdown().await;
     }
 
