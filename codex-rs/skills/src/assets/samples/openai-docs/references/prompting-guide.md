@@ -10,20 +10,18 @@ Treat the live section as the canonical model-specific prompting guidance. Use t
 
 ## Skill-specific migration judgment
 
-GPT-5.6 works best when prompts define the outcome, important constraints, available evidence, and completion bar, then leave room for the model to choose an efficient path. Compared with earlier GPT-5 models, many applications can use shorter prompts and smaller tool sets without losing quality.
+GPT-5.6 works best when prompts define the outcome, important constraints, available evidence, and completion bar, then leave room for the model to choose an efficient path.
 
-Do not carry over every instruction from an older prompt stack. Legacy prompts often repeat rules, prescribe unnecessary steps, expose irrelevant tools, or include examples that no longer change behavior. With GPT-5.6, this can encourage extra exploration, repeated validation, and larger accumulated context.
-
-Start with the smallest prompt and tool set that passes your evals. Add an instruction, example, or tool only when it fixes a measured failure mode.
+Removing repeated instructions and examples and simplifying tool descriptions can improve task performance and token efficiency. In a sample of internal coding-agent eval runs, configurations with leaner system prompts improved evaluation scores by roughly 10–15% while reducing total tokens by 41–66% and cost by 33–67%. Results will vary by workload, so treat these ranges as directional and validate changes on representative tasks from your own application.
 
 ## Simplify prompts first
 
-When migrating an existing prompt, remove redundant scaffolding before adding new GPT-5.6-specific instructions.
+Start with a prompt and tool set that already works. Remove one group of instructions, examples, or tools at a time, then rerun the same evals.
 
 Trim:
 
 - repeated statements of the same rule;
-- generic “be thorough,” “be concise,” or “think step by step” language;
+- repeated style or process instructions that do not change behavior;
 - examples that do not change behavior;
 - process instructions for behavior the model already performs reliably;
 - tools and tool descriptions unrelated to the task.
@@ -33,7 +31,7 @@ Keep:
 - the user-visible outcome;
 - success criteria and stopping conditions;
 - safety, business, evidence, and permission constraints;
-- tool-routing rules when the correct route is not obvious;
+- tool-routing rules when the route depends on context;
 - required output shape and validation requirements.
 
 Review the remaining instructions for contradictions. GPT-5-class models follow prompt contracts closely, so conflicting rules can create more instability than missing detail.
@@ -68,26 +66,32 @@ Add stopping conditions:
 
 ## Personality, collaboration, and response length
 
-GPT-5.6 is efficient, direct, and more compressed than recent models. For customer-facing assistants and collaborative products, define both personality and collaboration style.
+GPT-5.6 tends to be more concise by default than GPT-5.5. When migrating, check whether broad brevity instructions such as “Be concise” or “Keep it short” are still useful. They may be unnecessary for some tasks and can sometimes make responses too brief. Keep them when they reliably produce the output your application needs.
+
+For more consistent control across requests, use `text.verbosity` to set the default level of detail, then use the prompt for task-specific requirements. Choose `low`, `medium`, or `high` as the default level of detail for a request. In the prompt, specify any task-specific length, structure, or required content. See [Set up `text.verbosity`](https://developers.openai.com/api/docs/guides/deployment-checklist#set-up-textverbosity) for an API example.
+
+For customer-facing assistants and collaborative products, define both personality and collaboration style.
 
 - Personality controls tone, warmth, directness, formality, humor, empathy, and polish.
 - Collaboration style controls when the model asks questions, makes assumptions, takes initiative, explains tradeoffs, checks work, and handles uncertainty.
 
 Keep both short. Personality should shape the user experience; collaboration instructions should shape task behavior. Neither should replace clear goals, success criteria, tool rules, or stopping conditions.
 
-Use concrete writing controls:
+When a task calls for a shorter answer, identify the information the model must preserve and the detail it can omit. For example:
 
-    Lead with the conclusion. Include the evidence needed to support it, any
-    material caveat, and the next action. Keep all required facts, decisions,
-    caveats, and next steps. Trim introductions, repetition, generic reassurance,
-    and optional background first.
+    Lead with the conclusion. Include the evidence needed to support it, any material
+    caveat, and the next action. Omit secondary detail and repetition.
 
-Avoid generic “be brief,” “keep it short,” or “use minimal text” instructions. GPT-5.6 is already biased toward compression, and generic brevity can make it omit required evidence or parts of an artifact.
+    Keep all required facts, decisions, caveats, and next steps. Trim introductions,
+    repetition, generic reassurance, and optional background first.
 
-For customer-facing tone, prefer concrete guidance:
+This gives the model a clear priority order: preserve the content needed to complete the task, then remove lower-value detail.
 
-    Be direct and tactful. Acknowledge friction specifically when relevant.
-    Avoid canned reassurance and unnecessary sign-offs.
+Broad labels such as “friendly” or “empathetic” can be ambiguous. Describe the writing choices that define your product's tone, such as how directly to state the answer, when to acknowledge a problem, and whether reassurance or a sign-off is appropriate.
+
+    State the answer directly. If the user reports a problem, acknowledge the
+    specific issue before giving the next step. Use reassurance only when it is
+    relevant. Omit generic praise and unnecessary sign-offs.
 
 Avoid blanket language rules such as “always respond in the user's language” unless that is truly the product requirement. Specify the intended output language and when it should change.
 
@@ -97,9 +101,11 @@ For editing, rewriting, summaries, and customer-facing drafts, tell the model wh
     first. Improve clarity, flow, and correctness without adding new claims,
     sections, or a more promotional tone unless requested.
 
-## Autonomy and permissions
+## Define autonomy and approval boundaries
 
-GPT-5.6 can be proactive and persistent. Define which level of action each request authorizes.
+GPT-5.6 can be proactive and persistent when carrying out multi-step tasks. Define what level of action each request authorizes so the model can continue safe, in-scope work without unnecessary pauses while stopping before external, destructive, costly, or scope-expanding actions.
+
+A compact policy is usually sufficient:
 
     For requests to answer, explain, review, diagnose, or plan, inspect the
     relevant materials and report the result. Do not implement changes unless
@@ -111,9 +117,7 @@ GPT-5.6 can be proactive and persistent. Define which level of action each reque
     Require confirmation for external writes, destructive actions, purchases,
     or a material expansion of scope.
 
-Specify which local actions are safe without approval, such as reading files, inspecting logs, searching, editing in-scope code, and running non-destructive tests.
-
-Avoid repeating “ask first” throughout the prompt. Repetition can cause unnecessary permission checks even for safe, expected actions.
+Name safe local actions explicitly, such as reading files, inspecting logs, editing in-scope code, and running tests. Keep the policy in one place and state each rule once. Repeating instructions such as “ask first,” “do not mutate,” or “wait for approval” can cause unnecessary approval requests for safe, expected actions.
 
 For long-running work, define the current layer of work. Distinguish research, design, implementation, review, and external coordination so the model does not silently move from one layer to another.
 
@@ -133,7 +137,9 @@ If a tool returns empty, partial, or suspiciously narrow results, try one or two
 
 ## Programmatic Tool Calling
 
-Programmatic Tool Calling is useful when code can reduce large, structured intermediate results before they return to model context.
+Programmatic Tool Calling (PTC) works best for bounded workflows where code can process several tool results or large intermediate outputs and return a much smaller structured result.
+
+Multiple, parallel, or dependent calls alone do not justify Programmatic Tool Calling.
 
 Use it for:
 
@@ -159,7 +165,11 @@ Do not rely on generic instructions such as “use Programmatic Tool Calling eff
     evidence fields. Retry transient failures at most twice. Use direct tool
     calls for approval, semantic judgment, citations, and final validation.
 
-Evaluate the final user-visible answer, not only the program result. Lower tokens, latency, calls, or turns are improvements only when the final answer still meets the required quality bar.
+If both routes are needed, define one clear handoff and tell the model not to switch routes or repeat completed work.
+
+The `program_output` item and final assistant `message` are separate outputs; make sure to test both. In theory, a program can return the correct records while the message omits a required field, citation, or caveat.
+
+Compare direct and programmatic calling on the same representative tasks. Check whether the final response is correct, complete, and includes the required evidence. Then compare total tokens, latency, cost, calls, turns, and retries. Count lower resource use as an improvement only when the response still passes your existing evals.
 
 ## Grounding, citations, and retrieval budgets
 
@@ -206,7 +216,7 @@ Prompt caching also affects prompt construction. Keep reusable prefixes stable a
 
 ## Reasoning effort
 
-Treat reasoning effort as a last-mile tuning knob, not the first response to a weak result.
+Establish a baseline with the current reasoning effort before changing it.
 
 - Preserve the current GPT-5.5 or GPT-5.4 reasoning effort as the baseline.
 - Test the same setting and one level lower on representative tasks.
