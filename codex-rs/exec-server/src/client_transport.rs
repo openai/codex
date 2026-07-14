@@ -94,27 +94,35 @@ impl ExecServerClient {
     pub(crate) async fn connect_for_transport(
         transport_params: ExecServerTransportParams,
     ) -> Result<Self, ExecServerError> {
+        let (transport_params, deferred_readiness) = match transport_params {
+            ExecServerTransportParams::Deferred(deferred) => {
+                (deferred.transport, Some(deferred.readiness))
+            }
+            transport_params => (transport_params, None),
+        };
+
+        if let Some(readiness) = deferred_readiness {
+            readiness
+                .await
+                .unwrap_or_else(|_| {
+                    Err("environment registration ended before completion".to_string())
+                })
+                .map_err(|message| {
+                    ExecServerError::Disconnected(format!("environment unavailable: {message}"))
+                })?;
+        }
+
         let (websocket_url, connect_timeout, initialize_timeout) = match transport_params {
+            ExecServerTransportParams::Deferred(_) => {
+                return Err(ExecServerError::Protocol(
+                    "nested deferred exec-server transports are unsupported".to_string(),
+                ));
+            }
             ExecServerTransportParams::WebSocketUrl {
                 websocket_url,
                 connect_timeout,
                 initialize_timeout,
             } => (websocket_url, connect_timeout, initialize_timeout),
-            ExecServerTransportParams::PendingWebSocketUrl(websocket_url) => {
-                let websocket_url = websocket_url
-                    .await
-                    .unwrap_or_else(|_| {
-                        Err("environment registration ended before completion".to_string())
-                    })
-                    .map_err(|message| {
-                        ExecServerError::Disconnected(format!("environment unavailable: {message}"))
-                    })?;
-                (
-                    websocket_url,
-                    DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
-                    DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
-                )
-            }
             ExecServerTransportParams::NoiseRendezvous { provider, identity } => {
                 let reconnect_strategy = ExecServerReconnectStrategy::NoiseRendezvous {
                     provider: Arc::clone(&provider),
