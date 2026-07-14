@@ -157,6 +157,10 @@ enum RateLimitSnapshotSource {
     RollingUpdate,
 }
 
+fn has_usable_workspace_credits(credits: &CreditsSnapshot) -> bool {
+    credits.unlimited || credits.has_credits
+}
+
 impl ChatWidget {
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         self.on_rate_limit_snapshot_from(snapshot, RateLimitSnapshotSource::AccountUsage);
@@ -181,7 +185,9 @@ impl ChatWidget {
                 .limit_name
                 .clone()
                 .unwrap_or_else(|| limit_id.clone());
-            if snapshot.credits.is_none() {
+            if matches!(source, RateLimitSnapshotSource::RollingUpdate)
+                && snapshot.credits.is_none()
+            {
                 snapshot.credits = self
                     .rate_limit_snapshots_by_limit_id
                     .get(&limit_id)
@@ -206,21 +212,43 @@ impl ChatWidget {
 
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
             if is_codex_limit
-                && let Some(rate_limit_reached_type) = snapshot.rate_limit_reached_type
+                && (matches!(source, RateLimitSnapshotSource::AccountUsage)
+                    || snapshot.spend_control_reached.is_some())
             {
-                self.codex_rate_limit_reached_type = Some(rate_limit_reached_type);
+                self.codex_spend_control_reached = snapshot.spend_control_reached;
             }
-
-            let has_workspace_credits = snapshot.credits.as_ref().is_some_and(|credits| {
-                credits.has_credits
-                    && (credits.unlimited
-                        || credits.balance.as_deref().is_some_and(|balance| {
-                            balance
-                                .trim()
-                                .parse::<f64>()
-                                .is_ok_and(|balance| balance > 0.0)
-                        }))
-            });
+            if (is_codex_limit && matches!(source, RateLimitSnapshotSource::AccountUsage))
+                || snapshot.rate_limit_reached_type.is_some()
+            {
+                self.codex_rate_limit_reached_type = snapshot.rate_limit_reached_type;
+            }
+            let workspace_limit_reached = self.codex_spend_control_reached == Some(true)
+                || matches!(
+                    self.codex_rate_limit_reached_type,
+                    Some(
+                        RateLimitReachedType::WorkspaceOwnerCreditsDepleted
+                            | RateLimitReachedType::WorkspaceMemberCreditsDepleted
+                            | RateLimitReachedType::WorkspaceOwnerUsageLimitReached
+                            | RateLimitReachedType::WorkspaceMemberUsageLimitReached
+                    )
+                );
+            let has_workspace_credits = !workspace_limit_reached
+                && snapshot
+                    .credits
+                    .as_ref()
+                    .is_some_and(has_usable_workspace_credits);
+            if is_codex_limit && has_workspace_credits {
+                match self.rate_limit_switch_prompt {
+                    RateLimitSwitchPromptState::Pending => {
+                        self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+                    }
+                    RateLimitSwitchPromptState::Shown => {
+                        self.bottom_pane
+                            .dismiss_view_by_id(RATE_LIMIT_SWITCH_PROMPT_VIEW_ID);
+                    }
+                    RateLimitSwitchPromptState::Idle => {}
+                }
+            }
             let should_warn_about_rate_limit_usage = is_codex_limit && !has_workspace_credits;
             let warnings = if should_warn_about_rate_limit_usage {
                 self.rate_limit_warnings.take_warnings(
@@ -286,6 +314,7 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
             self.codex_rate_limit_reached_type = None;
+            self.codex_spend_control_reached = None;
         }
         self.refresh_status_line();
     }

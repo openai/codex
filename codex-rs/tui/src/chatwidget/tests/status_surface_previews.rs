@@ -77,6 +77,7 @@ fn cache_rate_limit_snapshot(chat: &mut ChatWidget) {
         }),
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -247,6 +248,7 @@ async fn status_surface_preview_omits_unavailable_rate_limit_items() {
         secondary: None,
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));

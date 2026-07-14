@@ -51,6 +51,7 @@ async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
         secondary: None,
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: None,
         rate_limit_reached_type: None,
     });
@@ -96,6 +97,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         secondary: None,
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: None,
         rate_limit_reached_type: None,
     });
@@ -110,6 +112,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         secondary: None,
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: None,
         rate_limit_reached_type: None,
     });
@@ -148,6 +151,7 @@ async fn set_rate_limits_carries_account_metadata_from_codex_to_codex_other() {
             remaining_percent: 68,
             resets_at: 300,
         }),
+        spend_control_reached: Some(true),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
         rate_limit_reached_type: None,
     });
@@ -163,6 +167,7 @@ async fn set_rate_limits_carries_account_metadata_from_codex_to_codex_other() {
         secondary: None,
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: None,
         rate_limit_reached_type: None,
     });
@@ -189,8 +194,29 @@ async fn set_rate_limits_carries_account_metadata_from_codex_to_codex_other() {
                 remaining_percent: 68,
                 resets_at: 300,
             }),
+            spend_control_reached: Some(true),
             plan_type: Some(codex_protocol::account::PlanType::Plus),
             rate_limit_reached_type: None,
         })
+    );
+
+    state.set_rate_limits(RateLimitSnapshot {
+        limit_id: Some("codex_other".to_string()),
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: Some(false),
+        plan_type: None,
+        rate_limit_reached_type: None,
+    });
+
+    assert_eq!(
+        state
+            .latest_rate_limits
+            .as_ref()
+            .and_then(|snapshot| snapshot.spend_control_reached),
+        Some(false)
     );
 }

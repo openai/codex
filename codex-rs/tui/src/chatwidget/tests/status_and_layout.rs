@@ -593,6 +593,7 @@ async fn status_line_uses_secondary_fallback_for_unsupported_window() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -622,6 +623,7 @@ async fn status_line_legacy_limit_items_prefer_matching_windows() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -655,6 +657,7 @@ async fn status_line_shows_secondary_non_weekly_when_primary_is_weekly() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -684,6 +687,7 @@ async fn status_line_five_hour_item_omits_weekly_only_limit() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -713,6 +717,7 @@ async fn status_line_single_monthly_primary_omits_weekly_limit_item() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -742,6 +747,7 @@ async fn status_line_secondary_only_non_weekly_limit_omits_primary_limit_item() 
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -771,6 +777,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         }),
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
     let initial_balance = chat
@@ -780,7 +787,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         .and_then(|credits| credits.balance.as_deref());
     assert_eq!(initial_balance, Some("17.5"));
 
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+    chat.on_rolling_rate_limit_snapshot(RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
@@ -792,8 +799,9 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
-    }));
+    });
 
     let display = chat
         .rate_limit_snapshots_by_limit_id
@@ -866,6 +874,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         credits: None,
         individual_limit: None,
         plan_type: Some(PlanType::Plus),
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Plus));
@@ -886,6 +895,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         credits: None,
         individual_limit: None,
         plan_type: Some(PlanType::Pro),
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
@@ -906,6 +916,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
@@ -931,6 +942,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         }),
         individual_limit: None,
         plan_type: Some(PlanType::Pro),
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -946,6 +958,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         credits: None,
         individual_limit: None,
         plan_type: Some(PlanType::Pro),
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -1000,6 +1013,7 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
         credits: None,
         individual_limit: None,
         plan_type: None,
+        spend_control_reached: None,
         rate_limit_reached_type: None,
     }));
 
@@ -1010,22 +1024,102 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
 }
 
 #[tokio::test]
-async fn rate_limit_usage_warnings_show_when_workspace_credits_zero_balance() {
+async fn rate_limit_usage_warnings_follow_workspace_credit_flags() {
+    for (credits, should_warn) in [
+        (
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: None,
+            },
+            false,
+        ),
+        (
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some(String::new()),
+            },
+            false,
+        ),
+        (
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("0".to_string()),
+            },
+            false,
+        ),
+        (
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("not-a-number".to_string()),
+            },
+            false,
+        ),
+        (
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("25.00".to_string()),
+            },
+            false,
+        ),
+        (
+            CreditsSnapshot {
+                has_credits: false,
+                unlimited: true,
+                balance: None,
+            },
+            false,
+        ),
+        (
+            CreditsSnapshot {
+                has_credits: false,
+                unlimited: false,
+                balance: Some("25.00".to_string()),
+            },
+            true,
+        ),
+    ] {
+        let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+        chat.has_chatgpt_account = true;
+        let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
+        rate_limit_snapshot.credits = Some(credits);
+
+        chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
+
+        assert_eq!(!drain_insert_history(&mut rx).is_empty(), should_warn);
+        assert_eq!(
+            matches!(
+                chat.rate_limit_switch_prompt,
+                RateLimitSwitchPromptState::Pending
+            ),
+            should_warn
+        );
+        assert_eq!(chat.rate_limit_warnings.primary_index > 0, should_warn);
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_show_when_authoritative_snapshot_clears_credits() {
     let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
 
-    let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
-    rate_limit_snapshot.credits = Some(CreditsSnapshot {
+    let mut initial_snapshot = snapshot(/*percent*/ 0.0);
+    initial_snapshot.credits = Some(CreditsSnapshot {
         has_credits: true,
         unlimited: false,
-        balance: Some("0".to_string()),
+        balance: None,
     });
+    chat.on_rate_limit_snapshot(Some(initial_snapshot));
 
-    chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 95.0)));
 
     assert!(
         !drain_insert_history(&mut rx).is_empty(),
-        "zero-balance workspace credits should not suppress proactive usage warnings"
+        "an authoritative snapshot without credits should clear stale credit availability"
     );
     assert!(matches!(
         chat.rate_limit_switch_prompt,
@@ -1034,55 +1128,396 @@ async fn rate_limit_usage_warnings_show_when_workspace_credits_zero_balance() {
 }
 
 #[tokio::test]
-async fn rate_limit_usage_warnings_skip_when_workspace_credits_are_available() {
-    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+async fn rate_limit_switch_prompt_clears_pending_when_workspace_credits_become_usable() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
 
-    let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
-    rate_limit_snapshot.credits = Some(CreditsSnapshot {
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 95.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+
+    let mut funded_snapshot = snapshot(/*percent*/ 95.0);
+    funded_snapshot.credits = Some(CreditsSnapshot {
         has_credits: true,
         unlimited: false,
-        balance: Some("25.00".to_string()),
+        balance: None,
     });
+    chat.on_rate_limit_snapshot(Some(funded_snapshot));
 
-    chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
-
-    assert!(
-        drain_insert_history(&mut rx).is_empty(),
-        "workspace credits should suppress proactive usage warnings"
-    );
     assert!(matches!(
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Idle
     ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_dismisses_shown_when_workspace_credits_become_usable() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 95.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    let mut funded_snapshot = snapshot(/*percent*/ 95.0);
+    funded_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
+        balance: None,
+    });
+    chat.on_rate_limit_snapshot(Some(funded_snapshot));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 0.0)));
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 95.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_preserve_workspace_limit_for_sparse_snapshots() {
+    for rate_limit_reached_type in [
+        RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+        RateLimitReachedType::WorkspaceMemberCreditsDepleted,
+        RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+        RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+    ] {
+        let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+        chat.has_chatgpt_account = true;
+
+        let mut blocked_snapshot = snapshot(/*percent*/ 0.0);
+        blocked_snapshot.credits = Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: None,
+        });
+        blocked_snapshot.rate_limit_reached_type = Some(rate_limit_reached_type);
+        chat.on_rate_limit_snapshot(Some(blocked_snapshot));
+
+        chat.on_rolling_rate_limit_snapshot(snapshot(/*percent*/ 95.0));
+
+        assert!(
+            !drain_insert_history(&mut rx).is_empty(),
+            "an explicit workspace hard stop should keep proactive usage warnings enabled"
+        );
+        assert!(matches!(
+            chat.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ));
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_keep_workspace_limit_after_rolling_credits() {
+    for rate_limit_reached_type in [
+        RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+        RateLimitReachedType::WorkspaceMemberCreditsDepleted,
+        RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+        RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+    ] {
+        for credits in [
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: None,
+            },
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some(String::new()),
+            },
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("25.00".to_string()),
+            },
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("0".to_string()),
+            },
+            CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("not-a-number".to_string()),
+            },
+            CreditsSnapshot {
+                has_credits: false,
+                unlimited: true,
+                balance: None,
+            },
+        ] {
+            let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+            chat.has_chatgpt_account = true;
+
+            let mut blocked_snapshot = snapshot(/*percent*/ 0.0);
+            blocked_snapshot.credits = Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: None,
+            });
+            blocked_snapshot.rate_limit_reached_type = Some(rate_limit_reached_type);
+            chat.on_rolling_rate_limit_snapshot(blocked_snapshot);
+
+            let mut rolling_snapshot = snapshot(/*percent*/ 95.0);
+            rolling_snapshot.credits = Some(credits);
+            chat.on_rolling_rate_limit_snapshot(rolling_snapshot);
+
+            assert!(
+                !drain_insert_history(&mut rx).is_empty(),
+                "usable rolling workspace credits must not suppress an existing workspace hard stop"
+            );
+            assert!(matches!(
+                chat.rate_limit_switch_prompt,
+                RateLimitSwitchPromptState::Pending
+            ));
+            assert_eq!(
+                chat.codex_rate_limit_reached_type,
+                Some(rate_limit_reached_type)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_keep_explicit_rolling_workspace_limit() {
+    for rate_limit_reached_type in [
+        RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+        RateLimitReachedType::WorkspaceMemberCreditsDepleted,
+        RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+        RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+    ] {
+        for spend_control_reached in [None, Some(false)] {
+            let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+            chat.has_chatgpt_account = true;
+
+            let mut rolling_snapshot = snapshot(/*percent*/ 95.0);
+            rolling_snapshot.credits = Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: None,
+            });
+            rolling_snapshot.rate_limit_reached_type = Some(rate_limit_reached_type);
+            rolling_snapshot.spend_control_reached = spend_control_reached;
+            chat.on_rolling_rate_limit_snapshot(rolling_snapshot);
+
+            assert!(
+                !drain_insert_history(&mut rx).is_empty(),
+                "an explicit rolling workspace hard stop should keep proactive usage warnings enabled"
+            );
+            assert!(matches!(
+                chat.rate_limit_switch_prompt,
+                RateLimitSwitchPromptState::Pending
+            ));
+            assert_eq!(
+                chat.codex_rate_limit_reached_type,
+                Some(rate_limit_reached_type)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_keep_newly_reached_workspace_limit() {
+    for (limit_id, should_warn) in [("codex", true), ("codex_other", false)] {
+        let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+        chat.has_chatgpt_account = true;
+
+        let mut initial_snapshot = snapshot(/*percent*/ 0.0);
+        initial_snapshot.credits = Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: None,
+        });
+        initial_snapshot.spend_control_reached = Some(false);
+        chat.on_rate_limit_snapshot(Some(initial_snapshot));
+
+        let mut capped_snapshot = snapshot(/*percent*/ 95.0);
+        capped_snapshot.limit_id = Some(limit_id.to_string());
+        capped_snapshot.credits = Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: None,
+        });
+        capped_snapshot.rate_limit_reached_type =
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+        chat.on_rolling_rate_limit_snapshot(capped_snapshot);
+
+        assert_eq!(!drain_insert_history(&mut rx).is_empty(), should_warn);
+        assert_eq!(
+            matches!(
+                chat.rate_limit_switch_prompt,
+                RateLimitSwitchPromptState::Pending
+            ),
+            should_warn
+        );
+        assert_eq!(
+            chat.codex_rate_limit_reached_type,
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
+        );
+
+        chat.on_rate_limit_error(
+            RateLimitErrorKind::UsageLimit,
+            "Usage limit reached.".to_string(),
+        );
+        let popup = render_bottom_popup(&chat, /*width*/ 100);
+        assert!(popup.contains("Request a limit increase from your owner"));
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_preserve_and_clear_spend_control_state() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    let mut blocked_snapshot = snapshot(/*percent*/ 0.0);
+    blocked_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
+        balance: None,
+    });
+    blocked_snapshot.spend_control_reached = Some(true);
+    blocked_snapshot.rate_limit_reached_type =
+        Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(blocked_snapshot));
+    assert_eq!(chat.codex_spend_control_reached, Some(true));
+
+    chat.on_rolling_rate_limit_snapshot(snapshot(/*percent*/ 95.0));
+    assert!(
+        !drain_insert_history(&mut rx).is_empty(),
+        "a sparse rolling snapshot should preserve a reached spend control"
+    );
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+    assert_eq!(chat.codex_spend_control_reached, Some(true));
+
+    let mut recovered_snapshot = snapshot(/*percent*/ 95.0);
+    recovered_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
+        balance: None,
+    });
+    recovered_snapshot.spend_control_reached = Some(false);
+    chat.on_rolling_rate_limit_snapshot(recovered_snapshot);
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+    assert_eq!(chat.codex_spend_control_reached, Some(false));
     assert_eq!(
-        chat.rate_limit_warnings.primary_index, 0,
-        "suppressed warnings should not consume warning thresholds"
+        chat.codex_rate_limit_reached_type,
+        Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
+    );
+
+    chat.on_rolling_rate_limit_snapshot(snapshot(/*percent*/ 95.0));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "a later sparse rolling snapshot should not clear an existing workspace hard stop"
+    );
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+    assert_eq!(chat.codex_spend_control_reached, Some(false));
+    assert_eq!(
+        chat.codex_rate_limit_reached_type,
+        Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
     );
 }
 
 #[tokio::test]
-async fn rate_limit_usage_warnings_skip_with_unlimited_workspace_credits() {
+async fn rolling_credits_preserve_depleted_workspace_error_routing() {
     let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
 
-    let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
-    rate_limit_snapshot.credits = Some(CreditsSnapshot {
+    let mut blocked_snapshot = snapshot(/*percent*/ 0.0);
+    blocked_snapshot.rate_limit_reached_type =
+        Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
+    chat.on_rate_limit_snapshot(Some(blocked_snapshot));
+
+    let mut rolling_snapshot = snapshot(/*percent*/ 95.0);
+    rolling_snapshot.credits = Some(CreditsSnapshot {
         has_credits: true,
-        unlimited: true,
+        unlimited: false,
+        balance: Some("0".to_string()),
+    });
+    rolling_snapshot.spend_control_reached = Some(false);
+    chat.on_rolling_rate_limit_snapshot(rolling_snapshot);
+
+    assert!(!drain_insert_history(&mut rx).is_empty());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+    assert_eq!(
+        chat.codex_rate_limit_reached_type,
+        Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted)
+    );
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::Generic,
+        "Usage limit reached.".to_string(),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Ask your workspace owner to add more"),
+        "popup: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_usage_warnings_clear_workspace_limit_from_authoritative_snapshot() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    let mut blocked_snapshot = snapshot(/*percent*/ 0.0);
+    blocked_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
         balance: None,
     });
+    blocked_snapshot.rate_limit_reached_type =
+        Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(blocked_snapshot));
 
-    chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
+    let mut recovered_snapshot = snapshot(/*percent*/ 0.0);
+    recovered_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
+        balance: None,
+    });
+    chat.on_rate_limit_snapshot(Some(recovered_snapshot));
+    chat.on_rolling_rate_limit_snapshot(snapshot(/*percent*/ 95.0));
 
     assert!(
         drain_insert_history(&mut rx).is_empty(),
-        "unlimited workspace credits should suppress proactive usage warnings"
+        "an authoritative recovery should prevent sparse updates from restoring a stale limit"
     );
     assert!(matches!(
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Idle
     ));
+    assert_eq!(chat.codex_rate_limit_reached_type, None);
 }
 
 #[tokio::test]
@@ -1114,11 +1549,13 @@ async fn account_update_clears_derived_usage_limit_state_and_prompt() {
     set_chatgpt_auth(&mut chat);
     let mut limits = snapshot(/*percent*/ 95.0);
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    limits.spend_control_reached = Some(true);
     chat.on_rate_limit_snapshot(Some(limits));
     chat.maybe_show_pending_rate_limit_prompt();
 
     assert!(chat.rate_limit_warnings.primary_index > 0);
     assert!(chat.codex_rate_limit_reached_type.is_some());
+    assert_eq!(chat.codex_spend_control_reached, Some(true));
     assert!(matches!(
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Shown
@@ -1133,6 +1570,7 @@ async fn account_update_clears_derived_usage_limit_state_and_prompt() {
     assert_eq!(chat.rate_limit_warnings.primary_index, 0);
     assert_eq!(chat.rate_limit_warnings.secondary_index, 0);
     assert_eq!(chat.codex_rate_limit_reached_type, None);
+    assert_eq!(chat.codex_spend_control_reached, None);
     assert!(matches!(
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Idle
@@ -1226,18 +1664,16 @@ async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
 }
 
 #[tokio::test]
-async fn header_rate_limit_snapshot_preserves_member_limit_type_for_error_prompt() {
+async fn sparse_rate_limit_snapshot_preserves_member_limit_type_for_error_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut usage_limits = snapshot(/*percent*/ 100.0);
     usage_limits.rate_limit_reached_type =
         Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
     chat.on_rate_limit_snapshot(Some(usage_limits));
 
-    // Turn-failure snapshots are derived from response headers and do not carry
-    // the backend-classified reached type. They arrive before the Error event.
-    let mut header_limits = snapshot(/*percent*/ 100.0);
-    header_limits.rate_limit_reached_type = None;
-    chat.on_rate_limit_snapshot(Some(header_limits));
+    let mut rolling_limits = snapshot(/*percent*/ 100.0);
+    rolling_limits.rate_limit_reached_type = None;
+    chat.on_rolling_rate_limit_snapshot(rolling_limits);
 
     chat.on_rate_limit_error(
         RateLimitErrorKind::UsageLimit,
