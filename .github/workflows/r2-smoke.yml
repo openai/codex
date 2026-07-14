@@ -12,5 +12,6 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/r2-release.yml
+    secrets: inherit
     with:
       tag: rust-v0.145.0-alpha.10
