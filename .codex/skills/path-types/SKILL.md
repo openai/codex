@@ -35,6 +35,8 @@ Keep these requirements in mind while migrating code to conform with the above g
 * path conversion errors: fail-closed for security-relevant paths, fail-open for UI/diagnostics
 * prefer small focused methods on `PathUri` or `LegacyAppPathString` over local helpers
 * represent `PathUri` values as URIs in diagnostics
+* prefer defining separate types for app-server and exec-server over adding generics to shared
+  protocol types
 
 It is OK if the conversion between paths and URIs is somewhat lossy as long as it will do the right
 thing for real users.
