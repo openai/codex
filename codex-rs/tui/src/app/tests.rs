@@ -31,6 +31,7 @@ use crate::multi_agents::SubAgentActivityDisplay;
 use assert_matches::assert_matches;
 
 use crate::app_command::AppCommand as Op;
+use crate::app_event::ConsolidationScrollbackReflow;
 use crate::diff_model::FileChange;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
@@ -4559,6 +4560,119 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
             "line 4".to_string(),
         ]
     );
+}
+
+#[tokio::test]
+async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tail() -> Result<()> {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(20);
+    app.transcript_cells = vec![
+        plain_line_cell("latest user question"),
+        Arc::new(AgentMarkdownCell::new(
+            "Final answer:\n\n| Pattern | Outcome |\n| --- | --- |\n| Table tail | Preserved |"
+                .to_string(),
+            Path::new("/tmp"),
+        )),
+    ];
+
+    app.begin_initial_history_replay_buffer();
+    App::buffer_initial_history_replay_display_lines(
+        app.initial_history_replay_buffer
+            .as_mut()
+            .expect("initial replay buffer active"),
+        vec![Line::from("latest user question").into()],
+        /*max_rows*/ 20,
+    );
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.finish_required_stream_reflow(&mut tui)?;
+
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("initial replay buffer should remain active");
+    assert_eq!(
+        (
+            buffer.retained_lines.len(),
+            buffer.render_from_transcript_tail
+        ),
+        (0, true),
+    );
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+    assert_snapshot!(
+        "required_stream_reflow_during_capped_initial_replay",
+        rendered
+            .lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    app.finish_initial_history_replay_buffer(&mut tui);
+    assert!(app.initial_history_replay_buffer.is_none());
+    assert!(app.transcript_reflow.has_pending_reflow());
+    Ok(())
+}
+
+#[tokio::test]
+async fn required_stream_reflow_during_capped_initial_replay_survives_transcript_overlay()
+-> Result<()> {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(7);
+    app.transcript_cells = vec![
+        plain_line_cell("latest user question"),
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("stale streamed table tail")],
+            /*is_first_line*/ true,
+        )),
+    ];
+
+    app.begin_initial_history_replay_buffer();
+    App::buffer_initial_history_replay_display_lines(
+        app.initial_history_replay_buffer
+            .as_mut()
+            .expect("initial replay buffer active"),
+        vec![Line::from("stale streamed table tail").into()],
+        /*max_rows*/ 7,
+    );
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.handle_consolidate_agent_message(
+        &mut tui,
+        "Final answer:\n\n| Pattern | Outcome |\n| --- | --- |\n| Table tail | Preserved |"
+            .to_string(),
+        PathBuf::from("/tmp"),
+        ConsolidationScrollbackReflow::Required,
+        /*deferred_history_cell*/ None,
+    )?;
+    app.open_transcript_overlay(&mut tui);
+    assert!(tui.is_alt_screen_active());
+
+    app.finish_initial_history_replay_buffer(&mut tui);
+    assert!(app.initial_history_replay_buffer.is_none());
+    assert!(app.transcript_reflow.has_pending_reflow());
+
+    app.maybe_run_resize_reflow(&mut tui)?;
+    assert!(app.transcript_reflow.has_pending_reflow());
+
+    app.close_transcript_overlay(&mut tui);
+    assert!(!tui.is_alt_screen_active());
+    assert!(app.transcript_reflow.has_pending_reflow());
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+    assert_eq!(rendered.lines.len(), 7);
+    assert_snapshot!(
+        "required_stream_reflow_during_capped_initial_replay_survives_transcript_overlay",
+        rendered
+            .lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    Ok(())
 }
 
 #[tokio::test]

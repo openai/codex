@@ -144,17 +144,14 @@ impl App {
             return;
         };
 
+        if buffer.render_from_transcript_tail || self.overlay.is_some() {
+            // Reflow clears any pre-replay or partially emitted history and applies the reserved
+            // history width. It also waits for an active overlay to close before rebuilding.
+            self.schedule_immediate_resize_reflow(tui);
+            return;
+        }
+
         if buffer.retained_lines.is_empty() {
-            if buffer.render_from_transcript_tail {
-                let width = tui.terminal.last_known_screen_size.width;
-                let reflowed_lines = self.render_transcript_lines_for_reflow(width).lines;
-                if !reflowed_lines.is_empty() {
-                    tui.insert_history_hyperlink_lines_with_wrap_policy(
-                        reflowed_lines,
-                        self.history_line_wrap_policy(),
-                    );
-                }
-            }
             return;
         }
 
@@ -274,6 +271,19 @@ impl App {
     /// replaced as one styled source-backed cell. If this reflow is skipped after a stream-time
     /// resize, the visible scrollback can keep the pre-consolidation wrapping.
     pub(super) fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        // Capped initial replay normally buffers per-cell display rows. A live stream tail is
+        // consolidated directly into `transcript_cells`, so any retained rows no longer describe
+        // the canonical transcript. Let the replay-end event render the capped transcript tail
+        // once all consolidation events have been processed.
+        if self.resize_reflow_max_rows().is_some()
+            && let Some(buffer) = self.initial_history_replay_buffer.as_mut()
+        {
+            buffer.retained_lines.clear();
+            buffer.render_from_transcript_tail = true;
+            self.transcript_reflow.clear_stream_flags();
+            return Ok(());
+        }
+
         self.schedule_immediate_resize_reflow(tui);
         self.maybe_run_resize_reflow(tui)?;
         if !self.transcript_reflow.has_pending_reflow() {
