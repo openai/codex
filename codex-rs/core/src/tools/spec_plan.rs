@@ -582,6 +582,33 @@ fn code_mode_namespace_descriptions(
 
 #[instrument(level = "trace", skip_all)]
 fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    // Guardian reviewers receive only `exec_command`, `write_stdin`, and `view_image`
+    // when an environment is available; all general tool sources stay excluded.
+    if crate::guardian::is_guardian_reviewer_source(&context.step_context.turn.session_source) {
+        let turn_context = context.step_context.turn.as_ref();
+        let environment_mode = tool_environment_mode(context.step_context);
+        if environment_mode.has_environment() {
+            let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+            planned_tools.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
+                allow_login_shell: turn_context.config.permissions.allow_login_shell,
+                exec_permission_approvals_enabled: false,
+                include_environment_id,
+                include_shell_parameter: unified_exec_should_include_shell_parameter(
+                    turn_context,
+                    context.step_context,
+                ),
+            }));
+            planned_tools.add(WriteStdinHandler);
+            planned_tools.add(ViewImageHandler::new(ViewImageToolOptions {
+                can_request_original_image_detail: can_request_original_image_detail(
+                    &turn_context.model_info,
+                ),
+                include_environment_id,
+            }));
+        }
+        return;
+    }
+
     add_shell_tools(context, planned_tools);
     add_mcp_resource_tools(context, planned_tools);
     add_core_utility_tools(context, planned_tools);
