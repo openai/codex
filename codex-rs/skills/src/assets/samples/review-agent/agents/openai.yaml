@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Agent"
+  short_description: "Find actionable bugs in code changes"
+  default_prompt: "Use $review-agent to review the requested code changes and return actionable findings."
+policy:
+  allow_implicit_invocation: false

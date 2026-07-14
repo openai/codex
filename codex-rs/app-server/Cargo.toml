@@ -34,6 +34,7 @@ axum = { workspace = true, default-features = false, features = [
     "ws",
 ] }
 codex-analytics = { workspace = true }
+codex-agent-extension = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
@@ -54,6 +55,7 @@ codex-http-client = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills = { workspace = true }
 codex-skills-extension = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-pty = { workspace = true }
