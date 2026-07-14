@@ -3,6 +3,7 @@ use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::MergeStrategy;
 use codex_config::CONFIG_TOML_FILE;
@@ -45,28 +46,41 @@ pub(super) async fn set_user_model_provider_to_bedrock(
         )));
     }
 
-    write_user_model_provider(
-        config_manager,
-        serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
-        /*expected_version*/ None,
-    )
-    .await
-}
-
-async fn write_user_model_provider(
-    config_manager: &ConfigManager,
-    value: serde_json::Value,
-    expected_version: Option<String>,
-) -> Result<(), JSONRPCErrorError> {
     config_manager
         .write_value(ConfigValueWriteParams {
             key_path: "model_provider".to_string(),
-            value,
+            value: serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
             merge_strategy: MergeStrategy::Replace,
             file_path: None,
-            expected_version,
+            expected_version: None,
         })
         .await
         .map(|_| ())
         .map_err(map_config_error)
+}
+
+pub(super) async fn clear_user_model_provider_if_bedrock(
+    config_manager: &ConfigManager,
+) -> Result<(), JSONRPCErrorError> {
+    let result = config_manager
+        .clear_user_value_if_matches(
+            "model_provider",
+            serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
+        )
+        .await;
+    if let Err(err) = &result
+        && err.write_error_code() == Some(ConfigWriteErrorCode::ConfigVersionConflict)
+    {
+        tracing::warn!(
+            "configuration changed while clearing the managed Amazon Bedrock model provider; retrying once"
+        );
+        return config_manager
+            .clear_user_value_if_matches(
+                "model_provider",
+                serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
+            )
+            .await
+            .map_err(map_config_error);
+    }
+    result.map_err(map_config_error)
 }

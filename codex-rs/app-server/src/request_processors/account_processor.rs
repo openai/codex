@@ -1,3 +1,4 @@
+use super::bedrock_auth::clear_user_model_provider_if_bedrock;
 use super::bedrock_auth::set_user_model_provider_to_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
@@ -832,6 +833,17 @@ impl AccountRequestProcessor {
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+        let managed_bedrock_auth = matches!(
+            self.auth_manager.auth_cached(),
+            Some(CodexAuth::BedrockApiKey(_))
+        );
+        let config = self.load_latest_config().await;
+        if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
+            return Err(invalid_request(
+                "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication",
+            ));
+        }
+
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -845,6 +857,10 @@ impl AccountRequestProcessor {
             Err(err) => {
                 return Err(internal_error(format!("logout failed: {err}")));
             }
+        }
+
+        if managed_bedrock_auth {
+            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
         }
 
         Self::maybe_refresh_plugin_caches_for_current_config(
