@@ -502,6 +502,8 @@ Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a sto
 
 Every returned `Turn` includes `itemsView`, which tells clients whether the `items` array was omitted intentionally (`notLoaded`), contains only summary items (`summary`), or contains every item available from persisted app-server history (`full`). Pass `itemsView` to choose the returned detail level; omitted `itemsView` defaults to `"summary"`.
 
+Paginated threads support `summary` and `notLoaded`; `full` returns an invalid-request error for them, so use `thread/items/list` to page complete items.
+
 ```json
 { "method": "thread/turns/list", "id": 24, "params": {
     "threadId": "thr_123",
@@ -527,7 +529,10 @@ Every returned `Turn` includes `itemsView`, which tells clients whether the `ite
 } }
 ```
 
-Omit `turnId` or pass `null` to page items across the thread. Thread stores that do not implement item pagination return JSON-RPC `-32601` with message `thread/items/list is not supported yet`.
+Each returned entry includes the containing `turnId` and its full `item`, so clients can group
+unfiltered pages into turns. Omit `turnId` or pass `null` to page items across the thread. Thread
+stores that do not implement item pagination return JSON-RPC `-32601` with message
+`thread/items/list is not supported yet`.
 
 ### Example: Update stored thread metadata
 

@@ -18787,6 +18787,22 @@
           }
         ]
       },
+      "ThreadItemEntry": {
+        "properties": {
+          "item": {
+            "$ref": "#/definitions/v2/ThreadItem"
+          },
+          "turnId": {
+            "description": "Turn containing this item.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "turnId"
+        ],
+        "type": "object"
+      },
       "ThreadListCwdFilter": {
         "anyOf": [
           {
