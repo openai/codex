@@ -1,4 +1,5 @@
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 
 use super::JSONRPCError;
@@ -9,6 +10,7 @@ use super::JSONRPCRequest;
 use super::JSONRPCResponse;
 use super::MAX_JSONRPC_VALUE_NODES;
 use super::RequestId;
+use super::SERDE_JSON_RAW_VALUE_TOKEN;
 
 #[test]
 fn round_trips_every_jsonrpc_message_variant() -> serde_json::Result<()> {
@@ -43,6 +45,51 @@ fn round_trips_every_jsonrpc_message_variant() -> serde_json::Result<()> {
         assert_eq!(actual, expected);
     }
 
+    Ok(())
+}
+
+#[test]
+fn round_trips_arbitrary_precision_numbers() -> serde_json::Result<()> {
+    let encoded = r#"{"method":"numbers","params":{"decimal":1.5,"exponent":1e100,"largeInteger":18446744073709551616}}"#;
+    let expected = serde_json::from_str::<Value>(encoded)?;
+
+    let message = serde_json::from_str::<JSONRPCMessage>(encoded)?;
+    let actual = serde_json::to_value(message)?;
+
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn applies_value_limit_to_raw_value_wrapper() -> serde_json::Result<()> {
+    let encoded =
+        format!(r#"{{"method":"raw","params":{{"{SERDE_JSON_RAW_VALUE_TOKEN}":"[0,1]"}}}}"#);
+    let actual = serde_json::from_str::<JSONRPCMessage>(&encoded)?;
+    let expected = JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "raw".to_string(),
+        params: Some(json!([0, 1])),
+    });
+    assert_eq!(actual, expected);
+
+    let mut wrapped = String::with_capacity(2 * MAX_JSONRPC_VALUE_NODES + 1);
+    wrapped.push('[');
+    for index in 0..MAX_JSONRPC_VALUE_NODES {
+        if index != 0 {
+            wrapped.push(',');
+        }
+        wrapped.push('0');
+    }
+    wrapped.push(']');
+    let encoded =
+        format!(r#"{{"method":"raw","params":{{"{SERDE_JSON_RAW_VALUE_TOKEN}":"{wrapped}"}}}}"#);
+
+    let error = serde_json::from_str::<JSONRPCMessage>(&encoded)
+        .expect_err("raw value wrapper should not bypass the JSON value limit");
+    let expected_error = format!("exceeds the limit of {MAX_JSONRPC_VALUE_NODES} JSON values");
+    assert!(
+        error.to_string().contains(&expected_error),
+        "unexpected error: {error}"
+    );
     Ok(())
 }
 

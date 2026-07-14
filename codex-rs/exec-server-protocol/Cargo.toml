@@ -20,7 +20,7 @@ codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

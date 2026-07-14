@@ -25,6 +25,11 @@ pub const JSONRPC_VERSION: &str = "2.0";
 // while preventing compact arrays from expanding into millions of heap values.
 const MAX_JSONRPC_VALUE_NODES: usize = 256 * 1024;
 
+// With `arbitrary_precision` enabled, serde_json presents decimal, exponent,
+// and out-of-range integer values to visitors as a synthetic one-entry map.
+const SERDE_JSON_NUMBER_TOKEN: &str = "$serde_json::private::Number";
+const SERDE_JSON_RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
+
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Deserialize, Serialize, Hash, Eq)]
 #[serde(untagged)]
 pub enum RequestId {
@@ -53,26 +58,6 @@ pub enum JSONRPCMessage {
     Error(JSONRPCError),
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum JSONRPCMessageRepr {
-    Request(JSONRPCRequest),
-    Notification(JSONRPCNotification),
-    Response(JSONRPCResponse),
-    Error(JSONRPCError),
-}
-
-impl From<JSONRPCMessageRepr> for JSONRPCMessage {
-    fn from(value: JSONRPCMessageRepr) -> Self {
-        match value {
-            JSONRPCMessageRepr::Request(request) => Self::Request(request),
-            JSONRPCMessageRepr::Notification(notification) => Self::Notification(notification),
-            JSONRPCMessageRepr::Response(response) => Self::Response(response),
-            JSONRPCMessageRepr::Error(error) => Self::Error(error),
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for JSONRPCMessage {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -83,9 +68,29 @@ impl<'de> Deserialize<'de> for JSONRPCMessage {
             remaining: &mut remaining,
         }
         .deserialize(deserializer)?;
-        JSONRPCMessageRepr::deserialize(value)
-            .map(Self::from)
-            .map_err(de::Error::custom)
+        let object = value
+            .as_object()
+            .ok_or_else(|| de::Error::custom("expected a JSON-RPC object"))?;
+
+        if object.contains_key("method") {
+            if object.contains_key("id") {
+                JSONRPCRequest::deserialize(value)
+                    .map(Self::Request)
+                    .map_err(de::Error::custom)
+            } else {
+                JSONRPCNotification::deserialize(value)
+                    .map(Self::Notification)
+                    .map_err(de::Error::custom)
+            }
+        } else if object.contains_key("result") {
+            JSONRPCResponse::deserialize(value)
+                .map(Self::Response)
+                .map_err(de::Error::custom)
+        } else {
+            JSONRPCError::deserialize(value)
+                .map(Self::Error)
+                .map_err(de::Error::custom)
+        }
     }
 }
 
@@ -182,7 +187,36 @@ impl<'de> Visitor<'de> for BoundedValueVisitor<'_> {
     where
         A: MapAccess<'de>,
     {
+        let Some(first_key) = object.next_key::<String>()? else {
+            return Ok(Value::Object(Map::new()));
+        };
+
+        if first_key == SERDE_JSON_NUMBER_TOKEN {
+            let encoded = object.next_value::<String>()?;
+            let number = encoded.parse::<Number>().map_err(de::Error::custom)?;
+            return Ok(Value::Number(number));
+        }
+
+        if first_key == SERDE_JSON_RAW_VALUE_TOKEN {
+            let encoded = object.next_value::<String>()?;
+            let mut deserializer = serde_json::Deserializer::from_str(&encoded);
+            // The raw wrapper already consumed one value from the budget. Reuse
+            // that slot for the decoded root while charging all of its children.
+            let value = (&mut deserializer)
+                .deserialize_any(BoundedValueVisitor {
+                    remaining: &mut *self.remaining,
+                })
+                .map_err(de::Error::custom)?;
+            deserializer.end().map_err(de::Error::custom)?;
+            return Ok(value);
+        }
+
         let mut values = Map::new();
+        let first_value = object.next_value_seed(BoundedValueSeed {
+            remaining: &mut *self.remaining,
+        })?;
+        values.insert(first_key, first_value);
+
         while let Some(key) = object.next_key::<String>()? {
             if values.contains_key(&key) {
                 return Err(de::Error::custom(format!(
