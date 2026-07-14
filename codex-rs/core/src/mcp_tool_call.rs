@@ -42,6 +42,7 @@ use codex_mcp::SandboxState;
 use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
+use codex_mcp::tool_is_model_visible;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
@@ -153,6 +154,23 @@ pub(crate) async fn handle_mcp_tool_call(
     )
     .await;
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, metadata.as_ref());
+    if metadata.is_none() {
+        let result = notify_mcp_tool_call_skip(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &call_id,
+            invocation,
+            item_metadata,
+            format!("MCP tool `{server}/{tool_name}` is not available to the model"),
+            /*already_started*/ false,
+        )
+        .await;
+        return HandledMcpToolCall {
+            result: CallToolResult::from_result(result),
+            tool_input: arguments_value
+                .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
+        };
+    }
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         let annotations = metadata
             .as_ref()
@@ -1480,10 +1498,10 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let plugin_id = manager
         .plugin_id_for_mcp_server_name(server)
         .map(str::to_string);
-    let tools = manager.list_all_tools().await;
-    let tool_info = tools
-        .into_iter()
-        .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
+    let tool_info = manager.tool_info(server, tool_name).await?;
+    if !tool_is_model_visible(&tool_info) {
+        return None;
+    }
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
@@ -1598,17 +1616,10 @@ async fn lookup_mcp_app_usage_metadata(
     server: &str,
     tool_name: &str,
 ) -> Option<McpAppUsageMetadata> {
-    let tools = manager.list_all_tools().await;
-
-    tools.into_iter().find_map(|tool_info| {
-        if tool_info.server_name == server && tool_info.tool.name == tool_name {
-            Some(McpAppUsageMetadata {
-                connector_id: tool_info.connector_id,
-                app_name: tool_info.connector_name,
-            })
-        } else {
-            None
-        }
+    let tool_info = manager.tool_info(server, tool_name).await?;
+    Some(McpAppUsageMetadata {
+        connector_id: tool_info.connector_id,
+        app_name: tool_info.connector_name,
     })
 }
 

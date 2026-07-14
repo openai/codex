@@ -371,6 +371,7 @@ impl Session {
             mcp_runtime_context.clone(),
             mcp_config.codex_home.clone(),
             self.services.mcp_manager.codex_apps_tools_cache(),
+            self.services.mcp_manager.tool_catalog_cache(),
             connector_runtime_context_key(auth.as_ref()),
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability.clone(),

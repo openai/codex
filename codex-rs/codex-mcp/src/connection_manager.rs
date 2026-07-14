@@ -30,6 +30,7 @@ use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
+use crate::tool_catalog_cache::McpToolCatalogCache;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
@@ -136,6 +137,7 @@ impl McpConnectionManager {
         runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
         codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
+        tool_catalog_cache: McpToolCatalogCache,
         codex_apps_tools_cache_key: ConnectorRuntimeContextKey,
         prefix_mcp_tool_names: bool,
         client_elicitation_capability: ElicitationCapability,
@@ -190,6 +192,10 @@ impl McpConnectionManager {
             )
             .await;
             let configured_config = server.configured_config().cloned();
+            let resolved_environment = configured_config.as_ref().map_or_else(
+                || Ok(None),
+                |config| runtime_context.resolve_server_environment(&server_name, config),
+            );
             // For built-in Codex Apps, `CODEX_CONNECTORS_TOKEN` is a debug
             // override: it supplies runtime auth but bypasses the shared tools
             // cache.
@@ -228,6 +234,22 @@ impl McpConnectionManager {
                 } else {
                     chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider)
                 };
+            let tool_catalog_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                None
+            } else if let Some(config) = configured_config.as_ref()
+                && let Ok(environment) = resolved_environment.as_ref()
+            {
+                tool_catalog_cache.context(
+                    &server_name,
+                    config,
+                    &runtime_context,
+                    environment.as_ref(),
+                    &client_elicitation_capability,
+                    supports_openai_form_elicitation,
+                )
+            } else {
+                None
+            };
             let has_runtime_auth = runtime_auth_provider.is_some();
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
@@ -239,8 +261,10 @@ impl McpConnectionManager {
                 tx_event.clone(),
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
+                tool_catalog_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_context.clone(),
+                resolved_environment,
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
                 supports_openai_form_elicitation,
@@ -586,6 +610,17 @@ impl McpConnectionManager {
         tools
     }
 
+    /// Returns one tool from the current live connection.
+    pub async fn tool_info(&self, server: &str, tool: &str) -> Option<ToolInfo> {
+        let client = self.clients.get(server)?;
+        let managed_client = client.client().await.ok()?;
+        let tool = client
+            .prepare_tools(managed_client.listed_tools())
+            .into_iter()
+            .find(|tool_info| tool_info.tool.name == tool)?;
+        Some(self.with_server_metadata(tool))
+    }
+
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace shared cache contents when the
@@ -895,15 +930,16 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    /// Returns presentation metadata without waiting for uncached clients still initializing.
-    /// Cached values will be used if available and the server is still starting up.
+    /// Returns presentation metadata from the current connection.
+    /// Codex Apps metadata may come from its existing cache; regular MCP server information is
+    /// connection-specific, so pending regular clients are awaited.
     pub(crate) async fn list_available_server_infos(&self) -> HashMap<String, McpServerInfo> {
         let mut server_infos = HashMap::new();
         for (server_name, client) in &self.clients {
-            if !client.startup_complete.load(Ordering::Acquire) {
-                if let Some(server_info) = client.cached_server_info.clone() {
-                    server_infos.insert(server_name.clone(), server_info);
-                }
+            if !client.startup_complete.load(Ordering::Acquire)
+                && let Some(server_info) = client.cached_server_info.clone()
+            {
+                server_infos.insert(server_name.clone(), server_info);
                 continue;
             }
             match client.client().await {
