@@ -151,13 +151,11 @@ pub(super) async fn shutdown_thread(
     if matches!(history_mode, ThreadHistoryMode::Legacy) {
         recorder.shutdown().await.map_err(thread_store_io_error)?;
     } else {
-        let start_offset = rollout_len_or_zero(rollout_path.as_path()).await?;
         recorder.shutdown().await.map_err(thread_store_io_error)?;
         if let Err(err) = super::thread_history_materialization::materialize_to_sqlite(
             store,
             thread_id,
             rollout_path.as_path(),
-            start_offset,
         )
         .await
         {
@@ -305,7 +303,6 @@ async fn write_and_project(
         durable_write(&recorder, write_op).await?;
     } else {
         let rollout_path = recorder.rollout_path();
-        let start_offset = rollout_len_or_zero(rollout_path).await?;
         // SQLite is a rebuildable view. The flush barrier must win before projection starts so it
         // can lag JSONL after failure, but can never get ahead of canonical history.
         durable_write(&recorder, write_op).await?;
@@ -313,7 +310,6 @@ async fn write_and_project(
             store,
             thread_id,
             rollout_path,
-            start_offset,
         )
         .await
         {
@@ -337,13 +333,5 @@ async fn durable_write(recorder: &RolloutRecorder, write: RolloutWriteOp) -> Thr
         }
         RolloutWriteOp::Persist => recorder.persist().await.map_err(thread_store_io_error),
         RolloutWriteOp::Flush => recorder.flush().await.map_err(thread_store_io_error),
-    }
-}
-
-async fn rollout_len_or_zero(rollout_path: &std::path::Path) -> ThreadStoreResult<u64> {
-    match tokio::fs::metadata(rollout_path).await {
-        Ok(metadata) => Ok(metadata.len()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(err) => Err(thread_store_io_error(err)),
     }
 }

@@ -12,6 +12,32 @@ mod read;
 pub(super) use read::list_items;
 pub(super) use read::list_turns;
 
+pub(super) async fn next_rollout_byte_offset(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<u64> {
+    let db_path = codex_state::thread_history_db_path(store.config.sqlite_home.as_path());
+    if !tokio::fs::try_exists(db_path.as_path())
+        .await
+        .map_err(thread_history_error)?
+    {
+        return Ok(0);
+    }
+
+    let pool = store.thread_history_db().await?;
+    let offset = sqlx::query_scalar::<_, i64>(
+        "SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .fetch_optional(pool)
+    .await
+    .map_err(thread_history_error)?
+    .unwrap_or(0);
+    u64::try_from(offset).map_err(|_| ThreadStoreError::Internal {
+        message: format!("thread history projection for {thread_id} has a negative byte offset"),
+    })
+}
+
 pub(super) async fn apply_projection(
     store: &LocalThreadStore,
     thread_id: ThreadId,

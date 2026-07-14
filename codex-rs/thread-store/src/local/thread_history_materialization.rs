@@ -17,9 +17,9 @@ pub(super) async fn materialize_to_sqlite(
     store: &LocalThreadStore,
     thread_id: ThreadId,
     rollout_path: &Path,
-    start_offset: u64,
 ) -> ThreadStoreResult<()> {
-    let (lines, next_offset) = read_durable_rollout_lines(rollout_path, start_offset).await?;
+    let start_offset = super::thread_history::next_rollout_byte_offset(store, thread_id).await?;
+    let (lines, next_offset) = read_complete_rollout_lines(rollout_path, start_offset).await?;
     if lines.is_empty() && start_offset == next_offset {
         return Ok(());
     }
@@ -43,14 +43,17 @@ pub(super) async fn materialize_to_sqlite(
     .await
 }
 
-async fn read_durable_rollout_lines(
+async fn read_complete_rollout_lines(
     rollout_path: &Path,
     start_offset: u64,
 ) -> ThreadStoreResult<(Vec<RolloutLine>, u64)> {
-    let next_offset = tokio::fs::metadata(rollout_path)
-        .await
-        .map_err(thread_store_io_error)?
-        .len();
+    let next_offset = match tokio::fs::metadata(rollout_path).await {
+        Ok(metadata) => metadata.len(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && start_offset == 0 => {
+            return Ok((Vec::new(), 0));
+        }
+        Err(err) => return Err(thread_store_io_error(err)),
+    };
     let byte_count =
         next_offset
             .checked_sub(start_offset)
@@ -70,12 +73,20 @@ async fn read_durable_rollout_lines(
     file.read_exact(bytes.as_mut_slice())
         .await
         .map_err(thread_store_io_error)?;
-    if bytes.last().is_some_and(|byte| *byte != b'\n') {
-        return Err(ThreadStoreError::Internal {
-            message: "durable rollout append is not newline terminated".to_string(),
-        });
-    }
-    let text = std::str::from_utf8(bytes.as_slice()).map_err(thread_history_error)?;
+    let complete_byte_count = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    let next_offset = start_offset
+        .checked_add(u64::try_from(complete_byte_count).map_err(|_| {
+            ThreadStoreError::Internal {
+                message: "durable rollout append exceeds addressable memory".to_string(),
+            }
+        })?)
+        .ok_or_else(|| ThreadStoreError::Internal {
+            message: "durable rollout byte offset overflow".to_string(),
+        })?;
+    let text = std::str::from_utf8(&bytes[..complete_byte_count]).map_err(thread_history_error)?;
     let mut lines = Vec::new();
     for line in text.lines().filter(|line| !line.is_empty()) {
         match serde_json::from_str(line) {
