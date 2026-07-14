@@ -28,7 +28,12 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+pub(crate) const TURN_START_AVAILABILITY_MAX_ITEMS: usize = 100;
+pub(crate) const TURN_START_AVAILABILITY_MAX_SERIALIZED_BYTES_PER_FIELD: usize = 16 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AcceptedLineFingerprint {
@@ -87,6 +92,111 @@ pub struct TurnResolvedConfigFact {
     pub personality: Option<Personality>,
     pub workspace_kind: Option<String>,
     pub is_first_turn: bool,
+}
+
+/// MCP and connector identities in the post-policy exposure frozen at turn start.
+///
+/// Each identity list is sorted, deduplicated, and capped at 100 items and 16 KiB when serialized.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct TurnStartAvailability {
+    pub(crate) available_mcp_server_names: Vec<String>,
+    pub(crate) available_mcp_server_names_truncated: bool,
+    pub(crate) available_connectors: Vec<TurnStartConnectorIdentity>,
+    pub(crate) available_connectors_truncated: bool,
+}
+
+impl TurnStartAvailability {
+    /// Builds a bounded snapshot without retaining tool schemas or connector metadata.
+    pub fn new(
+        mcp_server_names: impl IntoIterator<Item = String>,
+        connectors: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        let mcp_server_names = mcp_server_names.into_iter().collect::<BTreeSet<_>>();
+        let (available_mcp_server_names, available_mcp_server_names_truncated) =
+            collect_bounded_serializable(mcp_server_names, String::len);
+
+        let mut connectors_by_id = BTreeMap::new();
+        for (connector_id, connector_name) in connectors {
+            connectors_by_id
+                .entry(connector_id)
+                .and_modify(|existing_name: &mut String| {
+                    if connector_name < *existing_name {
+                        existing_name.clone_from(&connector_name);
+                    }
+                })
+                .or_insert(connector_name);
+        }
+        let (available_connectors, available_connectors_truncated) = collect_bounded_serializable(
+            connectors_by_id
+                .into_iter()
+                .map(
+                    |(connector_id, connector_name)| TurnStartConnectorIdentity {
+                        connector_id,
+                        connector_name,
+                    },
+                ),
+            |connector| {
+                connector
+                    .connector_id
+                    .len()
+                    .saturating_add(connector.connector_name.len())
+            },
+        );
+
+        Self {
+            available_mcp_server_names,
+            available_mcp_server_names_truncated,
+            available_connectors,
+            available_connectors_truncated,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct TurnStartConnectorIdentity {
+    pub(crate) connector_id: String,
+    pub(crate) connector_name: String,
+}
+
+fn collect_bounded_serializable<T: Serialize>(
+    items: impl IntoIterator<Item = T>,
+    raw_string_bytes: impl Fn(&T) -> usize,
+) -> (Vec<T>, bool) {
+    let mut collected = Vec::new();
+    let mut truncated = false;
+    let mut serialized_bytes = 2_usize;
+    for item in items {
+        if collected.len() == TURN_START_AVAILABILITY_MAX_ITEMS {
+            truncated = true;
+            break;
+        }
+        if raw_string_bytes(&item) > TURN_START_AVAILABILITY_MAX_SERIALIZED_BYTES_PER_FIELD {
+            truncated = true;
+            continue;
+        }
+        let Ok(serialized) = serde_json::to_vec(&item) else {
+            truncated = true;
+            continue;
+        };
+        let separator_bytes = usize::from(!collected.is_empty());
+        let next_serialized_bytes = serialized_bytes
+            .saturating_add(separator_bytes)
+            .saturating_add(serialized.len());
+        if next_serialized_bytes > TURN_START_AVAILABILITY_MAX_SERIALIZED_BYTES_PER_FIELD {
+            truncated = true;
+            continue;
+        }
+        serialized_bytes = next_serialized_bytes;
+        collected.push(item);
+    }
+    (collected, truncated)
+}
+
+/// Associates a frozen availability snapshot with the turn reducer state.
+#[derive(Clone)]
+pub struct TurnStartAvailabilityFact {
+    pub turn_id: String,
+    pub availability: TurnStartAvailability,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -501,6 +611,7 @@ pub(crate) enum CustomAnalyticsFact {
     Goal(Box<CodexGoalEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnStartAvailability(Box<TurnStartAvailabilityFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
     TurnProfile(Box<TurnProfileFact>),
     TurnCodexError(Box<TurnCodexErrorFact>),

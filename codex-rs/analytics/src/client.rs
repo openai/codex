@@ -28,6 +28,7 @@ use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnStartAvailabilityFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
@@ -341,6 +342,12 @@ impl AnalyticsEventsClient {
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
+        ));
+    }
+
+    pub fn track_turn_start_availability(&self, fact: TurnStartAvailabilityFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::TurnStartAvailability(Box::new(fact)),
         ));
     }
 
