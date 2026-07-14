@@ -1,8 +1,8 @@
 //! Local hard-delete support for persisted threads.
 //!
 //! Existing rollout files are deleted before this operation reports success. A rollout file that
-//! vanishes after discovery counts as already deleted. SQLite cleanup happens at the app-server
-//! layer after every associated rollout has been removed so failed deletes can be retried.
+//! vanishes after discovery counts as already deleted. The app-server deletes main state DB rows
+//! after every associated rollout is removed; this module deletes local history projection rows.
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -25,10 +25,10 @@ pub(super) async fn delete_thread(
     params: DeleteThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let thread_id_str = thread_id.to_string();
     let state_db_ctx = store.state_db().await;
     let mut rollout_paths = Vec::new();
-
     match find_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         thread_id_str.as_str(),
@@ -44,7 +44,6 @@ pub(super) async fn delete_thread(
             });
         }
     }
-
     match find_archived_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         thread_id_str.as_str(),
@@ -64,7 +63,9 @@ pub(super) async fn delete_thread(
             });
         }
     }
-
+    // Stop the live writer before removing files. The per-thread lock keeps new writes and
+    // replacements out while we find paths and clean up rollout files and history rows.
+    store.live_recorders.lock().await.remove(&thread_id);
     let found_rollout_path = !rollout_paths.is_empty();
     for rollout_path in rollout_paths {
         delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
@@ -74,12 +75,13 @@ pub(super) async fn delete_thread(
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to delete thread name index entries for {thread_id}: {err}"),
         })?;
+    // Keep this before ThreadNotFound so a retry can finish cleanup after an earlier attempt
+    // already removed the rollout file.
+    super::thread_history::delete_thread(store, thread_id).await?;
 
     if !found_rollout_path {
         return Err(ThreadStoreError::ThreadNotFound { thread_id });
     }
-
-    store.live_recorders.lock().await.remove(&thread_id);
 
     Ok(())
 }
@@ -133,6 +135,7 @@ fn delete_rollout_path(
 #[cfg(test)]
 mod tests {
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -143,6 +146,7 @@ mod tests {
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
+    use crate::local::test_support::write_session_file_with_history_mode;
 
     #[tokio::test]
     async fn delete_thread_removes_active_and_archived_rollouts() {
@@ -189,6 +193,67 @@ mod tests {
         std::fs::remove_file(&path).expect("remove session file");
 
         assert!(!delete_rollout_file(&store, path.as_path(), thread_id).expect("delete rollout"));
+    }
+
+    #[tokio::test]
+    async fn delete_thread_removes_materialized_thread_history() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = Uuid::from_u128(306);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T12-00-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("session file");
+        let pool = codex_state::open_thread_history_db(home.path())
+            .await
+            .expect("open thread history db");
+        let thread_id_string = thread_id.to_string();
+        sqlx::query(
+            "INSERT INTO thread_turns (thread_id, turn_id, rollout_ordinal, status) VALUES (?, 'turn-1', 1, 'completed')",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert turn");
+        sqlx::query(
+            "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json) VALUES (?, 'turn-1', 'item-1', 2, 1, '{}')",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert item");
+        sqlx::query(
+            "INSERT INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, 3, 3)",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert projection state");
+
+        store
+            .delete_thread(DeleteThreadParams { thread_id })
+            .await
+            .expect("delete thread");
+
+        let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+            r#"
+SELECT
+    (SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?),
+    (SELECT COUNT(*) FROM thread_items WHERE thread_id = ?),
+    (SELECT COUNT(*) FROM thread_history_projection_state WHERE thread_id = ?)
+            "#,
+        )
+        .bind(thread_id_string.as_str())
+        .bind(thread_id_string.as_str())
+        .bind(thread_id_string.as_str())
+        .fetch_one(&pool)
+        .await
+        .expect("read remaining history rows");
+        assert_eq!(counts, (0, 0, 0));
     }
 
     #[tokio::test]

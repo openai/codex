@@ -78,6 +78,7 @@ pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
 pub use runtime::memories_db_filename;
 pub use runtime::memories_db_path;
+pub use runtime::open_thread_history_db;
 pub use runtime::runtime_db_path_for_corruption_error;
 pub use runtime::runtime_db_paths;
 pub use runtime::sqlite_error_detail_is_corruption;

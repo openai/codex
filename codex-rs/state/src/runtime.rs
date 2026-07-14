@@ -23,6 +23,7 @@ use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
 use crate::migrations::runtime_state_migrator;
+use crate::migrations::runtime_thread_history_migrator;
 use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
@@ -412,6 +413,18 @@ async fn open_memories_sqlite(
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
     open_sqlite(path, migrator, MEMORIES_DB, telemetry_override).await
+}
+
+/// Open and migrate the rebuildable paginated thread-history database.
+pub async fn open_thread_history_db(sqlite_home: &Path) -> anyhow::Result<SqlitePool> {
+    let migrator = runtime_thread_history_migrator();
+    open_sqlite(
+        thread_history_db_path(sqlite_home).as_path(),
+        &migrator,
+        THREAD_HISTORY_DB,
+        /*telemetry_override*/ None,
+    )
+    .await
 }
 
 async fn open_sqlite(

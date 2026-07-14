@@ -2515,19 +2515,18 @@ impl ThreadRequestProcessor {
                 }
                 err => internal_error(format!("failed to list thread items: {err}")),
             })?;
-        let data =
-            page.items
-                .into_iter()
-                .map(|item| {
-                    serde_json::from_slice::<ThreadItem>(&item.materialized_thread_item_json)
-                        .map_err(|err| {
-                            internal_error(format!(
-                                "failed to deserialize stored thread item {}: {err}",
-                                item.item_key
-                            ))
-                        })
+        let data = page
+            .items
+            .into_iter()
+            .map(|item| {
+                serde_json::from_slice::<ThreadItem>(&item.item_json).map_err(|err| {
+                    internal_error(format!(
+                        "failed to deserialize stored thread item {}: {err}",
+                        item.item_id
+                    ))
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(ThreadItemsListResponse {
             data,

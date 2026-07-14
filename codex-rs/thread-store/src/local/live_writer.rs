@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
@@ -26,6 +28,7 @@ pub(super) async fn create_thread(
     params: CreateThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let history_mode = params.history_mode;
     store.ensure_live_recorder_absent(thread_id).await?;
     let recorder = create_thread::create_thread(store, params).await?;
@@ -38,6 +41,7 @@ pub(super) async fn resume_thread(
     store: &LocalThreadStore,
     params: ResumeThreadParams,
 ) -> ThreadStoreResult<()> {
+    let _live_writer_guard = store.live_writer_locks.lock(params.thread_id).await;
     store.ensure_live_recorder_absent(params.thread_id).await?;
     let history_mode = if let Some(history) = params.history.as_deref() {
         canonical_history_mode_from_rollout_items(history)
@@ -115,65 +119,52 @@ pub(super) async fn append_items(
     store: &LocalThreadStore,
     params: AppendThreadItemsParams,
 ) -> ThreadStoreResult<()> {
-    // A live append should always have a recorder: create/resume installs one, while
-    // shutdown/discard/delete removes it. Keep the lookup defensive so late appends fail after
-    // teardown.
-    let (recorder, history_mode) = store
-        .live_recorders
-        .lock()
-        .await
-        .get(&params.thread_id)
-        .map(|entry| (entry.recorder.clone(), entry.history_mode))
-        .ok_or(ThreadStoreError::ThreadNotFound {
-            thread_id: params.thread_id,
-        })?;
-    let persisted_items = persisted_rollout_items(params.items.as_slice(), history_mode);
-    if persisted_items.is_empty() {
-        return Ok(());
-    }
-    recorder
-        .record_canonical_items(persisted_items.as_slice())
-        .await
-        .map_err(thread_store_io_error)?;
-    // LiveThread applies metadata immediately after append_items returns. Wait for the local
-    // writer so SQLite never gets ahead of JSONL for accepted live appends.
-    recorder.flush().await.map_err(thread_store_io_error)
+    write_and_project(
+        store,
+        params.thread_id,
+        RolloutWriteOp::AppendItems(params.items),
+    )
+    .await
 }
 
 pub(super) async fn persist_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    store
-        .live_recorder(thread_id)
-        .await?
-        .persist()
-        .await
-        .map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await
+    write_and_project(store, thread_id, RolloutWriteOp::Persist).await
 }
 
 pub(super) async fn flush_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    store
-        .live_recorder(thread_id)
-        .await?
-        .flush()
-        .await
-        .map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await
+    write_and_project(store, thread_id, RolloutWriteOp::Flush).await
 }
 
 pub(super) async fn shutdown_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    let recorder = store.live_recorder(thread_id).await?;
+    let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
+    let (recorder, history_mode) = live_writer_parts(store, thread_id).await?;
     let rollout_path = recorder.rollout_path().to_path_buf();
-    recorder.shutdown().await.map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await?;
+    if matches!(history_mode, ThreadHistoryMode::Legacy) {
+        recorder.shutdown().await.map_err(thread_store_io_error)?;
+    } else {
+        let start_offset = rollout_len_or_zero(rollout_path.as_path()).await?;
+        recorder.shutdown().await.map_err(thread_store_io_error)?;
+        if let Err(err) = super::thread_history_materialization::materialize_to_sqlite(
+            store,
+            thread_id,
+            rollout_path.as_path(),
+            start_offset,
+        )
+        .await
+        {
+            warn!("failed to project durable rollout during shutdown for {thread_id}: {err}");
+        }
+    }
+    sync_materialized_rollout_path(store, thread_id, rollout_path.as_path()).await?;
     if let Some(metrics) = codex_otel::global()
         && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
     {
@@ -188,6 +179,7 @@ pub(super) async fn discard_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
+    let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     store
         .live_recorders
         .lock()
@@ -215,9 +207,9 @@ pub(super) async fn rollout_path(
 async fn sync_materialized_rollout_path(
     store: &LocalThreadStore,
     thread_id: ThreadId,
+    rollout_path: &std::path::Path,
 ) -> ThreadStoreResult<()> {
-    let rollout_path = rollout_path(store, thread_id).await?;
-    if codex_rollout::existing_rollout_path(rollout_path.as_path())
+    if codex_rollout::existing_rollout_path(rollout_path)
         .await
         .is_none()
     {
@@ -238,7 +230,7 @@ async fn sync_materialized_rollout_path(
             return Ok(());
         };
         if metadata.rollout_path != rollout_path {
-            metadata.rollout_path = rollout_path;
+            metadata.rollout_path = rollout_path.to_path_buf();
             state_db
                 .upsert_thread(&metadata)
                 .await
@@ -258,5 +250,100 @@ async fn sync_materialized_rollout_path(
 fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {
     ThreadStoreError::Internal {
         message: err.to_string(),
+    }
+}
+
+/// The rollout writer has three distinct lifecycle moments:
+/// - `AppendItems` is normal turn/event persistence and adds new rollout records.
+/// - `Persist` makes the thread durable before any turn items exist; locally this can write the
+///   initial `SessionMeta`.
+/// - `Flush` writes any rollout records already queued in the recorder and ensures they are
+///   durably persisted.
+///
+/// Each can advance the rollout JSONL file on disk, so we need to make sure we materialize the
+/// new data into the SQLite history tables (turns and items) as necessary.
+enum RolloutWriteOp {
+    AppendItems(Vec<RolloutItem>),
+    Persist,
+    Flush,
+}
+
+async fn live_writer_parts(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<(RolloutRecorder, ThreadHistoryMode)> {
+    let live_recorders = store.live_recorders.lock().await;
+    let entry = live_recorders
+        .get(&thread_id)
+        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
+    Ok((entry.recorder.clone(), entry.history_mode))
+}
+
+async fn write_and_project(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    write_op: RolloutWriteOp,
+) -> ThreadStoreResult<()> {
+    // Every live write should have a recorder: create/resume installs one, while
+    // shutdown/discard/delete removes it. Keep the lookup defensive so late writes fail after
+    // teardown.
+    let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
+    let (recorder, history_mode) = live_writer_parts(store, thread_id).await?;
+    let sync_rollout_path = matches!(&write_op, RolloutWriteOp::Persist | RolloutWriteOp::Flush);
+    let write_op = match write_op {
+        RolloutWriteOp::AppendItems(items) => {
+            let items = persisted_rollout_items(items.as_slice(), history_mode);
+            if items.is_empty() {
+                return Ok(());
+            }
+            RolloutWriteOp::AppendItems(items)
+        }
+        RolloutWriteOp::Persist => RolloutWriteOp::Persist,
+        RolloutWriteOp::Flush => RolloutWriteOp::Flush,
+    };
+    if matches!(history_mode, ThreadHistoryMode::Legacy) {
+        durable_write(&recorder, write_op).await?;
+    } else {
+        let rollout_path = recorder.rollout_path();
+        let start_offset = rollout_len_or_zero(rollout_path).await?;
+        // SQLite is a rebuildable view. The flush barrier must win before projection starts so it
+        // can lag JSONL after failure, but can never get ahead of canonical history.
+        durable_write(&recorder, write_op).await?;
+        if let Err(err) = super::thread_history_materialization::materialize_to_sqlite(
+            store,
+            thread_id,
+            rollout_path,
+            start_offset,
+        )
+        .await
+        {
+            warn!("failed to project durable rollout for {thread_id}: {err}");
+        }
+    }
+    if sync_rollout_path {
+        sync_materialized_rollout_path(store, thread_id, recorder.rollout_path()).await?;
+    }
+    Ok(())
+}
+
+async fn durable_write(recorder: &RolloutRecorder, write: RolloutWriteOp) -> ThreadStoreResult<()> {
+    match write {
+        RolloutWriteOp::AppendItems(items) => {
+            recorder
+                .record_canonical_items(items.as_slice())
+                .await
+                .map_err(thread_store_io_error)?;
+            recorder.flush().await.map_err(thread_store_io_error)
+        }
+        RolloutWriteOp::Persist => recorder.persist().await.map_err(thread_store_io_error),
+        RolloutWriteOp::Flush => recorder.flush().await.map_err(thread_store_io_error),
+    }
+}
+
+async fn rollout_len_or_zero(rollout_path: &std::path::Path) -> ThreadStoreResult<u64> {
+    match tokio::fs::metadata(rollout_path).await {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(thread_store_io_error(err)),
     }
 }

@@ -4083,6 +4083,7 @@ name = "codex-thread-store"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "codex-app-server-protocol",
  "codex-git-utils",
  "codex-install-context",
  "codex-internal-extra-config",
@@ -4094,6 +4095,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

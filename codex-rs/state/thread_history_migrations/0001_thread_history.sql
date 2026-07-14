@@ -20,6 +20,7 @@ CREATE TABLE thread_items (
     turn_id TEXT NOT NULL,
     item_id TEXT NOT NULL,
     rollout_ordinal INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
     item_json TEXT NOT NULL,
     PRIMARY KEY (thread_id, turn_id, item_id)
 );
