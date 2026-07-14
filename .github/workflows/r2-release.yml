@@ -1,0 +1,45 @@
+name: publish-r2-release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: codex-r2-publisher
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check disk before publication
+        run: df -h
+
+      - name: Publish release assets and metadata to R2
+        # R2 exposes an S3-compatible API, so the AWS CLI reads AWS-named variables.
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CODEX_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CODEX_R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ vars.CODEX_R2_ENDPOINT_URL }}
+          AWS_REGION: ${{ vars.CODEX_R2_REGION }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/publish_r2_release.py \
+            --tag "${RELEASE_TAG}"
+
+      - name: Check disk after publication
+        if: always()
+        run: df -h
