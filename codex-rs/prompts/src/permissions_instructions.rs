@@ -5,6 +5,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ApprovalMessages;
+use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -24,6 +25,7 @@ const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
 const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
     include_str!("../templates/permissions/approval_policy/on_request_rule_request_permission.md");
 const AUTO_REVIEW_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
+const NETWORK_ACCESS_PLACEHOLDER: &str = "{{ network_access }}";
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("../templates/permissions/sandbox_mode/danger_full_access.md");
@@ -49,6 +51,7 @@ struct PermissionsPromptConfig<'a> {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
     approval_messages: Option<&'a ApprovalMessages>,
+    permission_messages: Option<&'a PermissionMessages>,
     exec_policy: &'a Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
@@ -64,11 +67,20 @@ pub struct PermissionsInstructions {
 pub struct ApprovalPromptContext<'a> {
     reviewer: ApprovalsReviewer,
     messages: Option<&'a ApprovalMessages>,
+    permission_messages: Option<&'a PermissionMessages>,
 }
 
 impl<'a> ApprovalPromptContext<'a> {
-    pub fn new(reviewer: ApprovalsReviewer, messages: Option<&'a ApprovalMessages>) -> Self {
-        Self { reviewer, messages }
+    pub fn new(
+        reviewer: ApprovalsReviewer,
+        messages: Option<&'a ApprovalMessages>,
+        permission_messages: Option<&'a PermissionMessages>,
+    ) -> Self {
+        Self {
+            reviewer,
+            messages,
+            permission_messages,
+        }
     }
 }
 
@@ -94,6 +106,7 @@ impl PermissionsInstructions {
                 approval_policy,
                 approvals_reviewer: approval_context.reviewer,
                 approval_messages: approval_context.messages,
+                permission_messages: approval_context.permission_messages,
                 exec_policy,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
@@ -131,7 +144,10 @@ impl PermissionsInstructions {
         denied_reads: Option<String>,
     ) -> Self {
         let mut text = String::new();
-        append_section(&mut text, &sandbox_text(sandbox_mode, network_access));
+        let sandbox = sandbox_text(sandbox_mode, network_access, config.permission_messages);
+        if !sandbox.is_empty() {
+            append_section(&mut text, &sandbox);
+        }
         append_section(
             &mut text,
             &approval_text(
@@ -272,7 +288,24 @@ fn approval_text(
     }
 }
 
-fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> String {
+fn sandbox_text(
+    mode: SandboxMode,
+    network_access: NetworkAccess,
+    permission_messages: Option<&PermissionMessages>,
+) -> String {
+    let selected = permission_messages.and_then(|messages| match mode {
+        SandboxMode::DangerFullAccess => messages.danger_full_access.as_deref(),
+        SandboxMode::WorkspaceWrite => messages.workspace_write.as_deref(),
+        SandboxMode::ReadOnly => messages.read_only.as_deref(),
+    });
+    if let Some(selected) = selected {
+        if selected.is_empty() {
+            return String::new();
+        }
+        let network_access = network_access.to_string();
+        return selected.replace(NETWORK_ACCESS_PLACEHOLDER, network_access.as_str());
+    }
+
     let template = match mode {
         SandboxMode::DangerFullAccess => &*SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE,
         SandboxMode::WorkspaceWrite => &*SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE,
