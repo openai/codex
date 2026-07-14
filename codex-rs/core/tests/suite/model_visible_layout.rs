@@ -4,12 +4,16 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_config::types::Personality;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -76,6 +80,64 @@ fn format_environment_context_subagents_snapshot(subagents: &[&str]) -> String {
         }],
     })];
     context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_visible_environment_context_preserves_foreign_workspace_roots() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build(&server).await?;
+    let foreign_root = PathUri::parse("file:///C:/workspace")?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "inspect the workspace".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                        cwd: PathUri::from_abs_path(&test.config.cwd),
+                        workspace_roots: vec![foreign_root],
+                    }],
+                )),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let environment_context = response_mock
+        .single_request()
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<environment_context>"))
+        .expect("model-visible environment context");
+    assert!(
+        environment_context.contains("<workspace_roots><root>C:\\workspace</root>"),
+        "foreign workspace root should remain visible to the model: {environment_context}"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -658,7 +658,6 @@ impl Codex {
                 config.cwd.clone(),
                 environment_selections,
             ),
-            workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),

@@ -14,10 +14,12 @@ use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
@@ -60,6 +62,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::test_docker_container_name;
 use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
@@ -304,6 +307,7 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
         Some(vec![TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&test.config.cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
         }]),
     )
     .await?;
@@ -568,6 +572,7 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
                     vec![TurnEnvironmentSelection {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
+                        workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
                     }],
                 )),
                 ..Default::default()
@@ -805,6 +810,7 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
                     vec![TurnEnvironmentSelection {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
+                        workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
                     }],
                 )),
                 ..Default::default()
@@ -1153,6 +1159,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
+        workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -1175,6 +1182,161 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     assert!(
         !multi_env_output.contains("local-routing"),
         "multi-env command should not route to local: {multi_env_output}",
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_target_windows!(
+        Ok(()),
+        "sandboxed process launch is not supported by the exec-server Windows backend"
+    );
+    skip_if_no_remote_env!(Ok(()));
+
+    const SECRET: &str = "target-root-secret";
+    const SECRET_FILE: &str = "secret.txt";
+
+    let server = start_mock_server().await;
+    let test = unified_exec_test(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-target-roots-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let remote_cwd_uri = PathUri::from_abs_path(&remote_cwd);
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &remote_cwd_uri.join(SECRET_FILE)?,
+            SECRET.as_bytes().to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let call_id = "remote-target-root-sandbox";
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &json!({
+                        "shell": "bash",
+                        "cmd": format!("cat {SECRET_FILE}"),
+                        "login": false,
+                        "yield_time_ms": 1_000,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "try to read the denied remote workspace root".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![
+                        TurnEnvironmentSelection {
+                            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                            cwd: PathUri::from_abs_path(&local_cwd.path().abs()),
+                            workspace_roots: Vec::new(),
+                        },
+                        TurnEnvironmentSelection {
+                            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                            cwd: remote_cwd_uri.clone(),
+                            workspace_roots: vec![remote_cwd_uri.clone()],
+                        },
+                    ],
+                )),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response_mock
+        .last_request()
+        .context("model should receive the denied remote command output")?;
+    let (output, success) = request
+        .function_call_output_content_and_success(call_id)
+        .context("remote command output should be model visible")?;
+    assert_ne!(success, Some(true));
+    assert!(
+        output.is_none_or(|output| !output.contains(SECRET)),
+        "denied remote workspace contents should not be readable"
     );
 
     test.fs()
@@ -1309,6 +1471,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ],
         AskForApproval::OnRequest,
@@ -1450,6 +1613,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ]),
     )
@@ -1533,6 +1697,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
         },
     ];
     let local_patch = format!(
@@ -1734,6 +1899,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ]),
     )

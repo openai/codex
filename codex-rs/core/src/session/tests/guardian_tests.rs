@@ -303,6 +303,10 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
         .expect("test setup should allow enabling request permissions");
     turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let mut config = (*turn_context_raw.config).clone();
+    config
+        .permissions
+        .set_permission_profile(codex_protocol::models::PermissionProfile::Disabled)
+        .expect("test setup should allow disabling the permission profile");
     config.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
     config
         .features
@@ -414,6 +418,10 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         .expect("test setup should allow updating approval policy");
     turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let mut config = (*turn_context_raw.config).clone();
+    config
+        .permissions
+        .set_permission_profile(codex_protocol::models::PermissionProfile::Disabled)
+        .expect("test setup should allow disabling the permission profile");
     config.approvals_reviewer = ApprovalsReviewer::User;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);

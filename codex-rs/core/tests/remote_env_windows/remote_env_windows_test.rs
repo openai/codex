@@ -105,9 +105,13 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                 turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
             let environments = TurnEnvironmentSelections::new(
                 test.config.cwd.clone(),
-                vec![TurnEnvironmentSelection {
-                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: PathUri::parse("file:///C:/codex-home")?,
+                vec![{
+                    let cwd = PathUri::parse("file:///C:/codex-home")?;
+                    TurnEnvironmentSelection {
+                        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                        cwd: cwd.clone(),
+                        workspace_roots: vec![cwd],
+                    }
                 }],
             );
 

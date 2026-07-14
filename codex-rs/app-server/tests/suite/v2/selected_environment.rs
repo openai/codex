@@ -50,6 +50,13 @@ async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    let selected_workspace_roots = app_server
+        .auto_env()?
+        .selection()
+        .workspace_roots
+        .iter()
+        .filter_map(|root| root.to_abs_path().ok())
+        .collect::<Vec<_>>();
 
     let request_id = app_server
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
@@ -67,17 +74,12 @@ async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
     } = to_response(response)?;
     let host_cwd = codex_home.path().to_path_buf().abs().canonicalize()?;
     let cwd = cwd.canonicalize()?;
-    let runtime_workspace_roots = runtime_workspace_roots
-        .into_iter()
-        .map(|root| root.canonicalize())
-        .collect::<std::io::Result<Vec<_>>>()?;
     assert_eq!(
         (cwd, runtime_workspace_roots, active_permission_profile),
         (
             // TODO(anp): Return the selected environment's native cwd from thread/start.
-            host_cwd.clone(),
-            // TODO(anp): Derive runtime workspace roots from the selected remote environment.
-            vec![host_cwd],
+            host_cwd,
+            selected_workspace_roots,
             // TODO(anp): Report the implicit built-in permission profile instead of None.
             None,
         )
@@ -207,11 +209,7 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let ThreadStartResponse {
-        thread,
-        runtime_workspace_roots,
-        ..
-    } = to_response(response)?;
+    let ThreadStartResponse { thread, .. } = to_response(response)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.start_turn_and_wait_for_completion(text_turn_params(
@@ -246,16 +244,5 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
             )),
         )
     );
-    let [runtime_workspace_root] = runtime_workspace_roots.as_slice() else {
-        anyhow::bail!("expected one runtime workspace root");
-    };
-    let expected_workspace_roots = format!(
-        "<workspace_roots><root>{}</root></workspace_roots>",
-        runtime_workspace_root.as_path().display()
-    );
-    // TODO(anp): Derive model-visible workspace roots from the selected remote environment and
-    // render them using its native path convention.
-    assert!(environment_context.contains(&expected_workspace_roots));
-
     Ok(())
 }

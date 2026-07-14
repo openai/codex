@@ -334,6 +334,7 @@ fn resolved_local_environments<const N: usize>(
                             .expect("local environment"),
                     ),
                     PathUri::from_abs_path(&cwd),
+                    Vec::new(),
                     /*shell*/ None,
                 )
             })

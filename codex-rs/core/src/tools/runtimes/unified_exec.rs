@@ -256,6 +256,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+    fn workspace_roots<'b>(&self, req: &'b UnifiedExecRequest) -> &'b [PathUri] {
+        req.turn_environment.workspace_roots()
+    }
+
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b PathUri> {
         Some(&req.sandbox_cwd)
     }
@@ -505,6 +509,7 @@ mod tests {
             LOCAL_ENVIRONMENT_ID.to_string(),
             Arc::new(Environment::default_for_tests()),
             cwd,
+            Vec::new(),
             /*shell*/ None,
         )
     }

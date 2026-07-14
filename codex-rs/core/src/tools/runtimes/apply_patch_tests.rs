@@ -20,6 +20,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
         environment_id.to_string(),
         std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
         PathUri::from_abs_path(&std::env::temp_dir().abs()),
+        Vec::new(),
         /*shell*/ None,
     )
 }
@@ -219,7 +220,7 @@ async fn file_system_sandbox_context_uses_active_attempt() {
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &sandbox_policy_cwd,
-        workspace_roots: std::slice::from_ref(&path),
+        workspace_roots: std::slice::from_ref(&sandbox_policy_cwd),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: true,
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
@@ -288,7 +289,7 @@ async fn no_sandbox_attempt_has_no_file_system_context() {
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &sandbox_policy_cwd,
-        workspace_roots: std::slice::from_ref(&path),
+        workspace_roots: std::slice::from_ref(&sandbox_policy_cwd),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,

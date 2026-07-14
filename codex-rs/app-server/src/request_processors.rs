@@ -580,9 +580,28 @@ fn resolve_turn_environment_selections(
                     environment.cwd
                 ))
             })?;
+        let workspace_roots = environment
+            .runtime_workspace_roots
+            .map(|roots| {
+                let mut resolved_roots = Vec::new();
+                for root in roots {
+                    let root = root.to_inferred_path_uri().ok_or_else(|| {
+                        invalid_request(format!(
+                            "invalid runtime workspace root for environment `{environment_id}`: path `{root}` does not use absolute POSIX or Windows path syntax"
+                        ))
+                    })?;
+                    if !resolved_roots.contains(&root) {
+                        resolved_roots.push(root);
+                    }
+                }
+                Ok::<_, JSONRPCErrorError>(resolved_roots)
+            })
+            .transpose()?
+            .unwrap_or_else(|| vec![cwd.clone()]);
         selections.push(TurnEnvironmentSelection {
             environment_id,
             cwd,
+            workspace_roots,
         });
     }
     thread_manager

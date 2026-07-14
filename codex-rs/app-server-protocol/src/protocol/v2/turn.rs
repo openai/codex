@@ -41,6 +41,9 @@ pub enum TurnStatus {
 pub struct TurnEnvironmentParams {
     pub environment_id: String,
     pub cwd: LegacyAppPathString,
+    /// Environment-native runtime workspace roots. Omitted defaults to `cwd`.
+    #[ts(optional = nullable)]
+    pub runtime_workspace_roots: Option<Vec<LegacyAppPathString>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

@@ -210,6 +210,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
+    fn workspace_roots<'a>(&self, req: &'a ShellRequest) -> &'a [PathUri] {
+        req.turn_environment.workspace_roots()
+    }
+
     fn network_approval_spec(
         &self,
         req: &ShellRequest,

@@ -1067,6 +1067,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
         },
     ];
 

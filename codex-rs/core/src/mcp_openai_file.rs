@@ -229,6 +229,7 @@ mod tests {
             primary.environment_id.clone(),
             Arc::clone(&primary.environment),
             PathUri::from_abs_path(&cwd),
+            Vec::new(),
             primary.shell.clone(),
         );
     }
