@@ -120,6 +120,7 @@ fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> Track
         event_params: CodexMcpToolCallEventParams {
             base: CodexToolItemEventBase {
                 thread_id: thread_id.to_string(),
+                session_id: format!("session-{thread_id}"),
                 turn_id: "turn-1".to_string(),
                 item_id: format!("item-{thread_id}"),
                 app_server_client: CodexAppServerClientMetadata {

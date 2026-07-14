@@ -50,6 +50,7 @@ members = [
     "exec-server-protocol",
     "exec-server",
     "execpolicy",
+    "ext/agent",
     "ext/connectors",
     "ext/extension-api",
     "ext/goal",

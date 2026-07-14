@@ -1867,6 +1867,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-extension"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-core",
+ "codex-protocol",
+ "core_test_support",
+ "pretty_assertions",
+ "tokio",
+]
+
+[[package]]
 name = "codex-agent-graph-store"
 version = "0.0.0"
 dependencies = [
