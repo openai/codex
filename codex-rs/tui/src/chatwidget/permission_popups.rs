@@ -304,13 +304,8 @@ impl ChatWidget {
                 Self::permission_profile_selection_actions,
             )
         };
-        let requires_confirmation = approvals_reviewer == ApprovalsReviewer::User
-            && preset.id == "full-access"
-            && !self
-                .config
-                .notices
-                .hide_full_access_warning
-                .unwrap_or(false);
+        let requires_confirmation =
+            approvals_reviewer == ApprovalsReviewer::User && preset.id == "full-access";
         if requires_confirmation {
             let preset = preset.clone();
             return vec![Box::new(move |tx| {
@@ -426,23 +421,7 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = profile_selection.clone().map_or_else(
-            || {
-                Self::approval_preset_actions(
-                    approval,
-                    preset.permission_profile.clone(),
-                    preset.active_permission_profile.clone(),
-                    selected_name.clone(),
-                    ApprovalsReviewer::User,
-                )
-            },
-            Self::permission_profile_selection_actions,
-        );
-        accept_actions.push(Box::new(|tx| {
-            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
-        }));
-
-        let mut accept_and_remember_actions = profile_selection.map_or_else(
+        let accept_actions = profile_selection.map_or_else(
             || {
                 Self::approval_preset_actions(
                     approval,
@@ -454,10 +433,6 @@ impl ChatWidget {
             },
             Self::permission_profile_selection_actions,
         );
-        accept_and_remember_actions.push(Box::new(|tx| {
-            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
-            tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
-        }));
 
         let deny_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             if return_to_permissions {
@@ -472,13 +447,6 @@ impl ChatWidget {
                 name: "Yes, continue anyway".to_string(),
                 description: Some("Apply full access for this session".to_string()),
                 actions: accept_actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Yes, and don't ask again".to_string(),
-                description: Some("Enable full access and remember this choice".to_string()),
-                actions: accept_and_remember_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
