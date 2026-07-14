@@ -590,6 +590,7 @@ pub(crate) struct PluginInstallFailedInput {
     pub plugin: PluginTelemetryMetadata,
     pub source: PluginInstallSource,
     pub error_type: String,
+    pub sub_error_type: Option<String>,
 }
 
 pub struct ExternalAgentConfigImportCompletedInput {
@@ -606,6 +607,7 @@ pub struct ExternalAgentConfigImportFailureInput {
     pub item_type: String,
     pub failure_stage: String,
     pub error_type: String,
+    pub sub_error_type: Option<String>,
 }
 
 #[derive(Clone, Copy)]

@@ -1750,6 +1750,7 @@ impl PluginRequestProcessor {
             plugin,
             PluginInstallSource::Manual,
             error_type.to_string(),
+            sub_error_type,
         );
     }
 

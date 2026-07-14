@@ -376,12 +376,14 @@ impl AnalyticsEventsClient {
         plugin: PluginTelemetryMetadata,
         source: PluginInstallSource,
         error_type: String,
+        sub_error_type: Option<String>,
     ) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginInstallFailed(PluginInstallFailedInput {
                 plugin,
                 source,
                 error_type,
+                sub_error_type,
             }),
         ));
     }

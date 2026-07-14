@@ -715,6 +715,7 @@ pub struct ExternalAgentConfigImportResponse {
 pub struct ExternalAgentConfigImportItemTypeFailure {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub error_type: Option<String>,
+    pub sub_error_type: Option<String>,
     pub failure_stage: String,
     pub message: String,
     pub cwd: Option<PathBuf>,

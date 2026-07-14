@@ -5950,3 +5950,16 @@ fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
         0
     );
 }
+
+#[test]
+fn plugin_install_error_preserves_store_io_sub_error_type() {
+    let error = PluginInstallError::Store(PluginStoreError::Io {
+        context: "failed to copy plugin file",
+        source: std::io::Error::other("copy failed"),
+    });
+
+    assert_eq!(
+        error.sub_error_type(),
+        Some("failed_to_copy_plugin_file".to_string())
+    );
+}

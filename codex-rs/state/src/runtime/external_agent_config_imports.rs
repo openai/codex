@@ -18,6 +18,8 @@ pub struct ExternalAgentConfigImportSuccessRecord {
 pub struct ExternalAgentConfigImportFailureRecord {
     pub item_type: String,
     pub error_type: Option<String>,
+    #[serde(default)]
+    pub sub_error_type: Option<String>,
     pub failure_stage: String,
     pub message: String,
     pub cwd: Option<PathBuf>,
