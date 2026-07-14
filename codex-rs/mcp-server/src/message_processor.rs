@@ -76,6 +76,7 @@ impl MessageProcessor {
             config.as_ref(),
             Arc::clone(&auth_manager),
             codex_core::build_models_manager(config.as_ref(), auth_manager),
+            codex_core::CodexAppsToolsCache::default(),
             SessionSource::Mcp,
             environment_manager,
             Arc::new(extensions.build()),

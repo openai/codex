@@ -16,6 +16,7 @@ use codex_core_api::AskForApproval;
 use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
 use codex_core_api::AutoCompactTokenLimitScope;
+use codex_core_api::CodexAppsToolsCache;
 use codex_core_api::CodexHomeUserInstructionsProvider;
 use codex_core_api::CodexThread;
 use codex_core_api::Config;
@@ -135,6 +136,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         &config,
         Arc::clone(&auth_manager),
         build_models_manager(&config, auth_manager),
+        CodexAppsToolsCache::default(),
         SessionSource::Exec,
         environment_manager,
         Arc::new(extensions.build()),

@@ -2338,6 +2338,7 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         &config,
         auth_manager.clone(),
         crate::thread_manager::build_models_manager(&config, auth_manager),
+        crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),

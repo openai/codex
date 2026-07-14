@@ -413,6 +413,54 @@ fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
     assert_eq!(cache_context.current_tools(), Some(tools));
 }
 
+#[test]
+fn connector_runtime_without_cache_ignores_disk_state() {
+    let codex_home = tempdir().expect("tempdir");
+    let writer = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "cached")];
+    let server_info = create_test_server_info("Codex Apps");
+    write_cached_codex_apps_tools_for_test(&writer, &server_info, &tools);
+    let context = ConnectorRuntimeManager::<TestTool>::new_without_cache().context(
+        codex_home.path().to_path_buf(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+
+    assert_eq!(context.current_tools(), None);
+    assert_eq!(context.cached_server_info(), None);
+}
+
+#[test]
+fn connector_runtime_without_cache_publishes_without_writing() {
+    let temp_dir = tempdir().expect("tempdir");
+    let codex_home = temp_dir.path().join("codex-home");
+    let context = ConnectorRuntimeManager::<TestTool>::new_without_cache().context(
+        codex_home.clone(),
+        ConnectorRuntimeContextKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+        },
+    );
+    let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "live")];
+    let published_tools = context.publish_if_newest_accepted(
+        context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        &create_test_server_info("Codex Apps"),
+        tools.clone(),
+    );
+
+    assert_eq!(published_tools, tools);
+    assert_eq!(context.current_tools(), Some(tools));
+    assert!(!codex_home.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {

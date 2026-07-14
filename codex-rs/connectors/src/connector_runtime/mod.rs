@@ -117,12 +117,14 @@ impl<T> ConnectorRuntimeSnapshot<T> {
 /// remain independently available for clients that already hold their context.
 pub struct ConnectorRuntimeManager<T: ConnectorRuntimePayload> {
     entries: Arc<Mutex<HashMap<ConnectorRuntimeIdentity, Arc<ConnectorRuntimeEntry<T>>>>>,
+    disk_cache: ConnectorRuntimeDiskCache,
 }
 
 impl<T: ConnectorRuntimePayload> Clone for ConnectorRuntimeManager<T> {
     fn clone(&self) -> Self {
         Self {
             entries: Arc::clone(&self.entries),
+            disk_cache: self.disk_cache,
         }
     }
 }
@@ -131,11 +133,20 @@ impl<T: ConnectorRuntimePayload> Default for ConnectorRuntimeManager<T> {
     fn default() -> Self {
         Self {
             entries: Arc::new(Mutex::new(HashMap::new())),
+            disk_cache: ConnectorRuntimeDiskCache::Enabled,
         }
     }
 }
 
 impl<T: ConnectorRuntimePayload> ConnectorRuntimeManager<T> {
+    /// Constructs a process-local connector runtime that never reads or writes the disk cache.
+    pub fn new_without_cache() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            disk_cache: ConnectorRuntimeDiskCache::Disabled,
+        }
+    }
+
     pub fn current_snapshot(
         &self,
         codex_home: PathBuf,
@@ -153,7 +164,7 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeManager<T> {
         let mut entries = lock_unpoisoned(&self.entries);
         let entry = entries
             .entry(identity.clone())
-            .or_insert_with(|| Arc::new(ConnectorRuntimeEntry::new(identity)))
+            .or_insert_with(|| Arc::new(ConnectorRuntimeEntry::new(identity, self.disk_cache)))
             .clone();
         ConnectorRuntimeContext { entry }
     }
@@ -193,7 +204,10 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
     }
 
     pub fn cached_server_info(&self) -> Option<McpServerInfo> {
-        load_cached_codex_apps_server_info(self)
+        match self.entry.disk_cache {
+            ConnectorRuntimeDiskCache::Enabled => load_cached_codex_apps_server_info(self),
+            ConnectorRuntimeDiskCache::Disabled => None,
+        }
     }
 
     fn tools_cache_path(&self) -> PathBuf {
@@ -215,12 +229,20 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
         server_info: &McpServerInfo,
         tools: Vec<T>,
     ) -> Arc<ConnectorRuntimeSnapshot<T>> {
-        self.publish_runtime_if_newest_accepted_with(
-            ticket,
-            server_info,
-            tools,
-            persist_codex_apps_cache,
-        )
+        match self.entry.disk_cache {
+            ConnectorRuntimeDiskCache::Enabled => self.publish_runtime_if_newest_accepted_with(
+                ticket,
+                server_info,
+                tools,
+                persist_codex_apps_cache,
+            ),
+            ConnectorRuntimeDiskCache::Disabled => self.publish_runtime_if_newest_accepted_with(
+                ticket,
+                server_info,
+                tools,
+                |_, _, _| {},
+            ),
+        }
     }
 
     fn publish_runtime_if_newest_accepted_with(
@@ -300,21 +322,34 @@ pub struct ConnectorRuntimeFetchTicket {
 /// All live state owned by one connector identity.
 struct ConnectorRuntimeEntry<T: ConnectorRuntimePayload> {
     identity: ConnectorRuntimeIdentity,
+    disk_cache: ConnectorRuntimeDiskCache,
     current_snapshot: ArcSwapOption<ConnectorRuntimeSnapshot<T>>,
     next_fetch_generation: AtomicU64,
     last_accepted_generation: Mutex<u64>,
 }
 
 impl<T: ConnectorRuntimePayload> ConnectorRuntimeEntry<T> {
-    fn new(identity: ConnectorRuntimeIdentity) -> Self {
-        let current_snapshot = load_cached_connector_runtime_for_identity(&identity).map(Arc::new);
+    fn new(identity: ConnectorRuntimeIdentity, disk_cache: ConnectorRuntimeDiskCache) -> Self {
+        let current_snapshot = match disk_cache {
+            ConnectorRuntimeDiskCache::Enabled => {
+                load_cached_connector_runtime_for_identity(&identity).map(Arc::new)
+            }
+            ConnectorRuntimeDiskCache::Disabled => None,
+        };
         Self {
             identity,
+            disk_cache,
             current_snapshot: ArcSwapOption::from(current_snapshot),
             next_fetch_generation: AtomicU64::new(0),
             last_accepted_generation: Mutex::new(0),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum ConnectorRuntimeDiskCache {
+    Enabled,
+    Disabled,
 }
 
 /// Everything that decides whether two connector runtime clients can share a snapshot.
