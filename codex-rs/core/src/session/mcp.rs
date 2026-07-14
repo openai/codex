@@ -334,7 +334,11 @@ impl Session {
         } = mcp_projection;
         let mcp_config = Arc::new(mcp_config);
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-        let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+        let mcp_servers = if self.enabled(Feature::ToolFree) {
+            HashMap::new()
+        } else {
+            effective_mcp_servers(&mcp_config, auth.as_ref())
+        };
         let environment_manager = self.services.turn_environments.environment_manager();
         // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
         // values can be used without falling back to the legacy host cwd.

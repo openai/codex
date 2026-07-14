@@ -1,6 +1,7 @@
 use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -21,6 +22,9 @@ pub(crate) async fn queue_strict_refresh(
             .get_thread(thread_id)
             .await
             .map_err(|err| io::Error::other(format!("failed to load thread {thread_id}: {err}")))?;
+        if thread.enabled(Feature::ToolFree) {
+            continue;
+        }
         let config = build_refresh_config(thread.as_ref(), config_manager).await?;
         refreshes.push((thread_id, thread, config));
     }
@@ -42,6 +46,9 @@ pub(crate) async fn queue_best_effort_refresh(
                 continue;
             }
         };
+        if thread.enabled(Feature::ToolFree) {
+            continue;
+        }
         let config = match build_refresh_config(thread.as_ref(), config_manager).await {
             Ok(config) => config,
             Err(err) => {

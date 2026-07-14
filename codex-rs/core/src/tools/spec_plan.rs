@@ -173,6 +173,9 @@ fn build_tool_specs_and_registry(
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
     let turn_context = step_context.turn.as_ref();
+    if turn_context.config.features.enabled(Feature::ToolFree) {
+        return build_model_visible_specs_and_registry(turn_context, PlannedTools::default());
+    }
     let ToolRouterParams {
         mcp_tools,
         deferred_mcp_tools,

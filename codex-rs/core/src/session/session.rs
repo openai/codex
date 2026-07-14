@@ -689,7 +689,11 @@ impl Session {
                 )
                 .await;
             let mcp_config = &mcp_projection.config;
-            let mcp_servers = codex_mcp::effective_mcp_servers(mcp_config, auth.as_ref());
+            let mcp_servers = if config_for_mcp.features.enabled(Feature::ToolFree) {
+                HashMap::new()
+            } else {
+                codex_mcp::effective_mcp_servers(mcp_config, auth.as_ref())
+            };
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(mcp_config);
             (auth, mcp_projection, mcp_servers, tool_plugin_provenance)
         }

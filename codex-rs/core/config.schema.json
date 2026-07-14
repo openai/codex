@@ -677,6 +677,9 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_free": {
+              "type": "boolean"
+            },
             "tool_search": {
               "type": "boolean"
             },
@@ -5054,6 +5057,9 @@
           "$ref": "#/definitions/FeatureToml_for_TokenBudgetConfigToml"
         },
         "tool_call_mcp_elicitation": {
+          "type": "boolean"
+        },
+        "tool_free": {
           "type": "boolean"
         },
         "tool_search": {
