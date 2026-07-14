@@ -302,7 +302,7 @@ If migrating a legacy Pro slug, make the mode change explicit and evaluate it se
 
 ## Optional: Programmatic Tool Calling
 
-Programmatic Tool Calling is not a required part of moving to GPT-5.6. Add it only when code can reduce large structured intermediate results before they return to model context.
+Programmatic Tool Calling is not a required part of moving to GPT-5.6. Consider it for bounded workflows where code can process several tool results or large intermediate outputs and return a much smaller structured result. Multiple, parallel, or dependent calls alone do not justify it.
 
 Good candidates:
 
@@ -336,7 +336,7 @@ Request-shape requirements:
 
 Do not nest `programmatic_tool_calling` under another `tools` property. When enabled, the host must handle `program`, program-issued `function_call`, `function_call_output`, and `program_output` items. Preserve the original `call_id` and `caller` when returning function results.
 
-Constrain the stage, eligible read-only tools, output schema, retry limit, and handoff back to direct judgment. Validate the final user-visible answer; a correct program result can still become an incorrect final answer.
+Constrain the stage, eligible read-only tools, output schema, retry limit, and handoff back to direct judgment. Test both the `program_output` item and final assistant `message`; a program can return the correct records while the message omits a required field, citation, or caveat.
 
 ## Optional: multi-agent beta
 
@@ -359,20 +359,21 @@ After the model and API baseline is working, run representative traces before ed
 
 For GPT-5.6, prefer:
 
-- shorter, outcome-oriented prompts;
+- leaner, outcome-oriented prompts that remove repeated scaffolding while preserving product requirements;
 - explicit success criteria, dependencies, stopping conditions, and completion boundaries;
 - preserved user-provided values;
 - decision criteria for implicit choices instead of universal defaults or keyword maps;
 - explicit autonomy and permission boundaries;
 - explicit tool routing, resource links, breadcrumbs, and expected tool choice;
+- `text.verbosity` for the default level of detail, with prompt instructions for required task-specific content;
 - staged plans, current-layer awareness, and concise handoffs for long work;
 - real validation before declaring completion.
 
 Avoid:
 
-- generic `be brief`, `be thorough`, or `think step by step` instructions;
+- untested generic style or process instructions that do not change measured behavior;
 - blanket language instructions that can cause unwanted language switching;
-- repeating `ask first` until safe local work becomes blocked;
+- repeating approval warnings throughout the prompt instead of keeping one clear autonomy policy;
 - giant prompt rewrites that make the source of a regression impossible to identify;
 - telling the model to minimize tool loops when correctness, evidence, or required validation needs more work.
 
