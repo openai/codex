@@ -87,6 +87,11 @@ fn gpt_5_6_bedrock_model(
     priority: i32,
 ) -> ModelInfo {
     let openai_model = bundled_openai_model(openai_slug);
+    let ultra_reasoning_effort = openai_model
+        .supported_reasoning_levels
+        .iter()
+        .find(|preset| preset.effort == ReasoningEffort::Ultra)
+        .cloned();
     let mut model = gpt_5_bedrock_model(
         GPT_5_5_OPENAI_MODEL_ID,
         bedrock_slug,
@@ -101,6 +106,9 @@ fn gpt_5_6_bedrock_model(
             effort: ReasoningEffort::Max,
             description: "Maximum reasoning depth for the hardest problems".to_string(),
         });
+    model
+        .supported_reasoning_levels
+        .extend(ultra_reasoning_effort);
     model
 }
 
@@ -165,32 +173,43 @@ mod tests {
     }
 
     #[test]
-    fn gpt_5_6_bedrock_models_use_variant_metadata_and_max_reasoning_effort() {
+    fn gpt_5_6_bedrock_models_use_variant_metadata_and_reasoning_efforts() {
         let catalog = static_model_catalog();
         let gpt_5_5 = catalog
             .models
             .iter()
             .find(|model| model.slug == AMAZON_BEDROCK_GPT_5_5_MODEL_ID)
             .expect("Bedrock catalog should include GPT-5.5");
+        let max_reasoning_effort = ReasoningEffortPreset {
+            effort: ReasoningEffort::Max,
+            description: "Maximum reasoning depth for the hardest problems".to_string(),
+        };
+        let ultra_reasoning_effort = ReasoningEffortPreset {
+            effort: ReasoningEffort::Ultra,
+            description: "Maximum reasoning with automatic task delegation".to_string(),
+        };
 
-        for (openai_slug, slug, display_name, priority) in [
+        for (openai_slug, slug, display_name, priority, additional_reasoning_efforts) in [
             (
                 GPT_5_6_SOL_OPENAI_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID,
                 "GPT-5.6 Sol",
                 0,
+                vec![max_reasoning_effort.clone(), ultra_reasoning_effort.clone()],
             ),
             (
                 GPT_5_6_TERRA_OPENAI_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
                 "GPT-5.6 Terra",
                 1,
+                vec![max_reasoning_effort.clone(), ultra_reasoning_effort],
             ),
             (
                 GPT_5_6_LUNA_OPENAI_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
                 "GPT-5.6 Luna",
                 2,
+                vec![max_reasoning_effort],
             ),
         ] {
             let openai_model = bundled_openai_model(openai_slug);
@@ -202,10 +221,7 @@ mod tests {
             expected.priority = priority;
             expected
                 .supported_reasoning_levels
-                .push(ReasoningEffortPreset {
-                    effort: ReasoningEffort::Max,
-                    description: "Maximum reasoning depth for the hardest problems".to_string(),
-                });
+                .extend(additional_reasoning_efforts);
 
             assert_eq!(
                 catalog.models.iter().find(|model| model.slug == slug),
