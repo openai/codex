@@ -956,6 +956,13 @@ client_request_definitions! {
         serialization: global_shared_read("environment"),
         response: v2::EnvironmentInfoResponse,
     },
+    #[experimental("environment/status")]
+    /// Reads the current status of a configured execution environment.
+    EnvironmentStatus => "environment/status" {
+        params: v2::EnvironmentStatusParams,
+        serialization: global_shared_read("environment"),
+        response: v2::EnvironmentStatusResponse,
+    },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
         params: v2::McpServerOauthLoginParams,

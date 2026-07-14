@@ -16,6 +16,7 @@ mod current_time;
 mod dynamic_tools;
 mod environment_add;
 mod environment_info;
+mod environment_status;
 mod exec_server_test_support;
 #[cfg(not(target_os = "windows"))]
 mod executor_mcp;

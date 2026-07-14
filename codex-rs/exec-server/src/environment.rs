@@ -297,19 +297,6 @@ impl EnvironmentManager {
         environment_ids
     }
 
-    /// Returns every configured environment id in deterministic order.
-    pub fn environment_ids(&self) -> Vec<String> {
-        let mut environment_ids = self
-            .environments
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        environment_ids.sort_unstable();
-        environment_ids
-    }
-
     /// Returns the local environment instance when one is configured.
     pub fn try_local_environment(&self) -> Option<Arc<Environment>> {
         self.local_environment.as_ref().map(Arc::clone)

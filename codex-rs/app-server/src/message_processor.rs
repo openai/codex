@@ -966,6 +966,9 @@ impl MessageProcessor {
             ClientRequest::EnvironmentInfo { params, .. } => {
                 self.environment_processor.environment_info(params).await
             }
+            ClientRequest::EnvironmentStatus { params, .. } => {
+                self.environment_processor.environment_status(params).await
+            }
             ClientRequest::FsReadFile { params, .. } => self
                 .fs_processor
                 .read_file(params)

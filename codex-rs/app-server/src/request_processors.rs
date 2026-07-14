@@ -64,6 +64,9 @@ use codex_app_server_protocol::EnvironmentAddResponse;
 use codex_app_server_protocol::EnvironmentInfoParams;
 use codex_app_server_protocol::EnvironmentInfoResponse;
 use codex_app_server_protocol::EnvironmentShellInfo;
+use codex_app_server_protocol::EnvironmentStatusKind;
+use codex_app_server_protocol::EnvironmentStatusParams;
+use codex_app_server_protocol::EnvironmentStatusResponse;
 use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
@@ -368,6 +371,7 @@ use codex_core_plugins::remote::RemotePluginShareContext as RemoteCatalogPluginS
 use codex_core_plugins::remote::RemotePluginShareSummary as RemoteCatalogPluginShareSummary;
 use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentObservedStatus;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
