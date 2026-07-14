@@ -31,6 +31,7 @@ use crate::provider::ProviderCapabilities;
 use auth::resolve_provider_auth;
 pub(crate) use catalog::static_model_catalog;
 use catalog::with_default_only_service_tier;
+pub use mantle::is_supported_amazon_bedrock_region;
 use mantle::runtime_base_url;
 
 /// Runtime provider for Amazon Bedrock's OpenAI-compatible Mantle endpoint.
