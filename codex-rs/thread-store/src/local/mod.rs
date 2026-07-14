@@ -344,6 +344,14 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { list_threads::list_threads(self, params).await })
     }
 
+    fn list_turns(&self, params: ListTurnsParams) -> ThreadStoreFuture<'_, TurnPage> {
+        Box::pin(LocalThreadStore::list_turns(self, params))
+    }
+
+    fn list_items(&self, params: ListItemsParams) -> ThreadStoreFuture<'_, ItemPage> {
+        Box::pin(LocalThreadStore::list_items(self, params))
+    }
+
     fn search_threads(
         &self,
         params: SearchThreadsParams,
