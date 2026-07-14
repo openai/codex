@@ -392,6 +392,7 @@ use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::complete_device_code_login;
 use codex_login::login_with_api_key;
+use codex_login::login_with_bedrock_api_key;
 use codex_login::oauth_client_id;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
@@ -506,6 +507,7 @@ use codex_app_server_protocol::ServerRequest;
 
 mod account_processor;
 mod apps_processor;
+mod bedrock_auth;
 mod catalog_processor;
 mod command_exec_processor;
 mod config_processor;
