@@ -25,6 +25,9 @@ impl ChatWidget {
     pub(super) fn on_image_generation_begin(&mut self) {
         self.record_visible_turn_activity();
         self.flush_answer_stream_with_separator();
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.ensure_status_indicator();
+        }
     }
 
     pub(super) fn on_image_generation_end(

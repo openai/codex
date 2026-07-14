@@ -26,6 +26,11 @@ impl ChatWidget {
             };
             self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
+            // Match newline-committed streaming behavior: once assistant output is ready to be
+            // committed into history, hide the inline status row so transcript content replaces it.
+            if cell.is_some() {
+                self.bottom_pane.hide_status_indicator();
+            }
             let deferred_history_cell =
                 if scrollback_reflow == crate::app_event::ConsolidationScrollbackReflow::Required {
                     cell

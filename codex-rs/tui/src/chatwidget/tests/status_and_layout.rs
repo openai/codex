@@ -1526,6 +1526,45 @@ async fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[tokio::test]
+async fn single_line_final_answer_hides_working_status_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    complete_user_message(&mut chat, "user-1", "count to 1");
+    chat.on_task_started();
+    complete_assistant_message(
+        &mut chat,
+        "msg-final-single-line",
+        "1",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(!chat.bottom_pane.status_indicator_visible());
+
+    let width: u16 = 40;
+    let vt_height: u16 = 10;
+    let ui_height = chat.desired_height(width);
+    let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
+    let backend = VT100Backend::new(width, vt_height);
+    let mut terminal = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    terminal.set_viewport_area(viewport);
+
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut terminal, lines)
+            .expect("insert history lines");
+    }
+
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw final answer");
+    assert_chatwidget_snapshot!(
+        "single_line_final_answer_hides_working_status",
+        normalize_snapshot_paths(terminal.backend().vt100().screen().contents())
+    );
+}
+
+#[tokio::test]
 async fn ctrl_c_interrupt_pauses_active_goal_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = start_active_goal_turn(&mut chat);
