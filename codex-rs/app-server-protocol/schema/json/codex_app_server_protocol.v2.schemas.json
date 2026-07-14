@@ -11236,6 +11236,38 @@
       ],
       "type": "object"
     },
+    "RawResponseCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Internal-only notification containing the exact usage from one upstream Responses API completion.",
+      "properties": {
+        "responseId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TokenUsageBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "responseId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "RawResponseCompletedNotification",
+      "type": "object"
+    },
     "RawResponseItemCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {

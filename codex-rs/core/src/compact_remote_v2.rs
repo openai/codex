@@ -325,6 +325,7 @@ async fn run_remote_compact_task_inner_impl(
 
 struct RemoteCompactionV2Output {
     compaction_output: ResponseItem,
+    response_id: String,
     token_usage: Option<TokenUsage>,
 }
 
@@ -385,6 +386,7 @@ async fn collect_compaction_output(
     let mut compaction_count = 0usize;
     let mut compaction_output = None;
     let mut saw_completed = false;
+    let mut completed_response_id = None;
     let mut completed_token_usage = None;
     while let Some(event) = stream.next().await {
         match event? {
@@ -397,8 +399,13 @@ async fn collect_compaction_output(
                     }
                 }
             }
-            ResponseEvent::Completed { token_usage, .. } => {
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+                ..
+            } => {
                 saw_completed = true;
+                completed_response_id = Some(response_id);
                 completed_token_usage = token_usage;
                 break;
             }
@@ -422,8 +429,12 @@ async fn collect_compaction_output(
     let Some(compaction_output) = compaction_output else {
         unreachable!("compaction output must exist when count is exactly one");
     };
+    let Some(response_id) = completed_response_id else {
+        unreachable!("response id must exist after response.completed");
+    };
     Ok(RemoteCompactionV2Output {
         compaction_output,
+        response_id,
         token_usage: completed_token_usage,
     })
 }
@@ -837,6 +848,7 @@ mod tests {
             .expect("compaction should be collected");
 
         assert_eq!(output.compaction_output, compaction);
+        assert_eq!(output.response_id, "resp-compact");
         assert_eq!(
             output.token_usage,
             Some(TokenUsage {

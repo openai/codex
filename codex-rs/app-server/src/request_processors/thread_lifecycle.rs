@@ -316,7 +316,11 @@ pub(super) async fn ensure_listener_task_running(
                         thread_state.track_current_turn_event(&event.id, &event.msg);
                         thread_state.experimental_raw_events
                     };
-                    if matches!(&event.msg, EventMsg::RawResponseItem(_)) && !raw_events_enabled {
+                    if matches!(
+                        &event.msg,
+                        EventMsg::RawResponseItem(_) | EventMsg::RawResponseCompleted(_)
+                    ) && !raw_events_enabled
+                    {
                         continue;
                     }
                     let subscribed_connection_ids = thread_state_manager

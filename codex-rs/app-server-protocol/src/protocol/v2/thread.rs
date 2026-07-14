@@ -1375,6 +1375,18 @@ pub struct ThreadTokenUsageUpdatedNotification {
     pub token_usage: ThreadTokenUsage,
 }
 
+/// Internal-only notification containing the exact usage from one upstream
+/// Responses API completion.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RawResponseCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub response_id: String,
+    pub usage: Option<TokenUsageBreakdown>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

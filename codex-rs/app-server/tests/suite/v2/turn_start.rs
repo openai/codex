@@ -36,6 +36,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::RawResponseCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -51,6 +52,7 @@ use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnItemsView;
@@ -760,6 +762,104 @@ async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
     assert_eq!(
         response_mock.single_request().body_json()["service_tier"],
         json!(service_tier_id)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_emits_raw_response_completed_with_upstream_usage() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp-1",
+                "usage": {
+                    "input_tokens": 30,
+                    "input_tokens_details": { "cached_tokens": 11 },
+                    "output_tokens": 7,
+                    "output_tokens_details": { "reasoning_tokens": 3 },
+                    "total_tokens": 37
+                }
+            }
+        }),
+    ]);
+    responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+    write_models_cache(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            experimental_raw_events: true,
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("rawResponse/completed"),
+    )
+    .await??;
+    let notification: codex_app_server_protocol::ServerNotification = notification.try_into()?;
+    let codex_app_server_protocol::ServerNotification::RawResponseCompleted(notification) =
+        notification
+    else {
+        anyhow::bail!("expected rawResponse/completed notification");
+    };
+
+    assert_eq!(
+        notification,
+        RawResponseCompletedNotification {
+            thread_id: thread.id,
+            turn_id: turn.id,
+            response_id: "resp-1".to_string(),
+            usage: Some(TokenUsageBreakdown {
+                total_tokens: 37,
+                input_tokens: 30,
+                cached_input_tokens: 11,
+                output_tokens: 7,
+                reasoning_output_tokens: 3,
+            }),
+        }
     );
 
     Ok(())

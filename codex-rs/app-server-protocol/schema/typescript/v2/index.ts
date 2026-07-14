@@ -343,6 +343,7 @@ export type { RateLimitResetCreditsSummary } from "./RateLimitResetCreditsSummar
 export type { RateLimitResetType } from "./RateLimitResetType";
 export type { RateLimitSnapshot } from "./RateLimitSnapshot";
 export type { RateLimitWindow } from "./RateLimitWindow";
+export type { RawResponseCompletedNotification } from "./RawResponseCompletedNotification";
 export type { RawResponseItemCompletedNotification } from "./RawResponseItemCompletedNotification";
 export type { ReasoningEffortOption } from "./ReasoningEffortOption";
 export type { ReasoningSummaryPartAddedNotification } from "./ReasoningSummaryPartAddedNotification";
