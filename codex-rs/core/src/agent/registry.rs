@@ -38,7 +38,6 @@ pub(crate) struct AgentMetadata {
     pub(crate) agent_path: Option<AgentPath>,
     pub(crate) agent_nickname: Option<String>,
     pub(crate) agent_role: Option<String>,
-    pub(crate) last_task_message: Option<String>,
 }
 
 fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
@@ -164,34 +163,6 @@ impl AgentRegistry {
             })
             .cloned()
             .collect()
-    }
-
-    pub(crate) fn update_last_task_message(&self, thread_id: ThreadId, last_task_message: String) {
-        let mut active_agents = self
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(metadata) = active_agents
-            .agent_tree
-            .values_mut()
-            .find(|metadata| metadata.agent_id == Some(thread_id))
-        {
-            metadata.last_task_message = Some(last_task_message);
-        }
-    }
-
-    pub(crate) fn clear_last_task_message(&self, thread_id: ThreadId) {
-        let mut active_agents = self
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(metadata) = active_agents
-            .agent_tree
-            .values_mut()
-            .find(|metadata| metadata.agent_id == Some(thread_id))
-        {
-            metadata.last_task_message = None;
-        }
     }
 
     fn register_spawned_thread(&self, agent_metadata: AgentMetadata) {

@@ -50,8 +50,6 @@ pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
 use self::residency::V2Residency;
 
-const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
-
 mod execution;
 mod legacy;
 mod residency;
@@ -82,7 +80,6 @@ pub(crate) struct LiveAgent {
 pub(crate) struct ListedAgent {
     pub(crate) agent_name: String,
     pub(crate) agent_status: AgentStatus,
-    pub(crate) last_task_message: Option<String>,
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -156,23 +153,12 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         input: Vec<UserInput>,
     ) -> CodexResult<String> {
-        let last_task_message = non_empty_task_message(render_input_preview(&input));
-        let result = self
-            .handle_thread_request_result(
-                agent_id,
-                state,
-                state.send_op(agent_id, input.into()).await,
-            )
-            .await;
-        if result.is_ok() {
-            match last_task_message {
-                Some(last_task_message) => self
-                    .state
-                    .update_last_task_message(agent_id, last_task_message),
-                None => self.state.clear_last_task_message(agent_id),
-            }
-        }
-        result
+        self.handle_thread_request_result(
+            agent_id,
+            state,
+            state.send_op(agent_id, input.into()).await,
+        )
+        .await
     }
 
     pub(crate) async fn send_inter_agent_communication(
@@ -211,7 +197,6 @@ impl AgentControl {
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
     ) -> CodexResult<String> {
-        let last_task_message = last_task_message_from_communication(&communication);
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
         let result = self
@@ -232,14 +217,6 @@ impl AgentControl {
                 &communication,
                 agent_id,
             );
-        }
-        if result.is_ok() {
-            match last_task_message {
-                Some(last_task_message) => self
-                    .state
-                    .update_last_task_message(agent_id, last_task_message),
-                None => self.state.clear_last_task_message(agent_id),
-            }
         }
         result
     }
@@ -417,7 +394,6 @@ impl AgentControl {
             agents.push(ListedAgent {
                 agent_name: root_path.to_string(),
                 agent_status: root_thread.agent_status().await,
-                last_task_message: Some(ROOT_LAST_TASK_MESSAGE.to_string()),
             });
         }
 
@@ -440,11 +416,9 @@ impl AgentControl {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| thread_id.to_string());
-            let last_task_message = metadata.last_task_message.clone();
             agents.push(ListedAgent {
                 agent_name,
                 agent_status: thread.agent_status().await,
-                last_task_message,
             });
         }
 
@@ -562,7 +536,6 @@ impl AgentControl {
             agent_path,
             agent_nickname,
             agent_role,
-            last_task_message: None,
         })
     }
 
@@ -785,17 +758,6 @@ pub(crate) fn render_input_preview(input: &[UserInput]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn last_task_message_from_communication(communication: &InterAgentCommunication) -> Option<String> {
-    if communication.encrypted_content.is_some() {
-        return None;
-    }
-    non_empty_task_message(communication.content.clone())
-}
-
-fn non_empty_task_message(message: String) -> Option<String> {
-    (!message.is_empty()).then_some(message)
 }
 
 fn thread_spawn_depth(session_source: &SessionSource) -> Option<i32> {
