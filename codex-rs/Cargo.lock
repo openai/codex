@@ -3386,6 +3386,7 @@ dependencies = [
  "codex-utils-path-uri",
  "codex-utils-plugins",
  "futures",
+ "lru 0.16.3",
  "pretty_assertions",
  "regex-lite",
  "rmcp",

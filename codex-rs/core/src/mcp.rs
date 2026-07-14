@@ -18,6 +18,7 @@ use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
+use codex_mcp::McpToolCatalogCache;
 use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::configured_mcp_servers;
@@ -51,6 +52,7 @@ pub struct McpManager {
     plugins_manager: Arc<PluginsManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
+    tool_catalog_cache: McpToolCatalogCache,
 }
 
 impl McpManager {
@@ -72,11 +74,16 @@ impl McpManager {
             plugins_manager,
             extensions,
             codex_apps_tools_cache,
+            tool_catalog_cache: McpToolCatalogCache::default(),
         }
     }
 
     pub fn codex_apps_tools_cache(&self) -> ConnectorRuntimeManager<ToolInfo> {
         self.codex_apps_tools_cache.clone()
+    }
+
+    pub fn tool_catalog_cache(&self) -> McpToolCatalogCache {
+        self.tool_catalog_cache.clone()
     }
 
     /// Returns the MCP config after applying compatibility built-ins and

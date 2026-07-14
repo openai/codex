@@ -16,6 +16,7 @@ use codex_mcp::EffectiveMcpServer;
 use codex_mcp::ElicitationRequestRouter;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
+use codex_mcp::McpToolCatalogCache;
 use codex_mcp::ToolPluginProvenance;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -100,6 +101,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         ),
         home.path().to_path_buf(),
         CodexAppsToolsCache::default(),
+        McpToolCatalogCache::default(),
         codex_mcp::codex_apps_tools_cache_key(Some(&expected_auth)),
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),

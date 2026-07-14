@@ -169,7 +169,7 @@ enum McpCallEvent {
 
 const REMOTE_MCP_ENVIRONMENT: &str = "remote";
 
-fn remote_aware_environment_id() -> String {
+pub(super) fn remote_aware_environment_id() -> String {
     if is_remote_test_environment() {
         REMOTE_MCP_ENVIRONMENT.to_string()
     } else {
@@ -184,7 +184,7 @@ fn remote_aware_environment_id() -> String {
 /// would be meaningless to the process that actually launches the server. When
 /// the remote test environment is active, copy the binary into the executor
 /// container and return that in-container path instead.
-fn remote_aware_stdio_server_bin() -> anyhow::Result<String> {
+pub(super) fn remote_aware_stdio_server_bin() -> anyhow::Result<String> {
     let bin = stdio_server_bin()?;
     let Some(container_name) = test_docker_container_name() else {
         return Ok(bin);

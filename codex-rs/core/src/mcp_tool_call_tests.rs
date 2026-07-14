@@ -1454,6 +1454,7 @@ async fn host_owned_codex_apps_manager(
         ),
         turn_context.config.codex_home.to_path_buf(),
         session.services.mcp_manager.codex_apps_tools_cache(),
+        session.services.mcp_manager.tool_catalog_cache(),
         codex_connectors::connector_runtime_context_key(auth.as_ref()),
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),

@@ -305,6 +305,7 @@ pub async fn read_mcp_resource(
     auth: Option<&CodexAuth>,
     runtime_context: McpRuntimeContext,
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
+    tool_catalog_cache: crate::McpToolCatalogCache,
     server: &str,
     uri: &str,
 ) -> anyhow::Result<ReadResourceResult> {
@@ -325,6 +326,7 @@ pub async fn read_mcp_resource(
         runtime_context,
         config.codex_home.clone(),
         codex_apps_tools_cache,
+        tool_catalog_cache,
         connector_runtime_context_key(auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
@@ -361,6 +363,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     submit_id: String,
     runtime_context: McpRuntimeContext,
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
+    tool_catalog_cache: crate::McpToolCatalogCache,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
@@ -403,6 +406,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         runtime_context,
         config.codex_home.clone(),
         codex_apps_tools_cache,
+        tool_catalog_cache,
         connector_runtime_context_key(auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
@@ -662,8 +666,12 @@ async fn collect_mcp_server_status_snapshot_from_manager(
     server_names: Vec<String>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
-    let (tools, resources, resource_templates) = tokio::join!(
-        mcp_connection_manager.list_all_tools(),
+    let ((server_infos, tools), resources, resource_templates) = tokio::join!(
+        async {
+            let server_infos = mcp_connection_manager.list_available_server_infos().await;
+            let tools = mcp_connection_manager.list_all_tools().await;
+            (server_infos, tools)
+        },
         async {
             if detail.include_resources() {
                 mcp_connection_manager.list_all_resources(|_| true).await
@@ -681,7 +689,6 @@ async fn collect_mcp_server_status_snapshot_from_manager(
             }
         },
     );
-    let server_infos = mcp_connection_manager.list_available_server_infos().await;
 
     let mut tools_by_server = HashMap::<String, HashMap<String, Tool>>::new();
     for tool_info in tools {

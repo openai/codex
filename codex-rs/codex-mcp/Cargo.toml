@@ -29,6 +29,7 @@ codex-rmcp-client = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 futures = { workspace = true }
+lru = { workspace = true }
 regex-lite = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
 serde = { workspace = true, features = ["derive"] }
