@@ -1483,7 +1483,11 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
             "x-codex-secondary-used-percent": "87.5",
             "x-codex-primary-over-secondary-limit-percent": "95.0",
             "x-codex-primary-window-minutes": "15",
-            "x-codex-secondary-window-minutes": "60"
+            "x-codex-secondary-window-minutes": "60",
+            "x-codex-credits-has-credits": "true",
+            "x-codex-credits-unlimited": "false",
+            "x-codex-credits-balance": "",
+            "x-codex-rate-limit-reached-type": "workspace_member_usage_limit_reached"
         }
     });
 
@@ -1543,10 +1547,15 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
                     "window_minutes": 60,
                     "resets_at": null
                 },
-                "credits": null,
+                "credits": {
+                    "has_credits": true,
+                    "unlimited": false,
+                    "balance": null
+                },
                 "individual_limit": null,
+                "spend_control_reached": null,
                 "plan_type": null,
-                "rate_limit_reached_type": null
+                "rate_limit_reached_type": "workspace_member_usage_limit_reached"
             }
         })
     );
@@ -1556,7 +1565,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
         unreachable!();
     };
     assert!(
-        error_event.message.to_lowercase().contains("usage limit"),
+        error_event.message.contains("spend cap set by the owner"),
         "unexpected error message for submission {submission_id}: {}",
         error_event.message
     );

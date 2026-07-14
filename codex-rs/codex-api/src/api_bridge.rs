@@ -86,12 +86,18 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                     if let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body_text) {
                         if err.error.error_type.as_deref() == Some("usage_limit_reached") {
                             let limit_id = extract_header(headers.as_ref(), ACTIVE_LIMIT_HEADER);
-                            let rate_limits = headers.as_ref().and_then(|map| {
-                                parse_rate_limit_for_limit(map, limit_id.as_deref())
-                            });
                             let promo_message = headers.as_ref().and_then(parse_promo_message);
                             let rate_limit_reached_type =
                                 headers.as_ref().and_then(parse_rate_limit_reached_type);
+                            let rate_limits = headers
+                                .as_ref()
+                                .and_then(|map| {
+                                    parse_rate_limit_for_limit(map, limit_id.as_deref())
+                                })
+                                .map(|mut snapshot| {
+                                    snapshot.rate_limit_reached_type = rate_limit_reached_type;
+                                    snapshot
+                                });
                             let resets_at = err
                                 .error
                                 .resets_at

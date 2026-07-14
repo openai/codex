@@ -1,5 +1,6 @@
 use super::*;
 use base64::Engine;
+use codex_protocol::protocol::RateLimitReachedType;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -220,6 +221,70 @@ fn map_api_error_does_not_fallback_limit_name_to_limit_id() {
             .and_then(|snapshot| snapshot.limit_name.as_deref()),
         None
     );
+}
+
+#[test]
+fn map_api_error_copies_rate_limit_reached_type_to_usage_limit_snapshot() {
+    for (active_limit, expected_limit_id) in [(None, "codex"), (Some("codex_other"), "codex_other")]
+    {
+        let mut headers = HeaderMap::new();
+        if let Some(active_limit) = active_limit {
+            headers.insert(
+                ACTIVE_LIMIT_HEADER,
+                http::HeaderValue::from_static(active_limit),
+            );
+        }
+        for (name, value) in [
+            ("x-codex-credits-has-credits", "true"),
+            ("x-codex-credits-unlimited", "false"),
+            ("x-codex-credits-balance", ""),
+            (
+                "x-codex-rate-limit-reached-type",
+                "workspace_member_usage_limit_reached",
+            ),
+        ] {
+            headers.insert(name, http::HeaderValue::from_static(value));
+        }
+        let body = serde_json::json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "plan_type": "pro",
+            }
+        })
+        .to_string();
+
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::TOO_MANY_REQUESTS,
+            url: Some("http://example.com/v1/responses".to_string()),
+            headers: Some(headers),
+            body: Some(body),
+        }));
+
+        let CodexErr::UsageLimitReached(usage_limit) = err else {
+            panic!("expected CodexErr::UsageLimitReached, got {err:?}");
+        };
+        assert_eq!(
+            usage_limit.rate_limit_reached_type,
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
+        );
+        let snapshot = usage_limit
+            .rate_limits
+            .as_ref()
+            .expect("usage limit snapshot");
+        assert_eq!(snapshot.limit_id.as_deref(), Some(expected_limit_id));
+        assert_eq!(
+            snapshot.rate_limit_reached_type,
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
+        );
+        assert_eq!(
+            snapshot.credits.as_ref().map(|credits| (
+                credits.has_credits,
+                credits.unlimited,
+                credits.balance.as_deref()
+            )),
+            Some((true, false, None))
+        );
+    }
 }
 
 #[test]

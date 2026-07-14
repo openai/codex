@@ -490,17 +490,12 @@ impl Client {
             .rate_limit_reached_type
             .flatten()
             .and_then(|details| Self::map_rate_limit_reached_type(details.kind));
-        let individual_limit = payload
-            .spend_control
-            .flatten()
-            .and_then(|details| details.individual_limit.flatten())
-            .map(|details| Self::map_individual_limit(*details));
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
             Some("codex".to_string()),
             /*limit_name*/ None,
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
-            individual_limit,
+            payload.spend_control.flatten().map(|details| *details),
             plan_type,
             rate_limit_reached_type,
         )];
@@ -511,7 +506,7 @@ impl Client {
                     Some(details.limit_name),
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
                     /*credits*/ None,
-                    /*individual_limit*/ None,
+                    /*spend_control*/ None,
                     plan_type,
                     /*rate_limit_reached_type*/ None,
                 )
@@ -525,7 +520,7 @@ impl Client {
         limit_name: Option<String>,
         rate_limit: Option<crate::types::RateLimitStatusDetails>,
         credits: Option<crate::types::CreditStatusDetails>,
-        individual_limit: Option<SpendControlLimitSnapshot>,
+        spend_control: Option<codex_backend_openapi_models::models::SpendControlStatusDetails>,
         plan_type: Option<AccountPlanType>,
         rate_limit_reached_type: Option<RateLimitReachedType>,
     ) -> RateLimitSnapshot {
@@ -536,6 +531,10 @@ impl Client {
             ),
             None => (None, None),
         };
+        let spend_control_reached = spend_control.as_ref().map(|details| details.reached);
+        let individual_limit = spend_control
+            .and_then(|details| details.individual_limit.flatten())
+            .map(|details| Self::map_individual_limit(*details));
         RateLimitSnapshot {
             limit_id,
             limit_name,
@@ -543,6 +542,7 @@ impl Client {
             secondary,
             credits: Self::map_credits(credits),
             individual_limit,
+            spend_control_reached,
             plan_type,
             rate_limit_reached_type,
         }
@@ -767,6 +767,7 @@ mod tests {
             })
         );
         assert_eq!(snapshots[0].plan_type, Some(AccountPlanType::Pro));
+        assert_eq!(snapshots[0].spend_control_reached, Some(false));
         assert_eq!(
             snapshots[0].rate_limit_reached_type,
             Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted)
@@ -789,6 +790,7 @@ mod tests {
         );
         assert_eq!(snapshots[1].credits, None);
         assert_eq!(snapshots[1].individual_limit, None);
+        assert_eq!(snapshots[1].spend_control_reached, None);
         assert_eq!(snapshots[1].plan_type, Some(AccountPlanType::Pro));
         assert_eq!(snapshots[1].rate_limit_reached_type, None);
     }
@@ -818,6 +820,29 @@ mod tests {
     }
 
     #[test]
+    fn usage_payload_maps_spend_control_reached_without_individual_limit() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::EnterpriseCbpUsageBased,
+            rate_limit: None,
+            additional_rate_limits: None,
+            credits: None,
+            spend_control: Some(Some(Box::new(
+                codex_backend_openapi_models::models::SpendControlStatusDetails {
+                    reached: true,
+                    individual_limit: None,
+                },
+            ))),
+            rate_limit_reached_type: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].spend_control_reached, Some(true));
+        assert_eq!(snapshots[0].individual_limit, None);
+    }
+
+    #[test]
     fn preferred_snapshot_selection_matches_get_rate_limits_behavior() {
         let snapshots = [
             RateLimitSnapshot {
@@ -831,6 +856,7 @@ mod tests {
                 secondary: None,
                 credits: None,
                 individual_limit: None,
+                spend_control_reached: None,
                 plan_type: Some(AccountPlanType::Pro),
                 rate_limit_reached_type: None,
             },
@@ -845,6 +871,7 @@ mod tests {
                 secondary: None,
                 credits: None,
                 individual_limit: None,
+                spend_control_reached: None,
                 plan_type: Some(AccountPlanType::Pro),
                 rate_limit_reached_type: None,
             },
