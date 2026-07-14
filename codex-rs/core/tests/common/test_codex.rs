@@ -629,6 +629,7 @@ impl TestCodexBuilder {
             &config,
             auth_manager.clone(),
             codex_core::build_models_manager(&config, auth_manager),
+            codex_core::CodexAppsToolsCache::default(),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
             Arc::clone(&self.extensions),

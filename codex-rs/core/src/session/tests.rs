@@ -7734,6 +7734,7 @@ async fn plugin_availability_change_reuses_the_mcp_manager() {
     session.services.mcp_manager = Arc::new(McpManager::new_with_extensions(
         Arc::clone(&session.services.plugins_manager),
         registry,
+        crate::CodexAppsToolsCache::default(),
     ));
     let session = Arc::new(session);
     session

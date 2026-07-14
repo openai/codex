@@ -58,6 +58,7 @@ impl McpManager {
         Self::new_with_extensions(
             plugins_manager,
             codex_extension_api::empty_extension_registry(),
+            ConnectorRuntimeManager::default(),
         )
     }
 
@@ -65,11 +66,12 @@ impl McpManager {
     pub fn new_with_extensions(
         plugins_manager: Arc<PluginsManager>,
         extensions: Arc<ExtensionRegistry<Config>>,
+        codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     ) -> Self {
         Self {
             plugins_manager,
             extensions,
-            codex_apps_tools_cache: ConnectorRuntimeManager::default(),
+            codex_apps_tools_cache,
         }
     }
 

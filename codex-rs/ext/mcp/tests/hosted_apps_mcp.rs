@@ -120,6 +120,7 @@ async fn later_extension_can_remove_same_name_registration() -> TestResult {
     let manager = McpManager::new_with_extensions(
         Arc::new(PluginsManager::new(config.codex_home.to_path_buf())),
         Arc::new(builder.build()),
+        codex_core::CodexAppsToolsCache::default(),
     );
 
     let servers = manager.effective_servers(&config, Some(&auth)).await;
@@ -180,6 +181,7 @@ fn installed_manager(config: &Config) -> McpManager {
     McpManager::new_with_extensions(
         Arc::new(PluginsManager::new(config.codex_home.to_path_buf())),
         Arc::new(builder.build()),
+        codex_core::CodexAppsToolsCache::default(),
     )
 }
 
