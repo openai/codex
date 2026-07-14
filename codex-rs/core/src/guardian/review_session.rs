@@ -1414,6 +1414,7 @@ mod tests {
             auto_review: Some(AutoReviewMessages {
                 policy: Some("Use the catalog Guardian policy.".to_string()),
             }),
+            permissions: None,
         };
 
         let guardian_config = build_guardian_review_session_config(
@@ -1441,6 +1442,7 @@ mod tests {
             auto_review: Some(AutoReviewMessages {
                 policy: Some(String::new()),
             }),
+            permissions: None,
         };
 
         let guardian_config = build_guardian_review_session_config(

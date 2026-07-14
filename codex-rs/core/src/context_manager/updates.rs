@@ -46,6 +46,10 @@ fn build_permissions_update_item(
                     .model_messages
                     .as_ref()
                     .and_then(|messages| messages.approvals.as_ref()),
+                next.model_info
+                    .model_messages
+                    .as_ref()
+                    .and_then(|messages| messages.permissions.as_ref()),
             ),
             exec_policy,
             #[allow(deprecated)]

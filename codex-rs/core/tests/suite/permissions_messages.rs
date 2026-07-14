@@ -11,6 +11,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -52,6 +53,22 @@ fn model_with_approval_messages(
             on_request_auto_review: Some(on_request_auto_review.to_string()),
         }),
         auto_review: None,
+        permissions: None,
+    });
+    model
+}
+
+fn model_with_permission_messages(
+    slug: &str,
+    permissions: PermissionMessages,
+) -> codex_protocol::openai_models::ModelInfo {
+    let mut model = model_info_from_slug(slug);
+    model.model_messages = Some(ModelMessages {
+        instructions_template: None,
+        instructions_variables: None,
+        approvals: None,
+        auto_review: None,
+        permissions: Some(permissions),
     });
     model
 }
@@ -159,6 +176,128 @@ async fn model_change_appends_new_catalog_approval_message() -> Result<()> {
             .last()
             .is_some_and(|text| text.contains("model B approvals"))
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_permission_message_is_sent_initially_and_after_model_change() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+    let first_slug = "catalog-permissions-model-a";
+    let second_slug = "catalog-permissions-model-b";
+    let first = model_with_permission_messages(
+        first_slug,
+        PermissionMessages {
+            danger_full_access: None,
+            workspace_write: None,
+            read_only: Some("model A permissions: {{ network_access }}".to_string()),
+        },
+    );
+    let second = model_with_permission_messages(
+        second_slug,
+        PermissionMessages {
+            danger_full_access: None,
+            workspace_write: None,
+            read_only: Some("model B permissions: {{ network_access }}".to_string()),
+        },
+    );
+    let mut builder = test_codex()
+        .with_model(first_slug)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("read-only permission profile should be allowed");
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![first, second],
+            });
+        });
+    let test = builder.build(&server).await?;
+    submit_text_turn(&test, "first").await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            model: Some(second_slug.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    submit_text_turn(&test, "second").await?;
+
+    let permissions = permissions_texts(&req2.single_request());
+    assert_eq!(permissions.len(), 2);
+    assert!(permissions[0].contains("model A permissions: restricted"));
+    assert!(
+        permissions
+            .last()
+            .is_some_and(|text| text.contains("model B permissions: restricted"))
+    );
+    assert!(
+        permissions
+            .last()
+            .is_some_and(|text| text.contains("Approval policy is currently never"))
+    );
+    assert!(
+        !permissions
+            .iter()
+            .any(|text| text.contains("`sandbox_mode`"))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_catalog_permission_message_preserves_approval_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let model_slug = "empty-catalog-permissions-model";
+    let model = model_with_permission_messages(
+        model_slug,
+        PermissionMessages {
+            danger_full_access: None,
+            workspace_write: None,
+            read_only: Some(String::new()),
+        },
+    );
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("read-only permission profile should be allowed");
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    submit_text_turn(&test, "hello").await?;
+
+    let permissions = permissions_texts(&req.single_request());
+    assert_eq!(permissions.len(), 1);
+    assert!(permissions[0].contains("Approval policy is currently never"));
+    assert!(!permissions[0].contains("Filesystem sandboxing defines"));
+    assert!(!permissions[0].contains("`sandbox_mode`"));
     Ok(())
 }
 
@@ -692,7 +831,11 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let expected = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::OnRequest,
-        ApprovalPromptContext::new(test.config.approvals_reviewer, /*messages*/ None),
+        ApprovalPromptContext::new(
+            test.config.approvals_reviewer,
+            /*messages*/ None,
+            /*permission_messages*/ None,
+        ),
         &exec_policy,
         test.config.cwd.as_path(),
         /*exec_permission_approvals_enabled*/ false,
