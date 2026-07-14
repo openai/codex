@@ -683,21 +683,27 @@ For anything else, use this JSON schema:
 }"#
 }
 
+pub(super) const BUNDLED_GUARDIAN_POLICY: &str = include_str!("policy.md");
+pub(super) const BUNDLED_GUARDIAN_POLICY_TEMPLATE: &str = include_str!("policy_template.md");
+const TENANT_POLICY_CONFIG_PLACEHOLDER: &str = "{{ tenant_policy_config }}";
+
 /// Guardian policy prompt.
 ///
-/// Keep the prompt in a dedicated markdown file so reviewers can audit prompt
-/// changes directly without diffing through code. The output contract is
-/// appended from code so it stays near `guardian_output_schema()`.
+/// Keep the bundled fallback in a dedicated markdown file so reviewers can
+/// audit prompt changes directly without diffing through code. The output
+/// contract is appended from code so it stays near `guardian_output_schema()`.
 ///
 /// The template is intentionally separated from the default tenant policy
 /// configuration so workspace-managed overrides can keep the configurable
 /// section narrower than the full policy.
-pub(crate) fn guardian_policy_prompt() -> String {
-    guardian_policy_prompt_with_config(include_str!("policy.md"))
-}
-
-pub(crate) fn guardian_policy_prompt_with_config(tenant_policy_config: &str) -> String {
-    let template = include_str!("policy_template.md").trim_end();
-    let prompt = template.replace("{tenant_policy_config}", tenant_policy_config.trim());
+pub(super) fn guardian_policy_prompt_with_config_and_template(
+    tenant_policy_config: &str,
+    policy_template: &str,
+) -> String {
+    let template = policy_template.trim_end();
+    let prompt = template.replace(
+        TENANT_POLICY_CONFIG_PLACEHOLDER,
+        tenant_policy_config.trim(),
+    );
     format!("{prompt}\n\n{}\n", guardian_output_contract_prompt())
 }

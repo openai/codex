@@ -38,7 +38,7 @@ use tempfile::TempDir;
 async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let catalog_policy = "Use the catalog-provided Guardian policy.";
+    let catalog_template = "Catalog-provided Guardian template:\n{{ tenant_policy_config }}";
     let mut review_model = codex_models_manager::bundled_models_response()?
         .models
         .into_iter()
@@ -49,7 +49,8 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         .as_mut()
         .expect("auto-review model messages");
     model_messages.auto_review = Some(AutoReviewMessages {
-        policy: Some(catalog_policy.to_string()),
+        policy: None,
+        policy_template: Some(catalog_template.to_string()),
     });
 
     let tool_args = json!({
@@ -96,11 +97,13 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         })
         .expect("guardian startup prewarm request");
     assert_eq!(guardian_prewarm["generate"].as_bool(), Some(false));
-    assert!(
-        guardian_prewarm["instructions"]
-            .as_str()
-            .is_some_and(|instructions| instructions.contains(catalog_policy))
-    );
+    let guardian_instructions = guardian_prewarm["instructions"]
+        .as_str()
+        .expect("guardian instructions");
+    assert!(guardian_instructions.contains("Catalog-provided Guardian template:"));
+    assert!(guardian_instructions.contains("- Organization: default generic tenant."));
+    assert!(!guardian_instructions.contains("{{ tenant_policy_config }}"));
+    assert!(guardian_instructions.contains("final message must be strict JSON"));
     let guardian_thread_id = guardian_prewarm["client_metadata"]["thread_id"]
         .as_str()
         .expect("guardian thread id");
