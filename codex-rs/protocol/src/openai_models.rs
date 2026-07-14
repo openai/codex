@@ -518,6 +518,7 @@ pub struct ApprovalMessages {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct AutoReviewMessages {
     pub policy: Option<String>,
+    pub policy_template: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -773,6 +774,46 @@ mod tests {
             Some(ApprovalMessages {
                 on_request: Some(String::new()),
                 on_request_auto_review: None,
+            })
+        );
+    }
+
+    #[test]
+    fn auto_review_messages_preserve_missing_and_empty_template_values() {
+        let missing_template: ModelMessages = from_str(
+            r#"{
+                "instructions_template": null,
+                "instructions_variables": null,
+                "auto_review": {
+                    "policy": "policy"
+                }
+            }"#,
+        )
+        .expect("auto-review messages should deserialize without a policy template");
+        let empty_template: ModelMessages = from_str(
+            r#"{
+                "instructions_template": null,
+                "instructions_variables": null,
+                "auto_review": {
+                    "policy": "policy",
+                    "policy_template": ""
+                }
+            }"#,
+        )
+        .expect("auto-review messages should deserialize with an empty policy template");
+
+        assert_eq!(
+            missing_template.auto_review,
+            Some(AutoReviewMessages {
+                policy: Some("policy".to_string()),
+                policy_template: None,
+            })
+        );
+        assert_eq!(
+            empty_template.auto_review,
+            Some(AutoReviewMessages {
+                policy: Some("policy".to_string()),
+                policy_template: Some(String::new()),
             })
         );
     }

@@ -6,6 +6,9 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
 use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY;
+use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
+use crate::guardian::prompt::guardian_policy_prompt_with_config_and_template;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -2949,7 +2952,10 @@ async fn guardian_review_session_config_clears_parent_developer_instructions() {
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt())
+        Some(guardian_policy_prompt_with_config_and_template(
+            BUNDLED_GUARDIAN_POLICY,
+            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+        ))
     );
 }
 
@@ -3175,8 +3181,9 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config(
-            "Use the workspace-managed guardian policy."
+        Some(guardian_policy_prompt_with_config_and_template(
+            "Use the workspace-managed guardian policy.",
+            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
         ))
     );
 }
@@ -3214,6 +3221,9 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt())
+        Some(guardian_policy_prompt_with_config_and_template(
+            BUNDLED_GUARDIAN_POLICY,
+            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+        ))
     );
 }

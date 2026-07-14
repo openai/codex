@@ -89,6 +89,7 @@ fn base_instruction_override_preserves_catalog_auto_review_messages() {
     let mut model = model_info_from_slug("unknown-model");
     let auto_review = AutoReviewMessages {
         policy: Some("review policy".to_string()),
+        policy_template: Some("review policy template".to_string()),
     };
     model.model_messages = Some(ModelMessages {
         instructions_template: Some("template".to_string()),

@@ -53,11 +53,12 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
+use super::prompt::BUNDLED_GUARDIAN_POLICY;
+use super::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 use super::prompt::GuardianPromptMode;
 use super::prompt::GuardianTranscriptCursor;
 use super::prompt::build_guardian_prompt_items_with_parent_turn;
-use super::prompt::guardian_policy_prompt;
-use super::prompt::guardian_policy_prompt_with_config;
+use super::prompt::guardian_policy_prompt_with_config_and_template;
 use super::review::guardian_review_session_config;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1002,17 +1003,19 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.include_skill_instructions = false;
     guardian_config.memories.use_memories = false;
     guardian_config.memories.dedicated_tools = false;
-    let catalog_policy = model_messages
-        .and_then(|messages| messages.auto_review.as_ref())
-        .and_then(|messages| messages.policy.as_deref());
-    guardian_config.base_instructions = Some(
-        parent_config
-            .guardian_policy_config
-            .as_deref()
-            .or(catalog_policy)
-            .map(guardian_policy_prompt_with_config)
-            .unwrap_or_else(guardian_policy_prompt),
-    );
+    let catalog_auto_review = model_messages.and_then(|messages| messages.auto_review.as_ref());
+    let tenant_policy_config = parent_config
+        .guardian_policy_config
+        .as_deref()
+        .or_else(|| catalog_auto_review.and_then(|messages| messages.policy.as_deref()))
+        .unwrap_or(BUNDLED_GUARDIAN_POLICY);
+    let policy_template = catalog_auto_review
+        .and_then(|messages| messages.policy_template.as_deref())
+        .unwrap_or(BUNDLED_GUARDIAN_POLICY_TEMPLATE);
+    guardian_config.base_instructions = Some(guardian_policy_prompt_with_config_and_template(
+        tenant_policy_config,
+        policy_template,
+    ));
     guardian_config.notify = None;
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
@@ -1403,9 +1406,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guardian_review_session_config_prefers_managed_policy_over_catalog_policy() {
+    async fn guardian_review_session_config_prefers_managed_policy_and_uses_catalog_template() {
         let mut parent_config = crate::config::test_config().await;
         let managed_policy = "Use the managed Guardian policy.";
+        let catalog_template = "Catalog Guardian template:\n{{ tenant_policy_config }}";
         parent_config.guardian_policy_config = Some(managed_policy.to_string());
         let model_messages = ModelMessages {
             instructions_template: None,
@@ -1413,6 +1417,7 @@ mod tests {
             approvals: None,
             auto_review: Some(AutoReviewMessages {
                 policy: Some("Use the catalog Guardian policy.".to_string()),
+                policy_template: Some(catalog_template.to_string()),
             }),
             permissions: None,
         };
@@ -1428,7 +1433,10 @@ mod tests {
 
         assert_eq!(
             guardian_config.base_instructions,
-            Some(guardian_policy_prompt_with_config(managed_policy))
+            Some(guardian_policy_prompt_with_config_and_template(
+                managed_policy,
+                catalog_template,
+            ))
         );
     }
 
@@ -1441,6 +1449,7 @@ mod tests {
             approvals: None,
             auto_review: Some(AutoReviewMessages {
                 policy: Some(String::new()),
+                policy_template: None,
             }),
             permissions: None,
         };
@@ -1456,11 +1465,57 @@ mod tests {
 
         assert_eq!(
             guardian_config.base_instructions,
-            Some(guardian_policy_prompt_with_config(""))
+            Some(guardian_policy_prompt_with_config_and_template(
+                "",
+                BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+            ))
         );
         assert_ne!(
             guardian_config.base_instructions,
-            Some(guardian_policy_prompt())
+            Some(guardian_policy_prompt_with_config_and_template(
+                BUNDLED_GUARDIAN_POLICY,
+                BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_config_preserves_explicit_empty_catalog_template() {
+        let parent_config = crate::config::test_config().await;
+        let catalog_policy = "Use the catalog Guardian policy.";
+        let model_messages = ModelMessages {
+            instructions_template: None,
+            instructions_variables: None,
+            approvals: None,
+            auto_review: Some(AutoReviewMessages {
+                policy: Some(catalog_policy.to_string()),
+                policy_template: Some(String::new()),
+            }),
+            permissions: None,
+        };
+
+        let guardian_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+            Some(&model_messages),
+        )
+        .expect("guardian config");
+
+        assert_eq!(
+            guardian_config.base_instructions,
+            Some(guardian_policy_prompt_with_config_and_template(
+                catalog_policy,
+                "",
+            ))
+        );
+        assert_ne!(
+            guardian_config.base_instructions,
+            Some(guardian_policy_prompt_with_config_and_template(
+                catalog_policy,
+                BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+            ))
         );
     }
 

@@ -528,7 +528,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
 #[tokio::test]
 async fn process_compacted_history_preserves_separate_guardian_developer_message() {
     let (session, mut turn_context) = make_session_and_context().await;
-    let guardian_policy = crate::guardian::guardian_policy_prompt();
+    let guardian_policy = "guardian policy".to_string();
     let guardian_source =
         SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()));
 
