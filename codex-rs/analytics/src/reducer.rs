@@ -2155,6 +2155,7 @@ fn tool_item_base(
     let review_summary = context.review_summary.cloned().unwrap_or_default();
     CodexToolItemEventBase {
         thread_id: thread_id.to_string(),
+        session_id: thread_metadata.session_id.clone(),
         turn_id: turn_id.to_string(),
         item_id,
         app_server_client: context

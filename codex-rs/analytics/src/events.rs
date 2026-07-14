@@ -518,6 +518,7 @@ pub(crate) enum ToolItemFailureKind {
 #[derive(Serialize)]
 pub(crate) struct CodexToolItemEventBase {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) turn_id: String,
     /// App-server ThreadItem.id. For tool-originated items this generally
     /// corresponds to the originating core call_id.

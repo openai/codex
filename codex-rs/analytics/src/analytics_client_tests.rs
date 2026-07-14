@@ -1478,6 +1478,7 @@ fn command_execution_event_serializes_expected_shape() {
         event_params: CodexCommandExecutionEventParams {
             base: CodexToolItemEventBase {
                 thread_id: "thread-1".to_string(),
+                session_id: "session-thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "item-1".to_string(),
                 app_server_client: CodexAppServerClientMetadata {
@@ -1527,6 +1528,7 @@ fn command_execution_event_serializes_expected_shape() {
             "event_type": "codex_command_execution_event",
             "event_params": {
                 "thread_id": "thread-1",
+                "session_id": "session-thread-1",
                 "turn_id": "turn-1",
                 "item_id": "item-1",
                 "app_server_client": {
@@ -2338,6 +2340,7 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_command_execution_event");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
+    assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(payload[0]["event_params"]["turn_id"], "turn-1");
     assert_eq!(payload[0]["event_params"]["item_id"], "item-1");
     assert_eq!(payload[0]["event_params"]["tool_name"], "shell");
@@ -3105,7 +3108,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
                 SubAgentThreadStartedInput {
-                    session_id: "session-root".to_string(),
+                    session_id: "session-thread-1".to_string(),
                     thread_id: "thread-subagent".to_string(),
                     parent_thread_id: Some("thread-1".to_string()),
                     forked_from_thread_id: None,
@@ -3170,6 +3173,8 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_command_execution_event");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-subagent");
+    assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(payload[0]["event_params"]["thread_source"], "subagent");
     assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
     assert_eq!(payload[0]["event_params"]["parent_thread_id"], "thread-1");
@@ -4368,20 +4373,6 @@ async fn turn_event_counts_completed_tool_items() {
         error: None,
         duration_ms,
     };
-    reducer
-        .ingest(
-            AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                ItemStartedNotification {
-                    thread_id: "thread-2".to_string(),
-                    turn_id: "turn-2".to_string(),
-                    started_at_ms: 998,
-                    item: mcp_tool_call_item(McpToolCallStatus::InProgress, None),
-                },
-            ))),
-            &mut out,
-        )
-        .await;
-
     let completed_tool_items = vec![
         sample_command_execution_item(CommandExecutionStatus::Completed, Some(0), Some(1)),
         ThreadItem::FileChange {
@@ -4432,6 +4423,22 @@ async fn turn_event_counts_completed_tool_items() {
         }),
     ];
 
+    for item in &completed_tool_items {
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
+                    ItemStartedNotification {
+                        thread_id: "thread-2".to_string(),
+                        turn_id: "turn-2".to_string(),
+                        started_at_ms: 998,
+                        item: item.clone(),
+                    },
+                ))),
+                &mut out,
+            )
+            .await;
+    }
+
     for item in completed_tool_items {
         reducer
             .ingest(
@@ -4447,6 +4454,33 @@ async fn turn_event_counts_completed_tool_items() {
             )
             .await;
     }
+
+    let payload = serde_json::to_value(&out).expect("serialize tool item events");
+    let emitted_tool_events = payload
+        .as_array()
+        .expect("tool item events array")
+        .iter()
+        .map(|event| {
+            (
+                event["event_type"].as_str().expect("tool item event type"),
+                event["event_params"]["session_id"]
+                    .as_str()
+                    .expect("tool item event session ID"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        emitted_tool_events,
+        vec![
+            ("codex_command_execution_event", "session-thread-2"),
+            ("codex_file_change_event", "session-thread-2"),
+            ("codex_mcp_tool_call_event", "session-thread-2"),
+            ("codex_dynamic_tool_call_event", "session-thread-2"),
+            ("codex_collab_agent_tool_call_event", "session-thread-2"),
+            ("codex_web_search_event", "session-thread-2"),
+            ("codex_image_generation_event", "session-thread-2"),
+        ]
+    );
 
     let mcp_tool_call_event = out
         .iter()
