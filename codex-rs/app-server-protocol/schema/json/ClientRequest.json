@@ -3793,11 +3793,44 @@
     },
     "ThreadGoalSetParams": {
       "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override the approval policy before a goal continuation can start."
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed before a goal continuation can start."
+        },
         "objective": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override the sandbox policy before a goal continuation can start."
         },
         "status": {
           "anyOf": [

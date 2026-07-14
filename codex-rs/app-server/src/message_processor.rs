@@ -405,7 +405,9 @@ impl MessageProcessor {
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
             outgoing.clone(),
+            arg0_paths.clone(),
             Arc::clone(&config),
+            config_manager.clone(),
             thread_state_manager.clone(),
             state_db.clone(),
             Arc::clone(&goal_service),
