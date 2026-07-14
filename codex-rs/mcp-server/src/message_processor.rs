@@ -74,7 +74,8 @@ impl MessageProcessor {
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
-            auth_manager,
+            Arc::clone(&auth_manager),
+            codex_core::build_models_manager(config.as_ref(), auth_manager),
             SessionSource::Mcp,
             environment_manager,
             Arc::new(extensions.build()),

@@ -34,6 +34,7 @@ pub use codex_core::StartThreadOptions;
 pub use codex_core::StateDbHandle;
 pub use codex_core::ThreadManager;
 pub use codex_core::ThreadShutdownReport;
+pub use codex_core::build_models_manager;
 pub use codex_core::config::Config;
 pub use codex_core::config::Constrained;
 pub use codex_core::config::ExtraConfig;

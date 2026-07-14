@@ -80,6 +80,7 @@ async fn stores_config_and_starts_configured_turn_after_idle() {
         ThreadManager::new(
             &config,
             Arc::clone(&auth_manager),
+            codex_core::build_models_manager(&config, Arc::clone(&auth_manager)),
             SessionSource::Exec,
             Arc::new(EnvironmentManager::default_for_tests()),
             extensions,

@@ -305,6 +305,7 @@ impl ThreadManager {
     pub fn new(
         config: &Config,
         auth_manager: Arc<AuthManager>,
+        models_manager: SharedModelsManager,
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
         extensions: Arc<ExtensionRegistry<Config>>,
@@ -337,7 +338,7 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: build_models_manager(config, auth_manager.clone()),
+                models_manager,
                 environment_manager,
                 skills_service,
                 plugins_manager,

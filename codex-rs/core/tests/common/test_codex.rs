@@ -621,9 +621,11 @@ impl TestCodexBuilder {
                     config.codex_home.clone(),
                 ))
             });
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
         let thread_manager = ThreadManager::new(
             &config,
-            codex_core::test_support::auth_manager_from_auth(auth.clone()),
+            auth_manager.clone(),
+            codex_core::build_models_manager(&config, auth_manager),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
             Arc::clone(&self.extensions),

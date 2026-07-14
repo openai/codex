@@ -172,6 +172,16 @@ impl ModelProvider for AmazonBedrockModelProvider {
             config_model_catalog.map_or_else(static_model_catalog, with_default_only_service_tier),
         ))
     }
+
+    fn models_manager_without_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        Arc::new(StaticModelsManager::new(
+            /*auth_manager*/ None,
+            config_model_catalog.map_or_else(static_model_catalog, with_default_only_service_tier),
+        ))
+    }
 }
 
 #[cfg(test)]

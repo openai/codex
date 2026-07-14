@@ -55,6 +55,7 @@ use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
+use codex_core_api::build_models_manager;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
@@ -132,7 +133,8 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     });
     let thread_manager = ThreadManager::new(
         &config,
-        auth_manager,
+        Arc::clone(&auth_manager),
+        build_models_manager(&config, auth_manager),
         SessionSource::Exec,
         environment_manager,
         Arc::new(extensions.build()),

@@ -44,6 +44,7 @@ pub async fn build_prompt_input(
     let thread_manager = ThreadManager::new(
         &config,
         Arc::clone(&auth_manager),
+        crate::thread_manager::build_models_manager(&config, Arc::clone(&auth_manager)),
         SessionSource::Exec,
         Arc::new(
             EnvironmentManager::from_codex_home(

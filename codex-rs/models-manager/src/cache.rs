@@ -30,8 +30,8 @@ impl ModelsCacheManager {
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
     pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
         info!(
-                cache_path = %self.cache_path.display(),
-                expected_version,
+            cache_path = %self.cache_path.display(),
+            expected_version,
             "models cache: attempting load_fresh"
         );
         let cache = match self.load().await {

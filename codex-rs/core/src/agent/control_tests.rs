@@ -2393,9 +2393,11 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 async fn resume_thread_subagent_restores_stored_metadata() {
     let (home, config) = test_config().await;
     let thread_store = Arc::new(InMemoryThreadStore::default());
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let manager = ThreadManager::new(
         &config,
-        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+        auth_manager.clone(),
+        crate::thread_manager::build_models_manager(&config, auth_manager),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),

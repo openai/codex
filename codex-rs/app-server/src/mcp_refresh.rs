@@ -226,6 +226,7 @@ mod tests {
             ThreadManager::new(
                 &good_config,
                 auth_manager.clone(),
+                codex_core::build_models_manager(&good_config, auth_manager.clone()),
                 SessionSource::Exec,
                 Arc::clone(&environment_manager),
                 thread_extensions(

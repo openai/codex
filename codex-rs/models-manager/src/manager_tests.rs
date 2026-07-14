@@ -209,6 +209,36 @@ fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManage
     StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
 }
 
+#[tokio::test]
+async fn manager_without_cache_fetches_on_every_refresh() {
+    let remote_models = vec![remote_model("remote", "Remote", /*priority*/ 0)];
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone(), remote_models.clone()]);
+    let manager = OpenAiModelsManager::new_without_cache(
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
+
+    let catalog = manager
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+    let second_catalog = manager
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+
+    assert_eq!(catalog.models, remote_models);
+    assert_eq!(second_catalog, catalog);
+    assert_eq!(manager.get_remote_models().await, remote_models);
+    assert_eq!(endpoint.fetch_count(), 2);
+}
+
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
     let auth_dot_json = codex_login::AuthDotJson {
         auth_mode: Some(AuthMode::ChatgptAuthTokens),
@@ -719,6 +749,8 @@ async fn refresh_available_models_refetches_when_cache_stale() {
     // Rewrite cache with an old timestamp so it is treated as stale.
     manager
         .cache_manager
+        .as_ref()
+        .expect("cached model manager")
         .manipulate_cache_for_test(|fetched_at| {
             *fetched_at = Utc::now() - chrono::Duration::hours(1);
         })
@@ -758,6 +790,8 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
 
     manager
         .cache_manager
+        .as_ref()
+        .expect("cached model manager")
         .mutate_cache_for_test(|cache| {
             let client_version = crate::client_version_to_whole();
             cache.client_version = Some(format!("{client_version}-mismatch"));
@@ -795,7 +829,11 @@ async fn refresh_available_models_drops_removed_remote_models() {
     )];
     let endpoint = TestModelsEndpoint::new(vec![initial_models, refreshed_models]);
     let mut manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
-    manager.cache_manager.set_ttl(Duration::ZERO);
+    manager
+        .cache_manager
+        .as_mut()
+        .expect("cached model manager")
+        .set_ttl(Duration::ZERO);
 
     manager
         .refresh_available_models(

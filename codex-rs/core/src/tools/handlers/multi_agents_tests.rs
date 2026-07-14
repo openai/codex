@@ -4293,9 +4293,11 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .enable(Feature::Sqlite)
         .expect("test config should allow sqlite");
     let state_db = init_state_db(&config).await;
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let manager = ThreadManager::new(
         &config,
-        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+        auth_manager.clone(),
+        crate::thread_manager::build_models_manager(&config, auth_manager),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
