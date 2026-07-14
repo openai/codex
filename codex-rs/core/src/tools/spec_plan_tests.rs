@@ -993,7 +993,7 @@ async fn request_plugin_install_stays_visible_without_tool_search() {
 }
 
 #[tokio::test]
-async fn request_plugin_install_description_refers_to_recommended_plugins_hint() {
+async fn request_plugin_install_description_requires_exhausting_tool_search() {
     let plan = probe_with(
         |turn| {
             set_features(
@@ -1018,7 +1018,11 @@ async fn request_plugin_install_description_refers_to_recommended_plugins_hint()
     else {
         panic!("expected request_plugin_install function spec");
     };
-    assert!(request_description.contains("the `<recommended_plugins>` list"));
+    assert!(request_description.contains("listed in `<recommended_plugins>`"));
+    assert!(request_description.contains("explicitly asks to use a specific plugin"));
+    assert!(request_description.contains("Tool search has already been exhausted"));
+    assert!(!request_description.contains("`tool_search`"));
+    assert!(request_description.contains("DO NOT call this tool in parallel with other tools"));
     assert!(!request_description.contains("list_available_plugins_to_install"));
     assert!(!request_description.contains("github"));
     assert!(has_parameter(request_spec, "plugin_id"));

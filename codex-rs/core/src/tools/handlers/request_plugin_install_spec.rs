@@ -53,7 +53,8 @@ pub(crate) fn create_request_plugin_install_tool(
                 (
                     "plugin_id".to_string(),
                     JsonSchema::string(Some(
-                        "Plugin id from the `<recommended_plugins>` list.".to_string(),
+                        "The parenthesized plugin ID from the `<recommended_plugins>` list."
+                            .to_string(),
                     )),
                 ),
                 (
@@ -65,7 +66,7 @@ pub(crate) fn create_request_plugin_install_tool(
                 ),
             ]),
             vec!["plugin_id".to_string(), "suggest_reason".to_string()],
-            "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
+            "# Suggest a recommended plugin installation\n\nUse this tool only when all of the following are true:\n- The user explicitly asks to use a specific plugin that is not already available in the current context or active `tools` list.\n- Tool search has already been exhausted and did not find or make the requested tool callable.\n- The plugin is listed in `<recommended_plugins>`.\n\nDo not use it for adjacent capabilities, broad recommendations, or plugins that merely seem useful. Briefly explain why the plugin can help with the current request in `suggest_reason`.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools.".to_string(),
         ),
     };
 
@@ -144,11 +145,21 @@ mod tests {
 
     #[test]
     fn recommendation_context_uses_simplified_plugin_wire_shape() {
+        let expected_description = concat!(
+            "# Suggest a recommended plugin installation\n\n",
+            "Use this tool only when all of the following are true:\n",
+            "- The user explicitly asks to use a specific plugin that is not already available in the current context or active `tools` list.\n",
+            "- Tool search has already been exhausted and did not find or make the requested tool callable.\n",
+            "- The plugin is listed in `<recommended_plugins>`.\n\n",
+            "Do not use it for adjacent capabilities, broad recommendations, or plugins that merely seem useful. Briefly explain why the plugin can help with the current request in `suggest_reason`.\n\n",
+            "IMPORTANT: DO NOT call this tool in parallel with other tools.",
+        );
+
         assert_eq!(
             create_request_plugin_install_tool(ToolSuggestPresentation::RecommendationContext),
             ToolSpec::Function(ResponsesApiTool {
                 name: "request_plugin_install".to_string(),
-                description: "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
+                description: expected_description.to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
@@ -156,7 +167,8 @@ mod tests {
                         (
                             "plugin_id".to_string(),
                             JsonSchema::string(Some(
-                                "Plugin id from the `<recommended_plugins>` list.".to_string(),
+                                "The parenthesized plugin ID from the `<recommended_plugins>` list."
+                                    .to_string(),
                             )),
                         ),
                         (
