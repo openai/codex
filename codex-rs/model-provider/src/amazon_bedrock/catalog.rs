@@ -5,6 +5,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -75,6 +76,7 @@ fn gpt_5_bedrock_model(
     model.priority = priority;
     model.context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model.max_context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
+    model.visibility = ModelVisibility::List;
     model.availability_nux = None;
     model.upgrade = None;
     model
@@ -161,6 +163,15 @@ mod tests {
 
         for model in catalog.models {
             assert_eq!((model.availability_nux, model.upgrade), (None, None));
+        }
+    }
+
+    #[test]
+    fn gpt_5_bedrock_models_are_visible() {
+        let catalog = static_model_catalog();
+
+        for model in catalog.models {
+            assert_eq!(model.visibility, ModelVisibility::List);
         }
     }
 

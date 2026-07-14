@@ -3675,7 +3675,7 @@ async fn advanced_only_reasoning_option_requires_explicit_selection() {
 #[tokio::test]
 async fn auto_model_advertising_advanced_effort_opens_reasoning_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let mut preset = get_available_model(&chat, "gpt-5.4");
+    let mut preset = get_available_model(&chat, "gpt-5.6-terra");
     preset.id = "codex-auto-test".to_string();
     preset.model = "codex-auto-test".to_string();
     preset.display_name = "codex-auto-test".to_string();

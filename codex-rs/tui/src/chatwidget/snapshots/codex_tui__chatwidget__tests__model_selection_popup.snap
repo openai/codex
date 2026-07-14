@@ -10,10 +10,7 @@ expression: popup
   3. gpt-5.6-luna           Fast and affordable agentic coding model.
   4. gpt-5.5                Frontier model for complex coding, research, and
                             real-world work.
-  5. gpt-5.4                Strong model for everyday coding.
-  6. gpt-5.4-mini           Small, fast, and cost-efficient model for simpler
-                            coding tasks.
-› 7. gpt-5.2 (current)      Optimized for professional work and long-running
+› 5. gpt-5.2 (current)      Optimized for professional work and long-running
                             agents.
 
   Press enter to confirm or esc to go back
