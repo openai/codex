@@ -453,8 +453,8 @@ impl LazyRemoteExecServerClient {
     fn can_reconnect(&self) -> bool {
         matches!(
             self.transport_params,
-            ExecServerTransportParams::WebSocketUrl { .. }
-                | ExecServerTransportParams::PendingWebSocketUrl(..)
+            ExecServerTransportParams::Deferred(_)
+                | ExecServerTransportParams::WebSocketUrl { .. }
                 | ExecServerTransportParams::NoiseRendezvous { .. }
         )
     }

@@ -6,6 +6,8 @@ mod relay_proto;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -13,20 +15,24 @@ use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_api::AuthProvider;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::FsReadFileParams;
 use codex_exec_server::NoiseChannelIdentity;
 use codex_exec_server::NoiseChannelPublicKey;
 use codex_exec_server::NoiseRendezvousConnectArgs;
 use codex_exec_server::NoiseRendezvousConnectBundle;
+use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
 use codex_utils_path_uri::PathUri;
 use futures::SinkExt;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use http::HeaderMap;
 use http::HeaderValue;
 use pretty_assertions::assert_eq;
@@ -67,6 +73,126 @@ impl AuthProvider for StaticRegistryAuthProvider {
 
 fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
     Arc::new(StaticRegistryAuthProvider)
+}
+
+struct FreshBundleNoiseConnectProvider {
+    websocket_url: String,
+    executor_public_key: NoiseChannelPublicKey,
+    calls: AtomicUsize,
+}
+
+impl FreshBundleNoiseConnectProvider {
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::Relaxed)
+    }
+}
+
+impl NoiseRendezvousConnectProvider for FreshBundleNoiseConnectProvider {
+    fn connect_bundle(
+        &self,
+        _: NoiseChannelPublicKey,
+    ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
+        let call = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
+        let bundle = NoiseRendezvousConnectBundle {
+            websocket_url: self.websocket_url.clone(),
+            environment_id: ENVIRONMENT_ID.to_string(),
+            executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
+            executor_public_key: self.executor_public_key.clone(),
+            harness_key_authorization: format!("{HARNESS_KEY_AUTHORIZATION}-{call}"),
+        };
+        Box::pin(async move { Ok(bundle) })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let rendezvous_url = format!("ws://{}", listener.local_addr()?);
+    let registry = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/cloud/environment/{ENVIRONMENT_ID}/register"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "environment_id": ENVIRONMENT_ID,
+            "url": format!("{rendezvous_url}/relay?role=environment"),
+            "security_profile": "noise_hybrid_ik_v1",
+            "executor_registration_id": EXECUTOR_REGISTRATION_ID,
+        })))
+        .expect(1)
+        .mount(&registry)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/cloud/environment/{ENVIRONMENT_ID}/validate"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "valid": true,
+        })))
+        .expect(2)
+        .mount(&registry)
+        .await;
+
+    let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
+    let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
+    let config = RemoteEnvironmentConfig::new(
+        registry.uri(),
+        ENVIRONMENT_ID.to_string(),
+        static_registry_auth_provider(),
+    )?;
+    let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
+        config,
+        runtime_paths,
+    ));
+
+    let environment_websocket = accept_websocket(&listener, "environment").await?;
+    let provider = Arc::new(FreshBundleNoiseConnectProvider {
+        websocket_url: format!("{rendezvous_url}/relay?role=harness"),
+        executor_public_key: registered_executor_public_key(&registry).await?,
+        calls: AtomicUsize::new(0),
+    });
+    let manager = EnvironmentManager::without_environments();
+    let registration = manager
+        .register_deferred_noise_environment(ENVIRONMENT_ID.to_string(), provider.clone())?;
+    let environment = manager
+        .get_environment(ENVIRONMENT_ID)
+        .context("deferred Noise environment")?;
+
+    assert_eq!(provider.calls(), 0);
+    registration.complete(Ok(()))?;
+    let harness_websocket = accept_websocket(&listener, "harness").await?;
+    let first_relay = tokio::spawn(proxy_relay_frames(
+        environment_websocket,
+        harness_websocket,
+        Arc::new(Mutex::new(Vec::new())),
+    ));
+    let initial_info = timeout(TEST_TIMEOUT, environment.info())
+        .await
+        .context("deferred Noise environment should become ready")??;
+    assert_eq!(provider.calls(), 1);
+
+    first_relay.abort();
+    let _ = first_relay.await;
+    let first_reconnected_websocket = accept_websocket(&listener, "reconnected peer").await?;
+    let second_reconnected_websocket = accept_websocket(&listener, "reconnected peer").await?;
+    let second_relay = tokio::spawn(proxy_relay_frames(
+        first_reconnected_websocket,
+        second_reconnected_websocket,
+        Arc::new(Mutex::new(Vec::new())),
+    ));
+    let recovered_info = timeout(TEST_TIMEOUT, environment.info())
+        .await
+        .context("deferred Noise environment should reconnect")??;
+
+    assert_eq!(recovered_info, initial_info);
+    assert_eq!(provider.calls(), 2);
+    registry.verify().await;
+
+    second_relay.abort();
+    remote_environment.abort();
+    let _ = second_relay.await;
+    let _ = remote_environment.await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

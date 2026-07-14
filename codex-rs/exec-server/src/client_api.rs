@@ -90,17 +90,23 @@ pub(crate) struct StdioExecServerCommand {
     pub cwd: Option<PathBuf>,
 }
 
-pub(crate) type PendingExecServerUrl = Shared<oneshot::Receiver<Result<String, String>>>;
+pub(crate) type DeferredEnvironmentReadiness = Shared<oneshot::Receiver<Result<(), String>>>;
+
+#[derive(Clone)]
+pub(crate) struct Deferred<T> {
+    pub readiness: DeferredEnvironmentReadiness,
+    pub transport: T,
+}
 
 /// Parameters used to connect to a remote exec-server environment.
 #[derive(Clone)]
 pub(crate) enum ExecServerTransportParams {
+    Deferred(Box<Deferred<ExecServerTransportParams>>),
     WebSocketUrl {
         websocket_url: String,
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
-    PendingWebSocketUrl(PendingExecServerUrl),
     NoiseRendezvous {
         provider: Arc<dyn NoiseRendezvousConnectProvider>,
         identity: NoiseChannelIdentity,
@@ -115,6 +121,10 @@ pub(crate) enum ExecServerTransportParams {
 impl std::fmt::Debug for ExecServerTransportParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Deferred(deferred) => f
+                .debug_struct("Deferred")
+                .field("transport", &deferred.transport)
+                .finish_non_exhaustive(),
             Self::WebSocketUrl {
                 websocket_url,
                 connect_timeout,
@@ -125,9 +135,6 @@ impl std::fmt::Debug for ExecServerTransportParams {
                 .field("connect_timeout", connect_timeout)
                 .field("initialize_timeout", initialize_timeout)
                 .finish(),
-            Self::PendingWebSocketUrl(..) => {
-                f.debug_tuple("PendingWebSocketUrl").finish_non_exhaustive()
-            }
             Self::NoiseRendezvous { .. } => {
                 f.debug_struct("NoiseRendezvous").finish_non_exhaustive()
             }
