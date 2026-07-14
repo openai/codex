@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+codex-extension-items = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-otel = { workspace = true }

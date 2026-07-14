@@ -3848,6 +3848,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex-extension-items",
  "codex-file-search",
  "codex-git-utils",
  "codex-otel",

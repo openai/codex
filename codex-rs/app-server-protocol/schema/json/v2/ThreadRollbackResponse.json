@@ -1616,6 +1616,7 @@
           "type": "object"
         },
         {
+          "description": "Display item emitted by the interruptible `clock.sleep` tool.",
           "properties": {
             "durationMs": {
               "format": "uint64",

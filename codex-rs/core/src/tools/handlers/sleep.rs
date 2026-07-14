@@ -6,7 +6,8 @@ use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use codex_protocol::items::SleepItem;
+use codex_extension_items::ExtensionItem;
+use codex_extension_items::sleep::SleepItem;
 use codex_protocol::items::TurnItem;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
@@ -89,10 +90,10 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             }
 
             let started = Instant::now();
-            let item = TurnItem::Sleep(SleepItem {
+            let item = TurnItem::Extension(ExtensionItem::Sleep(SleepItem {
                 id: call_id,
                 duration_ms: args.duration_ms,
-            });
+            }));
             session.emit_turn_item_started(turn.as_ref(), &item).await;
             let turn_state = session
                 .input_queue

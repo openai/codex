@@ -37,6 +37,7 @@ codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-extension-items = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-system = { workspace = true }
@@ -134,7 +135,6 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 codex-shell-escalation = { workspace = true }
 
 [dev-dependencies]
-codex-extension-items = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-image-generation-extension = { workspace = true }

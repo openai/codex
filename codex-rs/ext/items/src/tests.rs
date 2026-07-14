@@ -3,6 +3,7 @@ use serde_json::json;
 
 use super::ExtensionItem;
 use super::image_generation::ImageGenerationItem;
+use super::sleep::SleepItem;
 use super::web_search::WebSearchAction;
 use super::web_search::WebSearchItem;
 
@@ -80,6 +81,28 @@ fn web_search_item_preserves_stable_wire_shape() {
             },
         }))
         .expect("deserialize legacy extension item without results"),
+        item
+    );
+}
+
+#[test]
+fn sleep_item_preserves_stable_wire_shape() {
+    let item = ExtensionItem::Sleep(SleepItem {
+        id: "sleep-1".to_string(),
+        duration_ms: 1_000,
+    });
+    let value = serde_json::to_value(&item).expect("serialize extension item");
+
+    assert_eq!(
+        value,
+        json!({
+            "kind": "clock.sleep",
+            "id": "sleep-1",
+            "durationMs": 1_000,
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ExtensionItem>(value).expect("deserialize extension item"),
         item
     );
 }

@@ -599,8 +599,7 @@ impl ThreadHistoryBuilder {
         );
         let should_upsert = match item {
             codex_protocol::items::TurnItem::Plan(plan) => !plan.text.is_empty(),
-            codex_protocol::items::TurnItem::Sleep(_)
-            | codex_protocol::items::TurnItem::HookPrompt(_)
+            codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::CommandExecution(_)
             | codex_protocol::items::TurnItem::DynamicToolCall(_)
             | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
@@ -1588,6 +1587,7 @@ mod tests {
     use super::*;
     use crate::protocol::v2::CommandExecutionSource;
     use codex_extension_items::ExtensionItem as CoreExtensionItem;
+    use codex_extension_items::sleep::SleepItem as CoreSleepItem;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::CommandExecutionItem as CoreCommandExecutionItem;
@@ -1595,7 +1595,6 @@ mod tests {
     use codex_protocol::items::EnteredReviewModeItem as CoreEnteredReviewModeItem;
     use codex_protocol::items::ExitedReviewModeItem as CoreExitedReviewModeItem;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
-    use codex_protocol::items::SleepItem as CoreSleepItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::items::build_hook_prompt_message;
@@ -1959,10 +1958,10 @@ mod tests {
     fn rebuilds_sleep_item_from_persisted_completion() {
         let turn_id = "turn-1";
         let thread_id = ThreadId::new();
-        let sleep_item = CoreTurnItem::Sleep(CoreSleepItem {
+        let sleep_item = CoreTurnItem::Extension(CoreExtensionItem::Sleep(CoreSleepItem {
             id: "sleep-1".to_string(),
             duration_ms: 1_000,
-        });
+        }));
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
@@ -1997,10 +1996,10 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(
             turns[0].items,
-            vec![ThreadItem::Sleep {
+            vec![ThreadItem::Sleep(CoreSleepItem {
                 id: "sleep-1".to_string(),
                 duration_ms: 1_000,
-            }]
+            })]
         );
     }
 
