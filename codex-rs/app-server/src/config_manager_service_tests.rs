@@ -131,6 +131,40 @@ async fn clear_missing_nested_config_is_noop() -> Result<()> {
 }
 
 #[tokio::test]
+async fn clear_user_value_if_matches_clears_matching_value() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "model = \"gpt-5.2\"\napproval_policy = \"never\"\n")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    service
+        .clear_user_value_if_matches("model", serde_json::json!("gpt-5.2"))
+        .await?;
+
+    assert_eq!(
+        std::fs::read_to_string(&path)?,
+        "approval_policy = \"never\"\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn clear_user_value_if_matches_preserves_non_matching_value() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    let original = "model = \"gpt-5.2\"\napproval_policy = \"never\"\n";
+    std::fs::write(&path, original)?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    service
+        .clear_user_value_if_matches("model", serde_json::json!("gpt-5.3"))
+        .await?;
+
+    assert_eq!(std::fs::read_to_string(&path)?, original);
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_rejects_legacy_profile_selector() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);

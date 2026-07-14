@@ -46,6 +46,18 @@ cargo run -p codex-app-server-test-client -- \
 The test client redacts `apiKey` from its outbound request log. After login, start a fresh Codex
 process with the same `CODEX_HOME` to verify that it uses the persisted managed credential.
 
+## Testing logout
+
+`test-logout` initializes the app-server, sends an `account/logout` request, and waits for the
+resulting `account/updated` notification. It uses the active `CODEX_HOME`, so point it at an
+isolated directory when testing credential cleanup.
+
+```bash
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  test-logout
+```
+
 ## Testing Plugin Analytics
 
 The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin
