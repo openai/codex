@@ -156,7 +156,7 @@ fn workspace_write_permission_profile_with_private_denials() -> PermissionProfil
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::project_roots(Some(PathBuf::from("private"))),
+                    value: FileSystemSpecialPath::project_roots(Some("private".to_string())),
                 },
                 access: FileSystemAccessMode::Deny,
             },

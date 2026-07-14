@@ -24,18 +24,30 @@ use ts_rs::TS;
 /// boundary. Non-UTF-8 paths are converted to UTF-8 lossily because this API
 /// value is serialized as a JSON string.
 ///
-/// Deserialization accepts any UTF-8 string without interpreting or validating
-/// it. That unrestricted construction path is intentionally available only to
-/// serde: Codex-internal code cannot construct this type directly from a raw
-/// `String` and is instead encouraged to convert through [`PathUri`] or
-/// [`AbsolutePathBuf`]. Relative path text remains valid until an operation
-/// such as [`Self::to_path_uri`] requires an absolute path.
+/// Deserialization and [`Self::from_string`] accept any UTF-8 string without
+/// interpreting or validating it. Use [`Self::from_string`] when a caller
+/// already owns legacy app-server path text and needs to preserve its wire
+/// spelling; use [`Self::from_path`], [`Self::from_abs_path`], or
+/// [`Self::from_path_uri`] when converting an actual path value. Relative
+/// path text remains valid until an operation such as [`Self::to_path_uri`]
+/// requires an absolute path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
 pub struct LegacyAppPathString(String);
 
 impl LegacyAppPathString {
+    /// Preserves already-legacy app-server path text without interpreting it
+    /// using the current host.
+    ///
+    /// This is for API-boundary values that are already strings, including
+    /// relative or foreign-platform spellings. Callers with a local
+    /// [`Path`], [`AbsolutePathBuf`], or [`PathUri`] should use the
+    /// corresponding typed constructor instead.
+    pub fn from_string(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
     /// Preserves path text without interpreting it using the current host.
     pub fn from_path(path: &Path) -> Self {
         Self(path.to_string_lossy().into_owned())

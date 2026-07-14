@@ -143,7 +143,7 @@ pub enum FileSystemSpecialPath {
     ProjectRoots {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        subpath: Option<PathBuf>,
+        subpath: Option<String>,
     },
     Tmpdir,
     SlashTmp,
@@ -159,16 +159,16 @@ pub enum FileSystemSpecialPath {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        subpath: Option<PathBuf>,
+        subpath: Option<String>,
     },
 }
 
 impl FileSystemSpecialPath {
-    pub fn project_roots(subpath: Option<PathBuf>) -> Self {
+    pub fn project_roots(subpath: Option<String>) -> Self {
         Self::ProjectRoots { subpath }
     }
 
-    pub fn unknown(path: impl Into<String>, subpath: Option<PathBuf>) -> Self {
+    pub fn unknown(path: impl Into<String>, subpath: Option<String>) -> Self {
         Self::Unknown {
             path: path.into(),
             subpath,
@@ -1712,7 +1712,7 @@ fn legacy_runtime_file_system_policy_for_cwd(
 
 fn append_default_read_only_project_root_subpath_if_no_explicit_rule(
     entries: &mut Vec<FileSystemSandboxEntry>,
-    subpath: impl Into<PathBuf>,
+    subpath: impl Into<String>,
 ) {
     append_default_read_only_entry_if_no_explicit_rule(
         entries,

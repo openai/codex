@@ -55,6 +55,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -1028,9 +1029,9 @@ fn special_path_label(value: &FileSystemSpecialPath) -> String {
     }
 }
 
-fn path_label(base: &str, subpath: &Option<PathBuf>) -> String {
+fn path_label(base: &str, subpath: &Option<LegacyAppPathString>) -> String {
     match subpath {
-        Some(subpath) => format!("{base}/{}", subpath.display()),
+        Some(subpath) => format!("{base}/{subpath}"),
         None => base.to_string(),
     }
 }
@@ -1871,7 +1872,9 @@ mod tests {
                 entries: Some(vec![FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
                         value: FileSystemSpecialPath::ProjectRoots {
-                            subpath: Some(".git".into()),
+                            subpath: Some(LegacyAppPathString::from_path(std::path::Path::new(
+                                ".git",
+                            ))),
                         },
                     },
                     access: FileSystemAccessMode::Read,

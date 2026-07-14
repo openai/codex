@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::io;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::Path;
 use ts_rs::TS;
 
 v2_enum_from_core! {
@@ -244,13 +244,13 @@ pub enum FileSystemSpecialPath {
     Minimal,
     #[serde(alias = "current_working_directory")]
     ProjectRoots {
-        subpath: Option<PathBuf>,
+        subpath: Option<LegacyAppPathString>,
     },
     Tmpdir,
     SlashTmp,
     Unknown {
         path: String,
-        subpath: Option<PathBuf>,
+        subpath: Option<LegacyAppPathString>,
     },
 }
 
@@ -259,10 +259,21 @@ impl From<CoreFileSystemSpecialPath> for FileSystemSpecialPath {
         match value {
             CoreFileSystemSpecialPath::Root => Self::Root,
             CoreFileSystemSpecialPath::Minimal => Self::Minimal,
-            CoreFileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
+            CoreFileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots {
+                subpath: subpath
+                    .as_deref()
+                    .map(Path::new)
+                    .map(LegacyAppPathString::from_path),
+            },
             CoreFileSystemSpecialPath::Tmpdir => Self::Tmpdir,
             CoreFileSystemSpecialPath::SlashTmp => Self::SlashTmp,
-            CoreFileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown { path, subpath },
+            CoreFileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown {
+                path,
+                subpath: subpath
+                    .as_deref()
+                    .map(Path::new)
+                    .map(LegacyAppPathString::from_path),
+            },
         }
     }
 }
@@ -272,10 +283,15 @@ impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
         match value {
             FileSystemSpecialPath::Root => Self::Root,
             FileSystemSpecialPath::Minimal => Self::Minimal,
-            FileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
+            FileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots {
+                subpath: subpath.map(LegacyAppPathString::into_string),
+            },
             FileSystemSpecialPath::Tmpdir => Self::Tmpdir,
             FileSystemSpecialPath::SlashTmp => Self::SlashTmp,
-            FileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown { path, subpath },
+            FileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown {
+                path,
+                subpath: subpath.map(LegacyAppPathString::into_string),
+            },
         }
     }
 }

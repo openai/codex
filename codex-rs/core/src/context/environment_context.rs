@@ -6,7 +6,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileSystemContext {
@@ -183,9 +182,9 @@ fn render_special_path(value: &FileSystemSpecialPath) -> String {
     }
 }
 
-fn render_special_path_with_subpath(base: &str, subpath: &Option<PathBuf>) -> String {
+fn render_special_path_with_subpath(base: &str, subpath: &Option<String>) -> String {
     match subpath {
-        Some(subpath) => format!("{base}/{}", subpath.display()),
+        Some(subpath) => format!("{base}/{subpath}"),
         None => base.to_string(),
     }
 }
