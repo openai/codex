@@ -2015,6 +2015,31 @@ async fn dangerous_rm_rf_requires_approval_in_danger_full_access() {
     .await;
 }
 
+#[tokio::test]
+async fn dangerous_rm_rf_in_shell_loop_requires_approval_in_danger_full_access() {
+    let command = vec_str(&[
+        "bash",
+        "-lc",
+        "for target in /tmp/a /tmp/b; do rm -rf \"$target\"; done",
+    ]);
+
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: command.clone(),
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::Disabled,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        },
+    )
+    .await;
+}
+
 fn vec_str(items: &[&str]) -> Vec<String> {
     items.iter().map(std::string::ToString::to_string).collect()
 }
