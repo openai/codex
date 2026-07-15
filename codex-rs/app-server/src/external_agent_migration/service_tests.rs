@@ -2546,6 +2546,121 @@ async fn import_plugins_supports_external_agent_plugin_marketplace_layout() {
 }
 
 #[tokio::test]
+async fn import_plugins_reuses_configured_marketplace_with_different_source() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let configured_marketplace_root = external_agent_home.join("configured-marketplace");
+    let source_marketplace_root = external_agent_home.join("source-marketplace");
+    let configured_plugin_root = configured_marketplace_root.join("plugins/cloudflare");
+    let source_plugin_root = source_marketplace_root.join("plugins/cloudflare");
+    fs::create_dir_all(configured_marketplace_root.join(".agents/plugins"))
+        .expect("create configured marketplace manifest dir");
+    fs::create_dir_all(configured_plugin_root.join(".codex-plugin"))
+        .expect("create configured plugin manifest dir");
+    fs::create_dir_all(source_marketplace_root.join(EXTERNAL_AGENT_PLUGIN_MANIFEST_DIR))
+        .expect("create source marketplace manifest dir");
+    fs::create_dir_all(source_plugin_root.join(".codex-plugin"))
+        .expect("create source plugin manifest dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "enabledPlugins": {
+                "cloudflare@my-plugins": true
+            },
+            "extraKnownMarketplaces": {
+                "my-plugins": {
+                    "source": "local",
+                    "path": source_marketplace_root
+                }
+            }
+        }))
+        .expect("serialize settings"),
+    )
+    .expect("write settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"[marketplaces.my-plugins]
+source_type = "local"
+source = {configured_marketplace_root:?}
+"#
+        ),
+    )
+    .expect("write Codex config");
+    fs::write(
+        configured_marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+          "name": "my-plugins",
+          "plugins": [{
+            "name": "cloudflare",
+            "source": {"source": "local", "path": "./plugins/cloudflare"}
+          }]
+        }"#,
+    )
+    .expect("write configured marketplace manifest");
+    fs::write(
+        source_marketplace_root
+            .join(EXTERNAL_AGENT_PLUGIN_MANIFEST_DIR)
+            .join("marketplace.json"),
+        r#"{
+          "name": "my-plugins",
+          "plugins": [{"name": "cloudflare", "source": "./plugins/cloudflare"}]
+        }"#,
+    )
+    .expect("write source marketplace manifest");
+    fs::write(
+        configured_plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"cloudflare","version":"0.1.0"}"#,
+    )
+    .expect("write configured plugin manifest");
+    fs::write(
+        source_plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"cloudflare","version":"0.2.0"}"#,
+    )
+    .expect("write source plugin manifest");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import_plugins(
+            /*cwd*/ None,
+            Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "my-plugins".to_string(),
+                    plugin_names: vec!["cloudflare".to_string()],
+                }],
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("import plugins");
+
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: vec!["my-plugins".to_string()],
+            succeeded_plugin_ids: vec!["cloudflare@my-plugins".to_string()],
+            failed_marketplaces: Vec::new(),
+            failed_plugin_ids: Vec::new(),
+            raw_errors: Vec::new(),
+        }
+    );
+    let config: TomlValue =
+        toml::from_str(&fs::read_to_string(codex_home.join("config.toml")).expect("read config"))
+            .expect("parse config");
+    let expected: TomlValue = toml::from_str(&format!(
+        r#"[marketplaces.my-plugins]
+source_type = "local"
+source = {configured_marketplace_root:?}
+
+[plugins."cloudflare@my-plugins"]
+enabled = true
+"#
+    ))
+    .expect("parse expected config");
+    assert_eq!(config, expected);
+}
+
+#[tokio::test]
 async fn detect_home_supports_relative_external_agent_plugin_marketplace_path() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let marketplace_root = external_agent_home.join("my-marketplace");

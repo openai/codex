@@ -36,7 +36,15 @@ pub(super) struct ParsedSessionImport {
 }
 
 pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
+    summarize_session_with_cwd(path, /*fallback_cwd*/ None)
+}
+
+pub(crate) fn summarize_session_with_cwd(
+    path: &Path,
+    fallback_cwd: Option<&Path>,
+) -> io::Result<Option<SessionSummary>> {
     let file = File::open(path)?;
+    let fallback_timestamp = fallback_cwd.and_then(|_| file_modified_at_seconds(&file));
     let reader = BufReader::new(file);
     let mut cwd = None;
     let mut custom_title = None;
@@ -67,7 +75,8 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         if let Some(title) = ai_title_from_record(&record) {
             ai_title = Some(title.to_string());
         }
-        let Some(message) = conversation_message_from_owned_record(&mut record) else {
+        let Some(message) = conversation_message_from_owned_record(&mut record, fallback_timestamp)
+        else {
             continue;
         };
         saw_message = true;
@@ -83,7 +92,7 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         }
     }
 
-    let Some(cwd) = cwd else {
+    let Some(cwd) = cwd.or_else(|| fallback_cwd.map(Path::to_path_buf)) else {
         return Ok(None);
     };
     if !saw_message {
@@ -109,8 +118,12 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     }))
 }
 
-pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport> {
+pub(super) fn read_session_import_with_cwd(
+    path: &Path,
+    fallback_cwd: Option<&Path>,
+) -> io::Result<ParsedSessionImport> {
     let file = File::open(path)?;
+    let fallback_timestamp = fallback_cwd.and_then(|_| file_modified_at_seconds(&file));
     let mut reader = BufReader::new(file);
     let mut cwd = None;
     let mut custom_title = None;
@@ -152,12 +165,14 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
         if let Some(title) = ai_title_from_record(&record) {
             ai_title = Some(title.to_string());
         }
-        if let Some(message) = conversation_message_from_owned_record(&mut record) {
+        if let Some(message) =
+            conversation_message_from_owned_record(&mut record, fallback_timestamp)
+        {
             messages.push(message);
         }
     }
     Ok(ParsedSessionImport {
-        cwd,
+        cwd: cwd.or_else(|| fallback_cwd.map(Path::to_path_buf)),
         custom_title,
         ai_title,
         messages,
@@ -182,9 +197,16 @@ fn title_from_record<'a>(record: &'a JsonValue, record_type: &str, field: &str) 
         .filter(|title| !title.is_empty())
 }
 
-fn conversation_message_from_owned_record(record: &mut JsonValue) -> Option<ConversationMessage> {
-    let record_type = record.get("type")?.as_str()?;
-    if record_type != "assistant" && record_type != "user" {
+fn conversation_message_from_owned_record(
+    record: &mut JsonValue,
+    fallback_timestamp: Option<i64>,
+) -> Option<ConversationMessage> {
+    let record_type = record
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .filter(|record_type| matches!(*record_type, "assistant" | "user"))
+        .or_else(|| record.get("role").and_then(JsonValue::as_str))?;
+    if !matches!(record_type, "assistant" | "user") {
         return None;
     }
     if record.get("isMeta").and_then(JsonValue::as_bool) == Some(true)
@@ -197,7 +219,14 @@ fn conversation_message_from_owned_record(record: &mut JsonValue) -> Option<Conv
     let timestamp = record
         .get("timestamp")
         .and_then(JsonValue::as_str)
-        .and_then(parse_timestamp);
+        .and_then(parse_timestamp)
+        .or_else(|| {
+            record
+                .get("timestamp_ms")
+                .and_then(JsonValue::as_i64)
+                .map(|value| value / 1_000)
+        })
+        .or(fallback_timestamp);
     let content = record.get_mut("message")?.get_mut("content")?.take();
     let extracted = match content {
         JsonValue::String(text) => {
@@ -211,15 +240,44 @@ fn conversation_message_from_owned_record(record: &mut JsonValue) -> Option<Conv
         }
         content => extract_message_text(&content)?,
     };
+    let role = if is_assistant || extracted.only_tool_result {
+        MessageRole::Assistant
+    } else {
+        MessageRole::User
+    };
+    let text = if role == MessageRole::User {
+        unwrap_user_query(extracted.text)
+    } else {
+        extracted.text
+    };
     Some(ConversationMessage {
-        role: if is_assistant || extracted.only_tool_result {
-            MessageRole::Assistant
-        } else {
-            MessageRole::User
-        },
-        text: extracted.text,
+        role,
+        text,
         timestamp,
     })
+}
+
+fn unwrap_user_query(text: String) -> String {
+    let trimmed = text.trim();
+    let Some(inner) = trimmed
+        .strip_prefix("<user_query>")
+        .and_then(|inner| inner.strip_suffix("</user_query>"))
+        .map(str::trim)
+        .filter(|inner| !inner.is_empty())
+    else {
+        return text;
+    };
+    inner.to_string()
+}
+
+fn file_modified_at_seconds(file: &File) -> Option<i64> {
+    file.metadata()
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
 }
 
 struct ExtractedMessage {
@@ -379,7 +437,7 @@ mod tests {
                 "type": "user",
                 "cwd": root.path(),
                 "timestamp": "2026-06-03T12:00:00Z",
-                "message": { "content": "first request" },
+                "message": { "content": "<user_query>\nfirst request\n</user_query>" },
             })
             .to_string(),
             "not json".to_string(),
@@ -397,7 +455,8 @@ mod tests {
         .join("\n");
         std::fs::write(&path, &contents).expect("session");
 
-        let parsed = read_session_import(&path).expect("parse session");
+        let parsed =
+            read_session_import_with_cwd(&path, /*fallback_cwd*/ None).expect("parse session");
 
         assert_eq!(parsed.cwd.as_deref(), Some(root.path()));
         assert_eq!(parsed.custom_title.as_deref(), Some("custom title"));
@@ -408,6 +467,33 @@ mod tests {
             parsed.content_sha256,
             format!("{:x}", Sha256::digest(contents))
         );
+    }
+
+    #[test]
+    fn embedded_cwd_overrides_migration_fallback() {
+        let root = TempDir::new().expect("tempdir");
+        let embedded_cwd = root.path().join("embedded");
+        let fallback_cwd = root.path().join("fallback");
+        let path = root.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "cwd": embedded_cwd,
+                "role": "user",
+                "message": {"content": "first request"},
+            })
+            .to_string(),
+        )
+        .expect("session");
+
+        let parsed =
+            read_session_import_with_cwd(&path, Some(&fallback_cwd)).expect("parse session");
+        let summary = summarize_session_with_cwd(&path, Some(&fallback_cwd))
+            .expect("summarize session")
+            .expect("session summary");
+
+        assert_eq!(parsed.cwd.as_deref(), Some(embedded_cwd.as_path()));
+        assert_eq!(summary.migration.cwd, embedded_cwd);
     }
 
     #[test]

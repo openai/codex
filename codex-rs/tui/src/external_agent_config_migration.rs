@@ -869,6 +869,31 @@ mod tests {
     }
 
     #[test]
+    fn secondary_source_customize_snapshot() {
+        let items = vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Config,
+            description:
+                "Migrate /Users/alex/.cursor/cli-config.json into /Users/alex/.codex/config.toml"
+                    .to_string(),
+            cwd: None,
+            details: None,
+        }];
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        screen.customize();
+
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 18);
+        assert_snapshot!(
+            "external_agent_config_migration_secondary_source_customize",
+            rendered
+        );
+    }
+
+    #[test]
     fn customize_action_snapshot() {
         let items = sample_items();
         let mut screen = ExternalAgentConfigMigrationScreen::new(

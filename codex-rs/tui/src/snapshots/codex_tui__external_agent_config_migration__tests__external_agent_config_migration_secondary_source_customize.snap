@@ -1,0 +1,16 @@
+---
+source: tui/src/external_agent_config_migration.rs
+expression: rendered
+---
+
+  > Choose what to import
+  Choose items to import.
+  Codex may add files to your current project folder.
+  Your existing setup will not be changed.
+  Home
+  › [x] Settings
+        Import /Users/alex/.cursor/cli-config.json into /Users/alex/.codex/co…
+
+  Selected 1 of 1 item.
+    1. Review selection
+  Use ↑/↓ to move, space to toggle, b to go back

@@ -50,7 +50,6 @@ use super::service::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use super::service::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use super::service::ExternalAgentConfigService;
 use super::service::NamedMigration as CoreNamedMigration;
-use super::service::PendingPluginImport;
 use super::service::PluginImportOutcome;
 use super::service::record_import_error;
 use super::session_importer::ExternalAgentSessionImporter;
@@ -117,8 +116,10 @@ impl ExternalAgentConfigRequestProcessor {
         &self,
         params: ExternalAgentConfigDetectParams,
     ) -> Result<ExternalAgentConfigDetectResponse, JSONRPCErrorError> {
-        let items = self
+        let migration_service = self
             .migration_service
+            .with_migration_source(params.migration_source.as_deref());
+        let items = migration_service
             .detect(ExternalAgentConfigDetectOptions {
                 include_home: params.include_home,
                 cwds: params.cwds,
@@ -219,6 +220,9 @@ impl ExternalAgentConfigRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let import_id = Uuid::new_v4().to_string();
         let analytics_source = params.source.clone().unwrap_or_default();
+        let migration_service = self
+            .migration_service
+            .with_migration_source(params.migration_source.as_deref());
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
@@ -228,8 +232,10 @@ impl ExternalAgentConfigRequestProcessor {
             )
         });
         let (pending_session_imports, session_validation_result) =
-            self.validate_pending_session_imports(&params);
-        let import_outcome = self.import_external_agent_config(params).await;
+            self.validate_pending_session_imports(&params, &migration_service);
+        let import_outcome = self
+            .import_external_agent_config(params, &migration_service)
+            .await;
         if needs_runtime_refresh {
             self.config_processor.handle_config_mutation().await;
         }
@@ -272,11 +278,12 @@ impl ExternalAgentConfigRequestProcessor {
         }
 
         let session_importer = self.session_importer.clone();
-        let plugin_processor = self.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let state_db = self.state_db.clone();
         let analytics_events_client = self.analytics_events_client.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
+        let session_metadata_mode = migration_service.session_metadata_mode();
+        let plugin_migration_service = migration_service;
         let session_import_result = (!pending_session_imports.is_empty()).then(|| {
             CoreImportItemResult::new(
                 CoreMigrationItemType::Sessions,
@@ -291,7 +298,11 @@ impl ExternalAgentConfigRequestProcessor {
             let session_imports = async move {
                 let session_import_result = session_import_result?;
                 let item_result = session_importer
-                    .import_sessions(pending_session_imports, session_import_result)
+                    .import_sessions(
+                        pending_session_imports,
+                        session_import_result,
+                        session_metadata_mode,
+                    )
                     .await;
                 send_import_progress(&session_progress_outgoing, &session_import_id, &item_result)
                     .await;
@@ -307,8 +318,11 @@ impl ExternalAgentConfigRequestProcessor {
                         pending_plugin_import.description.clone(),
                         pending_plugin_import.cwd.clone(),
                     );
-                    match plugin_processor
-                        .complete_pending_plugin_import(pending_plugin_import)
+                    match plugin_migration_service
+                        .import_plugins(
+                            pending_plugin_import.cwd.as_deref(),
+                            Some(pending_plugin_import.details),
+                        )
                         .await
                     {
                         Ok(plugin_outcome) => {
@@ -318,7 +332,7 @@ impl ExternalAgentConfigRequestProcessor {
                             record_import_error(
                                 &mut item_result,
                                 "plugin_import",
-                                error.message.clone(),
+                                error.to_string(),
                                 /*source*/ None,
                             );
                         }
@@ -393,6 +407,7 @@ impl ExternalAgentConfigRequestProcessor {
     fn validate_pending_session_imports(
         &self,
         params: &ExternalAgentConfigImportParams,
+        migration_service: &ExternalAgentConfigService,
     ) -> (Vec<CoreSessionMigration>, Option<CoreImportItemResult>) {
         let sessions = params
             .migration_items
@@ -422,33 +437,31 @@ impl ExternalAgentConfigRequestProcessor {
         let mut selected_session_paths = HashSet::new();
         let mut selected_sessions = Vec::new();
         for session in sessions {
-            let canonical_path = match self
-                .migration_service
-                .external_agent_session_source_path(&session.path)
-            {
-                Ok(Some(canonical_path)) => canonical_path,
-                Ok(None) => {
-                    record_import_error(
-                        &mut item_result,
-                        "session_missing",
-                        format!(
-                            "external agent session was not detected for import: {}",
-                            session.path.display()
-                        ),
-                        Some(session.path.display().to_string()),
-                    );
-                    continue;
-                }
-                Err(err) => {
-                    record_import_error(
-                        &mut item_result,
-                        "session_source_path",
-                        err.to_string(),
-                        Some(session.path.display().to_string()),
-                    );
-                    continue;
-                }
-            };
+            let canonical_path =
+                match migration_service.external_agent_session_source_path(&session.path) {
+                    Ok(Some(canonical_path)) => canonical_path,
+                    Ok(None) => {
+                        record_import_error(
+                            &mut item_result,
+                            "session_missing",
+                            format!(
+                                "external agent session was not detected for import: {}",
+                                session.path.display()
+                            ),
+                            Some(session.path.display().to_string()),
+                        );
+                        continue;
+                    }
+                    Err(err) => {
+                        record_import_error(
+                            &mut item_result,
+                            "session_source_path",
+                            err.to_string(),
+                            Some(session.path.display().to_string()),
+                        );
+                        continue;
+                    }
+                };
             if selected_session_paths.insert(canonical_path) {
                 selected_sessions.push(session);
             }
@@ -459,8 +472,9 @@ impl ExternalAgentConfigRequestProcessor {
     async fn import_external_agent_config(
         &self,
         params: ExternalAgentConfigImportParams,
+        migration_service: &ExternalAgentConfigService,
     ) -> CoreImportOutcome {
-        self.migration_service
+        migration_service
             .import(
                 params
                     .migration_items
@@ -557,19 +571,6 @@ impl ExternalAgentConfigRequestProcessor {
                     .collect(),
             )
             .await
-    }
-
-    async fn complete_pending_plugin_import(
-        &self,
-        pending_plugin_import: PendingPluginImport,
-    ) -> Result<PluginImportOutcome, JSONRPCErrorError> {
-        self.migration_service
-            .import_plugins(
-                pending_plugin_import.cwd.as_deref(),
-                Some(pending_plugin_import.details),
-            )
-            .await
-            .map_err(|err| internal_error(err.to_string()))
     }
 }
 

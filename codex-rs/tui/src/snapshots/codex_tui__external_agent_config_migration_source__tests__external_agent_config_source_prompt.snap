@@ -1,0 +1,13 @@
+---
+source: tui/src/external_agent_config_migration_source_tests.rs
+expression: terminal.backend()
+---
+
+Choose an import source
+
+  Select the app whose setup you want to import.
+
+› 1. Claude Code
+  2. Cursor
+
+  Press enter to continue
