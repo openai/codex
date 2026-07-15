@@ -1,6 +1,7 @@
 //! Migration helpers for importing external-agent configuration into Codex.
 
 mod hooks_cla;
+mod hooks_cur;
 pub mod sessions;
 
 use serde_json::Value as JsonValue;
@@ -16,6 +17,8 @@ use toml::Value as TomlValue;
 pub use hooks_cla::hook_migration_event_names_cla;
 pub use hooks_cla::hooks_migration_description_cla;
 pub use hooks_cla::import_hooks_cla;
+pub use hooks_cur::hook_migration_event_names_cur;
+pub use hooks_cur::import_hooks_cur;
 
 const SOURCE_EXTERNAL_AGENT_NAME: &str = "claude";
 const EXTERNAL_AGENT_MCP_CONFIG_FILE: &str = ".mcp.json";

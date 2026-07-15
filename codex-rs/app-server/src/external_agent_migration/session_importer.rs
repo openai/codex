@@ -10,8 +10,9 @@ use codex_external_agent_migration::sessions::ExternalAgentSessionMigration;
 use codex_external_agent_migration::sessions::ImportedExternalAgentSession;
 use codex_external_agent_migration::sessions::ImportedSessionConnectorAttribution;
 use codex_external_agent_migration::sessions::PendingSessionImport;
+use codex_external_agent_migration::sessions::SessionMetadataMode;
 use codex_external_agent_migration::sessions::detect_imported_cla_session_connectors;
-use codex_external_agent_migration::sessions::prepare_validated_session_import;
+use codex_external_agent_migration::sessions::prepare_validated_session_import_with_metadata_mode;
 use codex_external_agent_migration::sessions::record_completed_session_imports;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
@@ -75,6 +76,7 @@ impl ExternalAgentSessionImporter {
         &self,
         sessions: Vec<ExternalAgentSessionMigration>,
         mut item_result: ExternalAgentConfigImportItemResult,
+        metadata_mode: SessionMetadataMode,
     ) -> ExternalAgentConfigImportItemResult {
         if sessions.is_empty() {
             return item_result;
@@ -91,7 +93,11 @@ impl ExternalAgentSessionImporter {
         let import_results = futures::stream::iter(sessions)
             .map(|session| {
                 let importer = self.clone();
-                async move { importer.import_requested_session(session).await }
+                async move {
+                    importer
+                        .import_requested_session(session, metadata_mode)
+                        .await
+                }
             })
             .buffer_unordered(SESSION_IMPORT_CONCURRENCY);
         futures::pin_mut!(import_results);
@@ -167,16 +173,17 @@ impl ExternalAgentSessionImporter {
     async fn import_requested_session(
         &self,
         session: ExternalAgentSessionMigration,
+        metadata_mode: SessionMetadataMode,
     ) -> Result<Option<CompletedSessionImport>, SessionImportFailure> {
         let source_path = session.path.clone();
-        let Some(pending_import) =
-            self.prepare_session_import(session)
-                .await
-                .map_err(|message| SessionImportFailure {
-                    source_path: source_path.clone(),
-                    message,
-                    stage: "session_prepare",
-                })?
+        let Some(pending_import) = self
+            .prepare_session_import(session, metadata_mode)
+            .await
+            .map_err(|message| SessionImportFailure {
+                source_path: source_path.clone(),
+                message,
+                stage: "session_prepare",
+            })?
         else {
             return Ok(None);
         };
@@ -212,12 +219,15 @@ impl ExternalAgentSessionImporter {
     async fn prepare_session_import(
         &self,
         session: ExternalAgentSessionMigration,
+        metadata_mode: SessionMetadataMode,
     ) -> Result<Option<PendingSessionImport>, String> {
         let codex_home = self.codex_home.clone();
-        tokio::task::spawn_blocking(move || prepare_validated_session_import(&codex_home, session))
-            .await
-            .map_err(|err| format!("external agent session preparation task failed: {err}"))?
-            .map_err(|err| format!("failed to prepare external agent session: {err}"))
+        tokio::task::spawn_blocking(move || {
+            prepare_validated_session_import_with_metadata_mode(&codex_home, session, metadata_mode)
+        })
+        .await
+        .map_err(|err| format!("external agent session preparation task failed: {err}"))?
+        .map_err(|err| format!("failed to prepare external agent session: {err}"))
     }
 
     async fn persist_session(

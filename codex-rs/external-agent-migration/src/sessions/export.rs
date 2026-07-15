@@ -1,7 +1,7 @@
 use super::ConversationMessage;
 use super::ImportedExternalAgentSession;
 use super::MessageRole;
-use super::records::read_session_import;
+use super::records::read_session_import_with_cwd;
 use super::summarize_for_label;
 use super::title::IMPORTED_SESSION_FALLBACK_TITLE;
 use super::title::SessionTitleCandidates;
@@ -26,14 +26,17 @@ const EXTERNAL_SESSION_IMPORTED_MARKER: &str = "<EXTERNAL SESSION IMPORTED>";
 
 #[cfg(test)]
 fn load_session_for_import(path: &Path) -> io::Result<Option<ImportedExternalAgentSession>> {
-    Ok(load_session_for_import_with_content_sha256(path)?
-        .map(|(session, _content_sha256, _attributed_mcp_server_ids)| session))
+    Ok(
+        load_session_for_import_with_content_sha256(path, /*fallback_cwd*/ None)?
+            .map(|(session, _content_sha256, _attributed_mcp_server_ids)| session),
+    )
 }
 
 pub(crate) fn load_session_for_import_with_content_sha256(
     path: &Path,
+    fallback_cwd: Option<&Path>,
 ) -> io::Result<Option<(ImportedExternalAgentSession, String, BTreeSet<String>)>> {
-    let parsed = read_session_import(path)?;
+    let parsed = read_session_import_with_cwd(path, fallback_cwd)?;
     let Some(cwd) = parsed.cwd else {
         return Ok(None);
     };

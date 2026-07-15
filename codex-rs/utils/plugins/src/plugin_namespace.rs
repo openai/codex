@@ -7,8 +7,11 @@ use std::path::Path;
 use std::path::PathBuf;
 
 /// Ordered plugin manifest paths recognized beneath a plugin root.
-pub const DISCOVERABLE_PLUGIN_MANIFEST_PATHS: &[&str] =
-    &[".codex-plugin/plugin.json", ".claude-plugin/plugin.json"];
+pub const DISCOVERABLE_PLUGIN_MANIFEST_PATHS: &[&str] = &[
+    ".codex-plugin/plugin.json",
+    ".claude-plugin/plugin.json",
+    ".cursor-plugin/plugin.json",
+];
 
 pub fn find_plugin_manifest_path(plugin_root: &Path) -> Option<PathBuf> {
     DISCOVERABLE_PLUGIN_MANIFEST_PATHS
@@ -86,7 +89,8 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
+    const ALTERNATE_PLUGIN_CLA_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
+    const ALTERNATE_PLUGIN_CUR_MANIFEST_RELATIVE_PATH: &str = ".cursor-plugin/plugin.json";
 
     #[tokio::test]
     async fn uses_manifest_name() {
@@ -114,7 +118,27 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("plugins/sample");
         let skill_path = plugin_root.join("skills/search/SKILL.md");
-        let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+        let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_CLA_MANIFEST_RELATIVE_PATH);
+
+        fs::create_dir_all(skill_path.parent().expect("parent")).expect("mkdir");
+        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+            .expect("mkdir manifest");
+        fs::write(&manifest_path, r#"{"name":"sample"}"#).expect("write manifest");
+        fs::write(&skill_path, "---\ndescription: search\n---\n").expect("write skill");
+
+        assert_eq!(
+            plugin_namespace_for_skill_path(LOCAL_FS.as_ref(), &skill_path.abs()).await,
+            Some("sample".to_string())
+        );
+        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(manifest_path));
+    }
+
+    #[tokio::test]
+    async fn uses_name_from_cur_plugin_manifest_path() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("plugins/sample");
+        let skill_path = plugin_root.join("skills/search/SKILL.md");
+        let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_CUR_MANIFEST_RELATIVE_PATH);
 
         fs::create_dir_all(skill_path.parent().expect("parent")).expect("mkdir");
         fs::create_dir_all(manifest_path.parent().expect("manifest parent"))

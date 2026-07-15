@@ -5495,8 +5495,15 @@
           "description": "If true, include detection under the user's home directory.",
           "type": "boolean"
         },
+        "migrationSource": {
+          "description": "Optional migration-source selector. Missing or unrecognized values use the default source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "source": {
-          "description": "Optional import-source selector. Missing or unrecognized values use the default source for backwards compatibility.",
+          "description": "Deprecated field retained for compatibility. This field is ignored; use `migrationSource` to select the migration source.",
           "type": [
             "string",
             "null"
@@ -5676,8 +5683,15 @@
           },
           "type": "array"
         },
+        "migrationSource": {
+          "description": "Migration-source selector used to produce the migration items. Pass the same value to detection and import; missing or unrecognized values use the default source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "source": {
-          "description": "Import-source selector used to produce the migration items. Pass the same value to detection and import; missing or unrecognized values use the default source for backwards compatibility.",
+          "description": "Optional identifier for the product that initiated the import.",
           "type": [
             "string",
             "null"

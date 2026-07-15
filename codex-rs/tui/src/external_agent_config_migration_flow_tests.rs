@@ -12,6 +12,15 @@ use pretty_assertions::assert_eq;
 use ratatui::text::Line;
 use std::path::PathBuf;
 
+fn detected_item(description: &str) -> ExternalAgentConfigMigrationItem {
+    ExternalAgentConfigMigrationItem {
+        item_type: ExternalAgentConfigMigrationItemType::Config,
+        description: description.to_string(),
+        cwd: None,
+        details: None,
+    }
+}
+
 fn selected_items() -> Vec<ExternalAgentConfigMigrationItem> {
     vec![
         ExternalAgentConfigMigrationItem {
@@ -174,7 +183,7 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
         vec![
             Line::from(vec![
                 "• ".dim(),
-                "Claude Code import started.".cyan(),
+                "Import started.".cyan(),
                 " You can keep working while it finishes.".into(),
             ]),
             Line::from(vec![
@@ -228,7 +237,7 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
         vec![
             Line::from(vec![
                 "• ".dim(),
-                "Claude Code import finished: ".into(),
+                "Import finished: ".into(),
                 "2 imported".green(),
                 ", ".into(),
                 "1 failed".red(),
@@ -256,5 +265,72 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
                 "Run /import again to check for additional items.".dim(),
             ]),
         ]
+    );
+}
+
+#[test]
+fn external_agent_config_detection_keeps_one_or_multiple_available_sources() {
+    let mut detection = ExternalAgentConfigDetection::default();
+    detection.record_items(
+        ExternalAgentConfigMigrationSource::Cla,
+        vec![detected_item("first")],
+    );
+    detection.record_items(ExternalAgentConfigMigrationSource::Cur, Vec::new());
+    let ExternalAgentConfigDetectionOutcome::Sources(sources) = detection.finish() else {
+        panic!("expected one detected source");
+    };
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].source, ExternalAgentConfigMigrationSource::Cla);
+    assert_eq!(sources[0].items, vec![detected_item("first")]);
+
+    let mut detection = ExternalAgentConfigDetection::default();
+    detection.record_items(
+        ExternalAgentConfigMigrationSource::Cla,
+        vec![detected_item("first")],
+    );
+    detection.record_items(
+        ExternalAgentConfigMigrationSource::Cur,
+        vec![detected_item("second")],
+    );
+    let ExternalAgentConfigDetectionOutcome::Sources(sources) = detection.finish() else {
+        panic!("expected two detected sources");
+    };
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[0].source, ExternalAgentConfigMigrationSource::Cla);
+    assert_eq!(sources[1].source, ExternalAgentConfigMigrationSource::Cur);
+}
+
+#[test]
+fn external_agent_config_detection_tolerates_a_partial_failure() {
+    let mut detection = ExternalAgentConfigDetection::default();
+    detection.record_error(ExternalAgentConfigMigrationSource::Cla, "unavailable");
+    detection.record_items(
+        ExternalAgentConfigMigrationSource::Cur,
+        vec![detected_item("available")],
+    );
+
+    let ExternalAgentConfigDetectionOutcome::Sources(sources) = detection.finish() else {
+        panic!("expected the available source");
+    };
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].source, ExternalAgentConfigMigrationSource::Cur);
+}
+
+#[test]
+fn external_agent_config_detection_distinguishes_no_items_from_total_failure() {
+    assert!(matches!(
+        ExternalAgentConfigDetection::default().finish(),
+        ExternalAgentConfigDetectionOutcome::NoItems
+    ));
+
+    let mut detection = ExternalAgentConfigDetection::default();
+    detection.record_error(ExternalAgentConfigMigrationSource::Cla, "first failure");
+    detection.record_error(ExternalAgentConfigMigrationSource::Cur, "second failure");
+    let ExternalAgentConfigDetectionOutcome::Failed(error) = detection.finish() else {
+        panic!("expected detection failure");
+    };
+    assert_eq!(
+        error,
+        "Could not check for importable setup: Claude Code: first failure; Cursor: second failure"
     );
 }

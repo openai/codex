@@ -12,7 +12,11 @@ includeHome?: boolean,
  */
 cwds?: Array<string> | null,
 /**
- * Optional import-source selector. Missing or unrecognized values use the default source for
- * backwards compatibility.
+ * Deprecated field retained for compatibility. This field is ignored; use `migrationSource`
+ * to select the migration source.
  */
-source?: string | null, };
+source?: string | null,
+/**
+ * Optional migration-source selector. Missing or unrecognized values use the default source.
+ */
+migrationSource?: string | null, };

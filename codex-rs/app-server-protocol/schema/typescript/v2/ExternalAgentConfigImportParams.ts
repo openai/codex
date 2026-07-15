@@ -5,8 +5,11 @@ import type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigr
 
 export type ExternalAgentConfigImportParams = { migrationItems: Array<ExternalAgentConfigMigrationItem>,
 /**
- * Import-source selector used to produce the migration items. Pass the same value to detection
- * and import; missing or unrecognized values use the default source for backwards
- * compatibility.
+ * Optional identifier for the product that initiated the import.
  */
-source?: string | null, };
+source?: string | null,
+/**
+ * Migration-source selector used to produce the migration items. Pass the same value to
+ * detection and import; missing or unrecognized values use the default source.
+ */
+migrationSource?: string | null, };

@@ -79,8 +79,8 @@ pub(crate) fn external_agent_config_migration_item_label(
     item: &ExternalAgentConfigMigrationItem,
 ) -> &'static str {
     match item.item_type {
-        ExternalAgentConfigMigrationItemType::AgentsMd => "Instructions (CLAUDE.md -> AGENTS.md)",
-        ExternalAgentConfigMigrationItemType::Config => "Settings (settings.json -> config.toml)",
+        ExternalAgentConfigMigrationItemType::AgentsMd => "Instructions",
+        ExternalAgentConfigMigrationItemType::Config => "Settings",
         ExternalAgentConfigMigrationItemType::Skills => "Skills",
         ExternalAgentConfigMigrationItemType::Plugins => "Plugins",
         ExternalAgentConfigMigrationItemType::McpServerConfig => "MCP servers",
