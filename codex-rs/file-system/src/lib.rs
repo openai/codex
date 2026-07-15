@@ -126,8 +126,10 @@ pub struct WalkOutcome {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExecFileSystemPath {
     Path { path: PathUri },
+    GeneratedDefaultPath { path: PathUri },
     GlobPattern { pattern: String },
     Special { value: FileSystemSpecialPath },
+    GeneratedDefaultSpecial { value: FileSystemSpecialPath },
 }
 
 impl From<FileSystemPath> for ExecFileSystemPath {
@@ -136,8 +138,14 @@ impl From<FileSystemPath> for ExecFileSystemPath {
             FileSystemPath::Path { path } => Self::Path {
                 path: PathUri::from_abs_path(&path),
             },
+            FileSystemPath::GeneratedDefaultPath { path } => Self::GeneratedDefaultPath {
+                path: PathUri::from_abs_path(&path),
+            },
             FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             FileSystemPath::Special { value } => Self::Special { value },
+            FileSystemPath::GeneratedDefaultSpecial { value } => {
+                Self::GeneratedDefaultSpecial { value }
+            }
         }
     }
 }
@@ -150,8 +158,14 @@ impl TryFrom<ExecFileSystemPath> for FileSystemPath {
             ExecFileSystemPath::Path { path } => Self::Path {
                 path: path.to_abs_path()?,
             },
+            ExecFileSystemPath::GeneratedDefaultPath { path } => Self::GeneratedDefaultPath {
+                path: path.to_abs_path()?,
+            },
             ExecFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             ExecFileSystemPath::Special { value } => Self::Special { value },
+            ExecFileSystemPath::GeneratedDefaultSpecial { value } => {
+                Self::GeneratedDefaultSpecial { value }
+            }
         })
     }
 }
@@ -350,8 +364,14 @@ impl FileSystemSandboxContext {
                 ExecFileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
                 ExecFileSystemPath::Special {
                     value: FileSystemSpecialPath::ProjectRoots { .. },
+                }
+                | ExecFileSystemPath::GeneratedDefaultSpecial {
+                    value: FileSystemSpecialPath::ProjectRoots { .. },
                 } => true,
-                ExecFileSystemPath::Path { .. } | ExecFileSystemPath::Special { .. } => false,
+                ExecFileSystemPath::Path { .. }
+                | ExecFileSystemPath::GeneratedDefaultPath { .. }
+                | ExecFileSystemPath::Special { .. }
+                | ExecFileSystemPath::GeneratedDefaultSpecial { .. } => false,
             }),
             ExecPermissionProfile::Managed {
                 file_system: ExecManagedFileSystemPermissions::Unrestricted,

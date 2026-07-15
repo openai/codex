@@ -312,11 +312,13 @@ pub enum FileSystemPath {
 impl From<CoreFileSystemPath> for FileSystemPath {
     fn from(value: CoreFileSystemPath) -> Self {
         match value {
-            CoreFileSystemPath::Path { path } => Self::Path {
+            CoreFileSystemPath::Path { path }
+            | CoreFileSystemPath::GeneratedDefaultPath { path } => Self::Path {
                 path: LegacyAppPathString::from_abs_path(&path),
             },
             CoreFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
-            CoreFileSystemPath::Special { value } => Self::Special {
+            CoreFileSystemPath::Special { value }
+            | CoreFileSystemPath::GeneratedDefaultSpecial { value } => Self::Special {
                 value: value.into(),
             },
         }
