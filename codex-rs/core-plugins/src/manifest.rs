@@ -6,7 +6,9 @@ use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
+use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
 
@@ -42,6 +44,12 @@ struct RawPluginManifest {
     hooks: Option<RawPluginManifestHooks>,
     #[serde(default)]
     interface: Option<RawPluginManifestInterface>,
+}
+
+#[derive(Deserialize)]
+struct RawPluginCommandManifest {
+    #[serde(default)]
+    commands: Option<RawPluginManifestPaths>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -137,6 +145,24 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
             None
         }
     }
+}
+
+pub(crate) fn load_plugin_command_paths(plugin_root: &Path) -> io::Result<Option<Vec<PathBuf>>> {
+    let Some(manifest_path) = find_plugin_manifest_path(plugin_root) else {
+        return Ok(None);
+    };
+    let manifest =
+        serde_json::from_str::<RawPluginCommandManifest>(&fs::read_to_string(manifest_path)?)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let Some(commands) = manifest.commands else {
+        return Ok(None);
+    };
+    let plugin_root = PathUri::from_host_native_path(plugin_root)?;
+    resolve_manifest_paths(&plugin_root, "commands", Some(&commands))
+        .into_iter()
+        .map(|path| Ok(path.to_abs_path()?.into_path_buf()))
+        .collect::<io::Result<Vec<_>>>()
+        .map(Some)
 }
 
 pub(crate) fn parse_plugin_manifest(

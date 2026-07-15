@@ -1,5 +1,6 @@
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
+use crate::command_migration::migrated_command_skills_root;
 use crate::is_openai_curated_marketplace_name;
 use crate::manifest::PluginManifest;
 use crate::manifest::PluginManifestHooks;
@@ -958,10 +959,35 @@ pub(crate) async fn load_plugin_skill_inventory(
         .collect::<Vec<_>>();
     let outcome = load_skills_from_roots(roots, plugin_skill_snapshots, root_scan_slots).await;
     let had_errors = !outcome.errors.is_empty();
+    let migrated_command_skills = migrated_command_skills_root(plugin_root);
+    let migrated_command_skills = fs::canonicalize(migrated_command_skills.as_path())
+        .ok()
+        .and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
+        .unwrap_or(migrated_command_skills);
     let skills = outcome
         .skills
         .into_iter()
         .filter(|skill| skill.matches_product_restriction_for_product(restriction_product))
+        .collect::<Vec<_>>();
+    let native_skill_names = skills
+        .iter()
+        .filter(|skill| {
+            !skill
+                .path_to_skills_md
+                .as_path()
+                .starts_with(migrated_command_skills.as_path())
+        })
+        .map(|skill| skill.name.clone())
+        .collect::<HashSet<_>>();
+    let skills = skills
+        .into_iter()
+        .filter(|skill| {
+            !skill
+                .path_to_skills_md
+                .as_path()
+                .starts_with(migrated_command_skills.as_path())
+                || !native_skill_names.contains(&skill.name)
+        })
         .collect::<Vec<_>>();
 
     PluginSkillInventory { skills, had_errors }
@@ -976,6 +1002,10 @@ fn plugin_skill_roots(
     } else {
         manifest_paths.skills.clone()
     };
+    let migrated_command_skills = migrated_command_skills_root(plugin_root);
+    if migrated_command_skills.is_dir() {
+        paths.push(migrated_command_skills);
+    }
     paths.sort_unstable();
     paths.dedup();
     paths
