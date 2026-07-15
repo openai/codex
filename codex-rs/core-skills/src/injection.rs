@@ -39,6 +39,14 @@ pub struct InjectedHostSkillPrompts {
     paths: HashSet<String>,
 }
 
+/// Marks a turn whose skills extension projects the host skill catalog through
+/// WorldState.
+///
+/// Core uses this to keep its legacy thread-start catalog from duplicating the
+/// extension-owned catalog.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HostSkillsCatalogInWorldState;
+
 impl InjectedHostSkillPrompts {
     pub fn insert_path(&mut self, path: impl Into<String>) {
         let path = path.into();

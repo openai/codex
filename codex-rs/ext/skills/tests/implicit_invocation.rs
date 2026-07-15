@@ -25,6 +25,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_skills_extension::HostSkillProvider;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;
@@ -226,7 +227,9 @@ async fn shadow_selection_uses_host_snapshot_and_excludes_executor_candidates() 
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     install_with_providers_and_metrics(
         &mut builder,
-        SkillProviders::new().with_executor_provider(Arc::new(ExecutorProvider)),
+        SkillProviders::new()
+            .with_executor_provider(Arc::new(ExecutorProvider))
+            .with_host_provider(Arc::new(HostSkillProvider::new())),
         Some(metrics.clone()),
         |_| SkillsExtensionConfig {
             include_instructions: true,
