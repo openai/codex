@@ -65,10 +65,12 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::state_db::StateDbHandle;
 use codex_thread_store::InMemoryThreadStore;
+use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
+use codex_thread_store::StoredModelContext;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStore;
@@ -1180,6 +1182,24 @@ impl ThreadManagerState {
             })
     }
 
+    pub(crate) async fn load_latest_model_context(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> CodexResult<StoredModelContext> {
+        let thread_id = params.thread_id;
+        self.thread_store
+            .load_latest_model_context(params)
+            .await
+            .map_err(|err| match err {
+                ThreadStoreError::ThreadNotFound { thread_id } => {
+                    CodexErr::ThreadNotFound(thread_id)
+                }
+                err => CodexErr::Fatal(format!(
+                    "failed to load model context for thread {thread_id}: {err}"
+                )),
+            })
+    }
+
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
@@ -1360,6 +1380,7 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
+            /*history_mode*/ None,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
@@ -1377,6 +1398,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        history_mode: Option<ThreadHistoryMode>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
@@ -1395,7 +1417,7 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread_with_source(
             config,
             InitialHistory::New,
-            /*history_mode*/ None,
+            history_mode,
             /*allow_provider_model_fallback*/ false,
             Arc::clone(&self.auth_manager),
             agent_control,
@@ -1464,6 +1486,7 @@ impl ThreadManagerState {
         &self,
         config: Config,
         initial_history: InitialHistory,
+        history_mode: Option<ThreadHistoryMode>,
         agent_control: AgentControl,
         session_source: SessionSource,
         thread_source: Option<ThreadSource>,
@@ -1484,7 +1507,7 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
-            /*history_mode*/ None,
+            history_mode,
             /*allow_provider_model_fallback*/ false,
             Arc::clone(&self.auth_manager),
             agent_control,

@@ -157,6 +157,75 @@ WHERE thread_id = ?
 }
 
 #[tokio::test]
+async fn subagent_prefix_advances_projection_without_materializing_history() {
+    let home = TempDir::new().expect("temp dir");
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let thread_id = ThreadId::default();
+    create_paginated_subagent_thread(
+        &store,
+        thread_id,
+        /*subagent_history_start_ordinal*/ Some(4),
+    )
+    .await;
+    store
+        .persist_thread(thread_id)
+        .await
+        .expect("persist session metadata");
+
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("parent-turn"),
+                completed_item(
+                    thread_id,
+                    "parent-turn",
+                    TurnItem::UserMessage(UserMessageItem {
+                        id: "parent-user".to_string(),
+                        client_id: None,
+                        content: Vec::new(),
+                    }),
+                ),
+                turn_completed("parent-turn"),
+                turn_started("child-turn"),
+                completed_item(
+                    thread_id,
+                    "child-turn",
+                    TurnItem::UserMessage(UserMessageItem {
+                        id: "child-user".to_string(),
+                        client_id: None,
+                        content: Vec::new(),
+                    }),
+                ),
+                turn_completed("child-turn"),
+            ],
+        })
+        .await
+        .expect("append inherited prefix and child history");
+
+    let pool = codex_state::open_thread_history_db(home.path())
+        .await
+        .expect("open thread history db");
+    let turns = sqlx::query_as::<_, (String, i64)>(
+        "SELECT turn_id, rollout_ordinal FROM thread_turns WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .fetch_all(&pool)
+    .await
+    .expect("read projected turns");
+    assert_eq!(turns, vec![("child-turn".to_string(), 4)]);
+    let items = sqlx::query_as::<_, (String, i64)>(
+        "SELECT item_id, rollout_ordinal FROM thread_items WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .fetch_all(&pool)
+    .await
+    .expect("read projected items");
+    assert_eq!(items, vec![("child-user".to_string(), 5)]);
+    assert_eq!(projection_state(&pool, thread_id).await.1, 7);
+}
+
+#[tokio::test]
 async fn replayed_item_snapshot_updates_content_without_reordering() {
     let home = TempDir::new().expect("temp dir");
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
@@ -779,6 +848,17 @@ SELECT
 }
 
 async fn create_paginated_thread(store: &LocalThreadStore, thread_id: ThreadId) {
+    create_paginated_subagent_thread(
+        store, thread_id, /*subagent_history_start_ordinal*/ None,
+    )
+    .await;
+}
+
+async fn create_paginated_subagent_thread(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    subagent_history_start_ordinal: Option<u64>,
+) {
     store
         .create_thread(CreateThreadParams {
             session_id: thread_id.into(),
@@ -794,6 +874,7 @@ async fn create_paginated_thread(store: &LocalThreadStore, thread_id: ThreadId) 
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: ThreadHistoryMode::Paginated,
+            subagent_history_start_ordinal,
             initial_window_id: "window-1".to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(std::env::current_dir().expect("cwd")),
