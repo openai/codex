@@ -453,29 +453,6 @@ impl NetworkMitmToml {
         Ok(())
     }
 
-    pub fn validate_action_references(
-        &self,
-        actions_by_name: &IndexMap<String, NetworkMitmActionToml>,
-    ) -> Result<(), String> {
-        self.validate_action_definitions()?;
-
-        let Some(hooks) = self.hooks.as_ref() else {
-            return Ok(());
-        };
-
-        for (hook_name, hook) in hooks {
-            for action_name in &hook.action {
-                if !actions_by_name.contains_key(action_name) {
-                    return Err(format!(
-                        "network.mitm.hooks.{hook_name}.action references undefined action `{action_name}`"
-                    ));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn to_runtime_hooks(
         &self,
         actions_by_name: Option<&IndexMap<String, NetworkMitmActionToml>>,
