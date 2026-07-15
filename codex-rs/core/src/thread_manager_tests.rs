@@ -426,14 +426,12 @@ async fn code_mode_session_provider_is_shared_across_threads() {
 
     let first_provider = first
         .thread
-        .codex
         .session
         .services
         .code_mode_service
         .session_provider();
     let second_provider = second
         .thread
-        .codex
         .session
         .services
         .code_mode_service
@@ -660,7 +658,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         })
         .await
         .expect("start second thread");
-    let first_session = &first_thread.thread.codex.session;
+    let first_session = &first_thread.thread.session;
     let first_originator = first_session.originator().await;
     let first_resolved = first_session
         .services
@@ -673,7 +671,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             /*available_environment_ids*/ &[],
         )
         .await;
-    let second_session = &second_thread.thread.codex.session;
+    let second_session = &second_thread.thread.session;
     let second_originator = second_session.originator().await;
     let second_resolved = second_session
         .services
@@ -892,7 +890,6 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .expect("resume source thread");
     let resumed_turn = resumed
         .thread
-        .codex
         .session
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
@@ -919,7 +916,6 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .expect("fork source thread");
     let forked_turn = forked
         .thread
-        .codex
         .session
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
@@ -971,7 +967,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         .expect("start thread with explicit installation id");
 
     assert!(!config.codex_home.join(INSTALLATION_ID_FILENAME).exists());
-    assert_eq!(thread.thread.codex.session.installation_id, installation_id);
+    assert_eq!(thread.thread.session.installation_id, installation_id);
 
     thread
         .thread

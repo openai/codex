@@ -591,7 +591,6 @@ impl AgentControl {
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         Some(
             parent_thread
-                .codex
                 .session
                 .services
                 .turn_environments
@@ -614,14 +613,12 @@ impl AgentControl {
         };
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
-        let parent_config = parent_thread.codex.session.get_config().await;
+        let parent_config = parent_thread.session.get_config().await;
         if !crate::exec_policy::child_uses_parent_exec_policy(&parent_config, child_config) {
             return None;
         }
 
-        Some(Arc::clone(
-            &parent_thread.codex.session.services.exec_policy,
-        ))
+        Some(Arc::clone(&parent_thread.session.services.exec_policy))
     }
 
     async fn open_thread_spawn_children(

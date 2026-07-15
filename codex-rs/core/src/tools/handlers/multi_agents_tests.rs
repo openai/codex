@@ -1584,9 +1584,8 @@ async fn multi_agent_v2_list_agents_returns_completed_status() {
         .get_thread(agent_id)
         .await
         .expect("child thread should exist");
-    let child_turn = child_thread.codex.session.new_default_turn().await;
+    let child_turn = child_thread.session.new_default_turn().await;
     child_thread
-        .codex
         .session
         .send_event(
             child_turn.as_ref(),
@@ -1989,7 +1988,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .expect("root thread should start");
     // Production spawn_agent calls happen after the parent turn has resolved
     // and stored its runtime; mirror that before using the synthetic handler.
-    root.thread.codex.session.new_default_turn().await;
+    root.thread.session.new_default_turn().await;
     session.services.agent_control = manager.agent_control();
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
@@ -2019,9 +2018,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .expect("worker thread should exist");
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
 
-    let first_turn = thread.codex.session.new_default_turn().await;
+    let first_turn = thread.session.new_default_turn().await;
     thread
-        .codex
         .session
         .send_event(
             first_turn.as_ref(),
@@ -2062,9 +2060,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             )
     }));
 
-    let second_turn = thread.codex.session.new_default_turn().await;
+    let second_turn = thread.session.new_default_turn().await;
     thread
-        .codex
         .session
         .send_event(
             second_turn.as_ref(),
@@ -2226,9 +2223,8 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
         .await
         .expect("worker thread should exist");
 
-    let aborted_turn = thread.codex.session.new_default_turn().await;
+    let aborted_turn = thread.session.new_default_turn().await;
     thread
-        .codex
         .session
         .send_event(
             aborted_turn.as_ref(),
@@ -2421,7 +2417,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .get_thread(agent_id)
         .await
         .expect("spawned agent thread should exist");
-    let child_turn = child_thread.codex.session.new_default_turn().await;
+    let child_turn = child_thread.session.new_default_turn().await;
     assert_eq!(
         child_turn.file_system_sandbox_policy(),
         expected_file_system_sandbox_policy
@@ -3868,7 +3864,7 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
         .get_thread(agent_id)
         .await
         .expect("worker thread should be resident");
-    let worker_session = worker_thread.codex.session.clone();
+    let worker_session = worker_thread.session.clone();
     SpawnAgentHandlerV2::default()
         .handle(invocation(
             worker_session.clone(),
@@ -4299,7 +4295,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .await
         .expect("parent thread should start");
     let parent_thread_id = parent.thread_id;
-    let parent_session = parent.thread.codex.session.clone();
+    let parent_session = parent.thread.session.clone();
 
     let child_turn = parent_session.new_default_turn().await;
     let child_spawn_output = SpawnAgentHandler::default()
@@ -4326,7 +4322,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
-    let child_session = child_thread.codex.session.clone();
+    let child_session = child_thread.session.clone();
     let grandchild_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             child_session.clone(),
@@ -4430,7 +4426,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .start_thread(config.clone())
         .await
         .expect("operator thread should start");
-    let operator_session = operator.thread.codex.session.clone();
+    let operator_session = operator.thread.session.clone();
     let _ = manager
         .agent_control()
         .shutdown_live_agent(parent_thread_id)
@@ -4444,7 +4440,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_resume_output = ResumeAgentHandler
         .handle(invocation(
             operator_session,
-            operator.thread.codex.session.new_default_turn().await,
+            operator.thread.session.new_default_turn().await,
             "resume_agent",
             function_payload(json!({"id": parent_thread_id.to_string()})),
         ))

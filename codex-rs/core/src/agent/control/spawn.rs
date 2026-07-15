@@ -411,13 +411,7 @@ impl AgentControl {
         )) = notification_source.as_ref()
         {
             let client_metadata = match state.get_thread(*parent_thread_id).await {
-                Ok(parent_thread) => {
-                    parent_thread
-                        .codex
-                        .session
-                        .app_server_client_metadata()
-                        .await
-                }
+                Ok(parent_thread) => parent_thread.session.app_server_client_metadata().await,
                 Err(error) => {
                     tracing::warn!(
                         error = %error,
@@ -430,17 +424,12 @@ impl AgentControl {
                     }
                 }
             };
-            let thread_config = new_thread.thread.codex.thread_config_snapshot().await;
+            let thread_config = new_thread.thread.config_snapshot().await;
             let parent_thread_id = thread_config.parent_thread_id;
             emit_subagent_session_started(
-                &new_thread
-                    .thread
-                    .codex
-                    .session
-                    .services
-                    .analytics_events_client,
+                &new_thread.thread.session.services.analytics_events_client,
                 client_metadata,
-                new_thread.thread.codex.session.session_id(),
+                new_thread.thread.session.session_id(),
                 new_thread.thread_id,
                 parent_thread_id,
                 thread_config,
@@ -569,7 +558,7 @@ impl AgentControl {
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
                 if multi_agent_version == MultiAgentVersion::V2 {
-                    let parent_config = parent_thread.codex.session.get_config().await;
+                    let parent_config = parent_thread.session.get_config().await;
                     [
                         parent_config
                             .multi_agent_v2
