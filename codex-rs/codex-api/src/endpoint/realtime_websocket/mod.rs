@@ -1,9 +1,11 @@
 pub(crate) mod methods;
 mod methods_common;
+mod methods_frameless_bidi;
 mod methods_v1;
 mod methods_v2;
 pub(crate) mod protocol;
 mod protocol_common;
+mod protocol_frameless_bidi;
 mod protocol_v1;
 mod protocol_v2;
 
