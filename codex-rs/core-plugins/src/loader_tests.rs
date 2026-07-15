@@ -5,6 +5,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -163,6 +164,7 @@ enabled = true
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
         /*remote_global_catalog_active*/ false,
+        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
     )
     .await;
     let hooks_only = load_plugins_from_layer_stack_with_scope(
