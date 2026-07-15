@@ -1955,7 +1955,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     match op_rx.try_recv() {
-        Ok(Op::Interrupt { .. }) => {}
+        Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
@@ -2019,7 +2019,7 @@ async fn esc_interrupt_pauses_active_goal_turn() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt)));
     assert_goal_paused_event(&mut rx, thread_id);
 
     update_thread_goal(&mut chat, thread_id, AppThreadGoalStatus::Paused);
@@ -2056,7 +2056,7 @@ async fn request_user_input_interrupt_pauses_active_goal_turn() {
 
         chat.handle_key_event(key_event);
 
-        assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+        assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt)));
         assert_goal_paused_event(&mut rx, thread_id);
     }
 }

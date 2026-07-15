@@ -403,7 +403,7 @@ impl ChatWidget {
                 self.quit_shortcut_expires_at = None;
                 self.quit_shortcut_key = None;
                 self.bottom_pane.clear_quit_shortcut_hint();
-                if self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output()) {
+                if self.submit_op(AppCommand::interrupt()) {
                     self.pause_active_goal_for_interrupt();
                 }
             } else {
@@ -421,9 +421,7 @@ impl ChatWidget {
 
         self.arm_quit_shortcut(key);
 
-        if self.is_cancellable_work_active()
-            && self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output())
-        {
+        if self.is_cancellable_work_active() && self.submit_op(AppCommand::interrupt()) {
             self.pause_active_goal_for_interrupt();
         }
     }

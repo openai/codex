@@ -7,7 +7,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 use std::collections::VecDeque;
 
 #[tokio::test]
@@ -928,67 +927,89 @@ async fn empty_enter_during_task_does_not_queue() {
     assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
-#[tokio::test]
-async fn output_free_interrupted_turn_requests_prompt_restore() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let prompt = UserMessage::from("revise this prompt");
-    chat.record_cancel_edit_candidate(prompt.clone());
-    handle_turn_started(&mut chat, "turn-1");
-
-    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::Interrupt {
-            behavior: crate::app_command::InterruptBehavior::RestorePromptIfNoOutput,
-        })
+fn interrupted_history(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    prompt: &str,
+) -> (bool, String) {
+    let mut saw_prompt = false;
+    let mut history = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            if let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>() {
+                assert_eq!(cell.message, prompt);
+                saw_prompt = true;
+            }
+            history.push(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+        }
+    }
+    let history = history.join("\n");
+    assert!(
+        history.contains("Conversation interrupted - tell the model what to do differently."),
+        "expected normal interruption notice, got {history:?}"
     );
-    handle_turn_interrupted(&mut chat, "turn-1");
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::RestoreCancelledTurn(restored)) if restored == prompt);
+    (saw_prompt, history)
 }
 
 #[tokio::test]
-async fn visible_output_prevents_cancelled_turn_prompt_restore() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.record_cancel_edit_candidate(UserMessage::from("revise this prompt"));
+async fn output_free_esc_interrupt_keeps_prompt_and_opens_blank_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let prompt = "revise this prompt";
+    chat.thread_id = Some(ThreadId::new());
+    chat.submit_user_message(UserMessage::from(prompt));
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
     handle_turn_started(&mut chat, "turn-1");
-    chat.on_agent_message_delta("visible output".to_string());
-    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
+    chat.bottom_pane.ensure_status_indicator();
 
-    handle_turn_interrupted(&mut chat, "turn-1");
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    assert!(chat.bottom_pane.should_interrupt_running_task(esc));
+    chat.handle_key_event(esc);
 
-    while let Ok(event) = rx.try_recv() {
-        assert!(!matches!(event, AppEvent::RestoreCancelledTurn(_)));
+    let mut saw_prompt = false;
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => {
+                if let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>() {
+                    assert_eq!(cell.message, prompt);
+                    saw_prompt = true;
+                }
+            }
+            Ok(AppEvent::CodexOp(Op::Interrupt)) => break,
+            Ok(_) => {}
+            Err(error) => panic!("expected Esc interrupt command, got {error:?}"),
+        }
     }
-}
-
-#[tokio::test]
-async fn thinking_status_keeps_cancelled_turn_prompt_restore_eligible() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let prompt = UserMessage::from("revise this prompt");
-    chat.record_cancel_edit_candidate(prompt.clone());
-    handle_turn_started(&mut chat, "turn-1");
-    chat.on_agent_reasoning_delta("**Thinking**".to_string());
-    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
 
     handle_turn_interrupted(&mut chat, "turn-1");
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::RestoreCancelledTurn(restored)) if restored == prompt);
+    let (prompt_after_interrupt, _) = interrupted_history(&mut rx, prompt);
+    assert!(saw_prompt || prompt_after_interrupt);
+    assert!(chat.bottom_pane.composer_is_empty());
 }
 
 #[tokio::test]
-async fn patch_activity_prevents_cancelled_turn_prompt_restore() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.record_cancel_edit_candidate(UserMessage::from("revise this prompt"));
+async fn output_free_ctrl_c_interrupt_keeps_prompt_and_opens_blank_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let prompt = "revise this prompt";
+    chat.thread_id = Some(ThreadId::new());
+    chat.submit_user_message(UserMessage::from(prompt));
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
     handle_turn_started(&mut chat, "turn-1");
-    chat.on_patch_apply_begin(HashMap::new());
-    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
 
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_interrupt_op(&mut op_rx);
     handle_turn_interrupted(&mut chat, "turn-1");
 
-    while let Ok(event) = rx.try_recv() {
-        assert!(!matches!(event, AppEvent::RestoreCancelledTurn(_)));
-    }
+    let (saw_prompt, interrupted_history) = interrupted_history(&mut rx, prompt);
+    assert!(saw_prompt);
+    assert!(chat.bottom_pane.composer_is_empty());
+    insta::assert_snapshot!(
+        "output_free_ctrl_c_interrupt_keeps_prompt_and_blank_composer",
+        format!(
+            "history:\n{interrupted_history}\ncomposer:\n{}",
+            chat.bottom_pane.composer_text()
+        )
+    );
 }
 
 #[tokio::test]
@@ -1014,7 +1035,7 @@ async fn pending_steer_esc_does_not_steal_vim_insert_escape() {
     chat.handle_key_event(esc);
 
     match op_rx.try_recv() {
-        Ok(Op::Interrupt { .. }) => {}
+        Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(chat.input_queue.submit_pending_steers_after_interrupt);
@@ -1040,7 +1061,7 @@ async fn pending_steer_interrupt_uses_remapped_binding() {
     chat.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
 
     match op_rx.try_recv() {
-        Ok(Op::Interrupt { .. }) => {}
+        Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(chat.input_queue.submit_pending_steers_after_interrupt);
@@ -1053,6 +1074,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
 
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
+        safety_buffering_prompt: Some(UserMessage::from("buffered prompt")),
         pending_steers: VecDeque::new(),
         pending_steer_history_records: VecDeque::new(),
         pending_steer_compare_keys: VecDeque::new(),
@@ -1070,12 +1092,19 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(chat.turn_lifecycle.agent_turn_running);
     assert!(chat.turn_lifecycle.sleep_inhibitor.is_turn_running());
     assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(
+        chat.capture_thread_input_state()
+            .expect("thread input state")
+            .safety_buffering_prompt,
+        Some(UserMessage::from("buffered prompt"))
+    );
 
     chat.restore_thread_input_state(/*input_state*/ None);
 
     assert!(!chat.turn_lifecycle.agent_turn_running);
     assert!(!chat.turn_lifecycle.sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.safety_buffering_prompt, None);
 }
 
 #[tokio::test]

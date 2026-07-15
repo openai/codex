@@ -31,7 +31,6 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
-use crate::chatwidget::UserMessage;
 #[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
@@ -237,38 +236,6 @@ impl App {
             self.chat_widget
                 .set_composer_text(prefill, text_elements, local_image_paths);
         }
-    }
-
-    pub(crate) fn apply_cancelled_turn_edit(&mut self, prompt: UserMessage) {
-        let user_total = user_count(&self.transcript_cells);
-        let selection = BacktrackSelection {
-            nth_user_message: user_total.saturating_sub(1),
-            prefill: prompt.text.clone(),
-            text_elements: prompt.text_elements.clone(),
-            local_image_paths: prompt
-                .local_images
-                .iter()
-                .map(|image| image.path.clone())
-                .collect(),
-            remote_image_urls: prompt.remote_image_urls.clone(),
-        };
-        if user_total == 0 {
-            if self.backtrack.pending_rollback.is_some() {
-                self.chat_widget
-                    .add_error_message("Backtrack rollback already in progress.".to_string());
-                return;
-            }
-            self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
-                selection,
-                thread_id: self.chat_widget.thread_id(),
-            });
-            self.chat_widget
-                .submit_op(AppCommand::thread_rollback(/*num_turns*/ 1));
-            self.chat_widget.restore_user_message_to_composer(prompt);
-            return;
-        }
-        self.apply_backtrack_rollback(selection);
-        self.chat_widget.restore_user_message_to_composer(prompt);
     }
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).

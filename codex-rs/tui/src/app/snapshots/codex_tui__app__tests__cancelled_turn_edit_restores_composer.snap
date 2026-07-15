@@ -1,5 +1,0 @@
----
-source: tui/src/app/tests.rs
-expression: app.chat_widget.composer_text_with_pending()
----
-edit me

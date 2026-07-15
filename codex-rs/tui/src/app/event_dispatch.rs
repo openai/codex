@@ -414,9 +414,6 @@ impl App {
                         .add_error_message(format!("Failed to retry with a faster model: {err}"));
                 }
             }
-            AppEvent::RestoreCancelledTurn(prompt) => {
-                self.apply_cancelled_turn_edit(prompt);
-            }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);
             }

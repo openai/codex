@@ -46,12 +46,6 @@ impl AppEventSender {
         self.send(AppEvent::CodexOp(AppCommand::interrupt()));
     }
 
-    pub(crate) fn interrupt_and_restore_prompt_if_no_output(&self) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::interrupt_and_restore_prompt_if_no_output(),
-        ));
-    }
-
     pub(crate) fn compact(&self) {
         self.send(AppEvent::CodexOp(AppCommand::compact()));
     }
