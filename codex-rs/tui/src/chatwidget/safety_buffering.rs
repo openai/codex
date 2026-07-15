@@ -64,18 +64,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_safety_buffering_retry(&mut self) {
-        let cancel_edit = std::mem::take(&mut self.cancel_edit);
+        let safety_buffering_prompt = self.safety_buffering_prompt.take();
         self.last_rendered_user_message_display = None;
         self.finalize_turn();
-        self.cancel_edit = cancel_edit;
+        self.safety_buffering_prompt = safety_buffering_prompt;
         self.input_queue.user_turn_pending_start = true;
     }
 
     pub(crate) fn fail_safety_buffering_retry(&mut self) {
         self.input_queue.user_turn_pending_start = false;
         self.clear_safety_buffering();
-        let prompt = self.cancel_edit.prompt.take();
-        self.clear_cancel_edit();
+        let prompt = self.safety_buffering_prompt.take();
         if let Some(prompt) = prompt {
             self.restore_user_message_to_composer(prompt);
         }

@@ -521,7 +521,7 @@ impl App {
         op: &AppCommand,
     ) -> Result<bool> {
         match op {
-            AppCommand::Interrupt { .. } => {
+            AppCommand::Interrupt => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     let mut interrupt_turn_id = turn_id;
                     for retried_after_turn_mismatch in [false, true] {

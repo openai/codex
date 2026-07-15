@@ -191,6 +191,20 @@ async fn safety_buffering_remains_visible_until_turn_completes() {
 }
 
 #[tokio::test]
+async fn failed_safety_buffering_retry_restores_submitted_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+
+    chat.prepare_safety_buffering_retry();
+    assert!(chat.input_queue.user_turn_pending_start);
+
+    chat.fail_safety_buffering_retry();
+
+    assert_eq!(chat.composer_text_with_pending(), "Explain the request");
+    assert!(!chat.input_queue.user_turn_pending_start);
+}
+
+#[tokio::test]
 async fn safety_buffering_without_retry_shows_short_app_message() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let (thread_id, turn_id, turn) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);

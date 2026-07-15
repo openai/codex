@@ -562,6 +562,61 @@ async fn replay_thread_snapshot_restores_draft_and_queued_input() {
 }
 
 #[tokio::test]
+async fn replay_thread_snapshot_restores_the_matching_safety_buffer_prompt() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            session.clone(),
+            Vec::new(),
+        ),
+    );
+    app.activate_thread_channel(thread_id).await;
+    app.chat_widget.handle_thread_session(session);
+    let default_mode = CollaborationModeMask {
+        name: "Default".to_string(),
+        mode: None,
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: None,
+    };
+    app.chat_widget
+        .submit_user_message_with_mode("buffered prompt A".to_string(), default_mode.clone());
+    let expected_input_state = app
+        .chat_widget
+        .capture_thread_input_state()
+        .expect("expected thread input state");
+
+    app.store_active_thread_receiver().await;
+    let snapshot = {
+        let channel = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread channel should exist");
+        let store = channel.store.lock().await;
+        assert_eq!(store.input_state, Some(expected_input_state.clone()));
+        store.snapshot()
+    };
+
+    let (mut chat_widget, _app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/tmp/other-project"),
+    ));
+    chat_widget.submit_user_message_with_mode("buffered prompt B".to_string(), default_mode);
+    app.chat_widget = chat_widget;
+    app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+    assert_eq!(
+        app.chat_widget.capture_thread_input_state(),
+        Some(expected_input_state)
+    );
+}
+
+#[tokio::test]
 async fn active_turn_id_for_thread_uses_snapshot_turns() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -5281,61 +5336,6 @@ async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() 
         }
     }
     assert_eq!(rollback_turns, Some(1));
-}
-
-#[tokio::test]
-async fn cancelled_turn_edit_restores_prompt_and_rolls_back_latest_turn() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    app.transcript_cells = vec![Arc::new(UserHistoryCell {
-        message: "original".to_string(),
-        text_elements: Vec::new(),
-        local_image_paths: Vec::new(),
-        remote_image_urls: Vec::new(),
-    }) as Arc<dyn HistoryCell>];
-    let prompt = crate::chatwidget::UserMessage {
-        text: "edit me".to_string(),
-        local_images: Vec::new(),
-        remote_image_urls: vec!["https://example.com/edit.png".to_string()],
-        text_elements: Vec::new(),
-        mention_bindings: Vec::new(),
-    };
-
-    app.apply_cancelled_turn_edit(prompt);
-
-    assert_eq!(app.chat_widget.composer_text_with_pending(), "edit me");
-    assert_snapshot!(
-        "cancelled_turn_edit_restores_composer",
-        app.chat_widget.composer_text_with_pending()
-    );
-    assert_eq!(
-        app.chat_widget.remote_image_urls(),
-        vec!["https://example.com/edit.png".to_string()]
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
-}
-
-#[tokio::test]
-async fn first_cancelled_turn_edit_restores_prompt_without_local_history() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let prompt = crate::chatwidget::UserMessage {
-        text: "edit first prompt".to_string(),
-        local_images: Vec::new(),
-        remote_image_urls: vec!["https://example.com/edit.png".to_string()],
-        text_elements: Vec::new(),
-        mention_bindings: Vec::new(),
-    };
-
-    app.apply_cancelled_turn_edit(prompt);
-
-    assert_eq!(
-        app.chat_widget.composer_text_with_pending(),
-        "edit first prompt"
-    );
-    assert_eq!(
-        app.chat_widget.remote_image_urls(),
-        vec!["https://example.com/edit.png".to_string()]
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
 }
 
 #[tokio::test]

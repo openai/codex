@@ -121,6 +121,7 @@ impl ThreadComposerState {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
     pub(super) composer: Option<ThreadComposerState>,
+    pub(super) safety_buffering_prompt: Option<UserMessage>,
     pub(super) pending_steers: VecDeque<UserMessage>,
     pub(super) pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     pub(super) pending_steer_compare_keys: VecDeque<PendingSteerCompareKey>,
