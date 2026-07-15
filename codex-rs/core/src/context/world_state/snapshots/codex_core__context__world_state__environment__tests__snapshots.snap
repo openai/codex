@@ -1,0 +1,78 @@
+---
+source: core/src/context/world_state/environment_tests.rs
+expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&full)),\n(Unknown, Known(&full)),\n(Known(&before_environment_changes), Known(&after_environment_changes),),\n(Known(&before_turn_context_changes), Known(&after_turn_context_changes),),\n(Absent, Known(&foreign_windows)),\n(Known(&unknown_shell), Known(&known_shell)),\n(Known(&legacy_environment), Known(&empty)),])"
+---
+Absent -> Absent
+None
+
+Absent -> {"environments":{"devbox":{"cwd":"/workspace","shell":"bash","status":"available"},"laptop":{"cwd":"/repo","shell":"zsh","status":"available"}}} (role - user)
+<environment_context>
+  <environments>
+    <environment id="devbox">
+      <cwd>/workspace</cwd>
+      <shell>bash</shell>
+    </environment>
+    <environment id="laptop">
+      <cwd>/repo</cwd>
+      <shell>zsh</shell>
+    </environment>
+  </environments>
+</environment_context>
+
+Unknown -> {"environments":{"devbox":{"cwd":"/workspace","shell":"bash","status":"available"},"laptop":{"cwd":"/repo","shell":"zsh","status":"available"}}} (role - user)
+<environment_context>
+  <environments>
+    <environment id="devbox">
+      <cwd>/workspace</cwd>
+      <shell>bash</shell>
+    </environment>
+    <environment id="laptop">
+      <cwd>/repo</cwd>
+      <shell>zsh</shell>
+    </environment>
+  </environments>
+</environment_context>
+
+{"environments":{"devbox":{"cwd":"/workspace","status":"starting"},"laptop":{"cwd":"/repo","shell":"bash","status":"available"},"old":{"cwd":"/old","shell":"sh","status":"available"}}} -> {"environments":{"devbox":{"cwd":"/workspace","shell":"powershell","status":"available"},"laptop":{"cwd":"/repo","shell":"zsh","status":"available"},"remote":{"cwd":"/remote","status":"starting"}}} (role - user)
+<environment_context>
+  <environments>
+    <environment id="devbox">
+      <cwd>/workspace</cwd>
+      <shell>powershell</shell>
+    </environment>
+    <environment id="laptop">
+      <cwd>/repo</cwd>
+      <shell>zsh</shell>
+    </environment>
+    <environment id="old" status="unavailable" />
+    <environment id="remote">
+      <cwd>/remote</cwd>
+      <status>starting</status>
+    </environment>
+  </environments>
+</environment_context>
+
+{"current_date":"2026-06-19","environments":{"local":{"cwd":"/repo","shell":"zsh","status":"available"}},"filesystem":"<filesystem><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>","network":"<network enabled=\"true\"><allowed>old.example.com</allowed></network>","timezone":"UTC"} -> {"current_date":"2026-06-20","environments":{"local":{"cwd":"/repo","shell":"zsh","status":"available"}},"filesystem":"<filesystem><permission_profile type=\"external\"><file_system type=\"external\" /></permission_profile></filesystem>","network":"<network enabled=\"true\"><allowed>new.example.com</allowed><denied>blocked.example.com</denied></network>","timezone":"America/Los_Angeles"} (role - user)
+<environment_context>
+  <current_date>2026-06-20</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <network enabled="true"><allowed>new.example.com</allowed><denied>blocked.example.com</denied></network>
+  <filesystem><permission_profile type="external"><file_system type="external" /></permission_profile></filesystem>
+</environment_context>
+
+Absent -> {"environments":{"remote":{"cwd":"C:\\windows","shell":"powershell","status":"available"}},"filesystem":"<filesystem><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>"} (role - user)
+<environment_context>
+  <cwd>C:\windows</cwd>
+  <shell>powershell</shell>
+  <filesystem><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>
+
+{"environments":{"local":{"cwd":"/repo","status":"available"}}} -> {"environments":{"local":{"cwd":"/repo","shell":"zsh","status":"available"}}}
+None
+
+{"environments":{"local":{"cwd":"/repo","shell":"bash","status":"available"}}} -> {"environments":{}} (role - user)
+<environment_context>
+  <environments>
+    <environment id="local" status="unavailable" />
+  </environments>
+</environment_context>

@@ -1,0 +1,51 @@
+---
+source: core/src/context/world_state/agents_md_tests.rs
+expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&empty)),\n(Absent, Known(&project_formatter)),\n(Known(&project_formatter), Known(&project_formatter)),\n(Known(&old), Known(&new)), (Known(&new), Known(&empty)),\n(Unknown, Known(&new)), (Unknown, Known(&empty)),])"
+---
+Absent -> Absent
+None
+
+Absent -> {}
+None
+
+Absent -> {"text":"use the project formatter"} (role - user)
+# AGENTS.md instructions
+
+<INSTRUCTIONS>
+use the project formatter
+</INSTRUCTIONS>
+
+{"text":"use the project formatter"} -> {"text":"use the project formatter"}
+None
+
+{"text":"old instructions"} -> {"text":"new instructions"} (role - user)
+# AGENTS.md instructions
+
+<INSTRUCTIONS>
+These AGENTS.md instructions replace all previously provided AGENTS.md instructions.
+
+new instructions
+</INSTRUCTIONS>
+
+{"text":"new instructions"} -> {} (role - user)
+# AGENTS.md instructions
+
+<INSTRUCTIONS>
+The previously provided AGENTS.md instructions no longer apply.
+</INSTRUCTIONS>
+
+Unknown -> {"text":"new instructions"} (role - user)
+# AGENTS.md instructions
+
+<INSTRUCTIONS>
+These AGENTS.md instructions replace all previously provided AGENTS.md instructions.
+
+new instructions
+</INSTRUCTIONS>
+
+Unknown -> {} (role - user)
+# AGENTS.md instructions
+
+<INSTRUCTIONS>
+The previously provided AGENTS.md instructions no longer apply.
+</INSTRUCTIONS>
