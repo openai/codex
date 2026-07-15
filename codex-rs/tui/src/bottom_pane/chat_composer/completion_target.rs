@@ -1,5 +1,6 @@
 //! Cursor-neighborhood resolution for sigil-prefixed composer completions.
 
+use super::ends_plaintext_at_dollar_mention;
 use super::ends_plaintext_at_mention;
 use super::is_mention_name_char;
 use crate::bottom_pane::textarea::TextArea;
@@ -268,7 +269,7 @@ pub(super) fn current_prefixed_token_range_with_dollar_predicate(
 /// Returns whether a token candidate's sigil and mention name are editable plaintext.
 ///
 /// A candidate is bound when either its entire range is atomic or its mention-name prefix is
-/// atomic and the remaining text begins with punctuation that terminates the mention.
+/// atomic and the remaining text begins with a terminator for that sigil.
 pub(super) fn prefixed_token_range_is_editable(
     textarea: &TextArea,
     prefix: char,
@@ -285,9 +286,14 @@ pub(super) fn prefixed_token_range_is_editable(
         .take_while(|byte| is_mention_name_char(**byte))
         .count();
     let mention_end = range.start + prefix.len_utf8() + name_len;
+    let ends_bound_mention = if prefix == '@' {
+        ends_plaintext_at_mention(textarea.text().as_bytes(), mention_end)
+    } else {
+        ends_plaintext_at_dollar_mention(textarea.text().as_bytes(), mention_end)
+    };
     !(name_len > 0
         && mention_end < range.end
-        && ends_plaintext_at_mention(textarea.text().as_bytes(), mention_end)
+        && ends_bound_mention
         && textarea
             .element_id_for_exact_range(range.start..mention_end)
             .is_some())
