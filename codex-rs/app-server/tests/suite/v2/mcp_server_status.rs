@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
+use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::Implementation;
@@ -38,9 +40,45 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn wait_for_new_pid(path: &Path, previous_pid: Option<&str>) -> Result<String> {
+    Ok(timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                let pid = contents.trim();
+                if !pid.is_empty() && Some(pid) != previous_pid {
+                    return pid.to_string();
+                }
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?)
+}
+
+fn assert_dynamic_status(response: &ListMcpServerStatusResponse, process_label: &str) {
+    assert_eq!(response.data.len(), 1);
+    let status = &response.data[0];
+    assert_eq!(status.name, "cached-stdio");
+    assert_eq!(
+        status
+            .server_info
+            .as_ref()
+            .and_then(|info| info.title.as_deref()),
+        Some(process_label)
+    );
+    assert_eq!(
+        status
+            .tools
+            .get("echo")
+            .and_then(|tool| tool.description.as_deref()),
+        Some(format!("Echo from {process_label}.").as_str())
+    );
+}
 
 #[tokio::test]
 async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()> {
@@ -114,6 +152,100 @@ url = "{mcp_server_url}/mcp"
 
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_waits_for_live_stdio_metadata_before_using_cached_tools()
+-> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+
+    let barrier_file = codex_home.path().join("allow-initialize");
+    let pid_file = codex_home.path().join("mcp.pid");
+    std::fs::write(&barrier_file, "ready")?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.cached-stdio]
+command = {}
+enabled_tools = ["echo"]
+startup_timeout_sec = 10
+
+[mcp_servers.cached-stdio.env]
+MCP_TEST_DYNAMIC_SERVER_METADATA = "1"
+MCP_TEST_INITIALIZE_BARRIER_FILE = {}
+MCP_TEST_PID_FILE = {}
+"#,
+        toml::Value::String(stdio_server_bin()?),
+        toml::Value::String(barrier_file.to_string_lossy().into_owned()),
+        toml::Value::String(pid_file.to_string_lossy().into_owned()),
+    ));
+    std::fs::write(config_path, config_toml)?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let first_request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: None,
+        })
+        .await?;
+    let first_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_request_id)),
+    )
+    .await??;
+    let first_response: ListMcpServerStatusResponse = to_response(first_response)?;
+    let first_pid = wait_for_new_pid(&pid_file, /*previous_pid*/ None).await?;
+    assert_dynamic_status(&first_response, &format!("rmcp-test-process-{first_pid}"));
+
+    std::fs::remove_file(&barrier_file)?;
+    let second_request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: None,
+        })
+        .await?;
+    let second_pid = wait_for_new_pid(&pid_file, Some(&first_pid)).await?;
+    assert!(
+        timeout(
+            Duration::from_millis(200),
+            mcp.read_stream_until_response_message(RequestId::Integer(second_request_id)),
+        )
+        .await
+        .is_err(),
+        "status/list should wait for the live stdio server to initialize"
+    );
+
+    std::fs::write(&barrier_file, "ready")?;
+    let second_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_request_id)),
+    )
+    .await??;
+    let second_response: ListMcpServerStatusResponse = to_response(second_response)?;
+    assert_dynamic_status(&second_response, &format!("rmcp-test-process-{second_pid}"));
 
     Ok(())
 }

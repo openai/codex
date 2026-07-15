@@ -19,6 +19,7 @@ use crate::tools::normalize_tools_for_model_with_prefix;
 use codex_config::AppToolApproval;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
+use codex_config::McpServerEnvVar;
 use codex_config::McpServerToolConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -814,6 +815,36 @@ async fn tool_catalog_cache_sanitizes_tools_and_tracks_environment_generation() 
 
     tokio::time::advance(Duration::from_secs(30 * 60 + 1)).await;
     assert!(!first_context.has_tools());
+}
+
+#[test]
+fn tool_catalog_cache_bypasses_remote_sourced_environment_variables() {
+    let cache = McpToolCatalogCache::default();
+    let runtime_context = McpRuntimeContext::new(
+        Arc::new(EnvironmentManager::without_environments()),
+        PathBuf::from("/tmp"),
+    );
+    let config: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "command": "docs-mcp",
+        "env_vars": [McpServerEnvVar::Config {
+            name: "DOCS_TOKEN".to_string(),
+            source: Some("remote".to_string()),
+        }],
+    }))
+    .expect("MCP config");
+
+    assert!(
+        cache
+            .context(
+                "docs",
+                &config,
+                &runtime_context,
+                /*resolved_environment*/ None,
+                &ElicitationCapability::default(),
+                /*supports_openai_form_elicitation*/ false,
+            )
+            .is_none()
+    );
 }
 
 #[tokio::test]

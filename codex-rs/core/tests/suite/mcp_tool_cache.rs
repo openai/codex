@@ -267,6 +267,14 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
         output.contains(&expected_error),
         "model-visible tool output should contain the live visibility error: {output}"
     );
+    let output = cached_done_response
+        .single_request()
+        .function_call_output_text("cached-call")
+        .expect("successful tool output should be returned to the model");
+    assert!(
+        output.contains(&second_process),
+        "model-visible tool output should come from the live server: {output}"
+    );
 
     second_thread.shutdown_and_wait().await?;
     responses_server.verify().await;
