@@ -2,6 +2,7 @@ use std::io::SeekFrom;
 use std::path::Path;
 
 use chrono::DateTime;
+use codex_app_server_protocol::ThreadHistoryChangeSet;
 use codex_app_server_protocol::project_rollout_line;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutLine;
@@ -23,6 +24,11 @@ pub(super) async fn materialize_to_sqlite(
     if lines.is_empty() && start_offset == next_offset {
         return Ok(());
     }
+    let subagent_history_start_ordinal = codex_rollout::read_session_meta_line(rollout_path)
+        .await
+        .map_err(thread_store_io_error)?
+        .meta
+        .subagent_history_start_ordinal;
 
     let projections = lines
         .iter()
@@ -30,7 +36,14 @@ pub(super) async fn materialize_to_sqlite(
             let created_at_ms = DateTime::parse_from_rfc3339(line.timestamp.as_str())
                 .map(|timestamp| timestamp.timestamp_millis())
                 .map_err(thread_history_error)?;
-            Ok((line.ordinal, created_at_ms, project_rollout_line(line)))
+            let changes = if line.ordinal.is_some_and(|ordinal| {
+                subagent_history_start_ordinal.is_some_and(|start| ordinal < start)
+            }) {
+                ThreadHistoryChangeSet::default()
+            } else {
+                project_rollout_line(line)
+            };
+            Ok((line.ordinal, created_at_ms, changes))
         })
         .collect::<ThreadStoreResult<Vec<_>>>()?;
     super::thread_history::apply_projection(

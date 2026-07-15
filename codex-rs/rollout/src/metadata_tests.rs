@@ -53,6 +53,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         selected_capability_roots: Vec::new(),
         memory_mode: None,
         history_mode: ThreadHistoryMode::Paginated,
+        subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
     };
@@ -149,6 +150,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         selected_capability_roots: Vec::new(),
         memory_mode: None,
         history_mode: Default::default(),
+        subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
     };
@@ -422,6 +424,7 @@ fn write_rollout_in_sessions_with_cwd(
         selected_capability_roots: Vec::new(),
         memory_mode: None,
         history_mode: Default::default(),
+        subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
     };

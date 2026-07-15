@@ -51,7 +51,8 @@ pub(crate) fn ordinal_state_for_rollout(
     file: &mut File,
     path: &Path,
 ) -> io::Result<RolloutOrdinalState> {
-    let Some(history_mode) = read_history_mode(file, path)? else {
+    let Some((history_mode, subagent_history_start_ordinal)) = read_history_metadata(file, path)?
+    else {
         return Ok(RolloutOrdinalState::Legacy);
     };
     if matches!(history_mode, ThreadHistoryMode::Legacy) {
@@ -77,12 +78,25 @@ pub(crate) fn ordinal_state_for_rollout(
             path.display()
         ))
     })?;
+    // The child metadata is written before its inherited prefix. Never resume a
+    // partial initialization: later child records would otherwise stay below the boundary.
+    if let Some(prefix_end) = subagent_history_start_ordinal.and_then(|start| start.checked_sub(1))
+        && ordinal < prefix_end
+    {
+        return Err(io::Error::other(format!(
+            "paginated subagent rollout at {} is incomplete: expected inherited prefix through ordinal {prefix_end}, found final durable ordinal {ordinal}",
+            path.display()
+        )));
+    }
     Ok(RolloutOrdinalState::Paginated {
         next: ordinal.checked_add(1),
     })
 }
 
-fn read_history_mode(file: &mut File, path: &Path) -> io::Result<Option<ThreadHistoryMode>> {
+fn read_history_metadata(
+    file: &mut File,
+    path: &Path,
+) -> io::Result<Option<(ThreadHistoryMode, Option<u64>)>> {
     file.seek(SeekFrom::Start(0))?;
     let reader = BufReader::new(file);
     for line in reader.lines() {
@@ -102,7 +116,10 @@ fn read_history_mode(file: &mut File, path: &Path) -> io::Result<Option<ThreadHi
                 path.display()
             )));
         };
-        return Ok(Some(session_meta.meta.history_mode));
+        return Ok(Some((
+            session_meta.meta.history_mode,
+            session_meta.meta.subagent_history_start_ordinal,
+        )));
     }
     Ok(None)
 }
