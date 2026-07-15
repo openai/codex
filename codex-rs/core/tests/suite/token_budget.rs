@@ -27,6 +27,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -46,6 +47,7 @@ use std::path::Path;
 use std::time::Duration;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
+const AUTO_COMPACT_FALLBACK_PROMPT: &str = "Save the important state before rollover.";
 
 fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
     let context_window_prefix = format!("{CONTEXT_WINDOW_OPEN_TAG}\nThread id: ");
@@ -859,7 +861,171 @@ async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
+async fn token_budget_auto_compact_fallback_uses_buffer_until_new_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let trigger_call_id = "trigger-call";
+    let fallback_call_id = "fallback-call";
+    let new_context_call_id = "new-context-call";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(trigger_call_id, "get_context_remaining", "{}"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 9_500),
+            ]),
+            sse(vec![
+                ev_response_created("fallback-tool-resp"),
+                ev_shell_command_call(fallback_call_id, "echo fallback-note > fallback-note.txt"),
+                ev_completed_with_tokens("fallback-tool-resp", /*total_tokens*/ 10_000),
+            ]),
+            sse(vec![
+                ev_response_created("new-context-resp"),
+                ev_function_call(new_context_call_id, "new_context", "{}"),
+                ev_completed_with_tokens("new-context-resp", /*total_tokens*/ 10_500),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.name = "OpenAI (test)".into();
+            config.model_context_window = Some(50_000);
+            config.model_auto_compact_token_limit = Some(9_000);
+            config.token_budget = Some(TokenBudgetConfig {
+                auto_compact_fallback_prompt: Some(AUTO_COMPACT_FALLBACK_PROMPT.to_string()),
+                auto_compact_fallback_buffer_tokens: Some(4_000),
+                ..TokenBudgetConfig::default()
+            });
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("trigger auto compact fallback").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    let fallback_request = &requests[1];
+    assert!(
+        fallback_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text == AUTO_COMPACT_FALLBACK_PROMPT),
+        "fallback prompt should be injected as a developer message"
+    );
+    assert!(
+        tool_names(fallback_request)
+            .iter()
+            .any(|name| name == "get_context_remaining"),
+        "fallback should preserve the normal tool surface"
+    );
+    assert_eq!(
+        fallback_request.function_call_output_text(trigger_call_id),
+        Some("You have 0 tokens left in this context window.".to_string())
+    );
+    let thread_id = test.session_configured.thread_id;
+    let initial_context = token_budget_contexts(&requests[0]);
+    assert_eq!(token_budget_contexts(fallback_request), initial_context);
+    assert_eq!(token_budget_contexts(&requests[2]), initial_context);
+    assert!(requests[2].body_contains_text(AUTO_COMPACT_FALLBACK_PROMPT));
+    assert!(requests[2].body_contains_text(fallback_call_id));
+    let (_, _, initial_window_id) = token_budget_window_ids(&initial_context[0], thread_id);
+    let follow_up_context = token_budget_contexts(&requests[3]);
+    let (_, previous_window_id, follow_up_window_id) =
+        token_budget_window_ids(&follow_up_context[0], thread_id);
+    assert_eq!(
+        previous_window_id.as_deref(),
+        Some(initial_window_id.as_str())
+    );
+    assert_ne!(follow_up_window_id, initial_window_id);
+    assert!(!requests[3].body_contains_text(AUTO_COMPACT_FALLBACK_PROMPT));
+    assert_eq!(
+        requests[3].function_call_output_text(fallback_call_id),
+        None
+    );
+    assert_eq!(
+        std::fs::read_to_string(test.workspace_path("fallback-note.txt"))?.trim(),
+        "fallback-note"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_auto_compact_fallback_rolls_over_after_buffer() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call("trigger-call", "get_context_remaining", "{}"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 9_500),
+            ]),
+            sse(vec![
+                ev_response_created("fallback-resp"),
+                ev_function_call("buffer-call", "get_context_remaining", "{}"),
+                ev_completed_with_tokens("fallback-resp", /*total_tokens*/ 13_500),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.name = "OpenAI (test)".into();
+            config.model_context_window = Some(50_000);
+            config.model_auto_compact_token_limit = Some(9_000);
+            config.token_budget = Some(TokenBudgetConfig {
+                auto_compact_fallback_prompt: Some(AUTO_COMPACT_FALLBACK_PROMPT.to_string()),
+                auto_compact_fallback_buffer_tokens: Some(4_000),
+                ..TokenBudgetConfig::default()
+            });
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("exhaust the fallback buffer").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    let fallback_request = &requests[1];
+    assert!(
+        fallback_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text == AUTO_COMPACT_FALLBACK_PROMPT)
+    );
+    assert!(!requests[2].body_contains_text(AUTO_COMPACT_FALLBACK_PROMPT));
+    assert!(!requests[2].body_contains_text("exhaust the fallback buffer"));
+    assert_eq!(requests[2].function_call_output_text("buffer-call"), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_context_tool_skips_auto_compact_fallback() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -877,7 +1043,7 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_function_call(call_id, "new_context", "{}"),
-                ev_completed("resp-1"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 9_500),
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
@@ -894,7 +1060,12 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
     .await;
     let test = test_codex()
         .with_config(|config| {
-            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config.model_context_window = Some(10_000);
+            config.token_budget = Some(TokenBudgetConfig {
+                auto_compact_fallback_prompt: Some(AUTO_COMPACT_FALLBACK_PROMPT.to_string()),
+                auto_compact_fallback_buffer_tokens: Some(4_000),
+                ..TokenBudgetConfig::default()
+            });
             config
                 .features
                 .enable(Feature::TokenBudget)
@@ -907,6 +1078,7 @@ async fn new_context_tool_starts_new_window_before_follow_up() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 3);
+    assert!(!requests[1].body_contains_text(AUTO_COMPACT_FALLBACK_PROMPT));
     assert!(
         tool_names(&requests[0])
             .iter()

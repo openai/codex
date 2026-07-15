@@ -6,35 +6,56 @@ use codex_features::Feature;
 pub(super) async fn maybe_record(
     sess: &Session,
     turn_context: &TurnContext,
-    tokens_until_compaction: Option<i64>,
+    base_window_tokens_remaining: Option<i64>,
+    allow_auto_compact_fallback: bool,
 ) {
     if !turn_context.config.features.enabled(Feature::TokenBudget) {
         return;
     }
-    let Some(tokens_until_compaction) = tokens_until_compaction else {
+    let Some(base_window_tokens_remaining) = base_window_tokens_remaining else {
         return;
     };
 
-    let Some(config) = turn_context.config.token_budget.as_ref().filter(|config| {
-        config
-            .reminder_threshold_tokens
-            .is_some_and(|threshold| tokens_until_compaction <= threshold)
-    }) else {
+    let Some(config) = turn_context.config.token_budget.as_ref() else {
         return;
     };
 
-    let reminder_due = {
+    if config
+        .reminder_threshold_tokens
+        .is_some_and(|threshold| base_window_tokens_remaining <= threshold)
+    {
+        let reminder_due = {
+            let mut state = sess.state.lock().await;
+            state.claim_token_budget_reminder()
+        };
+        if reminder_due {
+            let response_item =
+                ContextualUserFragment::into(crate::context::TokenBudgetReminder::new(
+                    &config.reminder_message_template,
+                    base_window_tokens_remaining,
+                ));
+            sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+                .await;
+        }
+    }
+
+    if !allow_auto_compact_fallback || base_window_tokens_remaining != 0 {
+        return;
+    }
+    let Some(prompt) = config.auto_compact_fallback_prompt.as_deref() else {
+        return;
+    };
+
+    let fallback_due = {
         let mut state = sess.state.lock().await;
-        state.claim_token_budget_reminder()
+        state.claim_auto_compact_fallback()
     };
-    if !reminder_due {
+    if !fallback_due {
         return;
     }
 
-    let response_item = ContextualUserFragment::into(crate::context::TokenBudgetReminder::new(
-        &config.reminder_message_template,
-        tokens_until_compaction,
-    ));
+    let response_item =
+        ContextualUserFragment::into(crate::context::AutoCompactFallbackPrompt::new(prompt));
     sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
         .await;
 }

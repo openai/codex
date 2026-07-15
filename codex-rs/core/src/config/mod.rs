@@ -1154,6 +1154,16 @@ pub struct TokenBudgetConfig {
     pub auto_compact_fallback_buffer_tokens: Option<i64>,
 }
 
+impl TokenBudgetConfig {
+    pub(crate) fn fallback_buffer_tokens(&self) -> i64 {
+        if self.auto_compact_fallback_prompt.is_some() {
+            self.auto_compact_fallback_buffer_tokens.unwrap_or(0)
+        } else {
+            0
+        }
+    }
+}
+
 impl Default for TokenBudgetConfig {
     fn default() -> Self {
         Self {

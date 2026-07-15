@@ -42,6 +42,7 @@ pub(super) struct AutoCompactWindow {
     /// resume/recompute baselines when available.
     prefill_input_tokens: Option<AutoCompactWindowPrefill>,
     token_budget_reminder_delivered: bool,
+    auto_compact_fallback_delivered: bool,
 }
 
 impl AutoCompactWindow {
@@ -52,6 +53,7 @@ impl AutoCompactWindow {
             new_context_window_requested: false,
             prefill_input_tokens: None,
             token_budget_reminder_delivered: false,
+            auto_compact_fallback_delivered: false,
         }
     }
 
@@ -78,11 +80,16 @@ impl AutoCompactWindow {
         self.ids.window_id = Uuid::now_v7();
         self.new_context_window_requested = false;
         self.token_budget_reminder_delivered = false;
+        self.auto_compact_fallback_delivered = false;
         (self.window_number, self.ids)
     }
 
     pub(super) fn claim_token_budget_reminder(&mut self) -> bool {
         !std::mem::replace(&mut self.token_budget_reminder_delivered, true)
+    }
+
+    pub(super) fn claim_auto_compact_fallback(&mut self) -> bool {
+        !std::mem::replace(&mut self.auto_compact_fallback_delivered, true)
     }
 
     pub(super) fn request_new_context_window(&mut self) {
@@ -169,6 +176,8 @@ mod tests {
         assert_eq!(window.ids().window_id, restored_window_id);
         assert!(window.claim_token_budget_reminder());
         assert!(!window.claim_token_budget_reminder());
+        assert!(window.claim_auto_compact_fallback());
+        assert!(!window.claim_auto_compact_fallback());
         window.request_new_context_window();
         assert!(window.take_new_context_window_request());
         assert!(!window.take_new_context_window_request());
@@ -183,6 +192,7 @@ mod tests {
         assert_ne!(ids.window_id, restored_window_id);
         assert!(!window.take_new_context_window_request());
         assert!(window.claim_token_budget_reminder());
+        assert!(window.claim_auto_compact_fallback());
 
         assert_eq!(
             window.snapshot(),
