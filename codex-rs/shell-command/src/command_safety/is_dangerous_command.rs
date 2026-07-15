@@ -4,43 +4,53 @@ use std::path::Path;
 #[path = "windows_dangerous_commands.rs"]
 mod windows_dangerous_commands;
 
-pub fn command_might_be_dangerous(command: &[String]) -> bool {
-    #[cfg(windows)]
-    {
-        if windows_dangerous_commands::is_dangerous_command_windows(command) {
-            return true;
-        }
-    }
+/// Identifies the dangerous-command rule matched by a command invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DangerousCommandMatch {
+    /// An `rm` invocation includes the force option.
+    ForcedRm,
+    /// A platform-specific dangerous-command rule matched.
+    PlatformSpecific,
+}
 
-    if is_dangerous_to_call_with_exec(command) {
-        return true;
+/// Returns the dangerous-command rule matched by an already-tokenized command.
+pub fn dangerous_command_match(command: &[String]) -> Option<DangerousCommandMatch> {
+    if let Some(dangerous_match) = dangerous_command_match_for_exec(command) {
+        return Some(dangerous_match);
     }
 
     // Support shell scripts where any literal command might be dangerous,
     // including commands nested in control flow or substitutions.
-    if let Some(all_commands) = parse_shell_lc_literal_commands(command)
-        && all_commands
+    if let Some(dangerous_match) = parse_shell_lc_literal_commands(command).and_then(|commands| {
+        commands
             .iter()
-            .any(|cmd| is_dangerous_to_call_with_exec(cmd))
-    {
-        return true;
+            .find_map(|command| dangerous_command_match_for_exec(command))
+    }) {
+        return Some(dangerous_match);
     }
 
-    false
+    #[cfg(windows)]
+    {
+        if windows_dangerous_commands::is_dangerous_command_windows(command) {
+            return Some(DangerousCommandMatch::PlatformSpecific);
+        }
+    }
+
+    None
 }
 
-/// Returns whether already-tokenized PowerShell words should be treated as
-/// dangerous by the Windows unmatched-command heuristics.
-pub fn is_dangerous_powershell_words(command: &[String]) -> bool {
+/// Returns the dangerous-command rule matched by tokenized PowerShell words.
+pub fn dangerous_powershell_words_match(command: &[String]) -> Option<DangerousCommandMatch> {
     #[cfg(windows)]
     {
         windows_dangerous_commands::is_dangerous_powershell_words(command)
+            .then_some(DangerousCommandMatch::PlatformSpecific)
     }
 
     #[cfg(not(windows))]
     {
         let _ = command;
-        false
+        None
     }
 }
 
@@ -143,19 +153,21 @@ pub(crate) fn find_git_subcommand<'a>(
     None
 }
 
-fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
+fn dangerous_command_match_for_exec(command: &[String]) -> Option<DangerousCommandMatch> {
     let cmd0 = command
         .first()
         .and_then(|command| executable_name_lookup_key(command));
 
     match cmd0.as_deref() {
-        Some("rm") => rm_args_include_force_option(&command[1..]),
+        Some("rm") if rm_args_include_force_option(&command[1..]) => {
+            Some(DangerousCommandMatch::ForcedRm)
+        }
 
         // for sudo <cmd> simply do the check for <cmd>
-        Some("sudo") => is_dangerous_to_call_with_exec(&command[1..]),
+        Some("sudo") => dangerous_command_match_for_exec(&command[1..]),
 
         // ── anything else ─────────────────────────────────────────────────
-        _ => false,
+        _ => None,
     }
 }
 
@@ -181,12 +193,18 @@ mod tests {
 
     #[test]
     fn rm_rf_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&["rm", "-rf", "/"])));
+        assert_eq!(
+            dangerous_command_match(&vec_str(&["rm", "-rf", "/"])),
+            Some(DangerousCommandMatch::ForcedRm)
+        );
     }
 
     #[test]
     fn rm_f_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])));
+        assert_eq!(
+            dangerous_command_match(&vec_str(&["rm", "-f", "/"])),
+            Some(DangerousCommandMatch::ForcedRm)
+        );
     }
 
     #[test]
@@ -198,7 +216,11 @@ mod tests {
             vec_str(&["rm", "/tmp/example", "-f"]),
             vec_str(&["sudo", "rm", "-rf", "/tmp/example"]),
         ] {
-            assert_eq!(command_might_be_dangerous(&command), true, "{command:?}");
+            assert_eq!(
+                dangerous_command_match(&command),
+                Some(DangerousCommandMatch::ForcedRm),
+                "{command:?}"
+            );
         }
     }
 
@@ -213,7 +235,11 @@ mod tests {
             "for a in '-C5a25KeRr' '--' '--json' '--bogus'; do HOME=$(mktemp -d) MDE_URL=http://127.0.0.1:1 MDE_TOKEN=x node cli/mde.cjs ls \"$a\" >/tmp/mde-review-out 2>/tmp/mde-review-err; code=$?; printf '%s\\t%s\\t%s\\n' \"$a\" \"$code\" \"$(tr '\\n' ' ' </tmp/mde-review-err)\"; rm -rf \"$HOME\"; done",
         ] {
             let command = vec_str(&["bash", "-lc", script]);
-            assert_eq!(command_might_be_dangerous(&command), true, "{script}");
+            assert_eq!(
+                dangerous_command_match(&command),
+                Some(DangerousCommandMatch::ForcedRm),
+                "{script}"
+            );
         }
     }
 
@@ -226,18 +252,21 @@ mod tests {
             vec_str(&["bash", "-lc", "cmd=rm; $cmd -rf /tmp/example"]),
             vec_str(&["bash", "-lc", "if then rm -rf /tmp/example"]),
         ] {
-            assert_eq!(command_might_be_dangerous(&command), false, "{command:?}");
+            assert_eq!(dangerous_command_match(&command), None, "{command:?}");
         }
     }
 
     #[test]
-    fn direct_powershell_words_reuse_windows_dangerous_detection() {
+    fn direct_powershell_words_return_a_typed_match_on_windows() {
         let command = vec_str(&["Remove-Item", "test", "-Force"]);
 
         if cfg!(windows) {
-            assert!(is_dangerous_powershell_words(&command));
+            assert_eq!(
+                dangerous_powershell_words_match(&command),
+                Some(DangerousCommandMatch::PlatformSpecific)
+            );
         } else {
-            assert!(!is_dangerous_powershell_words(&command));
+            assert_eq!(dangerous_powershell_words_match(&command), None);
         }
     }
 }
