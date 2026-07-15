@@ -198,13 +198,6 @@ impl ThreadEventStore {
             })
     }
 
-    pub(super) fn apply_thread_rollback(&mut self, response: &ThreadRollbackResponse) {
-        self.turns = response.thread.turns.clone();
-        self.buffer.clear();
-        self.pending_interactive_replay = PendingInteractiveReplayState::default();
-        self.active_turn_id = None;
-    }
-
     pub(super) fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session: self.session.clone(),

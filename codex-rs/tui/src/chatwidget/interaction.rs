@@ -255,14 +255,6 @@ impl ChatWidget {
         self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
-    pub(crate) fn truncate_agent_copy_history_to_user_turn_count(
-        &mut self,
-        user_turn_count: usize,
-    ) {
-        self.transcript
-            .truncate_copy_history_to_user_turn_count(user_turn_count);
-    }
-
     /// Inner implementation with an injectable clipboard backend for testing.
     pub(super) fn copy_last_agent_markdown_with(
         &mut self,
@@ -281,11 +273,6 @@ impl ChatWidget {
                     "Copy failed: {error}"
                 ))),
             },
-            _ if self.transcript.copy_history_evicted_by_rollback => {
-                self.add_to_history(history_cell::new_error_event(format!(
-                    "Cannot copy that response after rewinding. Only the most recent {MAX_AGENT_COPY_HISTORY} responses are available to /copy."
-                )));
-            }
             _ => self.add_to_history(history_cell::new_error_event(
                 "No agent response to copy".into(),
             )),
