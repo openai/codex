@@ -10,7 +10,6 @@
 mod backends;
 
 use anyhow::Result;
-use anyhow::bail;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -48,12 +47,8 @@ pub async fn spawn_windows_sandbox_session_for_level(
     request: WindowsSandboxSessionRequest<'_>,
 ) -> Result<SpawnedProcess> {
     if request.proxy_enforced
-        && !matches!(request.windows_sandbox_level, WindowsSandboxLevel::Elevated)
+        || matches!(request.windows_sandbox_level, WindowsSandboxLevel::Elevated)
     {
-        bail!("network proxy enforcement requires the elevated Windows sandbox backend");
-    }
-
-    if matches!(request.windows_sandbox_level, WindowsSandboxLevel::Elevated) {
         backends::elevated::spawn_windows_sandbox_session_elevated_for_permission_profile(
             request.permission_profile,
             request.workspace_roots,

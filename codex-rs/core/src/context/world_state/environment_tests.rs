@@ -60,7 +60,6 @@ fn snapshots() -> Result<()> {
         current_date: Some("2026-06-19".to_string()),
         timezone: Some("UTC".to_string()),
         network: Some(NetworkContext::new(
-            /*enabled*/ true,
             vec!["old.example.com".to_string()],
             vec![],
         )),
@@ -74,7 +73,6 @@ fn snapshots() -> Result<()> {
         current_date: Some("2026-06-20".to_string()),
         timezone: Some("America/Los_Angeles".to_string()),
         network: Some(NetworkContext::new(
-            /*enabled*/ true,
             vec!["new.example.com".to_string()],
             vec!["blocked.example.com".to_string()],
         )),

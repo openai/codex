@@ -115,7 +115,6 @@ fn serialize_environment_context_with_foreign_windows_cwd() {
 #[test]
 fn serialize_environment_context_with_network() {
     let network = NetworkContext::new(
-        /*enabled*/ true,
         vec!["api.example.com".to_string(), "*.openai.com".to_string()],
         vec!["blocked.example.com".to_string()],
     );
