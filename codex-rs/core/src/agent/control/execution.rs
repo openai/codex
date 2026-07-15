@@ -46,10 +46,10 @@ impl AgentControl {
         }
         let state = self.upgrade()?;
         let thread = state.get_thread(thread_id).await?;
-        if thread.codex.session.active_turn.lock().await.is_some() {
+        if thread.session.active_turn.lock().await.is_some() {
             return Ok(());
         }
-        let config = thread.codex.session.get_config().await;
+        let config = thread.session.get_config().await;
         let multi_agent_version = thread
             .multi_agent_version()
             .unwrap_or_else(|| config.multi_agent_version_from_features());

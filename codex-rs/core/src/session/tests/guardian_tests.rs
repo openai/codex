@@ -724,7 +724,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         /*state_db*/ None,
     ));
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
+    let (session, io) = Session::spawn(SessionSpawnArgs {
         config,
         allow_provider_model_fallback: false,
         user_instructions: Default::default(),
@@ -767,8 +767,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     .expect("spawn guardian subagent");
 
     assert_eq!(
-        codex
-            .session
+        session
             .services
             .exec_policy
             .current()
@@ -781,5 +780,5 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             }],
         }
     );
-    drop(codex);
+    drop(io);
 }

@@ -137,7 +137,7 @@ async fn start_review_conversation(
     )
     .await)
         .ok()
-        .map(|io| io.rx_event)
+        .map(|(_session, io)| io.rx_event)
 }
 
 async fn process_review_events(

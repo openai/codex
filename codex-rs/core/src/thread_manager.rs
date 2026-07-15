@@ -10,11 +10,11 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
-use crate::session::Codex;
-use crate::session::CodexSpawnArgs;
-use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
+use crate::session::SessionIo;
+use crate::session::SessionSpawnArgs;
 use crate::session::resolve_multi_agent_version;
+use crate::session::session::Session;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
@@ -1281,7 +1281,7 @@ impl ThreadManagerState {
             // The spawn path retains only thread IDs, so look up the live
             // runtime again here to inherit its user instructions.
             Some(thread_id) => match self.get_thread(thread_id).await {
-                Ok(thread) => thread.codex.session.user_instructions().await,
+                Ok(thread) => thread.session.user_instructions().await,
                 Err(_) => None,
             },
             None => None,
@@ -1617,9 +1617,7 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
-        let CodexSpawnOk {
-            codex, thread_id, ..
-        } = Box::pin(Codex::spawn(CodexSpawnArgs {
+        let (session, io) = Box::pin(Session::spawn(SessionSpawnArgs {
             config,
             allow_provider_model_fallback,
             user_instructions,
@@ -1658,7 +1656,7 @@ impl ThreadManagerState {
         }))
         .await?;
         let new_thread = self
-            .finalize_thread_spawn(codex, thread_id, tracked_session_source)
+            .finalize_thread_spawn(session, io, tracked_session_source)
             .await?;
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;
@@ -1668,11 +1666,12 @@ impl ThreadManagerState {
 
     async fn finalize_thread_spawn(
         &self,
-        codex: Codex,
-        thread_id: ThreadId,
+        session: Arc<Session>,
+        io: SessionIo,
         session_source: SessionSource,
     ) -> CodexResult<NewThread> {
-        let event = codex.next_event().await?;
+        let thread_id = session.thread_id();
+        let event = io.next_event().await?;
         let session_configured = match event {
             Event {
                 id,
@@ -1687,7 +1686,8 @@ impl ThreadManagerState {
             let mut threads = self.threads.write().await;
             if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
                 let thread = Arc::new(CodexThread::new(
-                    codex,
+                    session,
+                    io,
                     session_configured.clone(),
                     session_configured.rollout_path.clone(),
                     session_source,
@@ -1701,7 +1701,7 @@ impl ThreadManagerState {
             }
         }
 
-        if let Err(err) = codex.shutdown_and_wait().await {
+        if let Err(err) = io.shutdown_and_wait().await {
             warn!("failed to shut down duplicate thread {thread_id}: {err}");
         }
         Err(CodexErr::InvalidRequest(format!(
@@ -1739,7 +1739,7 @@ impl ThreadManagerState {
         self.get_thread(*parent_thread_id)
             .await
             .ok()
-            .map(|thread| thread.codex.session.services.rollout_thread_trace.clone())
+            .map(|thread| thread.session.services.rollout_thread_trace.clone())
             .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
     }
 }

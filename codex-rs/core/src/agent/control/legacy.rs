@@ -6,8 +6,8 @@ impl AgentControl {
     pub(crate) async fn shutdown_live_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
         let result = if let Ok(thread) = state.get_thread(agent_id).await {
-            thread.codex.session.ensure_rollout_materialized().await;
-            thread.codex.session.flush_rollout().await?;
+            thread.session.ensure_rollout_materialized().await;
+            thread.session.flush_rollout().await?;
             let result = if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
                 Ok(String::new())
             } else {

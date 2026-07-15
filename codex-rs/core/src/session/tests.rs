@@ -6387,15 +6387,13 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
 
 #[tokio::test]
 async fn submit_with_id_captures_current_span_trace_context() {
-    let (session, _turn_context) = make_session_and_context().await;
+    let (_session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(1);
     let (_tx_event, rx_event) = async_channel::unbounded();
-    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
-    let codex = Codex {
+    let io = SessionIo {
         tx_sub,
         rx_event,
-        agent_status,
-        session: Arc::new(session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: completed_session_loop_termination(),
     };
 
@@ -6414,15 +6412,14 @@ async fn submit_with_id_captures_current_span_trace_context() {
     let expected_trace = async {
         let expected_trace =
             current_span_w3c_trace_context().expect("current span should have trace context");
-        codex
-            .submit_with_id(Submission {
-                id: "sub-1".into(),
-                op: Op::Interrupt,
-                client_user_message_id: None,
-                trace: None,
-            })
-            .await
-            .expect("submit should succeed");
+        io.submit_with_id(Submission {
+            id: "sub-1".into(),
+            op: Op::Interrupt,
+            client_user_message_id: None,
+            trace: None,
+        })
+        .await
+        .expect("submit should succeed");
         expected_trace
     }
     .instrument(request_span)
@@ -7115,30 +7112,28 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
 
 #[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
-    let (session, _turn_context) = make_session_and_context().await;
+    let (_session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
     let (_tx_event, rx_event) = async_channel::unbounded();
-    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
     let session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = rx_sub.recv().await.expect("shutdown submission");
         assert_eq!(shutdown.op, Op::Shutdown);
         tokio::time::sleep(StdDuration::from_millis(50)).await;
     });
-    let codex = Arc::new(Codex {
+    let io = Arc::new(SessionIo {
         tx_sub,
         rx_event,
-        agent_status,
-        session: Arc::new(session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
 
     let waiter_1 = {
-        let codex = Arc::clone(&codex);
-        tokio::spawn(async move { codex.shutdown_and_wait().await })
+        let io = Arc::clone(&io);
+        tokio::spawn(async move { io.shutdown_and_wait().await })
     };
     let waiter_2 = {
-        let codex = Arc::clone(&codex);
-        tokio::spawn(async move { codex.shutdown_and_wait().await })
+        let io = Arc::clone(&io);
+        tokio::spawn(async move { io.shutdown_and_wait().await })
     };
 
     waiter_1
@@ -7153,26 +7148,24 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
 
 #[tokio::test]
 async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
-    let (session, _turn_context) = make_session_and_context().await;
+    let (_session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
     drop(rx_sub);
     let (_tx_event, rx_event) = async_channel::unbounded();
-    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
     let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::oneshot::channel();
     let session_loop_handle = tokio::spawn(async move {
         let _ = shutdown_complete_rx.await;
     });
-    let codex = Arc::new(Codex {
+    let io = Arc::new(SessionIo {
         tx_sub,
         rx_event,
-        agent_status,
-        session: Arc::new(session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
 
     let waiter = {
-        let codex = Arc::clone(&codex);
-        tokio::spawn(async move { codex.shutdown_and_wait().await })
+        let io = Arc::clone(&io);
+        tokio::spawn(async move { io.shutdown_and_wait().await })
     };
 
     tokio::time::sleep(StdDuration::from_millis(10)).await;
@@ -7195,23 +7188,20 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
     let parent_config = Arc::clone(&parent_turn_context.config);
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
-    let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
     let parent_session_for_loop = Arc::clone(&parent_session);
     let parent_session_loop_handle = tokio::spawn(async move {
         submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
     });
-    let parent_codex = Codex {
+    let parent_io = SessionIo {
         tx_sub: parent_tx_sub,
         rx_event: parent_rx_event,
-        agent_status: parent_agent_status,
-        session: Arc::clone(&parent_session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
     };
 
     let (child_session, _child_turn_context) = make_session_and_context().await;
     let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
     let (_child_tx_event, child_rx_event) = async_channel::unbounded();
-    let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
     let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
     let child_session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = child_rx_sub
@@ -7223,19 +7213,19 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
             .send(())
             .expect("child shutdown signal should be delivered");
     });
-    let child_codex = Codex {
+    let child_session = Arc::new(child_session);
+    let child_io = SessionIo {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
-        agent_status: child_agent_status,
-        session: Arc::new(child_session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     parent_session
         .guardian_review_session
-        .cache_for_test(child_codex)
+        .cache_for_test(child_session, child_io)
         .await;
 
-    parent_codex
+    parent_io
         .shutdown_and_wait()
         .await
         .expect("parent shutdown should succeed");
@@ -7254,18 +7244,17 @@ async fn cached_guardian_subagent_exposes_its_rollout_path() {
     let child_rollout_path = attach_thread_persistence(&mut child_session).await;
     let (child_tx_sub, _child_rx_sub) = async_channel::bounded(4);
     let (_child_tx_event, child_rx_event) = async_channel::unbounded();
-    let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
     let child_session_loop_handle = tokio::spawn(async {});
-    let child_codex = Codex {
+    let child_session = Arc::new(child_session);
+    let child_io = SessionIo {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
-        agent_status: child_agent_status,
-        session: Arc::new(child_session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     parent_session
         .guardian_review_session
-        .cache_for_test(child_codex)
+        .cache_for_test(child_session, child_io)
         .await;
 
     assert_eq!(
@@ -7284,23 +7273,20 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     let parent_config = Arc::clone(&parent_turn_context.config);
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
-    let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
     let parent_session_for_loop = Arc::clone(&parent_session);
     let parent_session_loop_handle = tokio::spawn(async move {
         submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
     });
-    let parent_codex = Codex {
+    let parent_io = SessionIo {
         tx_sub: parent_tx_sub,
         rx_event: parent_rx_event,
-        agent_status: parent_agent_status,
-        session: Arc::clone(&parent_session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
     };
 
     let (child_session, _child_turn_context) = make_session_and_context().await;
     let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
     let (_child_tx_event, child_rx_event) = async_channel::unbounded();
-    let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
     let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
     let child_session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = child_rx_sub
@@ -7312,19 +7298,19 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
             .send(())
             .expect("child shutdown signal should be delivered");
     });
-    let child_codex = Codex {
+    let child_session = Arc::new(child_session);
+    let child_io = SessionIo {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
-        agent_status: child_agent_status,
-        session: Arc::new(child_session),
+        agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     parent_session
         .guardian_review_session
-        .register_ephemeral_for_test(child_codex)
+        .register_ephemeral_for_test(child_session, child_io)
         .await;
 
-    parent_codex
+    parent_io
         .shutdown_and_wait()
         .await
         .expect("parent shutdown should succeed");
