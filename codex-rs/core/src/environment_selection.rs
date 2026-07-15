@@ -195,6 +195,7 @@ impl ThreadEnvironments {
         .boxed()
     }
 
+    #[tracing::instrument(name = "environments.snapshot", skip_all)]
     pub(crate) async fn snapshot(&self) -> TurnEnvironmentSnapshot {
         let current = self.environments.load_full();
         let mut turn_environments = Vec::with_capacity(current.len());

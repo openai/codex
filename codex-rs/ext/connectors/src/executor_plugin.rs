@@ -31,6 +31,7 @@ pub enum ExecutorPluginConnectorProviderError {
 
 impl ExecutorPluginConnectorProvider {
     /// Returns the connector declarations contributed by `plugin`.
+    #[tracing::instrument(name = "connectors.executor_plugin.declarations.load", skip_all)]
     pub async fn load(
         &self,
         plugin: &ResolvedExecutorPlugin,

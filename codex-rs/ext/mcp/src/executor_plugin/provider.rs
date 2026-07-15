@@ -48,6 +48,7 @@ pub(super) enum ExecutorPluginMcpProviderError {
 
 impl ExecutorPluginMcpProvider {
     /// Returns MCP servers declared by `plugin`, bound to its environment.
+    #[tracing::instrument(name = "mcp.executor_plugin.servers.load", skip_all)]
     pub(super) async fn load(
         &self,
         plugin: &ResolvedExecutorPlugin,

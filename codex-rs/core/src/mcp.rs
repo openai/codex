@@ -100,6 +100,7 @@ impl McpManager {
         .config
     }
 
+    #[tracing::instrument(name = "mcp.runtime_config.project_for_step", skip_all)]
     pub(crate) async fn runtime_config_for_step(
         &self,
         config: &Config,

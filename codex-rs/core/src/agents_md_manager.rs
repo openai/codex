@@ -28,6 +28,7 @@ impl AgentsMdManager {
         }
     }
 
+    #[tracing::instrument(name = "agents_md.refresh", skip_all)]
     pub(crate) async fn refresh(&self, config: &Config, environments: &TurnEnvironmentSnapshot) {
         let selections = environments.to_selections();
         if self.cache.lock().await.selections.as_ref() == Some(&selections) {
