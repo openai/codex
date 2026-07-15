@@ -683,18 +683,7 @@ pub(crate) fn render_decision_for_unmatched_command(
     };
     if command_is_dangerous || windows_managed_fs_restrictions_without_sandbox_backend {
         return match approval_policy {
-            AskForApproval::Never => {
-                let sandbox_is_explicitly_disabled = matches!(
-                    permission_profile,
-                    PermissionProfile::Disabled | PermissionProfile::External { .. }
-                );
-                if sandbox_is_explicitly_disabled {
-                    // If the sandbox is explicitly disabled, we should allow the command to run
-                    Decision::Allow
-                } else {
-                    Decision::Forbidden
-                }
-            }
+            AskForApproval::Never => Decision::Forbidden,
             AskForApproval::OnRequest
             | AskForApproval::UnlessTrusted
             | AskForApproval::Granular(_) => Decision::Prompt,

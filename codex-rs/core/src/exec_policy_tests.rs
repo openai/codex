@@ -2122,7 +2122,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
 }
 
 #[tokio::test]
-async fn dangerous_command_allowed_when_sandbox_is_explicitly_disabled() {
+async fn dangerous_command_forbidden_when_sandbox_is_explicitly_disabled() {
     let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
@@ -2135,11 +2135,8 @@ async fn dangerous_command_allowed_when_sandbox_is_explicitly_disabled() {
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
-        ExecApprovalRequirement::Skip {
-            bypass_sandbox: false,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment {
-                command: vec_str(&["rm", "-rf", "/tmp/nonexistent"]),
-            }),
+        ExecApprovalRequirement::Forbidden {
+            reason: "`rm -rf /tmp/nonexistent` rejected: blocked by policy".to_string(),
         },
     )
     .await;
