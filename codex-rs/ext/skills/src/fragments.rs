@@ -7,6 +7,7 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AvailableSkillsInstructions {
     skill_lines: Vec<String>,
+    include_skills_usage_instructions: bool,
 }
 
 impl AvailableSkillsInstructions {
@@ -18,7 +19,10 @@ impl AvailableSkillsInstructions {
             skill_lines.push("### How to use skills".to_string());
             skill_lines.push(SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS.to_string());
         }
-        Self { skill_lines }
+        Self {
+            skill_lines,
+            include_skills_usage_instructions,
+        }
     }
 }
 
@@ -36,7 +40,11 @@ impl ContextualUserFragment for AvailableSkillsInstructions {
     }
 
     fn body(&self) -> String {
-        render_available_skills_body(&[], &self.skill_lines)
+        render_available_skills_body(
+            &[],
+            &self.skill_lines,
+            self.include_skills_usage_instructions,
+        )
     }
 }
 

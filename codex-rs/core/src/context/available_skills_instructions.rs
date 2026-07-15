@@ -12,6 +12,7 @@ use super::ContextualUserFragment;
 pub struct AvailableSkillsInstructions {
     skill_root_lines: Vec<String>,
     skill_lines: Vec<String>,
+    include_skills_usage_instructions: bool,
 }
 
 impl AvailableSkillsInstructions {
@@ -20,6 +21,7 @@ impl AvailableSkillsInstructions {
         Self {
             skill_root_lines: Vec::new(),
             skill_lines,
+            include_skills_usage_instructions: false,
         }
     }
 
@@ -40,6 +42,7 @@ impl AvailableSkillsInstructions {
         Self {
             skill_root_lines: available_skills.skill_root_lines.clone(),
             skill_lines,
+            include_skills_usage_instructions,
         }
     }
 }
@@ -58,6 +61,10 @@ impl ContextualUserFragment for AvailableSkillsInstructions {
     }
 
     fn body(&self) -> String {
-        render_available_skills_body(&self.skill_root_lines, &self.skill_lines)
+        render_available_skills_body(
+            &self.skill_root_lines,
+            &self.skill_lines,
+            self.include_skills_usage_instructions,
+        )
     }
 }
