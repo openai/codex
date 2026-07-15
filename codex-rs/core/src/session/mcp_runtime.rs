@@ -4,6 +4,7 @@ use std::sync::Arc;
 use codex_mcp::McpConfig;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 /// MCP config, plugin availability, exact environment bindings, and manager for one request.
 pub struct McpRuntimeSnapshot {
@@ -11,7 +12,7 @@ pub struct McpRuntimeSnapshot {
     plugins_available: bool,
     manager: Arc<McpConnectionManager>,
     runtime_context: McpRuntimeContext,
-    available_environment_ids: Vec<String>,
+    ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
 }
 
 impl McpRuntimeSnapshot {
@@ -20,14 +21,14 @@ impl McpRuntimeSnapshot {
         plugins_available: bool,
         manager: Arc<McpConnectionManager>,
         runtime_context: McpRuntimeContext,
-        available_environment_ids: Vec<String>,
+        ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
     ) -> Self {
         Self {
             config,
             plugins_available,
             manager,
             runtime_context,
-            available_environment_ids,
+            ready_selected_capability_roots,
         }
     }
 
@@ -51,8 +52,8 @@ impl McpRuntimeSnapshot {
         &self.runtime_context
     }
 
-    pub(crate) fn available_environment_ids(&self) -> &[String] {
-        &self.available_environment_ids
+    pub(crate) fn ready_selected_capability_roots(&self) -> &[SelectedCapabilityRoot] {
+        &self.ready_selected_capability_roots
     }
 
     #[cfg(test)]

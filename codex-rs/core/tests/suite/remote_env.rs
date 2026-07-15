@@ -7,6 +7,7 @@ use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Constrained;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -585,7 +586,7 @@ async fn deferred_executor_starts_noise_connection_after_registration() -> Resul
     wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
     assert_eq!(response_mock.requests().len(), 1);
     assert_eq!(provider.calls.load(Ordering::Relaxed), 0);
-    registration.complete(Ok(()))?;
+    registration.complete(Ok(EnvironmentReadyInfo::default()))?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })

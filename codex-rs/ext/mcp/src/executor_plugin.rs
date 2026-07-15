@@ -6,7 +6,6 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
-use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -148,31 +147,16 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
         context: McpServerContributionContext<'a, Config>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>> {
         Box::pin(async move {
-            let Some(thread_init) = context.thread_init() else {
-                return Vec::new();
-            };
             let Some(thread_store) = context.thread_store() else {
                 return Vec::new();
             };
-            let Some(selected_roots) = thread_init.get::<Vec<SelectedCapabilityRoot>>() else {
+            let Some(selected_roots) = context.ready_selected_capability_roots() else {
                 return Vec::new();
             };
             let state = thread_store.get_or_init(SelectedExecutorPluginMcpState::default);
             let mut contributions = Vec::new();
 
             for (selection_order, selected_root) in selected_roots.iter().enumerate() {
-                let CapabilityRootLocation::Environment { environment_id, .. } =
-                    &selected_root.location;
-                if context
-                    .available_environment_ids()
-                    .is_some_and(|available| {
-                        !available
-                            .iter()
-                            .any(|available| available == environment_id)
-                    })
-                {
-                    continue;
-                }
                 let Some(plugin) = self.metadata_for_root(&state, selected_root).await else {
                     continue;
                 };
