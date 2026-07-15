@@ -1021,11 +1021,14 @@ fn derive_forbidden_reason(
             let prefix = render_shlex_command(matched_prefix);
             format!("`{command}` rejected: policy forbids commands starting with `{prefix}`")
         }
-        None if let Some(dangerous_command_match) = dangerous_command_match => {
-            let reason = dangerous_command_rejection_reason(dangerous_command_match);
-            format!("`{command}` rejected: {reason}")
+        None => {
+            if let Some(dangerous_command_match) = dangerous_command_match {
+                let reason = dangerous_command_rejection_reason(dangerous_command_match);
+                format!("`{command}` rejected: {reason}")
+            } else {
+                format!("`{command}` rejected: blocked by policy")
+            }
         }
-        None => format!("`{command}` rejected: blocked by policy"),
     }
 }
 
