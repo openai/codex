@@ -1649,7 +1649,10 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
     let approval_file_system = approval_permissions
         .file_system
         .expect("expected filesystem permissions");
-    let (approval_reads, approval_writes) = approval_file_system
+    let codex_protocol::models::LegacyReadWriteRoots {
+        read: approval_reads,
+        write: approval_writes,
+    } = approval_file_system
         .legacy_read_write_roots()
         .expect("expected legacy-compatible permissions");
     assert!(approval_reads.as_ref().is_none_or(Vec::is_empty));
@@ -1657,7 +1660,10 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
     let mut approval_writes = approval_writes.unwrap_or_default();
     approval_writes.sort_by_key(|path| path.display().to_string());
 
-    let (_, expected_writes) = merged_permissions
+    let codex_protocol::models::LegacyReadWriteRoots {
+        write: expected_writes,
+        ..
+    } = merged_permissions
         .file_system
         .expect("expected merged filesystem permissions")
         .legacy_read_write_roots()

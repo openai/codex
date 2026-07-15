@@ -1,27 +1,30 @@
 mod find_up;
 
-pub use find_up::FindUpErrorPolicy;
-pub use find_up::find_nearest_ancestor_with_markers;
-pub use find_up::find_nearest_native_ancestor_with_markers;
-
 use bytes::Bytes;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+pub use find_up::FindUpErrorPolicy;
+pub use find_up::find_nearest_ancestor_with_markers;
+pub use find_up::find_nearest_native_ancestor_with_markers;
 use futures::Stream;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::pin::Pin;
 use std::task::Context;
@@ -119,10 +122,163 @@ pub struct WalkOutcome {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExecFileSystemPath {
+    Path { path: PathUri },
+    GlobPattern { pattern: String },
+    Special { value: FileSystemSpecialPath },
+}
+
+impl From<FileSystemPath> for ExecFileSystemPath {
+    fn from(value: FileSystemPath) -> Self {
+        match value {
+            FileSystemPath::Path { path } => Self::Path {
+                path: PathUri::from_abs_path(&path),
+            },
+            FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            FileSystemPath::Special { value } => Self::Special { value },
+        }
+    }
+}
+
+impl TryFrom<ExecFileSystemPath> for FileSystemPath {
+    type Error = io::Error;
+
+    fn try_from(value: ExecFileSystemPath) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ExecFileSystemPath::Path { path } => Self::Path {
+                path: path.to_abs_path()?,
+            },
+            ExecFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            ExecFileSystemPath::Special { value } => Self::Special { value },
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecFileSystemSandboxEntry {
+    pub path: ExecFileSystemPath,
+    pub access: FileSystemAccessMode,
+}
+
+impl From<FileSystemSandboxEntry> for ExecFileSystemSandboxEntry {
+    fn from(value: FileSystemSandboxEntry) -> Self {
+        Self {
+            path: value.path.into(),
+            access: value.access,
+        }
+    }
+}
+
+impl TryFrom<ExecFileSystemSandboxEntry> for FileSystemSandboxEntry {
+    type Error = io::Error;
+
+    fn try_from(value: ExecFileSystemSandboxEntry) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path.try_into()?,
+            access: value.access,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExecManagedFileSystemPermissions {
+    Restricted {
+        entries: Vec<ExecFileSystemSandboxEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        glob_scan_max_depth: Option<NonZeroUsize>,
+    },
+    Unrestricted,
+}
+
+impl From<ManagedFileSystemPermissions> for ExecManagedFileSystemPermissions {
+    fn from(value: ManagedFileSystemPermissions) -> Self {
+        match value {
+            ManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries.into_iter().map(Into::into).collect(),
+                glob_scan_max_depth,
+            },
+            ManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
+        }
+    }
+}
+
+impl TryFrom<ExecManagedFileSystemPermissions> for ManagedFileSystemPermissions {
+    type Error = io::Error;
+
+    fn try_from(value: ExecManagedFileSystemPermissions) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ExecManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<io::Result<_>>()?,
+                glob_scan_max_depth,
+            },
+            ExecManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExecPermissionProfile {
+    Managed {
+        file_system: ExecManagedFileSystemPermissions,
+        network: NetworkSandboxPolicy,
+    },
+    Disabled,
+    External {
+        network: NetworkSandboxPolicy,
+    },
+}
+
+impl From<PermissionProfile> for ExecPermissionProfile {
+    fn from(value: PermissionProfile) -> Self {
+        match value {
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                file_system: file_system.into(),
+                network,
+            },
+            PermissionProfile::Disabled => Self::Disabled,
+            PermissionProfile::External { network } => Self::External { network },
+        }
+    }
+}
+
+impl TryFrom<ExecPermissionProfile> for PermissionProfile {
+    type Error = io::Error;
+
+    fn try_from(value: ExecPermissionProfile) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ExecPermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                file_system: file_system.try_into()?,
+                network,
+            },
+            ExecPermissionProfile::Disabled => Self::Disabled,
+            ExecPermissionProfile::External { network } => Self::External { network },
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
-    pub permissions: PermissionProfile<PathUri>,
+    pub permissions: ExecPermissionProfile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathUri>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -147,30 +303,23 @@ impl FileSystemSandboxContext {
                 &sandbox_policy,
                 &native_cwd,
             );
-        let permissions =
-            PermissionProfile::<AbsolutePathBuf>::from_runtime_permissions_with_enforcement(
-                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                &file_system_sandbox_policy,
-                NetworkSandboxPolicy::from(&sandbox_policy),
-            );
+        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &file_system_sandbox_policy,
+            NetworkSandboxPolicy::from(&sandbox_policy),
+        );
         Ok(Self::from_permission_profile_with_cwd(permissions, cwd))
     }
 
-    pub fn from_permission_profile(permissions: PermissionProfile<AbsolutePathBuf>) -> Self {
+    pub fn from_permission_profile(permissions: PermissionProfile) -> Self {
         Self::from_permissions_and_cwd(permissions, /*cwd*/ None)
     }
 
-    pub fn from_permission_profile_with_cwd(
-        permissions: PermissionProfile<AbsolutePathBuf>,
-        cwd: PathUri,
-    ) -> Self {
+    pub fn from_permission_profile_with_cwd(permissions: PermissionProfile, cwd: PathUri) -> Self {
         Self::from_permissions_and_cwd(permissions, Some(cwd))
     }
 
-    fn from_permissions_and_cwd(
-        permissions: PermissionProfile<AbsolutePathBuf>,
-        cwd: Option<PathUri>,
-    ) -> Self {
+    fn from_permissions_and_cwd(permissions: PermissionProfile, cwd: Option<PathUri>) -> Self {
         let workspace_roots = cwd.iter().cloned().collect();
         Self {
             permissions: permissions.into(),
@@ -183,9 +332,7 @@ impl FileSystemSandboxContext {
     }
 
     pub fn should_run_in_sandbox(&self) -> bool {
-        let Ok(permissions) =
-            PermissionProfile::<AbsolutePathBuf>::try_from(self.permissions.clone())
-        else {
+        let Ok(permissions) = PermissionProfile::try_from(self.permissions.clone()) else {
             // A sandbox context for another host must not select the unsandboxed filesystem.
             return true;
         };
@@ -196,22 +343,22 @@ impl FileSystemSandboxContext {
 
     pub fn has_cwd_dependent_permissions(&self) -> bool {
         match &self.permissions {
-            PermissionProfile::Managed {
-                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+            ExecPermissionProfile::Managed {
+                file_system: ExecManagedFileSystemPermissions::Restricted { entries, .. },
                 ..
             } => entries.iter().any(|entry| match &entry.path {
-                FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
-                FileSystemPath::Special {
+                ExecFileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
+                ExecFileSystemPath::Special {
                     value: FileSystemSpecialPath::ProjectRoots { .. },
                 } => true,
-                FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
+                ExecFileSystemPath::Path { .. } | ExecFileSystemPath::Special { .. } => false,
             }),
-            PermissionProfile::Managed {
-                file_system: ManagedFileSystemPermissions::Unrestricted,
+            ExecPermissionProfile::Managed {
+                file_system: ExecManagedFileSystemPermissions::Unrestricted,
                 ..
             }
-            | PermissionProfile::Disabled
-            | PermissionProfile::External { .. } => false,
+            | ExecPermissionProfile::Disabled
+            | ExecPermissionProfile::External { .. } => false,
         }
     }
 
