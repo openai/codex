@@ -367,12 +367,14 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     .await?;
 
     let mut saw_replayed_answer = false;
+    let mut saw_optimistic_prompt = false;
     let mut submitted_items = None;
     while let Ok(event) = app_event_rx.try_recv() {
         match event {
             AppEvent::InsertHistoryCell(cell) => {
                 let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
                 saw_replayed_answer |= transcript.contains("earlier prompt");
+                saw_optimistic_prompt |= transcript.contains(&initial_prompt);
             }
             AppEvent::SubmitThreadOp {
                 thread_id: op_thread_id,
@@ -382,6 +384,10 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
                 submitted_items = Some(items);
             }
             AppEvent::CodexOp(Op::UserTurn { items, .. }) => {
+                assert!(
+                    saw_optimistic_prompt,
+                    "expected optimistic prompt before turn submission"
+                );
                 submitted_items = Some(items);
             }
             _ => {}
