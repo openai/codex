@@ -1,0 +1,47 @@
+---
+source: core/src/context/world_state/plugins_instructions_tests.rs
+expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&unavailable)),\n(Absent, Known(&available)), (Known(&unavailable), Known(&available)),\n(Known(&available), Known(&available)),\n(Known(&available), Known(&unavailable)), (Unknown, Known(&unavailable)),\n(Unknown, Known(&available)),])"
+---
+Absent -> Absent
+None
+
+Absent -> false
+None
+
+Absent -> true (role - developer)
+<plugins_instructions>
+## Plugins
+A plugin is a local bundle of skills, MCP servers, and apps.
+### How to use plugins
+- Skill naming: If a plugin contributes skills, those skill entries are prefixed with `plugin_name:` in the Skills list.
+- MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as `mcp__server__tool`; use tool provenance to tell which plugin they come from.
+- Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+- Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+- Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associated skills, MCP tools, and apps exposed elsewhere in this turn.
+- Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for the task, say so briefly and continue with the best fallback.
+</plugins_instructions>
+
+false -> true (role - developer)
+<plugins_instructions>
+## Plugins
+A plugin is a local bundle of skills, MCP servers, and apps.
+### How to use plugins
+- Skill naming: If a plugin contributes skills, those skill entries are prefixed with `plugin_name:` in the Skills list.
+- MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as `mcp__server__tool`; use tool provenance to tell which plugin they come from.
+- Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+- Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+- Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associated skills, MCP tools, and apps exposed elsewhere in this turn.
+- Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for the task, say so briefly and continue with the best fallback.
+</plugins_instructions>
+
+true -> true
+None
+
+true -> false
+None
+
+Unknown -> false
+None
+
+Unknown -> true
+None

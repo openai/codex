@@ -2,6 +2,8 @@ mod agents_md;
 mod apps_instructions;
 mod environment;
 mod plugins_instructions;
+#[cfg(test)]
+mod test_support;
 
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
