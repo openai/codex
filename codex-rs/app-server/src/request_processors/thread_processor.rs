@@ -967,8 +967,11 @@ impl ThreadRequestProcessor {
         if matches!(
             history_mode,
             Some(codex_app_server_protocol::ThreadHistoryMode::Paginated)
-        ) {
-            return Err(method_not_found("paginated_threads is not supported yet"));
+        ) && !self.thread_store.supports_paginated_history_lists()
+        {
+            return Err(invalid_request(
+                "paginated threads require thread/turns/list and thread/items/list support",
+            ));
         }
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
@@ -1783,6 +1786,14 @@ impl ThreadRequestProcessor {
         }
 
         let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        if matches!(
+            thread.config_snapshot().await.history_mode,
+            ThreadHistoryMode::Paginated
+        ) {
+            return Err(invalid_request(
+                "paginated threads do not support thread/rollback",
+            ));
+        }
 
         let request = request_id.clone();
 
@@ -2329,23 +2340,45 @@ impl ThreadRequestProcessor {
         include_turns: bool,
     ) -> Result<Option<Thread>, ThreadReadViewError> {
         let fallback_provider = self.config.model_provider_id.as_str();
+        if include_turns
+            && self
+                .read_stored_thread_for_read(thread_id, /*include_history*/ false)
+                .await?
+                .is_some_and(|thread| matches!(thread.history_mode, ThreadHistoryMode::Paginated))
+        {
+            return Err(ThreadReadViewError::InvalidRequest(
+                "paginated threads do not support thread/read(includeTurns=true)".to_string(),
+            ));
+        }
+        let Some(stored_thread) = self
+            .read_stored_thread_for_read(thread_id, /*include_history*/ include_turns)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let (mut thread, history) =
+            thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+        if include_turns && let Some(history) = history {
+            thread.turns = build_legacy_api_turns_from_rollout_items(&history.items);
+        }
+        Ok(Some(thread))
+    }
+
+    async fn read_stored_thread_for_read(
+        &self,
+        thread_id: ThreadId,
+        include_history: bool,
+    ) -> Result<Option<StoredThread>, ThreadReadViewError> {
         match self
             .thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,
                 include_archived: true,
-                include_history: include_turns,
+                include_history,
             })
             .await
         {
-            Ok(stored_thread) => {
-                let (mut thread, history) =
-                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
-                if include_turns && let Some(history) = history {
-                    thread.turns = build_legacy_api_turns_from_rollout_items(&history.items);
-                }
-                Ok(Some(thread))
-            }
+            Ok(stored_thread) => Ok(Some(stored_thread)),
             Err(ThreadStoreError::InvalidRequest { message })
                 if message == format!("no rollout found for thread id {thread_id}") =>
             {
@@ -2378,6 +2411,11 @@ impl ThreadRequestProcessor {
         if include_turns && config_snapshot.ephemeral {
             return Err(ThreadReadViewError::InvalidRequest(
                 "ephemeral threads do not support includeTurns".to_string(),
+            ));
+        }
+        if include_turns && matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
+            return Err(ThreadReadViewError::InvalidRequest(
+                "paginated threads do not support thread/read(includeTurns=true)".to_string(),
             ));
         }
         let fallback_thread =
@@ -2571,6 +2609,35 @@ impl ThreadRequestProcessor {
             next_cursor: page.next_cursor,
             backwards_cursor: page.backwards_cursor,
         })
+    }
+
+    pub(super) async fn paginated_resume_backwards_cursors(
+        thread_store: &dyn ThreadStore,
+        thread_id: ThreadId,
+    ) -> Result<(Option<String>, Option<String>), JSONRPCErrorError> {
+        let turns_page = thread_store
+            .list_turns(StoreListTurnsParams {
+                thread_id,
+                include_archived: true,
+                cursor: None,
+                page_size: 1,
+                sort_direction: StoreSortDirection::Desc,
+                items_view: StoredTurnItemsView::NotLoaded,
+            })
+            .await
+            .map_err(paginated_history_list_error)?;
+        let items_page = thread_store
+            .list_items(StoreListItemsParams {
+                thread_id,
+                turn_id: None,
+                include_archived: true,
+                cursor: None,
+                page_size: 1,
+                sort_direction: StoreSortDirection::Desc,
+            })
+            .await
+            .map_err(paginated_history_list_error)?;
+        Ok((turns_page.backwards_cursor, items_page.backwards_cursor))
     }
 
     async fn thread_items_list_response_inner(
@@ -2850,14 +2917,33 @@ impl ThreadRequestProcessor {
             self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
-        } else if let Some(mut stored_thread) = stored_thread_from_running_probe {
-            self.stored_thread_to_initial_history(&mut stored_thread)
-                .await
-                .map(|thread_history| (thread_history, Some(*stored_thread)))
+        } else if let Some(stored_thread) = stored_thread_from_running_probe {
+            self.load_resume_initial_history_from_stored_thread(
+                *stored_thread,
+                exclude_turns,
+                initial_turns_page.is_some(),
+            )
+            .await
+            .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
         } else {
-            self.resume_thread_from_rollout(&thread_id, path.as_ref())
+            match self
+                .read_stored_thread_for_resume(
+                    &thread_id,
+                    path.as_ref(),
+                    /*include_history*/ false,
+                )
                 .await
-                .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
+            {
+                Ok(stored_thread) => self
+                    .load_resume_initial_history_from_stored_thread(
+                        stored_thread,
+                        exclude_turns,
+                        initial_turns_page.is_some(),
+                    )
+                    .await
+                    .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread))),
+                Err(error) => Err(error),
+            }
         };
         let (thread_history, resume_source_thread) = match resume_result {
             Ok(value) => value,
@@ -3004,6 +3090,23 @@ impl ThreadRequestProcessor {
                     /*has_live_in_progress_turn*/ false,
                 );
                 let config_snapshot = codex_thread.config_snapshot().await;
+                let (turns_backwards_cursor, items_backwards_cursor) =
+                    if matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
+                        match Self::paginated_resume_backwards_cursors(
+                            self.thread_store.as_ref(),
+                            thread_id,
+                        )
+                        .await
+                        {
+                            Ok(cursors) => cursors,
+                            Err(error) => {
+                                self.outgoing.send_error(request_id, error).await;
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        (None, None)
+                    };
                 let sandbox = config_snapshot.sandbox_policy().into();
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
@@ -3049,6 +3152,8 @@ impl ThreadRequestProcessor {
                     reasoning_effort: session_configured.reasoning_effort,
                     multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
                     initial_turns_page,
+                    turns_backwards_cursor,
+                    items_backwards_cursor,
                 };
 
                 let connection_id = request_id.connection_id;
@@ -3139,7 +3244,7 @@ impl ThreadRequestProcessor {
                 .read_stored_thread_for_resume(
                     &params.thread_id,
                     /*path*/ None,
-                    /*include_history*/ true,
+                    /*include_history*/ false,
                 )
                 .await?;
             Some((existing_thread_id, existing_thread, source_thread))
@@ -3148,7 +3253,7 @@ impl ThreadRequestProcessor {
                 .read_stored_thread_for_resume(
                     &params.thread_id,
                     params.path.as_ref(),
-                    /*include_history*/ true,
+                    /*include_history*/ false,
                 )
                 .await?;
             let existing_thread_id = source_thread.thread_id;
@@ -3163,6 +3268,11 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
+            ensure_paginated_resume_supported(
+                source_thread.history_mode,
+                params.exclude_turns,
+                params.initial_turns_page.is_some(),
+            )?;
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -3222,15 +3332,32 @@ impl ThreadRequestProcessor {
             }
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
-            let history_items = source_thread
-                .history
-                .take()
-                .map(|history| history.items)
-                .ok_or_else(|| {
-                    internal_error(format!(
-                        "thread {existing_thread_id} did not include persisted history"
-                    ))
-                })?;
+            let include_turns = !params.exclude_turns;
+            let needs_history = include_turns || params.initial_turns_page.is_some();
+            if needs_history {
+                let source_thread_id = source_thread.thread_id.to_string();
+                let source_rollout_path = source_thread.rollout_path.clone();
+                source_thread = self
+                    .read_stored_thread_for_resume(
+                        &source_thread_id,
+                        source_rollout_path.as_ref(),
+                        /*include_history*/ true,
+                    )
+                    .await?;
+            }
+            let history_items = if needs_history {
+                source_thread
+                    .history
+                    .take()
+                    .map(|history| history.items)
+                    .ok_or_else(|| {
+                        internal_error(format!(
+                            "thread {existing_thread_id} did not include persisted history"
+                        ))
+                    })?
+            } else {
+                Vec::new()
+            };
 
             let thread_state = self
                 .thread_state_manager
@@ -3255,6 +3382,7 @@ impl ThreadRequestProcessor {
                 /*include_turns*/ false,
             );
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
+            thread_summary.thread_source = config_snapshot.thread_source.clone().map(Into::into);
             let instruction_sources = existing_thread.legacy_instruction_sources().await;
 
             let listener_command_tx = {
@@ -3271,6 +3399,9 @@ impl ThreadRequestProcessor {
                 .thread_goal_processor
                 .pending_resume_goal_state(existing_thread.as_ref())
                 .await;
+            let resume_cursor_store =
+                matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated)
+                    .then(|| Arc::clone(&self.thread_store));
 
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
@@ -3281,8 +3412,9 @@ impl ThreadRequestProcessor {
                     thread_summary,
                     emit_thread_goal_update,
                     thread_goal_state_db,
-                    include_turns: !params.exclude_turns,
+                    include_turns,
                     initial_turns_page: params.initial_turns_page.clone(),
+                    resume_cursor_store,
                     redact_resume_payloads,
                 }),
             );
@@ -3313,14 +3445,42 @@ impl ThreadRequestProcessor {
         ))
     }
 
-    #[tracing::instrument(level = "trace", skip_all)]
-    async fn resume_thread_from_rollout(
+    async fn load_resume_initial_history_from_stored_thread(
         &self,
-        thread_id: &str,
-        path: Option<&PathBuf>,
+        stored_thread: StoredThread,
+        exclude_turns: bool,
+        has_initial_turns_page: bool,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
+        ensure_paginated_resume_supported(
+            stored_thread.history_mode,
+            exclude_turns,
+            has_initial_turns_page,
+        )?;
+        if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
+            let model_context = self
+                .thread_store
+                .load_latest_model_context(StoreLoadThreadHistoryParams {
+                    thread_id: stored_thread.thread_id,
+                    include_archived: true,
+                })
+                .await
+                .map_err(thread_store_resume_read_error)?;
+            let history = InitialHistory::Resumed(ResumedHistory {
+                conversation_id: model_context.thread_id,
+                history: Arc::new(model_context.items),
+                rollout_path: stored_thread.rollout_path.clone(),
+            });
+            return Ok((history, stored_thread));
+        }
+
+        let thread_id = stored_thread.thread_id.to_string();
+        let rollout_path = stored_thread.rollout_path.clone();
         let mut stored_thread = self
-            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ true)
+            .read_stored_thread_for_resume(
+                &thread_id,
+                rollout_path.as_ref(),
+                /*include_history*/ true,
+            )
             .await?;
         let history = self
             .stored_thread_to_initial_history(&mut stored_thread)
@@ -4311,6 +4471,19 @@ fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
     }
 }
 
+fn paginated_history_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
+        ThreadStoreError::ThreadNotFound { thread_id } => {
+            invalid_request(format!("no rollout found for thread id {thread_id}"))
+        }
+        err => internal_error(format!("failed to list thread history: {err}")),
+    }
+}
+
 fn deserialize_stored_thread_item(
     item: codex_thread_store::StoredThreadItem,
 ) -> Result<ThreadItem, JSONRPCErrorError> {
@@ -4352,6 +4525,27 @@ fn stored_turn_to_api_turn(
         completed_at: turn.completed_at,
         duration_ms: turn.duration_ms,
     })
+}
+
+fn ensure_paginated_resume_supported(
+    history_mode: ThreadHistoryMode,
+    exclude_turns: bool,
+    has_initial_turns_page: bool,
+) -> Result<(), JSONRPCErrorError> {
+    if !matches!(history_mode, ThreadHistoryMode::Paginated) {
+        return Ok(());
+    }
+    if !exclude_turns {
+        return Err(invalid_request(
+            "paginated threads do not support full-history thread/resume; pass excludeTurns=true",
+        ));
+    }
+    if has_initial_turns_page {
+        return Err(invalid_request(
+            "paginated threads do not support initialTurnsPage; use turnsBackwardsCursor and itemsBackwardsCursor",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn unsupported_thread_store_operation(operation: &'static str) -> JSONRPCErrorError {

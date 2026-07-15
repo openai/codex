@@ -105,6 +105,11 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Lists stored threads matching the supplied filters.
     fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreFuture<'_, ThreadPage>;
 
+    /// Whether paginated threads can hydrate durable history through turn and item lists.
+    fn supports_paginated_history_lists(&self) -> bool {
+        false
+    }
+
     /// Searches stored threads and returns search-only preview metadata.
     fn search_threads(
         &self,

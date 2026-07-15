@@ -513,6 +513,8 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         reasoning_effort: None,
         multi_agent_mode: Default::default(),
         initial_turns_page: None,
+        turns_backwards_cursor: None,
+        items_backwards_cursor: None,
     })
 }
 

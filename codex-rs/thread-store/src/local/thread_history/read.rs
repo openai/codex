@@ -38,7 +38,7 @@ struct HistoryCursor {
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum CursorScope {
     Turns,
-    Items { turn_id: Option<String> },
+    Items,
 }
 
 struct StoredTurnRow {
@@ -148,9 +148,7 @@ pub(in crate::local) async fn list_items(
         "list_items",
     )
     .await?;
-    let scope = CursorScope::Items {
-        turn_id: params.turn_id.clone(),
-    };
+    let scope = CursorScope::Items;
     let cursor = parse_cursor(params.cursor.as_deref(), params.thread_id, &scope)?;
     let pool = store.thread_history_db().await?;
     let limit = page_limit(params.page_size)?;
