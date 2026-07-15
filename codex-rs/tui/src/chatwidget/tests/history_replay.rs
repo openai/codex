@@ -227,6 +227,89 @@ async fn replayed_review_prompt_does_not_seed_composer_history() {
 }
 
 #[tokio::test]
+async fn replayed_nested_review_prompts_do_not_render_or_seed_composer_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let review_hint = "current changes";
+    let review_prompt = "Review the current code changes (staged, unstaged, and untracked files).";
+    let user_message = |id: &str, text: &str| AppServerThreadItem::UserMessage {
+        id: id.to_string(),
+        client_id: None,
+        content: vec![AppServerUserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }],
+    };
+    let review_marker = |turn_id: &str| AppServerTurn {
+        items: vec![
+            AppServerThreadItem::EnteredReviewMode {
+                id: format!("{turn_id}-start"),
+                review: review_hint.to_string(),
+            },
+            AppServerThreadItem::ExitedReviewMode {
+                id: format!("{turn_id}-end"),
+                review: "review complete".to_string(),
+            },
+        ],
+        ..app_server_turn(
+            turn_id,
+            AppServerTurnStatus::Completed,
+            /*duration_ms*/ None,
+            /*error*/ None,
+        )
+    };
+
+    chat.replay_thread_turns(
+        vec![
+            review_marker("turn-review-before-steer"),
+            AppServerTurn {
+                items: vec![
+                    user_message("interrupted-prompt", review_hint),
+                    user_message("interrupted-steer", review_hint),
+                ],
+                completed_at: Some(1),
+                ..app_server_turn(
+                    "turn-interrupted",
+                    AppServerTurnStatus::Interrupted,
+                    /*duration_ms*/ None,
+                    /*error*/ None,
+                )
+            },
+            review_marker("turn-review"),
+            AppServerTurn {
+                items: vec![
+                    user_message("review-prompt-1", review_prompt),
+                    user_message("review-prompt-2", review_prompt),
+                    AppServerThreadItem::AgentMessage {
+                        id: "review-result".to_string(),
+                        text: "review result is retained".to_string(),
+                        phase: Some(MessagePhase::FinalAnswer),
+                        memory_citation: None,
+                    },
+                ],
+                ..app_server_turn(
+                    "turn-review-child",
+                    AppServerTurnStatus::Interrupted,
+                    /*duration_ms*/ None,
+                    /*error*/ None,
+                )
+            },
+        ],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(!rendered.contains(review_prompt));
+    assert_eq!(rendered.matches(review_hint).count(), 4);
+    insta::assert_snapshot!("replayed_nested_review_prompts", rendered);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), review_hint);
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 

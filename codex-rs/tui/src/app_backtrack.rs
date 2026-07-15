@@ -4,8 +4,8 @@
 //! mediates a key rendering boundary for the transcript overlay.
 //!
 //! Overall goal: keep the main chat view and the transcript overlay in sync while allowing users
-//! to edit an earlier prompt on a source-preserving branch. Confirming a selection forks through
-//! the immediately preceding turn and restores the selected prompt in the new composer.
+//! to edit an earlier prompt on a source-preserving branch. Confirming a selection forks before
+//! the selected turn and restores its prompt in the new composer.
 //!
 //! Backtrack operates as a small state machine:
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
@@ -463,14 +463,14 @@ impl App {
     }
 }
 
-/// Find the persisted turn immediately before a selected transcript prompt.
+/// Find the persisted turn that contains a selected transcript prompt.
 ///
 /// Replay hides review prompts and other display-empty inputs, so the selected ordinal must be
 /// resolved against the same visible projection before restoring its canonical mention bindings.
 ///
 /// A turn can contain multiple user messages when it was steered. Only its initial prompt can be
 /// reopened independently because app-server cannot fork in the middle of a turn.
-pub(crate) fn backtrack_fork_last_turn_id(
+pub(crate) fn backtrack_fork_before_turn_id(
     turns: &[Turn],
     nth_user_message: usize,
     prompt: &mut UserMessage,
@@ -478,6 +478,10 @@ pub(crate) fn backtrack_fork_last_turn_id(
     let mut visible_user_messages_seen = 0_usize;
     let mut review_mode = false;
     for (turn_index, turn) in turns.iter().enumerate() {
+        let hidden_nested_review_turn = turn_index
+            .checked_sub(/*rhs*/ 1)
+            .and_then(|index| turns.get(index))
+            .is_some_and(|previous| is_hidden_nested_review_turn(previous, turn));
         let mut user_messages_in_turn = 0_usize;
         for item in &turn.items {
             let content = match item {
@@ -499,6 +503,9 @@ pub(crate) fn backtrack_fork_last_turn_id(
             }
 
             let display = ChatWidget::user_message_display_from_inputs(content);
+            if hidden_nested_review_turn {
+                continue;
+            }
             if display.message.trim().is_empty()
                 && display.text_elements.is_empty()
                 && display.local_images.is_empty()
@@ -529,14 +536,42 @@ pub(crate) fn backtrack_fork_last_turn_id(
             }
             prompt.mention_bindings = mention_bindings_from_user_inputs(content, &display.message);
 
-            return Ok(turn_index
-                .checked_sub(1)
-                .and_then(|index| turns.get(index))
-                .map(|turn| turn.id.clone()));
+            return Ok((turn_index > 0).then(|| turn.id.clone()));
         }
     }
 
     bail!("the selected prompt was not found in the persisted thread")
+}
+
+/// Returns whether a turn is the reconstructed inline-review child with duplicated prompt inputs.
+pub(crate) fn is_hidden_nested_review_turn(previous: &Turn, turn: &Turn) -> bool {
+    if previous.status != TurnStatus::Completed
+        || turn.status != TurnStatus::Interrupted
+        || turn.completed_at.is_some()
+        || !previous
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::EnteredReviewMode { .. }))
+        || !previous
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::ExitedReviewMode { .. }))
+    {
+        return false;
+    }
+
+    let mut user_messages = turn.items.iter().filter_map(|item| match item {
+        ThreadItem::UserMessage { content, .. } => Some(content),
+        _ => None,
+    });
+    matches!(
+        (
+            user_messages.next(),
+            user_messages.next(),
+            user_messages.next(),
+        ),
+        (Some(first), Some(second), None) if first == second
+    )
 }
 
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
@@ -660,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn backtrack_fork_last_turn_id_resolves_first_and_later_prompts() {
+    fn backtrack_fork_before_turn_id_resolves_first_and_later_prompts() {
         let turns = vec![
             turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
             turn(
@@ -672,7 +707,7 @@ mod tests {
         ];
 
         assert_eq!(
-            backtrack_fork_last_turn_id(
+            backtrack_fork_before_turn_id(
                 &turns,
                 /*nth_user_message*/ 0,
                 &mut prompt("turn-1-prompt-0"),
@@ -681,25 +716,25 @@ mod tests {
             None
         );
         assert_eq!(
-            backtrack_fork_last_turn_id(
+            backtrack_fork_before_turn_id(
                 &turns,
                 /*nth_user_message*/ 1,
                 &mut prompt("turn-2-prompt-0"),
             )
             .expect("later prompt should resolve"),
-            Some("turn-compaction".to_string())
+            Some("turn-2".to_string())
         );
     }
 
     #[test]
-    fn backtrack_fork_last_turn_id_rejects_mid_turn_steers() {
+    fn backtrack_fork_before_turn_id_rejects_mid_turn_steers() {
         let turns = vec![turn(
             "turn-1",
             TurnStatus::Completed,
             /*user_messages*/ 2,
         )];
 
-        let error = backtrack_fork_last_turn_id(
+        let error = backtrack_fork_before_turn_id(
             &turns,
             /*nth_user_message*/ 1,
             &mut prompt("turn-1-prompt-1"),
@@ -713,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn backtrack_fork_last_turn_id_rejects_in_progress_and_missing_prompts() {
+    fn backtrack_fork_before_turn_id_rejects_in_progress_and_missing_prompts() {
         let turns = vec![turn(
             "turn-1",
             TurnStatus::InProgress,
@@ -721,7 +756,7 @@ mod tests {
         )];
 
         assert_eq!(
-            backtrack_fork_last_turn_id(
+            backtrack_fork_before_turn_id(
                 &turns,
                 /*nth_user_message*/ 0,
                 &mut prompt("turn-1-prompt-0"),
@@ -731,7 +766,7 @@ mod tests {
             "the selected prompt belongs to a turn that is still in progress"
         );
         assert_eq!(
-            backtrack_fork_last_turn_id(
+            backtrack_fork_before_turn_id(
                 &turns,
                 /*nth_user_message*/ 1,
                 &mut prompt("missing prompt"),
@@ -747,7 +782,7 @@ mod tests {
             /*user_messages*/ 1,
         )];
         assert_eq!(
-            backtrack_fork_last_turn_id(
+            backtrack_fork_before_turn_id(
                 &completed_turns,
                 /*nth_user_message*/ 0,
                 &mut prompt("different prompt"),
@@ -759,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn backtrack_fork_last_turn_id_skips_hidden_review_prompts() {
+    fn backtrack_fork_before_turn_id_skips_hidden_review_prompts() {
         let mut review_turn = turn(
             "turn-review",
             TurnStatus::Completed,
@@ -783,18 +818,87 @@ mod tests {
         ];
 
         assert_eq!(
-            backtrack_fork_last_turn_id(
+            backtrack_fork_before_turn_id(
                 &turns,
                 /*nth_user_message*/ 1,
                 &mut prompt("turn-2-prompt-0"),
             )
             .expect("the visible prompt after review should resolve"),
-            Some("turn-review".to_string())
+            Some("turn-2".to_string())
         );
     }
 
     #[test]
-    fn backtrack_fork_last_turn_id_restores_canonical_mention_bindings() {
+    fn backtrack_fork_before_turn_id_skips_hidden_nested_review_prompts() {
+        let review_hint = "current changes";
+        let review_prompt =
+            "Review the current code changes (staged, unstaged, and untracked files).";
+        let review_turn = Turn {
+            items: vec![
+                ThreadItem::EnteredReviewMode {
+                    id: "review-start".to_string(),
+                    review: review_hint.to_string(),
+                },
+                ThreadItem::ExitedReviewMode {
+                    id: "review-end".to_string(),
+                    review: "review complete".to_string(),
+                },
+            ],
+            ..turn(
+                "turn-review",
+                TurnStatus::Completed,
+                /*user_messages*/ 0,
+            )
+        };
+        let review_child_turn = Turn {
+            items: (0..2)
+                .map(|index| ThreadItem::UserMessage {
+                    id: format!("review-prompt-{index}"),
+                    client_id: None,
+                    content: vec![UserInput::Text {
+                        text: review_prompt.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                })
+                .collect(),
+            ..turn(
+                "turn-review-child",
+                TurnStatus::Interrupted,
+                /*user_messages*/ 0,
+            )
+        };
+        let interrupted_steered_turn = Turn {
+            items: review_child_turn.items.clone(),
+            completed_at: Some(1),
+            ..turn(
+                "turn-interrupted-steer",
+                TurnStatus::Interrupted,
+                /*user_messages*/ 0,
+            )
+        };
+        assert!(!is_hidden_nested_review_turn(
+            &review_turn,
+            &interrupted_steered_turn,
+        ));
+        let turns = vec![
+            review_turn,
+            review_child_turn,
+            turn("turn-2", TurnStatus::Completed, /*user_messages*/ 1),
+        ];
+
+        assert_eq!(
+            backtrack_fork_before_turn_id(
+                &turns,
+                /*nth_user_message*/ 0,
+                &mut prompt("turn-2-prompt-0"),
+            )
+            .expect("the visible prompt after a nested review should resolve"),
+            Some("turn-2".to_string())
+        );
+    }
+
+    #[test]
+    fn backtrack_fork_before_turn_id_restores_canonical_mention_bindings() {
         let mut selected_turn = turn("turn-2", TurnStatus::Completed, /*user_messages*/ 1);
         selected_turn.items = vec![ThreadItem::UserMessage {
             id: "selected-prompt".to_string(),
@@ -825,9 +929,13 @@ mod tests {
         let mut selected_prompt = prompt("use $skill @sample $google-calendar");
 
         assert_eq!(
-            backtrack_fork_last_turn_id(&turns, /*nth_user_message*/ 1, &mut selected_prompt,)
-                .expect("the selected prompt should resolve"),
-            Some("turn-1".to_string())
+            backtrack_fork_before_turn_id(
+                &turns,
+                /*nth_user_message*/ 1,
+                &mut selected_prompt,
+            )
+            .expect("the selected prompt should resolve"),
+            Some("turn-2".to_string())
         );
         assert_eq!(
             selected_prompt.mention_bindings,

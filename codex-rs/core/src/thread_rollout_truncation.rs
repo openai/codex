@@ -205,6 +205,35 @@ pub fn truncate_rollout_after_turn_id(
     Ok(items[..cut_index].to_vec())
 }
 
+/// Return a rollout prefix ending immediately before the requested persisted turn.
+pub fn truncate_rollout_before_turn_id(
+    items: &[RolloutItem],
+    before_turn_id: &str,
+) -> CodexResult<Vec<RolloutItem>> {
+    let turns = build_turns_from_rollout_items(items);
+    if !turns.iter().any(|turn| turn.id == before_turn_id) {
+        return Err(CodexErr::InvalidRequest(format!(
+            "beforeTurnId '{before_turn_id}' was not found in the source thread"
+        )));
+    }
+
+    let cut_index = items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event))
+                    if event.turn_id == before_turn_id
+            )
+        })
+        .ok_or_else(|| {
+            CodexErr::InvalidRequest(format!(
+                "beforeTurnId '{before_turn_id}' is not a persisted canonical turn in the source thread"
+            ))
+        })?;
+    Ok(items[..cut_index].to_vec())
+}
+
 /// Return a suffix of `items` that keeps the last `n_from_end` fork turns.
 ///
 /// If fewer than or equal to `n_from_end` fork turns exist, this keeps from the first fork-turn

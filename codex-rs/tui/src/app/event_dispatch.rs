@@ -6,6 +6,7 @@
 use super::resize_reflow::trailing_run_start;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::app_server_session::ForkGoalContinuation;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
@@ -249,14 +250,20 @@ impl App {
                     .thread_read(thread_id, /*include_turns*/ true)
                     .await
                 {
-                    Ok(thread) => match crate::app_backtrack::backtrack_fork_last_turn_id(
+                    Ok(thread) => match crate::app_backtrack::backtrack_fork_before_turn_id(
                         &thread.turns,
                         nth_user_message,
                         &mut prompt,
                     ) {
-                        Ok(Some(last_turn_id)) => {
+                        Ok(Some(before_turn_id)) => {
                             app_server
-                                .fork_thread_after(config.clone(), thread_id, last_turn_id)
+                                .fork_thread_at(
+                                    config.clone(),
+                                    thread_id,
+                                    /*last_turn_id*/ None,
+                                    /*before_turn_id*/ Some(before_turn_id),
+                                    ForkGoalContinuation::StartIfIdle,
+                                )
                                 .await
                         }
                         Ok(None) => {

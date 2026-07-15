@@ -138,6 +138,12 @@ pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
     "A previous Claude Code import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ForkGoalContinuation {
+    StartIfIdle,
+    DeferUntilNextTurn,
+}
+
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
 }
@@ -530,25 +536,23 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
-        self.fork_thread_at(config, thread_id, /*last_turn_id*/ None)
-            .await
+        self.fork_thread_at(
+            config,
+            thread_id,
+            /*last_turn_id*/ None,
+            /*before_turn_id*/ None,
+            ForkGoalContinuation::StartIfIdle,
+        )
+        .await
     }
 
-    pub(crate) async fn fork_thread_after(
-        &mut self,
-        config: Config,
-        thread_id: ThreadId,
-        last_turn_id: String,
-    ) -> Result<AppServerStartedThread> {
-        self.fork_thread_at(config, thread_id, /*last_turn_id*/ Some(last_turn_id))
-            .await
-    }
-
-    async fn fork_thread_at(
+    pub(crate) async fn fork_thread_at(
         &mut self,
         config: Config,
         thread_id: ThreadId,
         last_turn_id: Option<String>,
+        before_turn_id: Option<String>,
+        goal_continuation: ForkGoalContinuation,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
@@ -558,6 +562,9 @@ impl AppServerSession {
                 request_id,
                 params: ThreadForkParams {
                     last_turn_id,
+                    before_turn_id,
+                    defer_goal_continuation: goal_continuation
+                        == ForkGoalContinuation::DeferUntilNextTurn,
                     ..thread_fork_params_from_config(
                         session_config,
                         thread_id,

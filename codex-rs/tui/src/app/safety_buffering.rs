@@ -2,6 +2,7 @@
 
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::app_server_session::ForkGoalContinuation;
 use crate::chatwidget::ThreadInputState;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::chatwidget::UserMessage;
@@ -13,11 +14,6 @@ pub(super) struct SafetyBufferedRetry {
     pub(super) model: String,
     pub(super) turn: AppCommand,
     pub(super) prompt: UserMessage,
-}
-
-enum SafetyRetryForkPoint {
-    AfterTurn(String),
-    NewThread,
 }
 
 impl App {
@@ -90,13 +86,10 @@ impl App {
                 return;
             }
         };
-        let fork_point = match safety_retry_fork_point(&thread.turns, &turn_id) {
-            Ok(fork_point) => fork_point,
-            Err(err) => {
-                self.fail_safety_buffered_branch(input_state, prompt, err);
-                return;
-            }
-        };
+        if let Err(err) = safety_retry_fork_point(&thread.turns, &turn_id) {
+            self.fail_safety_buffered_branch(input_state, prompt, err);
+            return;
+        }
         items.extend(
             thread
                 .turns
@@ -117,22 +110,18 @@ impl App {
                     .chain(content.iter().cloned())
                 }),
         );
+        let retry_display = ChatWidget::user_message_display_from_inputs(items);
+
         self.config = retry_config.clone();
-        let started = match fork_point {
-            SafetyRetryForkPoint::AfterTurn(last_turn_id) => {
-                app_server
-                    .fork_thread_after(retry_config, thread_id, last_turn_id)
-                    .await
-            }
-            SafetyRetryForkPoint::NewThread => {
-                app_server
-                    .start_thread_with_session_start_source(
-                        &retry_config,
-                        /*session_start_source*/ None,
-                    )
-                    .await
-            }
-        };
+        let started = app_server
+            .fork_thread_at(
+                retry_config,
+                thread_id,
+                /*last_turn_id*/ None,
+                /*before_turn_id*/ Some(turn_id),
+                ForkGoalContinuation::DeferUntilNextTurn,
+            )
+            .await;
         let started = match started {
             Ok(started) => started,
             Err(err) => {
@@ -174,7 +163,7 @@ impl App {
             return;
         }
         self.chat_widget
-            .commit_safety_buffered_retry_submission(prompt);
+            .commit_safety_buffered_retry_submission(retry_display);
     }
 
     fn fail_safety_buffered_branch(
@@ -196,7 +185,7 @@ impl App {
     }
 }
 
-fn safety_retry_fork_point(turns: &[Turn], turn_id: &str) -> Result<SafetyRetryForkPoint> {
+fn safety_retry_fork_point(turns: &[Turn], turn_id: &str) -> Result<()> {
     let Some(turn_index) = turns.iter().position(|turn| turn.id == turn_id) else {
         return Err(color_eyre::eyre::eyre!(
             "interrupted turn {turn_id} is missing from the source thread"
@@ -214,7 +203,7 @@ fn safety_retry_fork_point(turns: &[Turn], turn_id: &str) -> Result<SafetyRetryF
     }
 
     let Some(previous_turn) = turns[..turn_index].last() else {
-        return Ok(SafetyRetryForkPoint::NewThread);
+        return Ok(());
     };
     if previous_turn.status == TurnStatus::InProgress {
         return Err(color_eyre::eyre::eyre!(
@@ -223,7 +212,7 @@ fn safety_retry_fork_point(turns: &[Turn], turn_id: &str) -> Result<SafetyRetryF
         ));
     }
 
-    Ok(SafetyRetryForkPoint::AfterTurn(previous_turn.id.clone()))
+    Ok(())
 }
 
 #[cfg(test)]
