@@ -56,6 +56,7 @@ use codex_analytics::TurnCodexErrorFact;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::connector_runtime_context_key;
+use codex_core_skills::injection::HostSkillsCatalogInWorldState;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
@@ -3257,6 +3258,10 @@ impl Session {
             }
         }
         if turn_context.config.include_skill_instructions {
+            let host_catalog_in_world_state = turn_context
+                .extension_data
+                .get::<HostSkillsCatalogInWorldState>()
+                .is_some();
             let available_skills = build_available_skills(
                 turn_context.turn_skills.snapshot.outcome(),
                 default_skill_metadata_budget(turn_context.model_info.context_window),
@@ -3279,7 +3284,9 @@ impl Session {
                     })
                     .await;
                 }
-                developer_sections.push(skills_instructions.render());
+                if !host_catalog_in_world_state {
+                    developer_sections.push(skills_instructions.render());
+                }
             }
         }
         let loaded_plugins = self
