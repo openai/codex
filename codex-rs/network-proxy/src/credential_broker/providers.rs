@@ -75,14 +75,14 @@ impl CredentialHostBinding {
     }
 }
 
-pub(super) fn credential_broker_env_keys() -> impl Iterator<Item = &'static str> {
+pub(super) fn credential_context_env_keys() -> impl Iterator<Item = &'static str> {
+    credential_providers().flat_map(|provider| provider.context_env_vars.iter().copied())
+}
+
+pub(super) fn credential_env_keys() -> impl Iterator<Item = &'static str> {
     credential_providers()
-        .flat_map(|provider| provider.context_env_vars.iter().copied())
-        .chain(
-            credential_providers()
-                .flat_map(CredentialProvider::sources)
-                .flat_map(|source| source.env_vars.iter().copied()),
-        )
+        .flat_map(CredentialProvider::sources)
+        .flat_map(|source| source.env_vars.iter().copied())
 }
 
 pub(super) fn credential_providers() -> impl Iterator<Item = &'static CredentialProvider> {

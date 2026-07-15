@@ -178,6 +178,13 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
     if let Some(allow_local_binding) = network.allow_local_binding {
         constraints.allow_local_binding = Some(allow_local_binding);
     }
+    if let Some(dangerously_allow_plaintext_credential_injection) = network
+        .mitm
+        .and_then(|mitm| mitm.dangerously_allow_plaintext_credential_injection)
+    {
+        constraints.dangerously_allow_plaintext_credential_injection =
+            Some(dangerously_allow_plaintext_credential_injection);
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -238,6 +245,12 @@ impl NetworkConfigAccumulator {
         network.apply_to_network_proxy_config(&mut self.config);
 
         if let Some(mitm) = mitm {
+            if let Some(dangerously_allow_plaintext_credential_injection) =
+                mitm.dangerously_allow_plaintext_credential_injection
+            {
+                self.config.dangerously_allow_plaintext_credential_injection =
+                    dangerously_allow_plaintext_credential_injection;
+            }
             if let Some(actions) = mitm.actions {
                 self.mitm_actions.extend(actions);
             }
@@ -251,6 +264,7 @@ impl NetworkConfigAccumulator {
         if !self.mitm_hooks.is_empty() {
             let actions = self.mitm_actions;
             let mitm = NetworkMitmToml {
+                dangerously_allow_plaintext_credential_injection: None,
                 hooks: Some(self.mitm_hooks),
                 actions: Some(actions.clone()),
             };
