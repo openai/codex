@@ -70,9 +70,7 @@ impl ChatWidget {
         self.input_queue.user_turn_pending_start = true;
     }
 
-    pub(crate) fn commit_safety_buffered_retry_submission(&mut self, prompt: UserMessage) {
-        let display =
-            user_message_display_for_history(prompt, &UserMessageHistoryRecord::UserMessageText);
+    pub(crate) fn commit_safety_buffered_retry_submission(&mut self, display: UserMessageDisplay) {
         self.on_user_message_display(display);
     }
 

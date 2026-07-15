@@ -4,6 +4,8 @@ use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_token_usage;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::rollout_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCError;
@@ -17,6 +19,8 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
@@ -31,11 +35,16 @@ use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::read_session_meta_line;
+use codex_state::StateRuntime;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -371,6 +380,276 @@ async fn thread_fork_at_last_turn_id_keeps_only_terminal_prefix() -> Result<()> 
 }
 
 #[tokio::test]
+async fn thread_fork_defers_inherited_active_goal_until_next_turn() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        responses::sse(vec![
+            responses::ev_response_created("first-source-turn"),
+            responses::ev_completed("first-source-turn"),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("second-source-turn"),
+            responses::ev_completed("second-source-turn"),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("explicit-fork-turn"),
+            responses::ev_completed_with_tokens("explicit-fork-turn", /*total_tokens*/ 20),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("goal-continuation"),
+            responses::ev_completed_with_tokens("goal-continuation", /*total_tokens*/ 100),
+        ]),
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        format!("{config}\n[features]\ngoals = true\n"),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread: source_thread,
+        ..
+    } = to_response::<ThreadStartResponse>(start_response)?;
+    let source_thread_id = ThreadId::from_string(&source_thread.id)?;
+
+    let mut turn_ids = Vec::new();
+    for text in ["first", "second"] {
+        let completed = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: source_thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            }),
+        )
+        .await??;
+        turn_ids.push(completed.turn.id);
+    }
+    mcp.clear_message_buffer();
+
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let source_goal = state_db
+        .thread_goals()
+        .replace_thread_goal(
+            source_thread_id,
+            "continue after the retry",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(150),
+        )
+        .await?;
+    state_db
+        .thread_goals()
+        .account_thread_goal_usage(
+            source_thread_id,
+            /*time_delta_seconds*/ 11,
+            /*token_delta*/ 37,
+            codex_state::GoalAccountingMode::ActiveOnly,
+            Some(source_goal.goal_id.as_str()),
+        )
+        .await?;
+    let source_goal = state_db
+        .thread_goals()
+        .get_thread_goal(source_thread_id)
+        .await?
+        .expect("source goal");
+
+    let ordinary_fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: source_thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let ordinary_fork_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(ordinary_fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse {
+        thread: ordinary_fork,
+        ..
+    } = to_response::<ThreadForkResponse>(ordinary_fork_response)?;
+    assert_eq!(
+        state_db
+            .thread_goals()
+            .get_thread_goal(ThreadId::from_string(&ordinary_fork.id)?)
+            .await?,
+        None
+    );
+
+    let mut forked_threads = Vec::new();
+    for (last_turn_id, before_turn_id, expected_turn_count) in [
+        (None, None, 2),
+        (Some(turn_ids[0].clone()), None, 1),
+        (None, Some(turn_ids[0].clone()), 0),
+    ] {
+        let fork_id = mcp
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: source_thread.id.clone(),
+                last_turn_id,
+                before_turn_id,
+                defer_goal_continuation: true,
+                ..Default::default()
+            })
+            .await?;
+        let fork_response: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+        )
+        .await??;
+        let ThreadForkResponse {
+            thread: forked_thread,
+            ..
+        } = to_response::<ThreadForkResponse>(fork_response)?;
+        let forked_thread_id = ThreadId::from_string(&forked_thread.id)?;
+        assert_eq!(forked_thread.turns.len(), expected_turn_count);
+        let mut expected_goal = source_goal.clone();
+        expected_goal.thread_id = forked_thread_id;
+        assert_eq!(
+            state_db
+                .thread_goals()
+                .get_thread_goal(forked_thread_id)
+                .await?,
+            Some(expected_goal)
+        );
+        assert!(
+            state_db
+                .thread_goals()
+                .has_thread_goal_continuation_deferral(forked_thread_id)
+                .await?
+        );
+        forked_threads.push(forked_thread);
+    }
+
+    assert_eq!(
+        state_db
+            .thread_goals()
+            .get_thread_goal(source_thread_id)
+            .await?,
+        Some(source_goal.clone())
+    );
+    assert!(
+        !mcp.pending_notification_methods()
+            .iter()
+            .any(|method| method == "turn/started"),
+        "deferred goal should not start a turn while forking"
+    );
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("wiremock requests")
+            .iter()
+            .filter(|request| request.url.path().ends_with("/responses"))
+            .count(),
+        2,
+        "deferred goal should not issue a model request while forking"
+    );
+
+    let forked_thread = forked_threads.pop().expect("empty-prefix fork");
+    let forked_thread_id = ThreadId::from_string(&forked_thread.id)?;
+    drop(mcp);
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: forked_thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    assert!(
+        !mcp.pending_notification_methods()
+            .iter()
+            .any(|method| method == "turn/started"),
+        "deferred goal should remain deferred after app-server restart"
+    );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: forked_thread.id,
+            input: vec![UserInput::Text {
+                text: "retry the interrupted prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+
+    assert!(
+        !state_db
+            .thread_goals()
+            .has_thread_goal_continuation_deferral(forked_thread_id)
+            .await?,
+        "first explicit turn should consume the deferred-goal marker"
+    );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let forked_goal = state_db
+        .thread_goals()
+        .get_thread_goal(forked_thread_id)
+        .await?
+        .expect("forked goal");
+    assert_eq!(forked_goal.goal_id, source_goal.goal_id);
+    assert_eq!(forked_goal.objective, source_goal.objective);
+    assert_eq!(forked_goal.token_budget, Some(150));
+    assert_eq!(forked_goal.tokens_used, 157);
+    assert!(forked_goal.time_used_seconds >= source_goal.time_used_seconds);
+    assert_eq!(
+        forked_goal.status,
+        codex_state::ThreadGoalStatus::BudgetLimited
+    );
+    assert_eq!(
+        state_db
+            .thread_goals()
+            .get_thread_goal(source_thread_id)
+            .await?,
+        Some(source_goal)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_fork_inherits_explicit_source_name_from_session_index() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -469,6 +748,90 @@ async fn thread_fork_can_load_source_by_path() -> Result<()> {
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
     assert_eq!(thread.turns.len(), 1, "expected copied fork history");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_can_cut_before_unfinished_stored_turn() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let source_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let unfinished_turn_id = "unfinished-turn";
+    append_rollout_item_to_path(
+        &source_path,
+        &RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: unfinished_turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+    )
+    .await?;
+    append_rollout_item_to_path(
+        &source_path,
+        &RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "Unfinished user message".to_string(),
+            ..Default::default()
+        })),
+    )
+    .await?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: conversation_id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse {
+        thread: source_thread,
+    } = to_response::<ThreadReadResponse>(read_response)?;
+    assert_eq!(source_thread.turns.len(), 2);
+    assert_eq!(source_thread.turns[1].id, unfinished_turn_id);
+    assert_eq!(source_thread.turns[1].status, TurnStatus::Interrupted);
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            before_turn_id: Some(unfinished_turn_id.to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let fork_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse {
+        thread: forked_thread,
+        ..
+    } = to_response::<ThreadForkResponse>(fork_response)?;
+    assert_eq!(forked_thread.turns.len(), 1);
+    assert_eq!(forked_thread.preview, "Saved user message");
 
     Ok(())
 }
@@ -1048,6 +1411,58 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_rejects_incompatible_boundaries_and_ephemeral_goal_deferral() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    for (params, expected_message) in [
+        (
+            ThreadForkParams {
+                thread_id: thread_id.clone(),
+                last_turn_id: Some("turn-1".to_string()),
+                before_turn_id: Some("turn-2".to_string()),
+                ..Default::default()
+            },
+            "`beforeTurnId` cannot be combined with `lastTurnId`",
+        ),
+        (
+            ThreadForkParams {
+                thread_id: thread_id.clone(),
+                ephemeral: true,
+                defer_goal_continuation: true,
+                ..Default::default()
+            },
+            "`deferGoalContinuation` cannot be combined with `ephemeral`",
+        ),
+    ] {
+        let fork_id = mcp.send_thread_fork_request(params).await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+        )
+        .await??;
+        assert_eq!(error.error.message, expected_message);
+    }
 
     Ok(())
 }

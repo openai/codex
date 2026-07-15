@@ -1,3 +1,4 @@
+use super::thread_fork_goal::inherit_thread_goal_snapshot;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
@@ -3549,6 +3550,7 @@ impl ThreadRequestProcessor {
         let ThreadForkParams {
             thread_id,
             last_turn_id,
+            before_turn_id,
             path,
             model,
             model_provider,
@@ -3565,6 +3567,7 @@ impl ThreadRequestProcessor {
             ephemeral,
             thread_source,
             exclude_turns,
+            defer_goal_continuation,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
@@ -3581,6 +3584,16 @@ impl ThreadRequestProcessor {
             .await?;
         if matches!(source_thread.history_mode, ThreadHistoryMode::Paginated) {
             return Err(method_not_found("paginated_threads is not supported yet"));
+        }
+        if last_turn_id.is_some() && before_turn_id.is_some() {
+            return Err(invalid_request(
+                "`beforeTurnId` cannot be combined with `lastTurnId`",
+            ));
+        }
+        if ephemeral && defer_goal_continuation {
+            return Err(invalid_request(
+                "`deferGoalContinuation` cannot be combined with `ephemeral`",
+            ));
         }
         let mut source_thread = self
             .read_stored_thread_for_resume(&thread_id, path.as_ref(), /*include_history*/ true)
@@ -3599,13 +3612,17 @@ impl ThreadRequestProcessor {
                     "thread {source_thread_id} did not include persisted history"
                 ))
             })?;
-        let history_items = if let Some(last_turn_id) = last_turn_id.as_deref() {
-            Arc::new(
+        let history_items = match (last_turn_id.as_deref(), before_turn_id.as_deref()) {
+            (Some(last_turn_id), None) => Arc::new(
                 truncate_rollout_after_turn_id(&history_items, last_turn_id)
                     .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
-            )
-        } else {
-            Arc::new(history_items)
+            ),
+            (None, Some(before_turn_id)) => Arc::new(
+                truncate_rollout_before_turn_id(&history_items, before_turn_id)
+                    .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
+            ),
+            (None, None) => Arc::new(history_items),
+            (Some(_), Some(_)) => unreachable!("fork boundaries are mutually exclusive"),
         };
         let history_cwd = Some(source_thread.cwd.clone());
 
@@ -3653,6 +3670,7 @@ impl ThreadRequestProcessor {
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        let goals_enabled = config.features.enabled(Feature::Goals);
 
         let fallback_model_provider = config.model_provider_id.clone();
 
@@ -3704,6 +3722,33 @@ impl ThreadRequestProcessor {
                 )
                 .await
                 .map_err(|err| core_thread_write_error("inherit source thread name", err))?;
+        }
+        let inherited_goal = if defer_goal_continuation
+            && session_configured.rollout_path.is_some()
+            && goals_enabled
+        {
+            if let Some(state_db) = forked_thread.state_db().or_else(|| self.state_db.clone()) {
+                self.thread_goal_processor
+                    .flush_goal_progress_for_fork(source_thread_id)
+                    .await
+                    .map_err(|err| {
+                        internal_error(format!("failed to flush source thread goal: {err}"))
+                    })?;
+                inherit_thread_goal_snapshot(&state_db, source_thread_id, thread_id)
+                    .await
+                    .map_err(|err| {
+                        internal_error(format!("failed to inherit source thread goal: {err}"))
+                    })?
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if inherited_goal {
+            self.thread_goal_processor
+                .restore_inherited_goal_runtime(thread_id)
+                .await;
         }
 
         let instruction_sources = forked_thread.legacy_instruction_sources().await;
@@ -3822,6 +3867,11 @@ impl ThreadRequestProcessor {
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
             .await;
+        if inherited_goal {
+            self.thread_goal_processor
+                .emit_thread_goal_snapshot(thread_id)
+                .await;
+        }
         Ok(())
     }
 

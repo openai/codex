@@ -1,0 +1,23 @@
+---
+source: tui/src/chatwidget/tests/history_replay.rs
+expression: rendered
+---
+>> Code review started: current changes <<
+
+<< Code review finished >>
+
+
+› current changes
+
+
+
+› current changes
+
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+>> Code review started: current changes <<
+
+<< Code review finished >>
+
+• review result is retained

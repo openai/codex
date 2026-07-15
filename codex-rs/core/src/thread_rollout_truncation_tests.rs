@@ -113,6 +113,45 @@ fn truncates_rollout_after_terminal_canonical_turn_id() {
 }
 
 #[test]
+fn truncates_rollout_before_terminal_canonical_turn_id() {
+    let rollout = vec![
+        turn_started("turn-1"),
+        turn_completed("turn-1"),
+        turn_started("turn-2"),
+        turn_completed("turn-2"),
+    ];
+
+    let truncated =
+        truncate_rollout_before_turn_id(&rollout, "turn-2").expect("truncate before turn-2");
+    assert_eq!(
+        serde_json::to_value(&truncated).unwrap(),
+        serde_json::to_value(&rollout[..2]).unwrap()
+    );
+    assert!(
+        truncate_rollout_before_turn_id(&rollout, "turn-1")
+            .expect("truncate before turn-1")
+            .is_empty()
+    );
+}
+
+#[test]
+fn truncates_rollout_before_in_progress_canonical_turn_id() {
+    let rollout = vec![
+        turn_started("turn-1"),
+        turn_completed("turn-1"),
+        turn_started("turn-2"),
+    ];
+
+    let truncated = truncate_rollout_before_turn_id(&rollout, "turn-2")
+        .expect("truncate before in-progress turn-2");
+
+    assert_eq!(
+        serde_json::to_value(&truncated).unwrap(),
+        serde_json::to_value(&rollout[..2]).unwrap()
+    );
+}
+
+#[test]
 fn truncate_rollout_after_turn_id_rejects_rolled_back_turn() {
     let rollout = vec![
         turn_started("turn-1"),
