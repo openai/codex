@@ -25,6 +25,7 @@ use crate::codex_apps::prepare_openai_file_params_for_model;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::openai_docs_source_attribution::maybe_with_openai_docs_source_attribution;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -1077,6 +1078,7 @@ async fn make_rmcp_client(
                 || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
                 |environment| environment.get_http_client(),
             );
+            let http_client = maybe_with_openai_docs_source_attribution(&url, http_client);
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,
