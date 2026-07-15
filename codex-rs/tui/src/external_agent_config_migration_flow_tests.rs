@@ -30,6 +30,15 @@ fn selected_items() -> Vec<ExternalAgentConfigMigrationItem> {
             details: None,
         },
         ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Memory,
+            description: "Import memory".to_string(),
+            cwd: None,
+            details: Some(MigrationDetails {
+                memory: vec!["project-a".to_string(), "project-b".to_string()],
+                ..Default::default()
+            }),
+        },
+        ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Skills,
             description: "Import skills".to_string(),
             cwd: None,
@@ -122,6 +131,24 @@ fn completed_notification() -> ExternalAgentConfigImportCompletedNotification {
                 failures: Vec::new(),
             },
             ExternalAgentConfigImportTypeResult {
+                item_type: ExternalAgentConfigMigrationItemType::Memory,
+                successes: vec![
+                    ExternalAgentConfigImportItemTypeSuccess {
+                        item_type: ExternalAgentConfigMigrationItemType::Memory,
+                        cwd: None,
+                        source: Some("project-a".to_string()),
+                        target: Some("memory resources".to_string()),
+                    },
+                    ExternalAgentConfigImportItemTypeSuccess {
+                        item_type: ExternalAgentConfigMigrationItemType::Memory,
+                        cwd: None,
+                        source: Some("project-b".to_string()),
+                        target: Some("memory resources".to_string()),
+                    },
+                ],
+                failures: Vec::new(),
+            },
+            ExternalAgentConfigImportTypeResult {
                 item_type: ExternalAgentConfigMigrationItemType::Plugins,
                 successes: vec![ExternalAgentConfigImportItemTypeSuccess {
                     item_type: ExternalAgentConfigMigrationItemType::Plugins,
@@ -174,6 +201,18 @@ fn external_agent_config_migration_messages_snapshot() {
 }
 
 #[test]
+fn memory_without_a_selection_counts_as_zero() {
+    let item = ExternalAgentConfigMigrationItem {
+        item_type: ExternalAgentConfigMigrationItemType::Memory,
+        description: "Import memory".to_string(),
+        cwd: None,
+        details: None,
+    };
+
+    assert_eq!(external_agent_config_migration_item_count(&item), 0);
+}
+
+#[test]
 fn external_agent_config_migration_status_lines_use_semantic_colors() {
     assert_eq!(
         external_agent_config_migration_started_lines(
@@ -196,6 +235,14 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
                 "Settings".cyan(),
                 ": ".into(),
                 "1".green(),
+            ]),
+            Line::from(vec![
+                "    ".into(),
+                "Memory".cyan(),
+                ": ".into(),
+                "2".green(),
+                " — ".dim(),
+                "project-a, project-b".into(),
             ]),
             Line::from(vec![
                 "    ".into(),
@@ -238,7 +285,7 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
             Line::from(vec![
                 "• ".dim(),
                 "Import finished: ".into(),
-                "2 imported".green(),
+                "4 imported".green(),
                 ", ".into(),
                 "1 failed".red(),
                 ".".into(),
@@ -249,6 +296,14 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
                 "Settings".cyan(),
                 ": ".into(),
                 "1 imported".green(),
+                ", ".into(),
+                "0 failed".green(),
+            ]),
+            Line::from(vec![
+                "    ".into(),
+                "Memory".cyan(),
+                ": ".into(),
+                "2 imported".green(),
                 ", ".into(),
                 "0 failed".green(),
             ]),

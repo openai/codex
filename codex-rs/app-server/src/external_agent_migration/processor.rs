@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::request_processors::ConfigRequestProcessor;
@@ -35,6 +36,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_external_agent_migration::sessions::ExternalAgentSessionMigration as CoreSessionMigration;
 use codex_external_agent_migration::sessions::read_imported_connector_candidates;
+use codex_features::Feature;
 use codex_rollout::StateDbHandle;
 use codex_state::ExternalAgentConfigImportFailureRecord;
 use codex_state::ExternalAgentConfigImportSuccessRecord;
@@ -61,6 +63,7 @@ pub(crate) struct ExternalAgentConfigRequestProcessor {
     migration_service: ExternalAgentConfigService,
     session_importer: ExternalAgentSessionImporter,
     thread_manager: Arc<ThreadManager>,
+    config_manager: ConfigManager,
     config_processor: ConfigRequestProcessor,
     state_db: Option<StateDbHandle>,
     analytics_events_client: AnalyticsEventsClient,
@@ -91,14 +94,17 @@ impl ExternalAgentConfigRequestProcessor {
             arg0_paths,
             codex_home,
         } = args;
-        let migration_service =
-            ExternalAgentConfigService::new(codex_home.clone(), analytics_events_client.clone());
+        let migration_service = ExternalAgentConfigService::new(
+            codex_home.clone(),
+            analytics_events_client.clone(),
+            state_db.clone(),
+        );
         let session_importer = ExternalAgentSessionImporter::new(
             codex_home,
             migration_service.connector_metadata_roots.clone(),
             Arc::clone(&thread_manager),
             thread_store,
-            config_manager,
+            config_manager.clone(),
             arg0_paths,
         );
         Self {
@@ -106,6 +112,7 @@ impl ExternalAgentConfigRequestProcessor {
             migration_service,
             session_importer,
             thread_manager,
+            config_manager,
             config_processor,
             state_db,
             analytics_events_client,
@@ -119,11 +126,13 @@ impl ExternalAgentConfigRequestProcessor {
         let migration_service = self
             .migration_service
             .with_migration_source(params.migration_source.as_deref());
+        let options = ExternalAgentConfigDetectOptions {
+            include_home: params.include_home,
+            include_memory: self.external_agent_memory_import_enabled().await,
+            cwds: params.cwds,
+        };
         let items = migration_service
-            .detect(ExternalAgentConfigDetectOptions {
-                include_home: params.include_home,
-                cwds: params.cwds,
-            })
+            .detect(options)
             .await
             .map_err(|err| internal_error(err.to_string()))?;
 
@@ -153,6 +162,9 @@ impl ExternalAgentConfigRequestProcessor {
                         CoreMigrationItemType::Hooks => ExternalAgentConfigMigrationItemType::Hooks,
                         CoreMigrationItemType::Commands => {
                             ExternalAgentConfigMigrationItemType::Commands
+                        }
+                        CoreMigrationItemType::Memory => {
+                            ExternalAgentConfigMigrationItemType::Memory
                         }
                         CoreMigrationItemType::Sessions => {
                             ExternalAgentConfigMigrationItemType::Sessions
@@ -207,6 +219,7 @@ impl ExternalAgentConfigRequestProcessor {
                             .into_iter()
                             .map(|command| CommandMigration { name: command.name })
                             .collect(),
+                        memory: details.memory,
                     }),
                 })
                 .collect(),
@@ -218,6 +231,25 @@ impl ExternalAgentConfigRequestProcessor {
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
     ) -> Result<(), JSONRPCErrorError> {
+        if params
+            .migration_items
+            .iter()
+            .any(|item| item.item_type == ExternalAgentConfigMigrationItemType::Memory)
+            && !self.external_agent_memory_import_enabled().await
+        {
+            return Err(invalid_request("external agent memory import is disabled"));
+        }
+        if params.migration_items.iter().any(|item| {
+            item.item_type == ExternalAgentConfigMigrationItemType::Memory
+                && item
+                    .details
+                    .as_ref()
+                    .is_none_or(|details| details.memory.is_empty())
+        }) {
+            return Err(invalid_request(
+                "memory import requires at least one selected memory",
+            ));
+        }
         let import_id = Uuid::new_v4().to_string();
         let analytics_source = params.source.clone().unwrap_or_default();
         let migration_service = self
@@ -372,6 +404,24 @@ impl ExternalAgentConfigRequestProcessor {
         Ok(())
     }
 
+    async fn external_agent_memory_import_enabled(&self) -> bool {
+        let config = match self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to reload config for external agent memory import detection"
+                );
+                return false;
+            }
+        };
+        config.features.enabled(Feature::ExternalAgentMemoryImport)
+    }
+
     pub(crate) async fn read_import_histories(
         &self,
     ) -> Result<ExternalAgentConfigImportHistoriesReadResponse, JSONRPCErrorError> {
@@ -511,6 +561,9 @@ impl ExternalAgentConfigRequestProcessor {
                             ExternalAgentConfigMigrationItemType::Commands => {
                                 CoreMigrationItemType::Commands
                             }
+                            ExternalAgentConfigMigrationItemType::Memory => {
+                                CoreMigrationItemType::Memory
+                            }
                             ExternalAgentConfigMigrationItemType::Sessions => {
                                 CoreMigrationItemType::Sessions
                             }
@@ -565,6 +618,7 @@ impl ExternalAgentConfigRequestProcessor {
                                     .into_iter()
                                     .map(|command| CoreNamedMigration { name: command.name })
                                     .collect(),
+                                memory: details.memory,
                             }
                         }),
                     })
@@ -682,6 +736,7 @@ fn analytics_migration_item_type(item_type: ExternalAgentConfigMigrationItemType
         ExternalAgentConfigMigrationItemType::Subagents => "SUBAGENTS",
         ExternalAgentConfigMigrationItemType::Hooks => "HOOKS",
         ExternalAgentConfigMigrationItemType::Commands => "COMMANDS",
+        ExternalAgentConfigMigrationItemType::Memory => "MEMORY",
         ExternalAgentConfigMigrationItemType::Sessions => "SESSIONS",
     }
 }
@@ -826,6 +881,7 @@ fn completed_notification(
         ExternalAgentConfigMigrationItemType::Hooks => 6,
         ExternalAgentConfigMigrationItemType::Commands => 7,
         ExternalAgentConfigMigrationItemType::Sessions => 8,
+        ExternalAgentConfigMigrationItemType::Memory => 9,
     });
 
     ExternalAgentConfigImportCompletedNotification {
@@ -887,6 +943,7 @@ fn protocol_migration_item_type(
         CoreMigrationItemType::Subagents => ExternalAgentConfigMigrationItemType::Subagents,
         CoreMigrationItemType::Hooks => ExternalAgentConfigMigrationItemType::Hooks,
         CoreMigrationItemType::Commands => ExternalAgentConfigMigrationItemType::Commands,
+        CoreMigrationItemType::Memory => ExternalAgentConfigMigrationItemType::Memory,
         CoreMigrationItemType::Sessions => ExternalAgentConfigMigrationItemType::Sessions,
     }
 }

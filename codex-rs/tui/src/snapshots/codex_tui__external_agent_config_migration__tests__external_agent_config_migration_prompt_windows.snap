@@ -9,7 +9,7 @@ expression: rendered
   Your existing setup will not be changed.
     [x] Tools & setup
         Settings, instructions, integrations, agents, commands, and skills
-        Importing: Settings 1
+        Importing: Settings 1, Memory 1
     [x] Current project
         Add Codex files alongside your existing project files
         Importing: Plugins 6, Instructions 1
@@ -17,7 +17,7 @@ expression: rendered
         Last 30 days of chats
         Importing: Chat sessions 1
 
-  Selected 4 of 4 items.
+  Selected 5 of 5 items.
   › 1. Import selected
     2. Customize selection
     3. Cancel

@@ -1,3 +1,4 @@
+mod memory;
 mod source;
 mod source_cla;
 mod source_cur;
@@ -22,6 +23,7 @@ use codex_external_agent_migration::missing_subagent_names;
 use codex_external_agent_migration::sessions::ExternalAgentSessionMigration;
 use codex_external_agent_migration::sessions::SessionMetadataMode;
 use codex_protocol::protocol::Product;
+use codex_rollout::StateDbHandle;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -56,6 +58,7 @@ const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.i
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalAgentConfigDetectOptions {
     pub include_home: bool,
+    pub include_memory: bool,
     pub cwds: Option<Vec<PathBuf>>,
 }
 
@@ -69,6 +72,7 @@ pub(crate) enum ExternalAgentConfigMigrationItemType {
     Subagents,
     Hooks,
     Commands,
+    Memory,
     Sessions,
 }
 
@@ -92,6 +96,7 @@ pub(crate) struct MigrationDetails {
     pub hooks: Vec<NamedMigration>,
     pub subagents: Vec<NamedMigration>,
     pub commands: Vec<NamedMigration>,
+    pub memory: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,10 +199,15 @@ pub(crate) struct ExternalAgentConfigService {
     external_agent_home: PathBuf,
     analytics_events_client: Option<AnalyticsEventsClient>,
     source: ExternalAgentSource,
+    state_db: Option<StateDbHandle>,
 }
 
 impl ExternalAgentConfigService {
-    pub(crate) fn new(codex_home: PathBuf, analytics_events_client: AnalyticsEventsClient) -> Self {
+    pub(crate) fn new(
+        codex_home: PathBuf,
+        analytics_events_client: AnalyticsEventsClient,
+        state_db: Option<StateDbHandle>,
+    ) -> Self {
         let source = ExternalAgentSource::default();
         let external_agent_home = default_external_agent_home(source);
         let connector_metadata_roots = source.connector_metadata_roots(&external_agent_home);
@@ -207,6 +217,7 @@ impl ExternalAgentConfigService {
             external_agent_home,
             analytics_events_client: Some(analytics_events_client),
             source,
+            state_db,
         }
     }
 
@@ -220,6 +231,7 @@ impl ExternalAgentConfigService {
             external_agent_home,
             analytics_events_client: self.analytics_events_client.clone(),
             source,
+            state_db: self.state_db.clone(),
         }
     }
 
@@ -237,6 +249,7 @@ impl ExternalAgentConfigService {
             external_agent_home,
             analytics_events_client: None,
             source,
+            state_db: None,
         }
     }
 
@@ -255,6 +268,19 @@ impl ExternalAgentConfigService {
                 continue;
             };
             self.detect_migrations(Some(&repo_root), &mut items).await?;
+        }
+
+        if params.include_home
+            && params.include_memory
+            && self.source.supports(SourceFeature::Memory)
+            && let Some(item) = memory::detect(&self.codex_home, &self.external_agent_home)?
+        {
+            items.push(item);
+            emit_migration_metric(
+                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                ExternalAgentConfigMigrationItemType::Memory,
+                /*skills_count*/ None,
+            );
         }
 
         Ok(items)
@@ -460,6 +486,49 @@ impl ExternalAgentConfigService {
                     }
                     Ok(())
                 })(),
+                ExternalAgentConfigMigrationItemType::Memory
+                    if self.source.supports(SourceFeature::Memory) =>
+                {
+                    async {
+                        let selected_memory = migration_item
+                            .details
+                            .as_ref()
+                            .map(|details| details.memory.as_slice())
+                            .unwrap_or_default();
+                        let memory_outcome = memory::import(
+                            &self.codex_home,
+                            &self.external_agent_home,
+                            self.state_db.as_ref(),
+                            selected_memory,
+                        )
+                        .await?;
+                        emit_migration_metric(
+                            EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                            ExternalAgentConfigMigrationItemType::Memory,
+                            /*skills_count*/ None,
+                        );
+                        let target_path = memory::resources_root(&self.codex_home);
+                        for project_key in memory_outcome.synchronized_projects {
+                            item_result.record_success(
+                                Some(project_key),
+                                Some(target_path.display().to_string()),
+                            );
+                        }
+                        for failure in memory_outcome.failures {
+                            record_import_error(
+                                &mut item_result,
+                                "memory_import",
+                                failure.message,
+                                Some(failure.project_key),
+                            );
+                        }
+                        Ok(())
+                    }
+                    .await
+                }
+                ExternalAgentConfigMigrationItemType::Memory => Err(invalid_data_error(
+                    "memory import is not supported for the selected migration source".to_string(),
+                )),
                 ExternalAgentConfigMigrationItemType::Sessions => Ok(()),
             };
             if let Err(err) = import_result
@@ -1704,6 +1773,7 @@ fn migration_item_type_label(item_type: ExternalAgentConfigMigrationItemType) ->
         ExternalAgentConfigMigrationItemType::Subagents => "subagents",
         ExternalAgentConfigMigrationItemType::Hooks => "hooks",
         ExternalAgentConfigMigrationItemType::Commands => "commands",
+        ExternalAgentConfigMigrationItemType::Memory => "memory",
         ExternalAgentConfigMigrationItemType::Sessions => "sessions",
     }
 }
