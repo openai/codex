@@ -743,6 +743,28 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
 }
 
 #[tokio::test]
+async fn prompt_edit_thread_history_line_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.emit_prompt_edit_thread_event();
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before prompt edit history was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for prompt edit history");
+    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+
+    assert_chatwidget_snapshot!("prompt_edit_thread_history_line", combined);
+}
+
+#[tokio::test]
 async fn app_server_forked_thread_history_line_uses_app_server_title_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut chat = chat;

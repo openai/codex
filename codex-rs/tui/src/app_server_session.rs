@@ -532,18 +532,41 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at(config, thread_id, /*last_turn_id*/ None)
+            .await
+    }
+
+    pub(crate) async fn fork_thread_after(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        last_turn_id: String,
+    ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at(config, thread_id, /*last_turn_id*/ Some(last_turn_id))
+            .await
+    }
+
+    async fn fork_thread_at(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        last_turn_id: Option<String>,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
-                params: thread_fork_params_from_config(
-                    session_config,
-                    thread_id,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                ),
+                params: ThreadForkParams {
+                    last_turn_id,
+                    ..thread_fork_params_from_config(
+                        session_config,
+                        thread_id,
+                        self.thread_params_mode(),
+                        self.remote_cwd_override.as_deref(),
+                    )
+                },
             })
             .await
             .map_err(|err| {

@@ -4,6 +4,7 @@
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
 use super::resize_reflow::trailing_run_start;
+use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
@@ -182,7 +183,11 @@ impl App {
                             self.shutdown_current_thread(app_server).await;
                             match self
                                 .replace_chat_widget_with_app_server_thread(
-                                    tui, app_server, forked, /*initial_user_message*/ None,
+                                    tui,
+                                    app_server,
+                                    forked,
+                                    ThreadAttachPresentation::SessionLineage,
+                                    /*initial_user_message*/ None,
                                 )
                                 .await
                             {
@@ -222,6 +227,72 @@ impl App {
                     );
                 }
 
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ForkSessionForPromptEdit {
+                thread_id,
+                nth_user_message,
+                mut prompt,
+            } => {
+                if self.chat_widget.thread_id() != Some(thread_id) {
+                    return Ok(AppRunControl::Continue);
+                }
+                self.session_telemetry.counter(
+                    "codex.thread.fork",
+                    /*inc*/ 1,
+                    &[("source", "transcript")],
+                );
+                self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
+                    .await;
+                let config = self.fresh_session_config();
+                let started = match app_server
+                    .thread_read(thread_id, /*include_turns*/ true)
+                    .await
+                {
+                    Ok(thread) => match crate::app_backtrack::backtrack_fork_last_turn_id(
+                        &thread.turns,
+                        nth_user_message,
+                        &mut prompt,
+                    ) {
+                        Ok(Some(last_turn_id)) => {
+                            app_server
+                                .fork_thread_after(config.clone(), thread_id, last_turn_id)
+                                .await
+                        }
+                        Ok(None) => {
+                            app_server
+                                .start_thread_with_session_start_source(
+                                    &config, /*session_start_source*/ None,
+                                )
+                                .await
+                        }
+                        Err(err) => Err(err),
+                    },
+                    Err(err) => Err(err),
+                };
+                match started {
+                    Ok(forked) => {
+                        self.shutdown_current_thread(app_server).await;
+                        match self
+                            .replace_chat_widget_with_app_server_thread(
+                                tui,
+                                app_server,
+                                forked,
+                                ThreadAttachPresentation::PromptEdit,
+                                /*initial_user_message*/ None,
+                            )
+                            .await
+                        {
+                            Ok(()) => self.chat_widget.restore_user_message_to_composer(prompt),
+                            Err(err) => {
+                                self.restore_backtrack_prompt_after_branch_error(prompt, err);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.restore_backtrack_prompt_after_branch_error(prompt, err);
+                    }
+                }
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::BeginInitialHistoryReplayBuffer => {
@@ -287,11 +358,6 @@ impl App {
                 }
                 self.chat_widget.note_stream_consolidation_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
-            }
-            AppEvent::ApplyThreadRollback { num_turns } => {
-                if self.apply_non_pending_thread_rollback(num_turns) {
-                    tui.frame_requester().schedule_frame();
-                }
             }
             AppEvent::StartCommitAnimation => {
                 if self
@@ -400,11 +466,10 @@ impl App {
                     };
 
                 self.chat_widget.prepare_safety_buffering_retry();
-                self.handle_thread_rollback_response_with_origin(
+                self.handle_thread_rollback_response(
                     thread_id,
                     /*num_turns*/ 1,
                     &rollback_response,
-                    super::thread_routing::ThreadRollbackOrigin::SafetyBufferingRetry,
                 )
                 .await;
 

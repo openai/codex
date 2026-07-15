@@ -111,7 +111,10 @@ impl ChatWidget {
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
         let model_for_header = self.current_model().to_string();
-        if display == SessionConfiguredDisplay::Normal {
+        if matches!(
+            display,
+            SessionConfiguredDisplay::Normal | SessionConfiguredDisplay::PromptEdit
+        ) {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status = self
                 .should_show_fast_status(&model_for_header, self.effective_service_tier.as_deref());
@@ -169,6 +172,16 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn handle_prompt_edit_thread_session(&mut self, session: ThreadSessionState) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        let fork_parent_title = session.fork_parent_title.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
+            session,
+            SessionConfiguredDisplay::PromptEdit,
+            fork_parent_title,
+        );
+    }
+
     pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
         let fork_parent_title = session.fork_parent_title.clone();
@@ -205,6 +218,17 @@ impl ChatWidget {
             ]
             .into()
         };
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            PlainHistoryCell::new(vec![line]),
+        )));
+    }
+
+    pub(crate) fn emit_prompt_edit_thread_event(&mut self) {
+        let line: Line<'static> = vec![
+            "• ".dim(),
+            "You’re continuing from this point in a new conversation".into(),
+        ]
+        .into();
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             PlainHistoryCell::new(vec![line]),
         )));

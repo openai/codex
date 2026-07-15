@@ -233,7 +233,8 @@ impl App {
                 && self.chat_widget.composer_is_empty() =>
             {
                 if let Some(selection) = self.confirm_backtrack_from_main() {
-                    self.apply_backtrack_selection(tui, selection);
+                    self.apply_backtrack_selection(selection);
+                    tui.frame_requester().schedule_frame();
                 }
             }
             KeyEvent {
