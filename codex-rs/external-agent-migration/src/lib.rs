@@ -2,8 +2,11 @@
 
 mod hooks_cla;
 mod hooks_cur;
+mod memory;
 pub mod sessions;
 
+pub use memory::ExternalMemoryFile;
+pub use memory::discover_external_memory_files;
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;

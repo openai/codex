@@ -52,6 +52,7 @@ pub(super) enum ExternalAgentSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SourceFeature {
     Config,
+    Memory,
     Plugins,
     Sessions,
 }
@@ -78,12 +79,16 @@ impl ExternalAgentSource {
         match (self, feature) {
             (
                 Self::Cla,
-                SourceFeature::Config | SourceFeature::Plugins | SourceFeature::Sessions,
+                SourceFeature::Config
+                | SourceFeature::Memory
+                | SourceFeature::Plugins
+                | SourceFeature::Sessions,
             ) => true,
             (
                 Self::Cur,
                 SourceFeature::Config | SourceFeature::Plugins | SourceFeature::Sessions,
             ) => true,
+            (Self::Cur, SourceFeature::Memory) => false,
         }
     }
 

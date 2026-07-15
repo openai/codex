@@ -898,6 +898,7 @@
         "SUBAGENTS",
         "HOOKS",
         "COMMANDS",
+        "MEMORY",
         "SESSIONS"
       ],
       "type": "string"
@@ -1786,6 +1787,12 @@
           "default": [],
           "items": {
             "$ref": "#/definitions/McpServerMigration"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },

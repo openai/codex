@@ -6,6 +6,7 @@ expression: messages
   Imported setup will apply to new chats.
   Importing:
     Settings: 1
+    Memory: 2 — project-a, project-b
     Skills: 4 — triage, release-notes, risk-check, +1 more
     MCP servers: 2 — docs, issues
     Chat sessions: 3 — Alpha rollout, Beta review, Gamma notes
@@ -14,6 +15,7 @@ expression: messages
   Imported setup will apply to new chats.
   Importing:
     Settings: 1
+    Memory: 2 — project-a, project-b
     Skills: 4 — triage, release-notes, risk-check, +1 more
     MCP servers: 2 — docs, issues
     Chat sessions: 3 — Alpha rollout, Beta review, Gamma notes
@@ -23,14 +25,16 @@ expression: messages
   Imported setup will apply to new chats.
   Importing:
     Settings: 1
+    Memory: 2 — project-a, project-b
     Skills: 4 — triage, release-notes, risk-check, +1 more
     MCP servers: 2 — docs, issues
     Chat sessions: 3 — Alpha rollout, Beta review, Gamma notes
     Plugins: 2 — formatter, reviewer
   2 additional items remain. After it finishes, run /import again to review them.
-• Import finished: 2 imported, 1 failed.
+• Import finished: 4 imported, 1 failed.
   Results by type:
     Settings: 1 imported, 0 failed
+    Memory: 2 imported, 0 failed
     Plugins: 1 imported, 1 failed
   Run /import again to check for additional items.
 No compatible setup was found to import.

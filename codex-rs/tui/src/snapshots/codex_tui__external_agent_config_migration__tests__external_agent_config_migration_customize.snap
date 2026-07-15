@@ -10,6 +10,9 @@ expression: rendered
   Home
   › [x] Settings
         Import /Users/alex/.claude/settings.json into /Users/alex/.codex/conf…
+    [x] Memory
+        Import memory files from /Users/alex/.claude/projects to /Users/alex/…
+        1 memory: project
     [x] Recent chat sessions
         Import recent Claude Code sessions
         1 chat session: Investigate migration UX
@@ -24,6 +27,6 @@ expression: rendered
     [x] Instructions
         Import CLAUDE.md to AGENTS.md
 
-  Selected 4 of 4 items.
+  Selected 5 of 5 items.
     1. Review selection
   Use ↑/↓ to move, space to toggle, b to go back

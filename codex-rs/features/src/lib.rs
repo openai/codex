@@ -134,6 +134,8 @@ pub enum Feature {
     RuntimeMetrics,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
+    /// Enable importing project-scoped memory from external agents.
+    ExternalAgentMemoryImport,
     /// Compress cold local thread-store rollout files.
     LocalThreadStoreCompression,
     /// Enable the Chronicle sidecar for passive screen-context memories.
@@ -928,6 +930,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::MemoryTool,
         key: "memories",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ExternalAgentMemoryImport,
+        key: "external_agent_memory_import",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

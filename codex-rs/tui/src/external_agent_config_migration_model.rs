@@ -87,6 +87,7 @@ pub(crate) fn external_agent_config_migration_item_label(
         ExternalAgentConfigMigrationItemType::Subagents => "Agents",
         ExternalAgentConfigMigrationItemType::Hooks => "Hooks",
         ExternalAgentConfigMigrationItemType::Commands => "Slash commands",
+        ExternalAgentConfigMigrationItemType::Memory => "Memory",
         ExternalAgentConfigMigrationItemType::Sessions => "Recent chat sessions",
     }
 }
@@ -103,6 +104,7 @@ pub(crate) fn external_agent_config_migration_type_label(
         ExternalAgentConfigMigrationItemType::Subagents => "Agents",
         ExternalAgentConfigMigrationItemType::Hooks => "Hooks",
         ExternalAgentConfigMigrationItemType::Commands => "Slash commands",
+        ExternalAgentConfigMigrationItemType::Memory => "Memory",
         ExternalAgentConfigMigrationItemType::Sessions => "Chat sessions",
     }
 }
@@ -168,6 +170,10 @@ pub(crate) fn external_agent_config_migration_item_count(
             .details
             .as_ref()
             .map_or(1, |details| details.commands.len()),
+        ExternalAgentConfigMigrationItemType::Memory => item
+            .details
+            .as_ref()
+            .map_or(0, |details| details.memory.len()),
         ExternalAgentConfigMigrationItemType::Sessions => item
             .details
             .as_ref()
@@ -215,6 +221,21 @@ pub(crate) fn external_agent_config_migration_item_detail(
             details.commands.len(),
             details.commands.iter().map(|command| command.name.as_str()),
         )),
+        ExternalAgentConfigMigrationItemType::Memory => {
+            let memory = &details.memory;
+            let count = memory.len();
+            let noun = if count == 1 { "memory" } else { "memories" };
+            let names = memory
+                .iter()
+                .map(String::as_str)
+                .take(4)
+                .collect::<Vec<_>>();
+            Some(if names.is_empty() {
+                format!("{count} {noun}")
+            } else {
+                format!("{count} {noun}: {}", names.join(", "))
+            })
+        }
         ExternalAgentConfigMigrationItemType::Sessions => Some(format_counted_details(
             "chat session",
             details.sessions.len(),
