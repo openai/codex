@@ -1347,11 +1347,11 @@ async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_gra
 }
 
 #[test]
-fn platform_specific_danger_preserves_rejected_prompt_reason() {
+fn other_danger_preserves_rejected_prompt_reason() {
     assert_eq!(
         derive_rejected_prompt_reason(
             REJECT_SANDBOX_APPROVAL_REASON,
-            Some(DangerousCommandMatch::PlatformSpecific),
+            Some(DangerousCommandMatch::Other),
         ),
         REJECT_SANDBOX_APPROVAL_REASON
     );

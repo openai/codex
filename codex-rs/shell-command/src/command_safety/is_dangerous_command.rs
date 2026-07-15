@@ -9,8 +9,8 @@ mod windows_dangerous_commands;
 pub enum DangerousCommandMatch {
     /// An `rm` invocation includes the force option.
     ForcedRm,
-    /// A platform-specific dangerous-command rule matched.
-    PlatformSpecific,
+    /// Another dangerous-command rule matched.
+    Other,
 }
 
 /// Returns the dangerous-command rule matched by an already-tokenized command.
@@ -32,7 +32,7 @@ pub fn dangerous_command_match(command: &[String]) -> Option<DangerousCommandMat
     #[cfg(windows)]
     {
         if windows_dangerous_commands::is_dangerous_command_windows(command) {
-            return Some(DangerousCommandMatch::PlatformSpecific);
+            return Some(DangerousCommandMatch::Other);
         }
     }
 
@@ -44,7 +44,7 @@ pub fn dangerous_powershell_words_match(command: &[String]) -> Option<DangerousC
     #[cfg(windows)]
     {
         windows_dangerous_commands::is_dangerous_powershell_words(command)
-            .then_some(DangerousCommandMatch::PlatformSpecific)
+            .then_some(DangerousCommandMatch::Other)
     }
 
     #[cfg(not(windows))]
@@ -257,13 +257,13 @@ mod tests {
     }
 
     #[test]
-    fn direct_powershell_words_return_a_typed_match_on_windows() {
+    fn direct_powershell_words_return_other_match_on_windows() {
         let command = vec_str(&["Remove-Item", "test", "-Force"]);
 
         if cfg!(windows) {
             assert_eq!(
                 dangerous_powershell_words_match(&command),
-                Some(DangerousCommandMatch::PlatformSpecific)
+                Some(DangerousCommandMatch::Other)
             );
         } else {
             assert_eq!(dangerous_powershell_words_match(&command), None);

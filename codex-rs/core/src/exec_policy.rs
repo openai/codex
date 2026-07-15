@@ -1037,7 +1037,7 @@ fn derive_rejected_prompt_reason(
         Some(dangerous_command_match @ DangerousCommandMatch::ForcedRm) => {
             dangerous_command_rejection_reason(dangerous_command_match).to_string()
         }
-        Some(DangerousCommandMatch::PlatformSpecific) | None => fallback_reason.to_string(),
+        Some(DangerousCommandMatch::Other) | None => fallback_reason.to_string(),
     }
 }
 
@@ -1048,7 +1048,7 @@ fn dangerous_command_rejection_reason(
         DangerousCommandMatch::ForcedRm => {
             "rm -f style commands are not permitted. Use a safer approach"
         }
-        DangerousCommandMatch::PlatformSpecific => "blocked by policy",
+        DangerousCommandMatch::Other => "blocked by policy",
     }
 }
 
