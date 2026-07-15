@@ -58,6 +58,7 @@ impl SelectedExecutorPluginMcpContributor {
     /// Successful resolution, including a root that is not a plugin or declares no capabilities,
     /// is cached until the thread state is dropped. Environment availability never invalidates
     /// this cache; it only controls whether the cached metadata is projected into a model step.
+    #[tracing::instrument(name = "mcp.executor_plugin.metadata.load", skip_all)]
     async fn metadata_for_root(
         &self,
         state: &SelectedExecutorPluginMcpState,

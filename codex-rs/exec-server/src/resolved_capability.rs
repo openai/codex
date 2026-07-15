@@ -118,6 +118,7 @@ impl EnvironmentManager {
     /// environment captured for the step carries its exact process-local handle so readiness and
     /// execution cannot come from different registry snapshots. Missing, starting, or failed
     /// environments are omitted. A lazy environment is started for a later step.
+    #[tracing::instrument(name = "capability_roots.resolve", skip_all)]
     pub async fn resolve_selected_capability_roots(
         &self,
         selected_roots: &[SelectedCapabilityRoot],

@@ -20,3 +20,4 @@ codex-plugin = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }

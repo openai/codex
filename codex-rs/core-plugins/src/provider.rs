@@ -105,6 +105,7 @@ impl ExecutorPluginProvider {
     }
 
     /// Resolves a plugin and retains the exact filesystem used for package access.
+    #[tracing::instrument(name = "plugins.executor.package.resolve", skip_all)]
     pub async fn resolve_bound(
         &self,
         selected_root: &SelectedCapabilityRoot,
