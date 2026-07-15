@@ -133,7 +133,14 @@ impl InputQueue {
             return;
         };
         let mut turn_state = turn_state.lock().await;
-        if !turn_state.pending_input.items.is_empty() {
+        // Explicit same-turn work still needs a follow-up. Queue-only child mail does not: keep
+        // it pending so task completion records it for the next turn without sampling again.
+        if turn_state.pending_input.items.iter().any(|input| {
+            !matches!(
+                input,
+                TurnInput::InterAgentCommunication(communication) if !communication.trigger_turn
+            )
+        }) {
             return;
         }
         turn_state.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
@@ -203,10 +210,14 @@ impl InputQueue {
             match active.as_mut() {
                 Some(active_turn) => {
                     let mut turn_state = active_turn.turn_state.lock().await;
-                    (
-                        turn_state.pending_input.items.split_off(0),
-                        turn_state.accepts_mailbox_delivery_for_current_turn(),
-                    )
+                    let accepts_mailbox_delivery =
+                        turn_state.accepts_mailbox_delivery_for_current_turn();
+                    let pending_input = if accepts_mailbox_delivery {
+                        turn_state.pending_input.items.split_off(0)
+                    } else {
+                        Vec::new()
+                    };
+                    (pending_input, accepts_mailbox_delivery)
                 }
                 None => (Vec::new(), true),
             }
@@ -242,11 +253,11 @@ impl InputQueue {
                 None => (false, true),
             }
         };
-        if has_turn_pending_input {
-            return true;
-        }
         if !accepts_mailbox_delivery {
             return false;
+        }
+        if has_turn_pending_input {
+            return true;
         }
         self.has_pending_mailbox_items().await
     }
