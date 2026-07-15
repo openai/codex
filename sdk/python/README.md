@@ -1,4 +1,4 @@
-# OpenAI Codex Python SDK (Beta)
+# OpenAI Codex Python SDK
 
 Build Python applications that start Codex threads, run turns, stream progress,
 and control workspace access.

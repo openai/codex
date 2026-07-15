@@ -16,7 +16,7 @@ multimodal or structured input lists.
 - Python `>=3.10`
 - Install the SDK for the same Python interpreter you will use to run examples
 
-Install the published beta:
+Install the published SDK:
 
 ```bash
 python -m pip install openai-codex

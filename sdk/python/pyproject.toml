@@ -12,11 +12,11 @@ license = "Apache-2.0"
 authors = [{ name = "OpenAI" }]
 keywords = ["codex", "sdk", "llm", "ai", "agents"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.137.0a4"]
+dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.144.4"]
 
 [project.urls]
 Homepage = "https://github.com/openai/codex"
@@ -65,10 +65,10 @@ combine-as-imports = true
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { openai-codex-cli-bin = "2026-06-03T19:00:00Z" }
+exclude-newer-package = { openai-codex-cli-bin = "2026-07-15T01:00:00Z" }
 index-strategy = "first-index"
 
 [tool.uv.pip]
 exclude-newer = "7 days"
-exclude-newer-package = { openai-codex-cli-bin = "2026-06-03T19:00:00Z" }
+exclude-newer-package = { openai-codex-cli-bin = "2026-07-15T01:00:00Z" }
 index-strategy = "first-index"

@@ -2,15 +2,13 @@
 
 ## Is the Python SDK stable?
 
-`openai-codex` is a public beta. Install it with
-`pip install openai-codex`; public APIs may change before `1.0`. While beta
-releases are the only published SDK releases, pip selects the latest beta.
-After a stable release exists, pass `--pre` to opt into newer prereleases.
+`openai-codex` publishes stable releases. Install the latest one with
+`pip install openai-codex`.
 
 ## Why does the SDK install a runtime package?
 
-The SDK and runtime packages are versioned independently. Each SDK release
-pins and installs one compatible runtime dependency automatically.
+The SDK version tracks the corresponding Codex CLI release. Each SDK release
+pins and installs its matching runtime dependency automatically.
 
 ## Thread vs turn
 

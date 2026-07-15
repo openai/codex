@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide gets a published OpenAI Codex Python SDK beta installation running
+This guide gets a published OpenAI Codex Python SDK installation running
 with a multi-turn thread.
 
 ## 1. Install
@@ -16,10 +16,8 @@ Requirements:
 - Python `>=3.10`
 - An existing Codex account session, or one of the login flows below
 
-The SDK installs its compatible `openai-codex-cli-bin` runtime dependency
-automatically. While beta releases are the only published SDK releases, this
-normal install command selects the latest beta. After a stable release exists,
-use `pip install --pre openai-codex` to opt into a newer prerelease.
+The SDK installs its matching `openai-codex-cli-bin` runtime dependency
+automatically. SDK release versions track the corresponding Codex CLI release.
 
 ## 2. Authenticate When Needed
 
