@@ -73,6 +73,22 @@ pub(super) fn current_prefixed_token_range(
     prefix: char,
     allow_empty: bool,
 ) -> Option<(Range<usize>, String)> {
+    current_prefixed_token_range_with_dollar_predicate(
+        textarea,
+        prefix,
+        allow_empty,
+        dollar_query_is_completable,
+    )
+}
+
+/// Extracts a prefixed token while using the provided dollar-query predicate for separator
+/// arbitration.
+pub(super) fn current_prefixed_token_range_with_dollar_predicate(
+    textarea: &TextArea,
+    prefix: char,
+    allow_empty: bool,
+    dollar_query_is_completable: impl Fn(&str) -> bool,
+) -> Option<(Range<usize>, String)> {
     let cursor_offset = textarea.cursor();
     let text = textarea.text();
 
@@ -279,9 +295,30 @@ pub(super) fn prefixed_token_range_is_editable(
 
 /// Rejects shell-like dollar syntax while preserving lowercase and plugin-qualified skill queries.
 ///
-/// Only uppercase common environment-variable spellings are excluded. The check uses the complete
-/// colon-qualified name so a skill such as `home` or `home:search` is not mistaken for `$HOME`.
+/// Uppercase common environment-variable spellings and tokens beginning with a positional or
+/// special shell parameter are excluded. The check uses the complete colon-qualified name so a
+/// skill such as `home` or `home:search` is not mistaken for `$HOME`.
 pub(super) fn dollar_query_is_completable(query: &str) -> bool {
+    matches!(dollar_query_kind(query), DollarQueryKind::Completable)
+}
+
+/// Classifies text after `$` for arbitration between shell syntax and mention completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DollarQueryKind {
+    Completable,
+    ShellVariable,
+    DefiniteShellParameter,
+    /// A digit-leading query containing a non-digit, or a `-` query with a suffix.
+    AmbiguousShellParameter,
+    Invalid,
+}
+
+/// Conservatively classifies a dollar query before the mention catalog is consulted.
+///
+/// Numeric-only and exact special-parameter forms remain definite shell syntax. A digit-leading
+/// query containing a non-digit, or a `-` query with a suffix, is ambiguous because loaded
+/// mentions may legally use those spellings.
+pub(super) fn dollar_query_kind(query: &str) -> DollarQueryKind {
     let name_end = query
         .as_bytes()
         .iter()
@@ -290,7 +327,24 @@ pub(super) fn dollar_query_is_completable(query: &str) -> bool {
     let name = &query[..name_end];
     let is_shell_var =
         name.bytes().all(|byte| !byte.is_ascii_lowercase()) && is_common_env_var(name);
-    query.is_empty() || name_end > 0 && !is_shell_var
+    let is_shell_parameter = name
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| *byte == b'-' || byte.is_ascii_digit());
+    let is_numeric_parameter = !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit());
+    if query.is_empty() {
+        DollarQueryKind::Completable
+    } else if name_end == 0 {
+        DollarQueryKind::Invalid
+    } else if is_shell_var {
+        DollarQueryKind::ShellVariable
+    } else if is_numeric_parameter || matches!(name, "-" | "_") {
+        DollarQueryKind::DefiniteShellParameter
+    } else if is_shell_parameter {
+        DollarQueryKind::AmbiguousShellParameter
+    } else {
+        DollarQueryKind::Completable
+    }
 }
 
 #[cfg(test)]

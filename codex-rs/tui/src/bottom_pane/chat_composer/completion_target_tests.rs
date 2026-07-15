@@ -184,4 +184,18 @@ fn dollar_query_classifies_shell_and_skill_syntax() {
     assert!(dollar_query_is_completable("home:search"));
     assert!(dollar_query_is_completable("home"));
     assert!(!dollar_query_is_completable("HOME"));
+    for query in ["0", "1", "12", "-", "_"] {
+        assert!(!dollar_query_is_completable(query));
+        assert_eq!(
+            dollar_query_kind(query),
+            DollarQueryKind::DefiniteShellParameter
+        );
+    }
+    for query in ["1_suffix", "1foo", "-x"] {
+        assert!(!dollar_query_is_completable(query));
+        assert_eq!(
+            dollar_query_kind(query),
+            DollarQueryKind::AmbiguousShellParameter
+        );
+    }
 }
