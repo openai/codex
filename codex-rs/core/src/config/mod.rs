@@ -1143,12 +1143,15 @@ pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
 );
 const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 2000;
 const TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES: usize = 2000;
+const AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES: usize = 2000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
     pub guidance_message: Option<String>,
+    pub auto_compact_fallback_prompt: Option<String>,
+    pub auto_compact_fallback_buffer_tokens: Option<i64>,
 }
 
 impl Default for TokenBudgetConfig {
@@ -1157,6 +1160,8 @@ impl Default for TokenBudgetConfig {
             reminder_threshold_tokens: None,
             reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
             guidance_message: None,
+            auto_compact_fallback_prompt: None,
+            auto_compact_fallback_buffer_tokens: None,
         }
     }
 }
@@ -2687,10 +2692,44 @@ fn resolve_token_budget_config(
         ));
     }
 
+    let auto_compact_fallback_prompt = token_budget_config
+        .and_then(|config| config.auto_compact_fallback_prompt.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if auto_compact_fallback_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.len() > AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "features.token_budget.auto_compact_fallback_prompt must not exceed {AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES} bytes"
+            ),
+        ));
+    }
+
+    let auto_compact_fallback_buffer_tokens =
+        token_budget_config.and_then(|config| config.auto_compact_fallback_buffer_tokens);
+    if auto_compact_fallback_prompt.is_some() && auto_compact_fallback_buffer_tokens.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.token_budget.auto_compact_fallback_buffer_tokens is required when auto_compact_fallback_prompt is set",
+        ));
+    }
+    if auto_compact_fallback_buffer_tokens.is_some_and(|tokens| tokens <= 0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.token_budget.auto_compact_fallback_buffer_tokens must be positive",
+        ));
+    }
+
     Ok(Some(TokenBudgetConfig {
         reminder_threshold_tokens,
         reminder_message_template,
         guidance_message,
+        auto_compact_fallback_prompt,
+        auto_compact_fallback_buffer_tokens,
     }))
 }
 

@@ -98,6 +98,14 @@ pub struct TokenBudgetConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(max = 2000))]
     pub guidance_message: Option<String>,
+    /// Developer message sampled before an automatic context-window rollover.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 2000))]
+    pub auto_compact_fallback_prompt: Option<String>,
+    /// Additional tokens available after the compaction threshold for fallback note-taking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub auto_compact_fallback_buffer_tokens: Option<i64>,
 }
 
 impl FeatureConfig for TokenBudgetConfigToml {

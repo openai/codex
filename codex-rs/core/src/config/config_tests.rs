@@ -572,11 +572,15 @@ enabled = true
 reminder_threshold_tokens = 16000
 reminder_message_template = "Custom reminder: {n_remaining} tokens."
 guidance_message = "Preserve important state before compaction."
+auto_compact_fallback_prompt = "  Write notes immediately.  "
+auto_compact_fallback_buffer_tokens = 8000
 "#,
             TokenBudgetConfig {
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
                 guidance_message: Some("Preserve important state before compaction.".to_string()),
+                auto_compact_fallback_prompt: Some("Write notes immediately.".to_string()),
+                auto_compact_fallback_buffer_tokens: Some(8_000),
             },
         ),
     ] {
@@ -592,6 +596,26 @@ guidance_message = "Preserve important state before compaction."
         assert!(config.features.enabled(Feature::TokenBudget));
         assert_eq!(config.token_budget, Some(expected));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_overlong_auto_compact_fallback_prompt() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let prompt = "x".repeat(AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES + 1);
+    let config_toml = toml::from_str(&format!(
+        "[features.token_budget]\nenabled = true\nauto_compact_fallback_prompt = {prompt:?}\n"
+    ))
+    .expect("TOML should deserialize");
+    let error = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("overlong fallback prompt should be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     Ok(())
 }
 
@@ -641,6 +665,55 @@ async fn load_config_rejects_non_positive_token_budget_reminder_threshold() -> s
             "features.token_budget.reminder_threshold_tokens must be positive"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_non_positive_auto_compact_fallback_buffer() -> std::io::Result<()> {
+    for auto_compact_fallback_buffer_tokens in [-1, 0] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\nauto_compact_fallback_prompt = \"Write notes.\"\nauto_compact_fallback_buffer_tokens = {auto_compact_fallback_buffer_tokens}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("non-positive fallback buffer should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "features.token_budget.auto_compact_fallback_buffer_tokens must be positive"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_missing_auto_compact_fallback_buffer() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml = toml::from_str(
+        "[features.token_budget]\nenabled = true\nauto_compact_fallback_prompt = \"Write notes.\"\n",
+    )
+    .expect("TOML should deserialize");
+
+    let error = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("missing fallback buffer should be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "features.token_budget.auto_compact_fallback_buffer_tokens is required when auto_compact_fallback_prompt is set"
+    );
+
     Ok(())
 }
 
