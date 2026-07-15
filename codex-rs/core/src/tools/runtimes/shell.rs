@@ -5,6 +5,8 @@ Executes shell requests under the orchestrator: asks for approval when needed,
 builds sandbox transform inputs, and runs them under the current SandboxAttempt.
 */
 #[cfg(unix)]
+mod trusted_executable;
+#[cfg(unix)]
 pub(crate) mod unix_escalation;
 pub(crate) mod zsh_fork_backend;
 
