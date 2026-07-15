@@ -8,10 +8,22 @@ on:
 permissions: {}
 
 jobs:
-  smoke:
+  smoke-prerelease:
     permissions:
       contents: read
     uses: ./.github/workflows/r2-release.yml
     secrets: inherit
     with:
       tag: rust-v0.145.0-alpha.9
+      make_latest: false
+      prerelease: true
+
+  smoke-latest:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/r2-release.yml
+    secrets: inherit
+    with:
+      tag: rust-v0.144.4
+      make_latest: true
+      prerelease: false
