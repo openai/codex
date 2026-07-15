@@ -18,6 +18,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 
@@ -25,19 +26,18 @@ const EXTERNAL_SESSION_IMPORTED_MARKER: &str = "<EXTERNAL SESSION IMPORTED>";
 
 #[cfg(test)]
 fn load_session_for_import(path: &Path) -> io::Result<Option<ImportedExternalAgentSession>> {
-    Ok(
-        load_session_for_import_with_content_sha256(path)?
-            .map(|(session, _content_sha256)| session),
-    )
+    Ok(load_session_for_import_with_content_sha256(path)?
+        .map(|(session, _content_sha256, _attributed_mcp_server_ids)| session))
 }
 
 pub(crate) fn load_session_for_import_with_content_sha256(
     path: &Path,
-) -> io::Result<Option<(ImportedExternalAgentSession, String)>> {
+) -> io::Result<Option<(ImportedExternalAgentSession, String, BTreeSet<String>)>> {
     let parsed = read_session_import(path)?;
     let Some(cwd) = parsed.cwd else {
         return Ok(None);
     };
+    let attributed_mcp_server_ids = parsed.attributed_mcp_server_ids;
     let messages = parsed.messages;
     let first_user_message_text = messages
         .iter()
@@ -67,6 +67,7 @@ pub(crate) fn load_session_for_import_with_content_sha256(
             rollout_items,
         },
         parsed.content_sha256,
+        attributed_mcp_server_ids,
     )))
 }
 

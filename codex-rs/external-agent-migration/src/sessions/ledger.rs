@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
@@ -28,6 +29,8 @@ struct ImportedExternalAgentSessionRecord {
     imported_at: i64,
     #[serde(default)]
     source_modified_at: Option<i64>,
+    #[serde(default)]
+    connector_names: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -35,6 +38,13 @@ pub struct CompletedExternalAgentSessionImport {
     pub source_path: PathBuf,
     pub source_content_sha256: String,
     pub imported_thread_id: ThreadId,
+    pub connector_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedConnectorCandidate {
+    pub name: String,
+    pub session_count: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,6 +73,7 @@ pub(crate) fn record_imported_session(
             source_content_sha256: session_content_sha256(&source_path)?,
             source_path,
             imported_thread_id,
+            connector_names: Vec::new(),
         }],
     )
 }
@@ -86,6 +97,7 @@ pub fn record_completed_session_imports(
             record.imported_thread_id = import.imported_thread_id;
             record.imported_at = imported_at;
             record.source_modified_at = source_modified_at.or(record.source_modified_at);
+            record.connector_names = import.connector_names;
             ledger.records.push(record);
             continue;
         }
@@ -95,9 +107,40 @@ pub fn record_completed_session_imports(
             imported_thread_id: import.imported_thread_id,
             imported_at,
             source_modified_at,
+            connector_names: import.connector_names,
         });
     }
     save_import_ledger(codex_home, &ledger)
+}
+
+pub fn read_imported_connector_candidates(
+    codex_home: &Path,
+) -> io::Result<Vec<ImportedConnectorCandidate>> {
+    let ledger = load_import_ledger(codex_home)?;
+    let mut connector_names_by_source = BTreeMap::new();
+    for record in ledger.records {
+        connector_names_by_source.insert(record.source_path, record.connector_names);
+    }
+    let mut candidates_by_name = BTreeMap::<String, ImportedConnectorCandidate>::new();
+    for connector_names in connector_names_by_source.into_values() {
+        let connector_names = connector_names
+            .into_iter()
+            .filter_map(|name| super::normalized_connector_display_name(Some(&name)))
+            .map(|name| (name.to_lowercase(), name))
+            .collect::<BTreeMap<_, _>>();
+        for (key, name) in connector_names {
+            let candidate = candidates_by_name
+                .entry(key)
+                .or_insert(ImportedConnectorCandidate {
+                    name,
+                    session_count: 0,
+                });
+            candidate.session_count = candidate.session_count.saturating_add(1);
+        }
+    }
+    let mut candidates = candidates_by_name.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(candidates)
 }
 
 impl ImportedExternalAgentSessionLedger {

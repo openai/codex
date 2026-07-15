@@ -8,7 +8,9 @@ use codex_core::config::ConfigOverrides;
 use codex_external_agent_migration::sessions::CompletedExternalAgentSessionImport;
 use codex_external_agent_migration::sessions::ExternalAgentSessionMigration;
 use codex_external_agent_migration::sessions::ImportedExternalAgentSession;
+use codex_external_agent_migration::sessions::ImportedSessionConnectorAttribution;
 use codex_external_agent_migration::sessions::PendingSessionImport;
+use codex_external_agent_migration::sessions::detect_imported_cla_session_connectors;
 use codex_external_agent_migration::sessions::prepare_validated_session_import;
 use codex_external_agent_migration::sessions::record_completed_session_imports;
 use codex_models_manager::manager::RefreshStrategy;
@@ -33,9 +35,15 @@ use crate::config_manager::ConfigManager;
 
 const SESSION_IMPORT_CONCURRENCY: usize = 5;
 
+struct CompletedSessionImport {
+    import: CompletedExternalAgentSessionImport,
+    connector_attribution: Option<ImportedSessionConnectorAttribution>,
+}
+
 #[derive(Clone)]
 pub(super) struct ExternalAgentSessionImporter {
     codex_home: PathBuf,
+    connector_metadata_roots: Vec<PathBuf>,
     permits: Arc<Semaphore>,
     thread_manager: Arc<ThreadManager>,
     thread_store: Arc<dyn ThreadStore>,
@@ -46,6 +54,7 @@ pub(super) struct ExternalAgentSessionImporter {
 impl ExternalAgentSessionImporter {
     pub(super) fn new(
         codex_home: PathBuf,
+        connector_metadata_roots: Vec<PathBuf>,
         thread_manager: Arc<ThreadManager>,
         thread_store: Arc<dyn ThreadStore>,
         config_manager: ConfigManager,
@@ -53,6 +62,7 @@ impl ExternalAgentSessionImporter {
     ) -> Self {
         Self {
             codex_home,
+            connector_metadata_roots,
             permits: Arc::new(Semaphore::new(1)),
             thread_manager,
             thread_store,
@@ -91,8 +101,8 @@ impl ExternalAgentSessionImporter {
             match result {
                 Ok(Some(completed_import)) => {
                     item_result.record_success(
-                        Some(completed_import.source_path.display().to_string()),
-                        Some(completed_import.imported_thread_id.to_string()),
+                        Some(completed_import.import.source_path.display().to_string()),
+                        Some(completed_import.import.imported_thread_id.to_string()),
                     );
                     completed_imports.push(completed_import);
                 }
@@ -107,6 +117,42 @@ impl ExternalAgentSessionImporter {
                 }
             }
         }
+        let connector_attributions = completed_imports
+            .iter()
+            .filter_map(|completed_import| completed_import.connector_attribution.clone())
+            .collect::<Vec<_>>();
+        let connector_metadata_roots = self.connector_metadata_roots.clone();
+        let mut connector_names_by_session = match tokio::task::spawn_blocking(move || {
+            detect_imported_cla_session_connectors(
+                &connector_attributions,
+                &connector_metadata_roots,
+            )
+        })
+        .await
+        {
+            Ok(connector_names_by_session) => connector_names_by_session,
+            Err(err) => {
+                record_import_error(
+                    &mut item_result,
+                    "session_connector_detection_task",
+                    err.to_string(),
+                    /*source*/ None,
+                );
+                Default::default()
+            }
+        };
+        for completed_import in &mut completed_imports {
+            let Some(attribution) = &completed_import.connector_attribution else {
+                continue;
+            };
+            completed_import.import.connector_names = connector_names_by_session
+                .remove(&attribution.session_id)
+                .unwrap_or_default();
+        }
+        let completed_imports = completed_imports
+            .into_iter()
+            .map(|completed_import| completed_import.import)
+            .collect();
         if let Err(err) = record_completed_session_imports(&self.codex_home, completed_imports) {
             record_import_error(
                 &mut item_result,
@@ -121,7 +167,7 @@ impl ExternalAgentSessionImporter {
     async fn import_requested_session(
         &self,
         session: ExternalAgentSessionMigration,
-    ) -> Result<Option<CompletedExternalAgentSessionImport>, SessionImportFailure> {
+    ) -> Result<Option<CompletedSessionImport>, SessionImportFailure> {
         let source_path = session.path.clone();
         let Some(pending_import) =
             self.prepare_session_import(session)
@@ -134,6 +180,16 @@ impl ExternalAgentSessionImporter {
         else {
             return Ok(None);
         };
+        let connector_attribution = pending_import
+            .source_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::trim)
+            .filter(|session_id| !session_id.is_empty())
+            .map(|session_id| ImportedSessionConnectorAttribution {
+                session_id: session_id.to_string(),
+                server_ids: pending_import.attributed_mcp_server_ids,
+            });
         let imported_thread_id =
             self.persist_session(pending_import.session)
                 .await
@@ -142,10 +198,14 @@ impl ExternalAgentSessionImporter {
                     message,
                     stage: "session_persist",
                 })?;
-        Ok(Some(CompletedExternalAgentSessionImport {
-            source_path: pending_import.source_path,
-            source_content_sha256: pending_import.source_content_sha256,
-            imported_thread_id,
+        Ok(Some(CompletedSessionImport {
+            import: CompletedExternalAgentSessionImport {
+                source_path: pending_import.source_path,
+                source_content_sha256: pending_import.source_content_sha256,
+                imported_thread_id,
+                connector_names: Vec::new(),
+            },
+            connector_attribution,
         }))
     }
 

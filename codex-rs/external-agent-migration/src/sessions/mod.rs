@@ -1,5 +1,6 @@
 //! Parsing and export helpers for external-agent session histories.
 
+mod connectors_cla;
 mod detect_cla;
 mod export;
 mod ledger;
@@ -7,19 +8,30 @@ mod records;
 mod title;
 
 use codex_protocol::protocol::RolloutItem;
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+pub use connectors_cla::ImportedSessionConnectorAttribution;
+pub use connectors_cla::detect_imported_cla_session_connectors;
 pub use detect_cla::detect_recent_cla_sessions;
 use export::load_session_for_import_with_content_sha256;
 pub use ledger::CompletedExternalAgentSessionImport;
+pub use ledger::ImportedConnectorCandidate;
 pub use ledger::has_current_session_been_imported;
+pub use ledger::read_imported_connector_candidates;
 pub use ledger::record_completed_session_imports;
 pub use records::SessionSummary;
 pub use records::summarize_session;
 
 const SESSION_TITLE_MAX_LEN: usize = 120;
+
+fn normalized_connector_display_name(name: Option<&str>) -> Option<String> {
+    name.map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentSessionMigration {
@@ -40,6 +52,7 @@ pub struct ImportedExternalAgentSession {
 pub struct PendingSessionImport {
     pub source_path: PathBuf,
     pub source_content_sha256: String,
+    pub attributed_mcp_server_ids: BTreeSet<String>,
     pub session: ImportedExternalAgentSession,
 }
 
@@ -51,32 +64,25 @@ pub fn prepare_validated_session_import(
     if has_been_imported {
         return Ok(None);
     }
-    let Some((source_path, imported_session, source_content_sha256)) =
-        load_importable_session(&session.path)?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(PendingSessionImport {
-        source_path,
-        source_content_sha256,
-        session: imported_session,
-    }))
+    load_importable_session(&session.path)
 }
 
-fn load_importable_session(
-    path: &Path,
-) -> io::Result<Option<(PathBuf, ImportedExternalAgentSession, String)>> {
+fn load_importable_session(path: &Path) -> io::Result<Option<PendingSessionImport>> {
     let source_path = std::fs::canonicalize(path)?;
-    let Some((imported_session, source_content_sha256)) =
+    let Some((imported_session, source_content_sha256, attributed_mcp_server_ids)) =
         load_session_for_import_with_content_sha256(&source_path)?
     else {
         return Ok(None);
     };
-    Ok(imported_session.cwd.is_dir().then_some((
-        source_path,
-        imported_session,
-        source_content_sha256,
-    )))
+    Ok(imported_session
+        .cwd
+        .is_dir()
+        .then_some(PendingSessionImport {
+            source_path,
+            source_content_sha256,
+            attributed_mcp_server_ids,
+            session: imported_session,
+        }))
 }
 
 #[derive(Debug, Clone)]

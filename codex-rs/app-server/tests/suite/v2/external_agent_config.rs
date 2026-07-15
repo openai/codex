@@ -14,6 +14,8 @@ use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+use codex_app_server_protocol::ExternalAgentImportedConnectorCandidate;
+use codex_app_server_protocol::ExternalAgentImportedConnectorSource;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
@@ -44,6 +46,21 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn external_agent_home(codex_home: &Path) -> PathBuf {
     codex_home.join(concat!(".", "cla", "ude"))
+}
+
+fn connector_metadata_root(home: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        home.join("Library/Application Support/Claude")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        home.join("AppData/Roaming/Claude")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        home.join(".config/Claude")
+    }
 }
 
 fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String {
@@ -196,6 +213,7 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     )
     .await??;
     let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
+    assert_eq!(response.connectors, Vec::new());
     let entry = response
         .data
         .iter()
@@ -749,10 +767,24 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
+    let manifest_dir = connector_metadata_root(codex_home.path())
+        .join("claude-code-sessions/account/organization");
     let control_request = "<ide_selection>src/auth.rs:1-5</ide_selection>";
     let first_request = "Fix auth flow";
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
+    std::fs::create_dir_all(&manifest_dir)?;
+    std::fs::write(
+        manifest_dir.join("session.json"),
+        serde_json::json!({
+            "cliSessionId": "session",
+            "remoteMcpServersConfig": [
+                { "name": "Gmail", "uuid": "gmail-server" },
+                { "name": "Slack", "uuid": "slack-server" },
+            ],
+        })
+        .to_string(),
+    )?;
     std::fs::write(
         &session_path,
         [
@@ -774,6 +806,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
                 "type": "assistant",
                 "cwd": &project_root,
                 "timestamp": &recent_timestamp,
+                "attributionMcpServer": "gmail-server",
                 "message": { "content": "first answer" },
             })
             .to_string(),
@@ -860,6 +893,27 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .as_deref()
         .expect("session success should include imported thread id")
         .to_string();
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import/readHistories",
+            /*params*/ None,
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
+    assert_eq!(
+        response.connectors,
+        vec![ExternalAgentImportedConnectorCandidate {
+            name: "Gmail".to_string(),
+            session_count: 1,
+            source: ExternalAgentImportedConnectorSource::RemoteMcpServersConfig,
+        }]
+    );
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {
