@@ -8,6 +8,7 @@ use super::truncate;
 use serde_json::Value as JsonValue;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
@@ -31,6 +32,7 @@ pub(super) struct ParsedSessionImport {
     pub ai_title: Option<String>,
     pub messages: Vec<ConversationMessage>,
     pub content_sha256: String,
+    pub attributed_mcp_server_ids: BTreeSet<String>,
 }
 
 pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
@@ -114,6 +116,7 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
     let mut custom_title = None;
     let mut ai_title = None;
     let mut messages = Vec::new();
+    let mut attributed_mcp_server_ids = BTreeSet::new();
     let mut line = String::new();
     let mut hasher = Sha256::new();
     loop {
@@ -129,6 +132,14 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
         let Ok(mut record) = serde_json::from_str::<JsonValue>(trimmed) else {
             continue;
         };
+        if let Some(server_id) = record
+            .get("attributionMcpServer")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|server_id| !server_id.is_empty())
+        {
+            attributed_mcp_server_ids.insert(server_id.to_string());
+        }
         if cwd.is_none() {
             cwd = record
                 .get("cwd")
@@ -151,6 +162,7 @@ pub(super) fn read_session_import(path: &Path) -> io::Result<ParsedSessionImport
         ai_title,
         messages,
         content_sha256: format!("{:x}", hasher.finalize()),
+        attributed_mcp_server_ids,
     })
 }
 

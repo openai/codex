@@ -5545,6 +5545,12 @@
     "ExternalAgentConfigImportHistoriesReadResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "connectors": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentImportedConnectorCandidate"
+          },
+          "type": "array"
+        },
         "data": {
           "items": {
             "$ref": "#/definitions/ExternalAgentConfigImportHistory"
@@ -5553,6 +5559,7 @@
         }
       },
       "required": [
+        "connectors",
         "data"
       ],
       "title": "ExternalAgentConfigImportHistoriesReadResponse",
@@ -5784,6 +5791,33 @@
         "HOOKS",
         "COMMANDS",
         "SESSIONS"
+      ],
+      "type": "string"
+    },
+    "ExternalAgentImportedConnectorCandidate": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sessionCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalAgentImportedConnectorSource"
+        }
+      },
+      "required": [
+        "name",
+        "sessionCount",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentImportedConnectorSource": {
+      "enum": [
+        "remoteMcpServersConfig"
       ],
       "type": "string"
     },

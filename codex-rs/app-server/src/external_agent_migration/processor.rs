@@ -22,6 +22,8 @@ use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+use codex_app_server_protocol::ExternalAgentImportedConnectorCandidate;
+use codex_app_server_protocol::ExternalAgentImportedConnectorSource;
 use codex_app_server_protocol::HookMigration;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerMigration;
@@ -32,6 +34,7 @@ use codex_app_server_protocol::SkillMigration;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_external_agent_migration::sessions::ExternalAgentSessionMigration as CoreSessionMigration;
+use codex_external_agent_migration::sessions::read_imported_connector_candidates;
 use codex_rollout::StateDbHandle;
 use codex_state::ExternalAgentConfigImportFailureRecord;
 use codex_state::ExternalAgentConfigImportSuccessRecord;
@@ -89,15 +92,16 @@ impl ExternalAgentConfigRequestProcessor {
             arg0_paths,
             codex_home,
         } = args;
+        let migration_service =
+            ExternalAgentConfigService::new(codex_home.clone(), analytics_events_client.clone());
         let session_importer = ExternalAgentSessionImporter::new(
-            codex_home.clone(),
+            codex_home,
+            migration_service.connector_metadata_roots.clone(),
             Arc::clone(&thread_manager),
             thread_store,
             config_manager,
             arg0_paths,
         );
-        let migration_service =
-            ExternalAgentConfigService::new(codex_home, analytics_events_client.clone());
         Self {
             outgoing,
             migration_service,
@@ -369,8 +373,21 @@ impl ExternalAgentConfigRequestProcessor {
             .into_iter()
             .map(protocol_import_history)
             .collect::<Result<Vec<_>, _>>()?;
+        let connectors = read_imported_connector_candidates(&self.migration_service.codex_home)
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to read imported connector candidates: {err}"
+                ))
+            })?
+            .into_iter()
+            .map(|candidate| ExternalAgentImportedConnectorCandidate {
+                name: candidate.name,
+                session_count: candidate.session_count,
+                source: ExternalAgentImportedConnectorSource::RemoteMcpServersConfig,
+            })
+            .collect();
 
-        Ok(ExternalAgentConfigImportHistoriesReadResponse { data })
+        Ok(ExternalAgentConfigImportHistoriesReadResponse { data, connectors })
     }
 
     fn validate_pending_session_imports(

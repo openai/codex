@@ -107,6 +107,12 @@ impl ExternalAgentSource {
         }
     }
 
+    pub(super) fn connector_metadata_roots(self, external_agent_home: &Path) -> Vec<PathBuf> {
+        match self {
+            Self::Cla => source_cla::connector_metadata_roots(external_agent_home),
+        }
+    }
+
     pub(super) fn marketplace_import_sources(
         self,
         external_agent_home: &Path,
