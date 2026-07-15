@@ -13,9 +13,22 @@ pub enum DangerousCommandMatch {
     Other,
 }
 
+const MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH: usize = 8;
+
 /// Returns the dangerous-command rule matched by an already-tokenized command.
 pub fn dangerous_command_match(command: &[String]) -> Option<DangerousCommandMatch> {
-    if let Some(dangerous_match) = dangerous_command_match_for_exec(command) {
+    dangerous_command_match_with_depth(command, 0)
+}
+
+fn dangerous_command_match_with_depth(
+    command: &[String],
+    wrapper_depth: usize,
+) -> Option<DangerousCommandMatch> {
+    if wrapper_depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH {
+        return None;
+    }
+
+    if let Some(dangerous_match) = dangerous_command_match_for_exec(command, wrapper_depth) {
         return Some(dangerous_match);
     }
 
@@ -24,7 +37,7 @@ pub fn dangerous_command_match(command: &[String]) -> Option<DangerousCommandMat
     if let Some(dangerous_match) = parse_shell_lc_literal_commands(command).and_then(|commands| {
         commands
             .iter()
-            .find_map(|command| dangerous_command_match_for_exec(command))
+            .find_map(|command| dangerous_command_match_with_depth(command, wrapper_depth + 1))
     }) {
         return Some(dangerous_match);
     }
@@ -153,7 +166,10 @@ pub(crate) fn find_git_subcommand<'a>(
     None
 }
 
-fn dangerous_command_match_for_exec(command: &[String]) -> Option<DangerousCommandMatch> {
+fn dangerous_command_match_for_exec(
+    command: &[String],
+    wrapper_depth: usize,
+) -> Option<DangerousCommandMatch> {
     let cmd0 = command
         .first()
         .and_then(|command| executable_name_lookup_key(command));
@@ -163,12 +179,59 @@ fn dangerous_command_match_for_exec(command: &[String]) -> Option<DangerousComma
             Some(DangerousCommandMatch::ForcedRm)
         }
 
-        // for sudo <cmd> simply do the check for <cmd>
-        Some("sudo") => dangerous_command_match_for_exec(&command[1..]),
+        // For sudo <cmd>, simply check <cmd>.
+        Some("sudo") => dangerous_command_match_with_depth(&command[1..], wrapper_depth + 1),
+
+        // Skip environment assignments before checking the command run by env.
+        Some("env") => dangerous_command_match_for_env(command, wrapper_depth),
+
+        // A trap action is shell source stored in the first operand.
+        Some("trap") => dangerous_command_match_for_trap(command, wrapper_depth),
 
         // ── anything else ─────────────────────────────────────────────────
         _ => None,
     }
+}
+
+fn dangerous_command_match_for_env(
+    command: &[String],
+    wrapper_depth: usize,
+) -> Option<DangerousCommandMatch> {
+    let mut command_index = 1;
+    while let Some(argument) = command.get(command_index) {
+        if argument == "--" {
+            command_index += 1;
+            break;
+        }
+        if matches!(argument.as_str(), "-i" | "--ignore-environment")
+            || argument
+                .split_once('=')
+                .is_some_and(|(name, _)| !name.is_empty() && !name.starts_with('-'))
+        {
+            command_index += 1;
+            continue;
+        }
+        break;
+    }
+    dangerous_command_match_with_depth(&command[command_index..], wrapper_depth + 1)
+}
+
+fn dangerous_command_match_for_trap(
+    command: &[String],
+    wrapper_depth: usize,
+) -> Option<DangerousCommandMatch> {
+    let mut action_index = 1;
+    if command
+        .get(action_index)
+        .is_some_and(|argument| argument == "--")
+    {
+        action_index += 1;
+    }
+    let action = command
+        .get(action_index)
+        .filter(|action| !action.starts_with('-'))?;
+    let shell_command = vec!["sh".to_string(), "-c".to_string(), action.clone()];
+    dangerous_command_match_with_depth(&shell_command, wrapper_depth + 1)
 }
 
 fn rm_args_include_force_option(args: &[String]) -> bool {
@@ -215,6 +278,7 @@ mod tests {
             vec_str(&["rm", "--force", "/tmp/example"]),
             vec_str(&["rm", "/tmp/example", "-f"]),
             vec_str(&["sudo", "rm", "-rf", "/tmp/example"]),
+            vec_str(&["env", "TARGET=/tmp/example", "rm", "-rf", "/tmp/example"]),
         ] {
             assert_eq!(
                 dangerous_command_match(&command),
@@ -232,6 +296,8 @@ mod tests {
             "rm -rf \"$TARGET\" >/dev/null",
             "for target in /tmp/a /tmp/b; do rm -r -f \"$target\"; done",
             "echo \"$(rm -rf /tmp/example)\"",
+            "bash -c 'rm -rf /tmp/example'",
+            "trap 'rm -rf /tmp/example' EXIT",
             "for a in '-C5a25KeRr' '--' '--json' '--bogus'; do HOME=$(mktemp -d) MDE_URL=http://127.0.0.1:1 MDE_TOKEN=x node cli/mde.cjs ls \"$a\" >/tmp/mde-review-out 2>/tmp/mde-review-err; code=$?; printf '%s\\t%s\\t%s\\n' \"$a\" \"$code\" \"$(tr '\\n' ' ' </tmp/mde-review-err)\"; rm -rf \"$HOME\"; done",
         ] {
             let command = vec_str(&["bash", "-lc", script]);
@@ -251,6 +317,8 @@ mod tests {
             vec_str(&["bash", "-lc", "echo 'rm -rf /tmp/example'"]),
             vec_str(&["bash", "-lc", "cmd=rm; $cmd -rf /tmp/example"]),
             vec_str(&["bash", "-lc", "if then rm -rf /tmp/example"]),
+            vec_str(&["env", "TARGET=/tmp/example", "rm", "-r", "/tmp/example"]),
+            vec_str(&["bash", "-lc", "trap 'echo rm -rf /tmp/example' EXIT"]),
         ] {
             assert_eq!(dangerous_command_match(&command), None, "{command:?}");
         }
