@@ -373,22 +373,28 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     let mut queued_user_messages = VecDeque::new();
     queued_user_messages.push_back(UserMessage::from("queued draft").into());
 
-    chat.restore_thread_input_state(Some(ThreadInputState {
-        composer: None,
-        safety_buffering_prompt: None,
-        pending_steers,
-        pending_steer_history_records: VecDeque::new(),
-        pending_steer_compare_keys,
-        rejected_steers_queue,
-        rejected_steer_history_records: VecDeque::new(),
-        queued_user_messages,
-        queued_user_message_history_records: VecDeque::new(),
-        user_turn_pending_start: false,
-        current_collaboration_mode: chat.current_collaboration_mode.clone(),
-        active_collaboration_mask: chat.active_collaboration_mask.clone(),
-        task_running: false,
-        agent_turn_running: false,
-    }));
+    chat.restore_thread_input_state(
+        Some(ThreadInputState {
+            composer: None,
+            safety_buffering_prompt: None,
+            pending_steers,
+            pending_steer_history_records: VecDeque::new(),
+            pending_steer_compare_keys,
+            rejected_steers_queue,
+            rejected_steer_history_records: VecDeque::new(),
+            queued_user_messages,
+            queued_user_message_history_records: VecDeque::new(),
+            user_turn_pending_start: false,
+            submit_pending_steers_after_interrupt: false,
+            current_collaboration_mode: chat.current_collaboration_mode.clone(),
+            active_collaboration_mask: chat.active_collaboration_mask.clone(),
+            task_running: false,
+            agent_turn_running: false,
+        }),
+        ThreadInputStateRestoreMode {
+            preserve_in_flight_turn: true,
+        },
+    );
 
     assert_eq!(
         chat.queued_user_message_texts(),

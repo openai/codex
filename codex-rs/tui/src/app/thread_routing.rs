@@ -6,6 +6,7 @@
 
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::session_resume::read_session_model;
 
 impl App {
@@ -1344,8 +1345,12 @@ impl App {
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ true);
-        self.chat_widget
-            .restore_thread_input_state(snapshot.input_state);
+        self.chat_widget.restore_thread_input_state(
+            snapshot.input_state,
+            ThreadInputStateRestoreMode {
+                preserve_in_flight_turn: true,
+            },
+        );
         if !snapshot.turns.is_empty() {
             self.chat_widget
                 .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);

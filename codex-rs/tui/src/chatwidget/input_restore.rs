@@ -1,6 +1,7 @@
 //! Input queue restore and thread-input snapshot behavior for `ChatWidget`.
 
 use std::collections::HashSet;
+use std::collections::VecDeque;
 
 use super::user_messages::remap_colliding_paste_placeholders;
 use super::*;
@@ -338,6 +339,9 @@ impl ChatWidget {
                 .queued_user_message_history_records
                 .clone(),
             user_turn_pending_start: self.input_queue.user_turn_pending_start,
+            submit_pending_steers_after_interrupt: self
+                .input_queue
+                .submit_pending_steers_after_interrupt,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -345,15 +349,26 @@ impl ChatWidget {
         })
     }
 
-    pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
-        let restored_task_running = input_state.as_ref().is_some_and(|state| state.task_running);
+    pub(crate) fn restore_thread_input_state(
+        &mut self,
+        input_state: Option<ThreadInputState>,
+        restore_mode: ThreadInputStateRestoreMode,
+    ) {
+        let preserve_in_flight_turn = restore_mode.preserve_in_flight_turn;
+        let restored_task_running =
+            preserve_in_flight_turn && input_state.as_ref().is_some_and(|state| state.task_running);
         if let Some(input_state) = input_state {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.safety_buffering_prompt = input_state.safety_buffering_prompt;
-            self.turn_lifecycle
-                .restore_running(input_state.agent_turn_running, Instant::now());
-            self.input_queue.user_turn_pending_start = input_state.user_turn_pending_start;
+            self.turn_lifecycle.restore_running(
+                preserve_in_flight_turn && input_state.agent_turn_running,
+                Instant::now(),
+            );
+            self.input_queue.user_turn_pending_start =
+                preserve_in_flight_turn && input_state.user_turn_pending_start;
+            self.input_queue.submit_pending_steers_after_interrupt =
+                preserve_in_flight_turn && input_state.submit_pending_steers_after_interrupt;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             self.restore_composer_state(input_state.composer.unwrap_or_default());
@@ -363,22 +378,37 @@ impl ChatWidget {
                 UserMessageHistoryRecord::UserMessageText,
             );
             let mut pending_steer_compare_keys = input_state.pending_steer_compare_keys;
-            self.input_queue.pending_steers = input_state
-                .pending_steers
-                .into_iter()
-                .zip(pending_steer_history_records)
-                .map(|(user_message, history_record)| PendingSteer {
-                    compare_key: pending_steer_compare_keys.pop_front().unwrap_or_else(|| {
-                        PendingSteerCompareKey {
-                            message: user_message.text.clone(),
-                            image_count: user_message.local_images.len()
-                                + user_message.remote_image_urls.len(),
-                        }
-                    }),
-                    history_record,
-                    user_message,
-                })
-                .collect();
+            let pending_steers = input_state.pending_steers;
+            let mut queued_user_messages = input_state.queued_user_messages;
+            let mut queued_user_message_history_records =
+                input_state.queued_user_message_history_records;
+            if preserve_in_flight_turn {
+                self.input_queue.pending_steers = pending_steers
+                    .into_iter()
+                    .zip(pending_steer_history_records)
+                    .map(|(user_message, history_record)| PendingSteer {
+                        compare_key: pending_steer_compare_keys.pop_front().unwrap_or_else(|| {
+                            PendingSteerCompareKey {
+                                message: user_message.text.clone(),
+                                image_count: user_message.local_images.len()
+                                    + user_message.remote_image_urls.len(),
+                            }
+                        }),
+                        history_record,
+                        user_message,
+                    })
+                    .collect();
+            } else {
+                self.input_queue.pending_steers.clear();
+                let mut safety_retry_follow_ups = pending_steers
+                    .into_iter()
+                    .map(QueuedUserMessage::from)
+                    .collect::<VecDeque<_>>();
+                safety_retry_follow_ups.append(&mut queued_user_messages);
+                queued_user_messages = safety_retry_follow_ups;
+                pending_steer_history_records.append(&mut queued_user_message_history_records);
+                queued_user_message_history_records = pending_steer_history_records;
+            }
             self.input_queue.rejected_steers_queue = input_state.rejected_steers_queue;
             self.input_queue.rejected_steer_history_records =
                 input_state.rejected_steer_history_records;
@@ -386,9 +416,9 @@ impl ChatWidget {
                 self.input_queue.rejected_steers_queue.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
-            self.input_queue.queued_user_messages = input_state.queued_user_messages;
+            self.input_queue.queued_user_messages = queued_user_messages;
             self.input_queue.queued_user_message_history_records =
-                input_state.queued_user_message_history_records;
+                queued_user_message_history_records;
             self.input_queue.queued_user_message_history_records.resize(
                 self.input_queue.queued_user_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
