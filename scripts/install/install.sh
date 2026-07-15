@@ -4,6 +4,11 @@ set -eu
 
 RELEASE="${CODEX_RELEASE:-latest}"
 NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"
+DEFAULT_PREFER_RELEASES_OPENAI_COM="false"
+PREFER_RELEASES_OPENAI_COM="${CODEX_INSTALLER_USE_RELEASES_OPENAI_COM:-$DEFAULT_PREFER_RELEASES_OPENAI_COM}"
+RELEASES_BASE_URL="https://releases.openai.com/codex"
+release_json=""
+release_metadata_available="false"
 
 BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_PATH="$BIN_DIR/codex"
@@ -125,11 +130,35 @@ download_text() {
   exit 1
 }
 
+download_file_with_fallback() {
+  primary_url="$1"
+  fallback_url="$2"
+  output="$3"
+
+  if download_file "$primary_url" "$output"; then
+    return
+  fi
+
+  if [ -z "$fallback_url" ]; then
+    return 1
+  fi
+
+  warn "Could not download $primary_url; retrying from GitHub Releases."
+  download_file "$fallback_url" "$output"
+}
+
 release_url_for_asset() {
   asset="$1"
   resolved_version="$2"
 
   printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
+}
+
+releases_url_for_asset() {
+  asset="$1"
+  resolved_version="$2"
+
+  printf '%s/releases/%s/%s\n' "$RELEASES_BASE_URL" "$resolved_version" "$asset"
 }
 
 release_metadata_url() {
@@ -138,10 +167,18 @@ release_metadata_url() {
   printf 'https://api.github.com/repos/openai/codex/releases/tags/rust-v%s\n' "$resolved_version"
 }
 
-resolve_release() {
-  normalized_version="$(normalize_version "$RELEASE")"
-  validate_version "$normalized_version"
+resolve_version_from_release_json() {
+  release_json="$1"
+  resolved_version="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"rust-v\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -z "$resolved_version" ]; then
+    echo "Failed to resolve the latest Codex release version." >&2
+    exit 1
+  fi
+  validate_version "$resolved_version"
+}
 
+resolve_release_from_github() {
+  normalized_version="$1"
   if [ "$normalized_version" = "latest" ]; then
     requested_release="latest"
     metadata_url="https://api.github.com/repos/openai/codex/releases/latest"
@@ -155,15 +192,48 @@ resolve_release() {
     echo "Could not fetch GitHub release metadata for Codex $requested_release. GitHub API may be unavailable or rate limited." >&2
     exit 1
   fi
+  release_metadata_available="true"
+  release_source="github"
 
   if [ "$normalized_version" = "latest" ]; then
-    resolved_version="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"rust-v\([^"]*\)".*/\1/p' | head -n 1)"
-    if [ -z "$resolved_version" ]; then
-      echo "Failed to resolve the latest Codex release version." >&2
-      exit 1
-    fi
-    validate_version "$resolved_version"
+    resolve_version_from_release_json "$release_json"
   fi
+}
+
+resolve_release_from_releases() {
+  normalized_version="$1"
+
+  if [ "$normalized_version" = "latest" ]; then
+    if ! release_json="$(download_text "$RELEASES_BASE_URL/channels/latest")"; then
+      return 1
+    fi
+    release_metadata_available="true"
+    resolve_version_from_release_json "$release_json"
+  else
+    resolved_version="$normalized_version"
+    release_json=""
+    release_metadata_available="false"
+  fi
+
+  requested_release="$resolved_version"
+  release_source="releases.openai.com"
+}
+
+resolve_release() {
+  normalized_version="$(normalize_version "$RELEASE")"
+  validate_version "$normalized_version"
+  release_source="github"
+
+  case "$PREFER_RELEASES_OPENAI_COM" in
+    1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss])
+      if resolve_release_from_releases "$normalized_version"; then
+        return
+      fi
+      warn "releases.openai.com is unavailable; falling back to GitHub Releases."
+      ;;
+  esac
+
+  resolve_release_from_github "$normalized_version"
 }
 
 release_asset_digest_or_empty() {
@@ -232,6 +302,43 @@ release_asset_digest() {
   printf '%s\n' "$digest"
 }
 
+select_release_assets() {
+  package_asset="codex-package-$vendor_target.tar.gz"
+  checksum_asset="codex-package_SHA256SUMS"
+  download_fallback_url=""
+  checksum_fallback_url=""
+
+  if [ "$release_source" = "releases.openai.com" ] &&
+    [ "$release_metadata_available" = "false" ]; then
+    install_layout="package"
+    asset="$package_asset"
+  elif release_asset_exists "$package_asset" &&
+    release_asset_exists "$checksum_asset"; then
+    install_layout="package"
+    asset="$package_asset"
+  elif release_asset_exists "codex-npm-$npm_tag-$resolved_version.tgz"; then
+    install_layout="legacy-platform-npm"
+    asset="codex-npm-$npm_tag-$resolved_version.tgz"
+  else
+    echo "Could not find Codex package or platform npm release assets for Codex $resolved_version." >&2
+    exit 1
+  fi
+
+  if [ "$release_source" = "releases.openai.com" ]; then
+    download_url="$(releases_url_for_asset "$asset" "$resolved_version")"
+    download_fallback_url="$(release_url_for_asset "$asset" "$resolved_version")"
+    if [ "$install_layout" = "package" ]; then
+      checksum_url="$(releases_url_for_asset "$checksum_asset" "$resolved_version")"
+      checksum_fallback_url="$(release_url_for_asset "$checksum_asset" "$resolved_version")"
+    fi
+  else
+    download_url="$(release_url_for_asset "$asset" "$resolved_version")"
+    if [ "$install_layout" = "package" ]; then
+      checksum_url="$(release_url_for_asset "$checksum_asset" "$resolved_version")"
+    fi
+  fi
+}
+
 package_archive_digest() {
   asset="$1"
   manifest_path="$2"
@@ -290,6 +397,25 @@ verify_archive_digest() {
     echo "actual:   $actual_digest" >&2
     exit 1
   fi
+}
+
+download_selected_release() {
+  archive_path="$tmp_dir/$asset"
+  checksum_path="$tmp_dir/$checksum_asset"
+
+  if [ "$install_layout" = "package" ]; then
+    download_file_with_fallback "$checksum_url" "$checksum_fallback_url" "$checksum_path" || return 1
+    if [ "$release_metadata_available" = "true" ]; then
+      checksum_digest="$(release_asset_digest "$checksum_asset")"
+      verify_archive_digest "$checksum_path" "$checksum_digest"
+    fi
+    expected_digest="$(package_archive_digest "$asset" "$checksum_path")"
+  else
+    expected_digest="$(release_asset_digest "$asset")"
+  fi
+
+  download_file_with_fallback "$download_url" "$download_fallback_url" "$archive_path" || return 1
+  verify_archive_digest "$archive_path" "$expected_digest"
 }
 
 require_command() {
@@ -847,21 +973,7 @@ else
 fi
 
 resolve_release
-package_asset="codex-package-$vendor_target.tar.gz"
-checksum_asset="codex-package_SHA256SUMS"
-if release_asset_exists "$package_asset" &&
-  release_asset_exists "$checksum_asset"; then
-  install_layout="package"
-  asset="$package_asset"
-elif release_asset_exists "codex-npm-$npm_tag-$resolved_version.tgz"; then
-  install_layout="legacy-platform-npm"
-  asset="codex-npm-$npm_tag-$resolved_version.tgz"
-else
-  echo "Could not find Codex package or platform npm release assets for Codex $resolved_version." >&2
-  exit 1
-fi
-download_url="$(release_url_for_asset "$asset" "$resolved_version")"
-checksum_url="$(release_url_for_asset "$checksum_asset" "$resolved_version")"
+select_release_assets
 release_name="$resolved_version-$vendor_target"
 release_dir="$RELEASES_DIR/$release_name"
 current_version="$(current_installed_version)"
@@ -895,20 +1007,18 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
     warn "Found incomplete existing release at $release_dir; reinstalling."
   fi
 
-  archive_path="$tmp_dir/$asset"
-  checksum_path="$tmp_dir/$checksum_asset"
-
   step "Downloading Codex CLI"
-  if [ "$install_layout" = "package" ]; then
-    checksum_digest="$(release_asset_digest "$checksum_asset")"
-    download_file "$checksum_url" "$checksum_path"
-    verify_archive_digest "$checksum_path" "$checksum_digest"
-    expected_digest="$(package_archive_digest "$asset" "$checksum_path")"
-  else
-    expected_digest="$(release_asset_digest "$asset")"
+  if ! download_selected_release; then
+    if [ "$release_source" != "releases.openai.com" ] ||
+      [ "$release_metadata_available" != "false" ]; then
+      exit 1
+    fi
+
+    warn "The package layout is unavailable for Codex $resolved_version; checking GitHub release metadata for a legacy asset."
+    resolve_release_from_github "$resolved_version"
+    select_release_assets
+    download_selected_release
   fi
-  download_file "$download_url" "$archive_path"
-  verify_archive_digest "$archive_path" "$expected_digest"
 
   step "Installing standalone package to $release_dir"
   if [ "$install_layout" = "package" ]; then
