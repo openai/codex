@@ -86,6 +86,7 @@ pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;
+mod openai_docs_source_attribution;
 mod plugin_config;
 mod resource_client;
 pub(crate) mod rmcp_client;
