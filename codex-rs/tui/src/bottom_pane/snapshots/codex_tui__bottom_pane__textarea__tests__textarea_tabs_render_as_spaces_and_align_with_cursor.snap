@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/textarea.rs
+expression: "format!(\"cursor: {cursor:?}\\n{}\", terminal.backend())"
+---
+cursor: (62, 0)
+"❌ Simulation formatter[large/dataset.py] 7.4 ms 8.1 ms -8.29%                                      " Hidden by multi-width symbols: [(1, " ")]
