@@ -622,6 +622,25 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
+    let (turns_backwards_cursor, items_backwards_cursor) = if let Some(thread_store) =
+        pending.resume_cursor_store.as_ref()
+    {
+        match super::thread_processor::ThreadRequestProcessor::paginated_resume_backwards_cursors(
+            thread_store.as_ref(),
+            conversation_id,
+        )
+        .await
+        {
+            Ok(cursors) => cursors,
+            Err(error) => {
+                outgoing.send_error(request_id, error).await;
+                return;
+            }
+        }
+    } else {
+        (None, None)
+    };
+
     let config_snapshot = pending.config_snapshot;
     let sandbox = config_snapshot.sandbox_policy().into();
     let cwd = config_snapshot.cwd().clone();
@@ -658,6 +677,8 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         initial_turns_page,
+        turns_backwards_cursor,
+        items_backwards_cursor,
     };
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)

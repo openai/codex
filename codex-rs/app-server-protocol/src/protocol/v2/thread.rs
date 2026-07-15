@@ -435,6 +435,20 @@ pub struct ThreadResumeResponse {
     #[experimental("thread/resume.initialTurnsPage")]
     #[serde(default)]
     pub initial_turns_page: Option<TurnsPage>,
+    /// Opaque head cursor for hydrating paginated turns backwards.
+    ///
+    /// Pass this as `cursor` to `thread/turns/list` with
+    /// `sortDirection: "desc"`. The first page includes the cursor's head turn.
+    #[experimental("thread/resume.turnsBackwardsCursor")]
+    #[serde(default)]
+    pub turns_backwards_cursor: Option<String>,
+    /// Opaque head cursor for hydrating paginated items backwards.
+    ///
+    /// Pass this as `cursor` to `thread/items/list` with
+    /// `sortDirection: "desc"`. The first page includes the cursor's head item.
+    #[experimental("thread/resume.itemsBackwardsCursor")]
+    #[serde(default)]
+    pub items_backwards_cursor: Option<String>,
 }
 
 impl ThreadResumeResponse {

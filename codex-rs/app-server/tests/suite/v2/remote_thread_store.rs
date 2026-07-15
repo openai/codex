@@ -18,6 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server::in_process;
 use codex_app_server::in_process::InProcessClientHandle;
@@ -26,10 +27,12 @@ use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -59,6 +62,48 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test]
+async fn thread_start_rejects_paginated_history_without_list_support() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
+
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "codex-app-server-tests".to_string(),
+            title: None,
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "paginated threads require thread/turns/list and thread/items/list support"
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_delete_with_non_local_thread_store_does_not_create_local_persistence() -> Result<()>

@@ -17,6 +17,7 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -36,6 +37,54 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const COLLIDING_REVIEW_SKILL_MARKER: &str = "COLLIDING_REVIEW_SKILL_MARKER";
+
+#[tokio::test]
+async fn review_start_rejects_detached_delivery_for_paginated_parent() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(start_resp)?;
+
+    let review_id = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id: thread.id,
+            delivery: Some(ReviewDelivery::Detached),
+            target: ReviewTarget::Custom {
+                instructions: "detached review".to_string(),
+            },
+        })
+        .await?;
+    let review_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(review_id)),
+    )
+    .await??;
+    assert_eq!(review_err.error.code, -32600);
+    assert_eq!(
+        review_err.error.message,
+        "paginated threads do not support detached review"
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()> {

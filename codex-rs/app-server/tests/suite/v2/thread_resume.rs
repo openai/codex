@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::create_apply_patch_sse_response;
+use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_fake_rollout_with_token_usage;
@@ -34,6 +35,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
@@ -123,6 +125,91 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+
+#[tokio::test]
+async fn thread_resume_paginated_uses_model_context_without_history() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let conversation_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut primary = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+
+    let full_resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let full_resume_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_error_message(RequestId::Integer(full_resume_id)),
+    )
+    .await??;
+    assert_eq!(full_resume_err.error.code, -32600);
+    assert_eq!(
+        full_resume_err.error.message,
+        "paginated threads do not support full-history thread/resume; pass excludeTurns=true"
+    );
+
+    let initial_page_resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            exclude_turns: true,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: None,
+                sort_direction: None,
+                items_view: None,
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let initial_page_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_error_message(RequestId::Integer(initial_page_resume_id)),
+    )
+    .await??;
+    assert_eq!(initial_page_err.error.code, -32600);
+    assert_eq!(
+        initial_page_err.error.message,
+        "paginated threads do not support initialTurnsPage; use turnsBackwardsCursor and itemsBackwardsCursor"
+    );
+
+    // LocalThreadStore rejects paginated full-history reads, so this cold resume only succeeds
+    // when app-server asks for the bounded latest model context.
+    let resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed.id, conversation_id);
+    assert_eq!(resumed.history_mode, ThreadHistoryMode::Paginated);
+    assert!(resumed.turns.is_empty());
+
+    Ok(())
+}
 
 fn normalized_existing_path(path: impl AsRef<Path>) -> Result<PathBuf> {
     Ok(AbsolutePathBuf::from_absolute_path(path.as_ref().canonicalize()?)?.into_path_buf())

@@ -184,6 +184,20 @@ async fn list_items_pages_whole_thread_and_per_turn_rows() {
         .await
         .expect("turn item page");
     assert_eq!(item_ids(&turn_page), vec!["item-5", "item-4"]);
+    let whole_thread_from_turn_cursor = store
+        .list_items(item_params(
+            thread_id,
+            /*turn_id*/ None,
+            turn_page.backwards_cursor.clone(),
+            /*page_size*/ 2,
+            SortDirection::Desc,
+        ))
+        .await
+        .expect("whole-thread page from turn cursor");
+    assert_eq!(
+        item_ids(&whole_thread_from_turn_cursor),
+        vec!["item-5", "item-4"]
+    );
     let next_turn_page = store
         .list_items(item_params(
             thread_id,

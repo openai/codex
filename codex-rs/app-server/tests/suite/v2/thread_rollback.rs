@@ -1,13 +1,16 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
@@ -24,6 +27,51 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test]
+async fn thread_rollback_rejects_paginated_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(start_resp)?;
+
+    let rollback_id = mcp
+        .send_thread_rollback_request(ThreadRollbackParams {
+            thread_id: thread.id,
+            num_turns: 1,
+        })
+        .await?;
+    let rollback_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(rollback_id)),
+    )
+    .await??;
+    assert_eq!(rollback_err.error.code, -32600);
+    assert_eq!(
+        rollback_err.error.message,
+        "paginated threads do not support thread/rollback"
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_rollback_does_not_emit_deprecation_notice_to_codex_tui() -> Result<()> {

@@ -219,6 +219,8 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             next_cursor: Some("cursor_next".to_string()),
             backwards_cursor: Some("cursor_back".to_string()),
         }),
+        turns_backwards_cursor: Some("turns_head".to_string()),
+        items_backwards_cursor: Some("items_head".to_string()),
     };
 
     let value = serde_json::to_value(&response).expect("serialize thread resume response");
@@ -229,6 +231,14 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             "nextCursor": "cursor_next",
             "backwardsCursor": "cursor_back",
         }))
+    );
+    assert_eq!(
+        value.get("turnsBackwardsCursor"),
+        Some(&json!("turns_head"))
+    );
+    assert_eq!(
+        value.get("itemsBackwardsCursor"),
+        Some(&json!("items_head"))
     );
     let decoded = serde_json::from_value::<ThreadResumeResponse>(value)
         .expect("deserialize thread resume response");

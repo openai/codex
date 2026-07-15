@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
@@ -223,18 +224,13 @@ async fn paginated_stored_thread_routes_projected_turns_and_rejects_legacy_histo
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let conversation_id = create_fake_rollout_with_text_elements(
+    let conversation_id = create_fake_paginated_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         "Saved user message",
-        Vec::new(),
         Some("mock_provider"),
         /*git_info*/ None,
-    )?;
-    set_rollout_history_mode(
-        rollout_path(codex_home.path(), "2025-01-05T12-00-00", &conversation_id).as_path(),
-        ThreadHistoryMode::Paginated,
     )?;
 
     let mut mcp = TestAppServer::builder()
@@ -293,12 +289,15 @@ async fn paginated_stored_thread_routes_projected_turns_and_rejects_legacy_histo
             include_turns: true,
         })
         .await?;
-    assert_paginated_threads_unsupported(
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
-        )
-        .await??,
+    let read_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    assert_eq!(read_err.error.code, -32600);
+    assert_eq!(
+        read_err.error.message,
+        "paginated threads do not support thread/read(includeTurns=true)"
     );
 
     let turns_list_id = mcp
@@ -322,20 +321,6 @@ async fn paginated_stored_thread_routes_projected_turns_and_rejects_legacy_histo
             next_cursor: None,
             backwards_cursor: None,
         }
-    );
-
-    let resume_id = mcp
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: conversation_id,
-            ..Default::default()
-        })
-        .await?;
-    assert_paginated_threads_unsupported(
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
-        )
-        .await??,
     );
 
     Ok(())
@@ -1412,11 +1397,108 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread,
+        turns_backwards_cursor,
+        items_backwards_cursor,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert!(thread.turns.is_empty());
+    let turns_backwards_cursor =
+        turns_backwards_cursor.expect("resume should return a turn head cursor");
+    let items_backwards_cursor =
+        items_backwards_cursor.expect("resume should return an item head cursor");
+
+    let rejoin_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let rejoin_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(rejoin_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        turns_backwards_cursor: rejoin_turns_backwards_cursor,
+        items_backwards_cursor: rejoin_items_backwards_cursor,
+        ..
+    } = to_response::<ThreadResumeResponse>(rejoin_resp)?;
+    assert_eq!(
+        rejoin_turns_backwards_cursor.as_deref(),
+        Some(turns_backwards_cursor.as_str())
+    );
+    assert_eq!(
+        rejoin_items_backwards_cursor.as_deref(),
+        Some(items_backwards_cursor.as_str())
+    );
+
+    let ThreadTurnsListResponse { data, .. } = read_turns_page(
+        &mut mcp,
+        thread_id,
+        Some(turns_backwards_cursor),
+        Some(2),
+        SortDirection::Desc,
+        Some(TurnItemsView::NotLoaded),
+    )
+    .await?;
+    assert_eq!(
+        data.into_iter().map(|turn| turn.id).collect::<Vec<_>>(),
+        vec!["turn-2", "turn-1"]
+    );
+
+    let ThreadItemsListResponse { data, .. } = read_items_page(
+        &mut mcp,
+        thread_id,
+        /*turn_id*/ None,
+        Some(items_backwards_cursor.clone()),
+        Some(3),
+        SortDirection::Desc,
+    )
+    .await?;
+    assert_eq!(
+        data.into_iter()
+            .map(|entry| entry.item.id().to_string())
+            .collect::<Vec<_>>(),
+        vec!["user-2", "agent-1", "user-1"]
+    );
+
+    let ThreadItemsListResponse { data, .. } = read_items_page(
+        &mut mcp,
+        thread_id,
+        Some("turn-1"),
+        Some(items_backwards_cursor),
+        Some(2),
+        SortDirection::Desc,
+    )
+    .await?;
+    assert_eq!(
+        data.into_iter()
+            .map(|entry| entry.item.id().to_string())
+            .collect::<Vec<_>>(),
+        vec!["agent-1", "user-1"]
+    );
+
     let first_page = read_turns_page(
         &mut mcp,
         thread_id,
         /*cursor*/ None,
         Some(1),
+        SortDirection::Asc,
         Some(TurnItemsView::Summary),
     )
     .await?;
@@ -1451,6 +1533,7 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
         thread_id,
         Some(next_cursor),
         Some(1),
+        SortDirection::Asc,
         Some(TurnItemsView::NotLoaded),
     )
     .await?;
@@ -1488,15 +1571,25 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
         "thread/turns/list itemsView full is not supported for paginated threads; use thread/items/list"
     );
 
-    let first_items_page = read_items_page(&mut mcp, thread_id, /*cursor*/ None, Some(1)).await?;
+    let first_items_page = read_items_page(
+        &mut mcp,
+        thread_id,
+        /*turn_id*/ None,
+        /*cursor*/ None,
+        Some(1),
+        SortDirection::Asc,
+    )
+    .await?;
     assert_eq!(first_items_page.data.len(), 1);
     assert_eq!(first_items_page.data[0].turn_id, "turn-1");
     assert_eq!(first_items_page.data[0].item.id(), "user-1");
     let second_items_page = read_items_page(
         &mut mcp,
         thread_id,
+        /*turn_id*/ None,
         Some(first_items_page.next_cursor.expect("next item cursor")),
         Some(1),
+        SortDirection::Asc,
     )
     .await?;
     assert_eq!(second_items_page.data.len(), 1);
@@ -1505,8 +1598,10 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
     let third_items_page = read_items_page(
         &mut mcp,
         thread_id,
+        /*turn_id*/ None,
         Some(second_items_page.next_cursor.expect("next item cursor")),
         Some(1),
+        SortDirection::Asc,
     )
     .await?;
     assert_eq!(third_items_page.data.len(), 1);
@@ -1706,6 +1801,7 @@ async fn read_turns_page(
     thread_id: codex_protocol::ThreadId,
     cursor: Option<String>,
     limit: Option<u32>,
+    sort_direction: SortDirection,
     items_view: Option<TurnItemsView>,
 ) -> Result<ThreadTurnsListResponse> {
     let request_id = mcp
@@ -1713,7 +1809,7 @@ async fn read_turns_page(
             thread_id: thread_id.to_string(),
             cursor,
             limit,
-            sort_direction: Some(SortDirection::Asc),
+            sort_direction: Some(sort_direction),
             items_view,
         })
         .await?;
@@ -1728,16 +1824,18 @@ async fn read_turns_page(
 async fn read_items_page(
     mcp: &mut TestAppServer,
     thread_id: codex_protocol::ThreadId,
+    turn_id: Option<&str>,
     cursor: Option<String>,
     limit: Option<u32>,
+    sort_direction: SortDirection,
 ) -> Result<ThreadItemsListResponse> {
     let request_id = mcp
         .send_thread_items_list_request(ThreadItemsListParams {
             thread_id: thread_id.to_string(),
-            turn_id: None,
+            turn_id: turn_id.map(str::to_string),
             cursor,
             limit,
-            sort_direction: Some(SortDirection::Asc),
+            sort_direction: Some(sort_direction),
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -1877,26 +1975,6 @@ fn store_history_items() -> Vec<RolloutItem> {
             ..Default::default()
         },
     ))]
-}
-
-fn set_rollout_history_mode(path: &Path, history_mode: ThreadHistoryMode) -> Result<()> {
-    let mut lines = std::fs::read_to_string(path)?
-        .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<Result<Vec<_>, _>>()?;
-    lines[0]["payload"]["history_mode"] = serde_json::to_value(history_mode)?;
-    let contents = lines
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(path, format!("{contents}\n"))?;
-    Ok(())
-}
-
-fn assert_paginated_threads_unsupported(err: JSONRPCError) {
-    assert_eq!(err.error.code, -32601);
-    assert_eq!(err.error.message, "paginated_threads is not supported yet");
 }
 
 fn create_config_toml_with_thread_store(codex_home: &Path, store_id: &str) -> std::io::Result<()> {

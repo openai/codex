@@ -6,6 +6,7 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -54,6 +55,41 @@ pub fn create_fake_rollout(
         git_info,
         SessionSource::Cli,
     )
+}
+
+/// Creates a minimal paginated rollout with ordinalized JSONL records.
+pub fn create_fake_paginated_rollout(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
+) -> Result<String> {
+    let thread_id = create_fake_rollout(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        model_provider,
+        git_info,
+    )?;
+    let path = rollout_path(codex_home, filename_ts, &thread_id);
+    let mut lines = fs::read_to_string(path.as_path())?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    lines[0]["payload"]["history_mode"] = serde_json::to_value(ThreadHistoryMode::Paginated)?;
+    for (ordinal, line) in lines.iter_mut().enumerate() {
+        line["ordinal"] = serde_json::to_value(ordinal)?;
+    }
+    let contents = lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(path, format!("{contents}\n"))?;
+    Ok(thread_id)
 }
 
 /// Creates a minimal rollout whose history includes a persisted token usage event.

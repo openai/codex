@@ -470,7 +470,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_history_mode_accepts_legacy_and_rejects_paginated() -> Result<()> {
+async fn thread_start_history_mode_accepts_legacy_and_paginated() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
@@ -502,17 +502,14 @@ async fn thread_start_history_mode_accepts_legacy_and_rejects_paginated() -> Res
             ..Default::default()
         })
         .await?;
-    let error: JSONRPCError = timeout(
+    let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    let ThreadStartResponse { thread, .. } = to_response(response)?;
 
-    assert_eq!(error.error.code, -32601);
-    assert_eq!(
-        error.error.message,
-        "paginated_threads is not supported yet"
-    );
+    assert_eq!(thread.history_mode, ThreadHistoryMode::Paginated);
     Ok(())
 }
 

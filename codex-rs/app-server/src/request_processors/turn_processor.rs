@@ -1258,6 +1258,17 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         prompt: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
+        // AgentRunner::start still delegates to spawn_subagent, which forks from the parent's
+        // full history. Paginated threads only allow bounded model-context reads, so keep this
+        // closed until detached review has a bounded fork path.
+        if matches!(
+            parent_thread.config_snapshot().await.history_mode,
+            codex_protocol::protocol::ThreadHistoryMode::Paginated
+        ) {
+            return Err(invalid_request(
+                "paginated threads do not support detached review",
+            ));
+        }
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());

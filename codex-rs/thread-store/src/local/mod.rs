@@ -344,6 +344,10 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { list_threads::list_threads(self, params).await })
     }
 
+    fn supports_paginated_history_lists(&self) -> bool {
+        true
+    }
+
     fn list_turns(&self, params: ListTurnsParams) -> ThreadStoreFuture<'_, TurnPage> {
         Box::pin(LocalThreadStore::list_turns(self, params))
     }
@@ -1244,7 +1248,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paginated_threads_allow_metadata_reads_and_reject_legacy_history_paths() {
+    async fn paginated_threads_allow_metadata_reads_and_resume_but_reject_legacy_history_paths() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(408);
@@ -1308,18 +1312,16 @@ mod tests {
                 .await
                 .expect_err("history load should fail"),
         );
-        assert_paginated_threads_unsupported(
-            store
-                .resume_thread(ResumeThreadParams {
-                    thread_id,
-                    rollout_path: Some(rollout_path),
-                    history: None,
-                    include_archived: false,
-                    metadata: thread_metadata(),
-                })
-                .await
-                .expect_err("resume should fail"),
-        );
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: false,
+                metadata: thread_metadata(),
+            })
+            .await
+            .expect("resume should succeed");
     }
 
     #[tokio::test]
