@@ -17,6 +17,7 @@ use base64::engine::general_purpose::STANDARD;
 use codex_api::AuthProvider;
 use codex_exec_server::EnvironmentConnectionState;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::ExecServerClient;
@@ -30,6 +31,8 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -164,7 +167,16 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
         .context("remote environment connection state")?;
 
     assert_eq!(provider.calls(), 0);
-    registration.complete(Ok(()))?;
+    let selected_capability_roots = vec![SelectedCapabilityRoot {
+        id: "executor-plugin".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: ENVIRONMENT_ID.to_string(),
+            path: PathUri::parse("file:///plugins/executor-plugin")?,
+        },
+    }];
+    registration.complete(Ok(EnvironmentReadyInfo {
+        selected_capability_roots: selected_capability_roots.clone(),
+    }))?;
     let harness_websocket = accept_websocket(&listener, "harness").await?;
     let first_relay = tokio::spawn(proxy_relay_frames(
         environment_websocket,
@@ -174,6 +186,10 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
     let initial_info = timeout(TEST_TIMEOUT, environment.info())
         .await
         .context("deferred Noise environment should become ready")??;
+    assert_eq!(
+        environment.selected_capability_roots(),
+        selected_capability_roots
+    );
     assert_eq!(provider.calls(), 1);
     assert_eq!(
         next_connection_state(&mut connection_state).await?,
@@ -198,6 +214,10 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
         .context("deferred Noise environment should reconnect")??;
 
     assert_eq!(recovered_info, initial_info);
+    assert_eq!(
+        environment.selected_capability_roots(),
+        selected_capability_roots
+    );
     assert_eq!(provider.calls(), 2);
     assert_eq!(
         next_connection_state(&mut connection_state).await?,

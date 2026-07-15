@@ -3,10 +3,14 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::NoiseChannelPublicKey;
 use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::poll;
@@ -38,6 +42,18 @@ impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
     }
 }
 
+fn ready_info(root_id: &str, environment_id: &str) -> anyhow::Result<EnvironmentReadyInfo> {
+    Ok(EnvironmentReadyInfo {
+        selected_capability_roots: vec![SelectedCapabilityRoot {
+            id: root_id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: environment_id.to_string(),
+                path: PathUri::parse("file:///plugins/root")?,
+            },
+        }],
+    })
+}
+
 #[tokio::test]
 async fn deferred_environment_waits_before_connecting() -> anyhow::Result<()> {
     let manager = EnvironmentManager::without_environments();
@@ -52,8 +68,14 @@ async fn deferred_environment_waits_before_connecting() -> anyhow::Result<()> {
 
     assert!(poll!(&mut readiness).is_pending());
     assert_eq!(provider.calls(), 0);
+    assert!(environment.selected_capability_roots().is_empty());
 
-    registration.complete(Ok(()))?;
+    let ready_info = ready_info("selected-root", "tools")?;
+    registration.complete(Ok(ready_info.clone()))?;
+    assert_eq!(
+        environment.selected_capability_roots(),
+        ready_info.selected_capability_roots
+    );
     let error = readiness.await.unwrap_err();
     assert!(error.to_string().contains("test Noise provider called"));
     assert_eq!(provider.calls(), 1);
@@ -95,6 +117,29 @@ async fn failure_and_dropped_registration_are_terminal() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn invalid_ready_info_is_terminal() -> anyhow::Result<()> {
+    let manager = EnvironmentManager::without_environments();
+    let provider = Arc::new(FailingNoiseConnectProvider::default());
+    let registration =
+        manager.register_deferred_noise_environment("tools".to_string(), provider.clone())?;
+    let environment = manager.get_environment("tools").expect("environment");
+
+    let error = registration
+        .complete(Ok(ready_info("selected-root", "other")?))
+        .unwrap_err();
+    assert!(matches!(error, ExecServerError::Protocol(_)));
+    let readiness_error = environment.wait_until_ready().await.unwrap_err();
+    assert!(
+        readiness_error
+            .to_string()
+            .contains("belong to environment")
+    );
+    assert!(environment.selected_capability_roots().is_empty());
+    assert_eq!(provider.calls(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn late_completion_is_isolated_from_replacement() -> anyhow::Result<()> {
     let manager = EnvironmentManager::without_environments();
     let old_provider = Arc::new(FailingNoiseConnectProvider::default());
@@ -106,7 +151,13 @@ async fn late_completion_is_isolated_from_replacement() -> anyhow::Result<()> {
         .register_deferred_noise_environment("tools".to_string(), current_provider.clone())?;
     let current = manager.get_environment("tools").expect("current");
 
-    old_registration.complete(Ok(()))?;
+    let old_ready_info = ready_info("old-root", "tools")?;
+    old_registration.complete(Ok(old_ready_info.clone()))?;
+    assert_eq!(
+        old_environment.selected_capability_roots(),
+        old_ready_info.selected_capability_roots
+    );
+    assert!(current.selected_capability_roots().is_empty());
     let old_error = old_environment.wait_until_ready().await.unwrap_err();
     assert!(old_error.to_string().contains("test Noise provider called"));
     assert_eq!(old_provider.calls(), 1);
@@ -114,7 +165,12 @@ async fn late_completion_is_isolated_from_replacement() -> anyhow::Result<()> {
     assert!(poll!(&mut current_readiness).is_pending());
     assert_eq!(current_provider.calls(), 0);
 
-    current_registration.complete(Ok(()))?;
+    let current_ready_info = ready_info("current-root", "tools")?;
+    current_registration.complete(Ok(current_ready_info.clone()))?;
+    assert_eq!(
+        current.selected_capability_roots(),
+        current_ready_info.selected_capability_roots
+    );
     let current_error = current_readiness.await.unwrap_err();
     assert!(
         current_error

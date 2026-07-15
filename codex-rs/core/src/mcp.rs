@@ -24,6 +24,7 @@ use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
 use codex_plugin::AppConnectorId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
@@ -107,7 +108,7 @@ impl McpManager {
         thread_init: &ExtensionDataInit,
         thread_store: &ExtensionData,
         originator: &str,
-        available_environment_ids: &[String],
+        ready_selected_capability_roots: &[SelectedCapabilityRoot],
     ) -> McpRuntimeProjection {
         self.runtime_config_with_context(
             McpServerContributionContext::for_step(
@@ -115,7 +116,7 @@ impl McpManager {
                 thread_init,
                 thread_store,
                 originator,
-                available_environment_ids,
+                ready_selected_capability_roots,
             ),
             Some(originator),
         )

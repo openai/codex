@@ -27,7 +27,7 @@ async fn hosted_plugin_runtime_forwards_thread_originator() -> Result<(), Box<dy
             &thread_init,
             &thread_store,
             "codex_work_desktop",
-            /*available_environment_ids*/ &[],
+            /*ready_selected_capability_roots*/ &[],
         ))
         .await;
     let [McpServerContribution::Set { config: server, .. }] = contributions.as_slice() else {

@@ -686,7 +686,7 @@ impl Session {
                     mcp_thread_init_for_startup,
                     thread_extension_data_for_mcp,
                     &mcp_originator,
-                    /*available_environment_ids*/ &[],
+                    /*ready_selected_capability_roots*/ &[],
                 )
                 .await;
             let mcp_config = &mcp_projection.config;
@@ -1235,7 +1235,7 @@ impl Session {
                     Arc::new(mcp_projection.config),
                     mcp_projection.plugins_available,
                     mcp_runtime_context,
-                    /*available_environment_ids*/ Vec::new(),
+                    /*ready_selected_capability_roots*/ Vec::new(),
                     mcp_connection_manager,
                 )
                 .await?;
