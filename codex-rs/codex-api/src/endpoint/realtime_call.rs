@@ -63,6 +63,17 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
         "realtime/calls"
     }
 
+    fn path_for_session(&self, event_parser: RealtimeEventParser) -> &'static str {
+        if self.uses_backend_request_shape() {
+            return Self::path();
+        }
+
+        match event_parser {
+            RealtimeEventParser::FramelessBidi => "live",
+            RealtimeEventParser::V1 | RealtimeEventParser::RealtimeV2 => Self::path(),
+        }
+    }
+
     fn uses_backend_request_shape(&self) -> bool {
         self.session.provider().base_url.contains("/backend-api")
     }
@@ -123,9 +134,11 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
     ) -> Result<RealtimeCallResponse, ApiError> {
         trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {sdp}");
         // WebRTC can begin inference as soon as the peer connection comes up, so the initial
-        // session payload is sent with call creation. The sideband WebSocket still sends its normal
-        // session.update after it joins.
+        // session payload is sent with call creation. Legacy sidebands still send session.update
+        // after joining; Frameless sidebands attach to the session that is already running.
         validate_avas_session_config(&session_config)?;
+        let event_parser = session_config.event_parser;
+        let path = self.path_for_session(event_parser);
         let mut session = realtime_session_json(session_config)?;
         if let Some(session) = session.as_object_mut() {
             session.remove("id");
@@ -139,13 +152,13 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime call: {err}")))?;
             let resp = self
                 .session
-                .execute_with(
-                    Method::POST,
-                    Self::path(),
-                    extra_headers,
-                    Some(body),
-                    configure_realtime_call_request,
-                )
+                .execute_with(Method::POST, path, extra_headers, Some(body), |request| {
+                    configure_realtime_call_request(
+                        request,
+                        event_parser,
+                        /*uses_backend_request_shape*/ true,
+                    )
+                })
                 .await?;
             let sdp = decode_sdp_response(resp.body.as_ref())?;
             let call_id = decode_call_id_from_location(&resp.headers)?;
@@ -172,11 +185,15 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
             .session
             .execute_with(
                 Method::POST,
-                Self::path(),
+                path,
                 extra_headers,
                 /*body*/ None,
                 |req| {
-                    configure_realtime_call_request(req);
+                    configure_realtime_call_request(
+                        req,
+                        event_parser,
+                        /*uses_backend_request_shape*/ false,
+                    );
                     req.headers.insert(
                         CONTENT_TYPE,
                         HeaderValue::from_static(MULTIPART_CONTENT_TYPE),
@@ -193,15 +210,23 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
     }
 }
 
-fn configure_realtime_call_request(request: &mut Request) {
-    append_query_pair(&mut request.url, "intent", "quicksilver");
-    append_query_pair(&mut request.url, "architecture", "avas");
+fn configure_realtime_call_request(
+    request: &mut Request,
+    event_parser: RealtimeEventParser,
+    uses_backend_request_shape: bool,
+) {
+    if event_parser == RealtimeEventParser::V1
+        || (uses_backend_request_shape && event_parser == RealtimeEventParser::FramelessBidi)
+    {
+        append_query_pair(&mut request.url, "intent", "quicksilver");
+        append_query_pair(&mut request.url, "architecture", "avas");
+    }
 }
 
 fn validate_avas_session_config(session_config: &RealtimeSessionConfig) -> Result<(), ApiError> {
-    if session_config.event_parser != RealtimeEventParser::V1 {
+    if session_config.event_parser == RealtimeEventParser::RealtimeV2 {
         return Err(ApiError::InvalidRequest {
-            message: "AVAS realtime calls require realtime v1".to_string(),
+            message: "AVAS realtime calls require realtime v1 or v3".to_string(),
         });
     }
     Ok(())
@@ -378,6 +403,13 @@ mod tests {
         }
     }
 
+    fn frameless_bidi_session_config(session_id: &str) -> RealtimeSessionConfig {
+        RealtimeSessionConfig {
+            event_parser: RealtimeEventParser::FramelessBidi,
+            ..realtime_session_config(session_id)
+        }
+    }
+
     #[tokio::test]
     async fn sends_sdp_offer_as_raw_body() {
         let transport = CapturingTransport::new();
@@ -521,6 +553,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sends_frameless_session_call_to_live_without_legacy_query_params() {
+        let transport = CapturingTransport::with_location("/v1/live/rtc_frameless");
+        let client = RealtimeCallClient::new(
+            transport.clone(),
+            provider("https://api.openai.com/v1"),
+            Arc::new(DummyAuth),
+        );
+
+        let response = client
+            .create_with_session(
+                "v=offer\r\n".to_string(),
+                frameless_bidi_session_config("sess-api"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.call_id, "rtc_frameless");
+        let request = transport.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.url, "https://api.openai.com/v1/live");
+        let Some(RequestBody::Raw(body)) = request.body else {
+            panic!("multipart body should be raw");
+        };
+        let body = std::str::from_utf8(&body).expect("multipart body should be utf-8");
+        assert!(body.contains("\"model\":\"gpt-realtime\""));
+        assert!(body.contains("\"delegation\":{\"type\":\"client\"}"));
+        assert!(!body.contains("\"id\":\"sess-api\""));
+    }
+
+    #[tokio::test]
     async fn sends_session_call_with_avas_query_params() {
         let transport = CapturingTransport::new();
         let client = RealtimeCallClient::new(
@@ -573,7 +635,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "invalid request: AVAS realtime calls require realtime v1"
+            "invalid request: AVAS realtime calls require realtime v1 or v3"
         );
         assert!(transport.last_request.lock().unwrap().is_none());
     }
@@ -625,6 +687,37 @@ mod tests {
                 .expect("request should encode")
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn sends_backend_frameless_session_call_to_realtime_calls() {
+        let transport = CapturingTransport::with_location("/v1/live/rtc_backend_frameless");
+        let client = RealtimeCallClient::new(
+            transport.clone(),
+            provider("https://chatgpt.com/backend-api/codex"),
+            Arc::new(DummyAuth),
+        );
+
+        let response = client
+            .create_with_session(
+                "v=offer\r\n".to_string(),
+                frameless_bidi_session_config("sess-backend"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.call_id, "rtc_backend_frameless");
+        let request = transport.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(
+            request.url,
+            "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
+        );
+        let Some(RequestBody::Json(body)) = request.body else {
+            panic!("backend request body should be JSON");
+        };
+        assert_eq!(body["session"]["delegation"]["type"], "client");
+        assert!(body["session"].get("id").is_none());
     }
 
     #[tokio::test]

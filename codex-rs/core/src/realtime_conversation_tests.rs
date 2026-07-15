@@ -5,7 +5,7 @@ use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
 use super::wrap_realtime_delegation_input;
 use async_channel::bounded;
-use codex_config::config_toml::RealtimeWsVersion;
+use codex_api::RealtimeEventParser;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
 use pretty_assertions::assert_eq;
@@ -152,7 +152,7 @@ fn uses_quicksilver_alpha_header_for_realtime_v1() {
     let headers = realtime_request_headers(
         Some("session_1"),
         Some("sk-test"),
-        RealtimeWsVersion::V1,
+        RealtimeEventParser::V1,
         "codex_work_desktop",
     )
     .expect("headers")
@@ -171,13 +171,32 @@ fn omits_quicksilver_alpha_header_for_realtime_v2() {
     let headers = realtime_request_headers(
         Some("session_1"),
         Some("sk-test"),
-        RealtimeWsVersion::V2,
+        RealtimeEventParser::RealtimeV2,
         "codex_work_desktop",
     )
     .expect("headers")
     .expect("headers");
 
     assert!(headers.get("openai-alpha").is_none());
+}
+
+#[test]
+fn uses_frameless_alpha_header_for_realtime_v3() {
+    let headers = realtime_request_headers(
+        Some("session_1"),
+        Some("sk-test"),
+        RealtimeEventParser::FramelessBidi,
+        "codex_work_desktop",
+    )
+    .expect("headers")
+    .expect("headers");
+
+    assert_eq!(
+        headers
+            .get("openai-alpha")
+            .and_then(|value| value.to_str().ok()),
+        Some("quicksilver=v2")
+    );
 }
 
 #[test]
@@ -190,7 +209,7 @@ fn realtime_headers_include_only_non_default_originator() {
         let headers = realtime_request_headers(
             Some("session_1"),
             Some("sk-test"),
-            RealtimeWsVersion::V2,
+            RealtimeEventParser::RealtimeV2,
             originator,
         )
         .expect("headers")

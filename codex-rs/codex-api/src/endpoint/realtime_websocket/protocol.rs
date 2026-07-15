@@ -1,3 +1,4 @@
+use crate::endpoint::realtime_websocket::protocol_frameless_bidi::parse_frameless_bidi_event;
 use crate::endpoint::realtime_websocket::protocol_v1::parse_realtime_event_v1;
 use crate::endpoint::realtime_websocket::protocol_v2::parse_realtime_event_v2;
 use codex_protocol::protocol::ConversationTextRole;
@@ -12,8 +13,11 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RealtimeEventParser {
     V1,
+    FramelessBidi,
     RealtimeV2,
 }
+
+pub type RealtimeWireAdapter = RealtimeEventParser;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RealtimeSessionMode {
@@ -42,12 +46,40 @@ pub(super) enum RealtimeOutboundMessage {
         handoff_id: String,
         output_text: String,
     },
+    #[serde(rename = "input_audio.append")]
+    InputAudioAppend { audio: String },
+    #[serde(rename = "delegation.context.append")]
+    DelegationContextAppend {
+        delegation_item_id: String,
+        content: Vec<FramelessInputTextContent>,
+    },
+    #[serde(rename = "session.context.append")]
+    SessionContextAppend {
+        content: Vec<FramelessInputTextContent>,
+    },
+    #[serde(rename = "session.close")]
+    SessionClose,
     #[serde(rename = "response.create")]
     ResponseCreate,
     #[serde(rename = "session.update")]
     SessionUpdate { session: SessionUpdateSession },
+    #[serde(rename = "session.update")]
+    FramelessSessionUpdate { session: Value },
     #[serde(rename = "conversation.item.create")]
     ConversationItemCreate { item: ConversationItemPayload },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FramelessInputTextContent {
+    #[serde(rename = "type")]
+    pub(super) r#type: FramelessContentType,
+    pub(super) text: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FramelessContentType {
+    InputText,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -219,6 +251,7 @@ pub(super) fn parse_realtime_event(
 ) -> Option<RealtimeEvent> {
     match event_parser {
         RealtimeEventParser::V1 => parse_realtime_event_v1(payload),
+        RealtimeEventParser::FramelessBidi => parse_frameless_bidi_event(payload),
         RealtimeEventParser::RealtimeV2 => parse_realtime_event_v2(payload),
     }
 }

@@ -74,6 +74,7 @@ const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
 const REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET: usize = 1_000;
 const STANDALONE_HANDOFF_ID: &str = "codex";
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
+const DEFAULT_FRAMELESS_REALTIME_MODEL: &str = "gpt-live-1-boulder-alpha";
 pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
 const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
@@ -325,7 +326,7 @@ impl RealtimeConversationManager {
         } = start;
         let event_parser = session_config.event_parser;
         let session_kind = match event_parser {
-            RealtimeEventParser::V1 => RealtimeSessionKind::V1,
+            RealtimeEventParser::V1 | RealtimeEventParser::FramelessBidi => RealtimeSessionKind::V1,
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
 
@@ -796,6 +797,7 @@ async fn prepare_realtime_start(
     let session_config =
         build_realtime_session_config(sess, &params, version, configured_voice).await?;
     let requested_realtime_session_id = session_config.session_id.clone();
+    let event_parser = session_config.event_parser;
     let originator = sess.originator().await;
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
@@ -803,7 +805,7 @@ async fn prepare_realtime_start(
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
                 Some(realtime_api_key.as_str()),
-                version,
+                event_parser,
                 originator.as_str(),
             )?
         }
@@ -811,7 +813,7 @@ async fn prepare_realtime_start(
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
                 /*api_key*/ None,
-                version,
+                event_parser,
                 originator.as_str(),
             )?
         }
@@ -836,9 +838,9 @@ fn validate_avas_webrtc_start(
     version: RealtimeWsVersion,
     session_type: RealtimeWsMode,
 ) -> CodexResult<()> {
-    if version != RealtimeWsVersion::V1 {
+    if version == RealtimeWsVersion::V2 {
         return Err(CodexErr::InvalidRequest(
-            "AVAS realtime calls require realtime v1".to_string(),
+            "AVAS realtime calls require realtime v1 or v3".to_string(),
         ));
     }
     if session_type != RealtimeWsMode::Conversational {
@@ -883,13 +885,17 @@ pub(crate) async fn build_realtime_session_config(
             .model
             .clone()
             .or_else(|| config.experimental_realtime_ws_model.clone())
-            .unwrap_or_else(|| DEFAULT_REALTIME_MODEL.to_string()),
+            .unwrap_or_else(|| match version {
+                RealtimeWsVersion::V1 | RealtimeWsVersion::V2 => DEFAULT_REALTIME_MODEL.to_string(),
+                RealtimeWsVersion::V3 => DEFAULT_FRAMELESS_REALTIME_MODEL.to_string(),
+            }),
     );
     let event_parser = match version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
+        RealtimeWsVersion::V3 => RealtimeEventParser::FramelessBidi,
     };
-    if version == RealtimeWsVersion::V1
+    if version != RealtimeWsVersion::V2
         && matches!(params.output_modality, RealtimeOutputModality::Text)
     {
         return Err(CodexErr::InvalidRequest(
@@ -928,7 +934,7 @@ pub(crate) async fn build_realtime_session_config(
 fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
     let voices = RealtimeVoicesList::builtin();
     match version {
-        RealtimeWsVersion::V1 => voices.default_v1,
+        RealtimeWsVersion::V1 | RealtimeWsVersion::V3 => voices.default_v1,
         RealtimeWsVersion::V2 => voices.default_v2,
     }
 }
@@ -956,7 +962,7 @@ fn realtime_backend_item(text: String, prefix: Option<&str>) -> String {
 fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
     let voices = RealtimeVoicesList::builtin();
     let allowed = match version {
-        RealtimeWsVersion::V1 => &voices.v1,
+        RealtimeWsVersion::V1 | RealtimeWsVersion::V3 => &voices.v1,
         RealtimeWsVersion::V2 => &voices.v2,
     };
     if allowed.contains(&voice) {
@@ -966,6 +972,7 @@ fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> 
     let version = match version {
         RealtimeWsVersion::V1 => "v1",
         RealtimeWsVersion::V2 => "v2",
+        RealtimeWsVersion::V3 => "v3",
     };
     let allowed = allowed
         .iter()
@@ -1199,13 +1206,19 @@ fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> C
 fn realtime_request_headers(
     realtime_session_id: Option<&str>,
     api_key: Option<&str>,
-    version: RealtimeWsVersion,
+    event_parser: RealtimeEventParser,
     originator: &str,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
-    if version == RealtimeWsVersion::V1 {
-        headers.insert("openai-alpha", HeaderValue::from_static("quicksilver=v1"));
+    match event_parser {
+        RealtimeEventParser::V1 => {
+            headers.insert("openai-alpha", HeaderValue::from_static("quicksilver=v1"));
+        }
+        RealtimeEventParser::FramelessBidi => {
+            headers.insert("openai-alpha", HeaderValue::from_static("quicksilver=v2"));
+        }
+        RealtimeEventParser::RealtimeV2 => {}
     }
 
     if let Some(realtime_session_id) = realtime_session_id
@@ -1462,11 +1475,10 @@ async fn handle_handoff_output(
     let handoff_output = handoff_output.context("handoff output channel closed")?;
 
     let result = match event_parser {
-        RealtimeEventParser::V1 => match handoff_output {
+        RealtimeEventParser::V1 | RealtimeEventParser::FramelessBidi => match handoff_output {
             RealtimeOutbound::StandaloneHandoff { text } => {
-                // TODO(guinness): Use the new client event for standalone handoffs once the API changes are complete.
                 writer
-                    .send_conversation_handoff_append(STANDALONE_HANDOFF_ID.to_string(), text)
+                    .send_standalone_handoff(STANDALONE_HANDOFF_ID.to_string(), text)
                     .await
             }
             RealtimeOutbound::HandoffUpdate { handoff_id, text }
