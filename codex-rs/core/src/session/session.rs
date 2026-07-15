@@ -1183,6 +1183,7 @@ impl Session {
             for event in events {
                 sess.send_event_raw(event).await;
             }
+            turn_environments.start_connection_event_forwarding(tx_event.clone());
 
             let mcp_startup_cancellation_token = {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;

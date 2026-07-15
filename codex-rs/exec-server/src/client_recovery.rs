@@ -298,7 +298,7 @@ impl Inner {
                 ConnectionStatus::Connected(current)
                     if Arc::ptr_eq(current, &failed_rpc_client) =>
                 {
-                    connection.status = ConnectionStatus::Recovering;
+                    connection.set_status(ConnectionStatus::Recovering);
                     true
                 }
                 ConnectionStatus::Connected(_)
@@ -411,7 +411,7 @@ impl Inner {
             {
                 false
             } else {
-                connection.status = ConnectionStatus::Connected(rpc_client);
+                connection.set_status(ConnectionStatus::Connected(rpc_client));
                 true
             }
         };
@@ -512,7 +512,7 @@ impl Inner {
             match &connection.status {
                 ConnectionStatus::Failed(existing) => (existing.clone(), false),
                 ConnectionStatus::Connected(_) | ConnectionStatus::Recovering => {
-                    connection.status = ConnectionStatus::Failed(message.clone());
+                    connection.set_status(ConnectionStatus::Failed(message.clone()));
                     (message, true)
                 }
             }

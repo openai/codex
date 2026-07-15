@@ -35,6 +35,7 @@ use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::client_transport::ExecServerReconnectStrategy;
 use crate::connection::JsonRpcConnection;
+use crate::environment::EnvironmentConnectionState;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
 use crate::process::ExecProcessEventReceiver;
@@ -220,12 +221,41 @@ struct Inner {
 struct ConnectionState {
     status: ConnectionStatus,
     active_process_starts: usize,
+    environment_connection_state_tx: watch::Sender<EnvironmentConnectionState>,
 }
 
 enum ConnectionStatus {
     Connected(Arc<RpcClient>),
     Recovering,
     Failed(String),
+}
+
+impl ConnectionState {
+    fn set_status(&mut self, status: ConnectionStatus) {
+        self.status = status;
+        self.publish_environment_connection_state();
+    }
+
+    fn publish_environment_connection_state(&self) {
+        let state = match &self.status {
+            ConnectionStatus::Connected(rpc_client) if !rpc_client.is_disconnected() => {
+                EnvironmentConnectionState::Connected
+            }
+            ConnectionStatus::Connected(_)
+            | ConnectionStatus::Recovering
+            | ConnectionStatus::Failed(_) => EnvironmentConnectionState::Disconnected,
+        };
+        let _ = self
+            .environment_connection_state_tx
+            .send_if_modified(|current| {
+                if *current == state {
+                    false
+                } else {
+                    *current = state;
+                    true
+                }
+            });
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -262,6 +292,7 @@ pub(crate) struct LazyRemoteExecServerClient {
     // The latest successful client, replaced whenever reconnecting succeeds.
     current_client: Arc<StdMutex<Option<ExecServerClient>>>,
     reconnect: Arc<StdMutex<Option<Arc<ConnectionAttempt>>>>,
+    environment_connection_state_tx: watch::Sender<EnvironmentConnectionState>,
 }
 
 impl LazyRemoteExecServerClient {
@@ -272,7 +303,15 @@ impl LazyRemoteExecServerClient {
             startup: Arc::new(ConnectionAttempt::new()),
             current_client: Arc::new(StdMutex::new(None)),
             reconnect: Arc::new(StdMutex::new(None)),
+            environment_connection_state_tx: watch::channel(
+                EnvironmentConnectionState::Disconnected,
+            )
+            .0,
         }
+    }
+
+    pub(crate) fn subscribe_connection_state(&self) -> watch::Receiver<EnvironmentConnectionState> {
+        self.environment_connection_state_tx.subscribe()
     }
 
     pub(crate) fn start_connecting(&self) -> Option<AbortOnDropHandle<()>> {
@@ -379,10 +418,7 @@ impl LazyRemoteExecServerClient {
 
     async fn initial_client(&self) -> Result<ExecServerClient, ExecServerError> {
         // The first caller starts the work; every other caller waits for that same result.
-        let result = self
-            .startup
-            .get_or_init(|| connect_once(self.transport_params.clone()))
-            .await;
+        let result = self.startup.get_or_init(|| self.connect_once()).await;
         match result {
             Ok(client) => {
                 let mut current_client = self
@@ -414,7 +450,7 @@ impl LazyRemoteExecServerClient {
         };
         let result = attempt
             .get_or_init(|| async {
-                let result = connect_once(self.transport_params.clone()).await;
+                let result = self.connect_once().await;
                 if let Ok(client) = &result {
                     *self
                         .current_client
@@ -458,12 +494,17 @@ impl LazyRemoteExecServerClient {
                 | ExecServerTransportParams::NoiseRendezvous { .. }
         )
     }
-}
 
-async fn connect_once(transport_params: ExecServerTransportParams) -> ConnectionResult {
-    ExecServerClient::connect_for_transport(transport_params)
-        .await
-        .map_err(Arc::new)
+    async fn connect_once(&self) -> ConnectionResult {
+        let result = ExecServerClient::connect_for_transport(self.transport_params.clone())
+            .await
+            .map_err(Arc::new);
+        if let Ok(client) = &result {
+            client
+                .attach_environment_connection_state(self.environment_connection_state_tx.clone());
+        }
+        result
+    }
 }
 
 impl HttpClient for LazyRemoteExecServerClient {
@@ -534,6 +575,19 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
+    fn attach_environment_connection_state(
+        &self,
+        state_tx: watch::Sender<EnvironmentConnectionState>,
+    ) {
+        let mut connection = self
+            .inner
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        connection.environment_connection_state_tx = state_tx;
+        connection.publish_environment_connection_state();
+    }
+
     fn fail_fast(&self) -> Result<Self, ExecServerError> {
         self.rpc_client_without_recovery()?;
         Ok(Self {
@@ -890,6 +944,10 @@ impl ExecServerClient {
             connection: StdMutex::new(ConnectionState {
                 status: ConnectionStatus::Connected(Arc::clone(&rpc_client)),
                 active_process_starts: 0,
+                environment_connection_state_tx: watch::channel(
+                    EnvironmentConnectionState::Connected,
+                )
+                .0,
             }),
             connection_changed,
             sessions: ArcSwap::from_pointee(HashMap::new()),

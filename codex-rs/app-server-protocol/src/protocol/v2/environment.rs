@@ -23,6 +23,14 @@ pub struct EnvironmentAddResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct EnvironmentConnectionNotification {
+    pub thread_id: String,
+    pub environment_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct EnvironmentInfoParams {
     pub environment_id: String,

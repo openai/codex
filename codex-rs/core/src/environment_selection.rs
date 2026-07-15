@@ -2,18 +2,25 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use arc_swap::ArcSwap;
+use async_channel::Sender;
 use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentConnectionState;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
+use codex_protocol::protocol::EnvironmentConnectionEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -41,6 +48,9 @@ type TurnEnvironmentResolution = Shared<BoxFuture<'static, TurnEnvironmentResult
 #[derive(Clone)]
 struct SelectedTurnEnvironment {
     selection: TurnEnvironmentSelection,
+    environment: Arc<Environment>,
+    // Selection clones share one listener; the final handle drop aborts it.
+    connection_events_task: Option<Arc<AbortOnDropHandle<()>>>,
     resolution: TurnEnvironmentResolution,
 }
 
@@ -72,6 +82,7 @@ pub(crate) struct ThreadEnvironments {
     shell_snapshot: ShellSnapshot,
     non_blocking_snapshots: bool,
     environments: ArcSwap<Vec<SelectedTurnEnvironment>>,
+    connection_event_tx: OnceLock<Sender<Event>>,
 }
 
 impl ThreadEnvironments {
@@ -88,10 +99,13 @@ impl ThreadEnvironments {
             .into_iter()
             .map(|environment| {
                 let selection = environment.selection();
+                let selected_environment = Arc::clone(&environment.environment);
                 let resolution: TurnEnvironmentResolution =
                     futures::future::ready(Ok(environment)).boxed().shared();
                 SelectedTurnEnvironment {
                     selection,
+                    environment: selected_environment,
+                    connection_events_task: None,
                     resolution,
                 }
             })
@@ -102,6 +116,7 @@ impl ThreadEnvironments {
             shell_snapshot,
             non_blocking_snapshots,
             environments: ArcSwap::from_pointee(environments),
+            connection_event_tx: OnceLock::new(),
         }
     }
 
@@ -127,9 +142,26 @@ impl ThreadEnvironments {
                 tracing::warn!("skipping unknown turn environment `{environment_id}`");
                 continue;
             };
+            // Connection state belongs to the environment instance, not its cwd or roots.
+            let connection_events_task = previous
+                .iter()
+                .find(|previous| {
+                    previous.selection.environment_id.as_str() == environment_id.as_str()
+                        && Arc::ptr_eq(&previous.environment, &environment)
+                })
+                .and_then(|previous| previous.connection_events_task.clone())
+                .or_else(|| {
+                    self.connection_event_tx.get().and_then(|tx_event| {
+                        Self::spawn_connection_event_listener(
+                            environment.as_ref(),
+                            environment_id.clone(),
+                            tx_event.clone(),
+                        )
+                    })
+                });
             let (resolution_task, resolution) = Self::resolve_environment(
                 selected_environment.clone(),
-                environment,
+                Arc::clone(&environment),
                 self.local_shell.clone(),
                 self.shell_snapshot.clone(),
             )
@@ -138,10 +170,92 @@ impl ThreadEnvironments {
             let resolution = resolution.boxed().shared();
             next.push(SelectedTurnEnvironment {
                 selection: selected_environment.clone(),
+                environment,
+                connection_events_task,
                 resolution,
             });
         }
+        let removed_connection_tasks = previous
+            .iter()
+            .filter_map(|previous| {
+                let task = previous.connection_events_task.as_ref()?;
+                (!next.iter().any(|next| {
+                    next.connection_events_task
+                        .as_ref()
+                        .is_some_and(|next_task| Arc::ptr_eq(task, next_task))
+                }))
+                .then(|| Arc::clone(task))
+            })
+            .collect::<Vec<_>>();
         self.environments.store(Arc::new(next));
+        // ArcSwap readers may retain removed selections, so abort at logical removal.
+        for task in removed_connection_tasks {
+            task.abort();
+        }
+    }
+
+    fn spawn_connection_event_listener(
+        environment: &Environment,
+        environment_id: String,
+        tx_event: Sender<Event>,
+    ) -> Option<Arc<AbortOnDropHandle<()>>> {
+        let mut connection_state = environment.subscribe_connection_state()?;
+        let task = tokio::spawn(async move {
+            loop {
+                let state = tokio::select! {
+                    _ = tx_event.closed() => return,
+                    changed = connection_state.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                        *connection_state.borrow_and_update()
+                    }
+                };
+                let msg = match state {
+                    EnvironmentConnectionState::Connected => {
+                        EventMsg::EnvironmentConnected(EnvironmentConnectionEvent {
+                            environment_id: environment_id.clone(),
+                        })
+                    }
+                    EnvironmentConnectionState::Disconnected => {
+                        EventMsg::EnvironmentDisconnected(EnvironmentConnectionEvent {
+                            environment_id: environment_id.clone(),
+                        })
+                    }
+                };
+                if tx_event
+                    .send(Event {
+                        id: String::new(),
+                        msg,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        Some(Arc::new(AbortOnDropHandle::new(task)))
+    }
+
+    pub(crate) fn start_connection_event_forwarding(&self, tx_event: Sender<Event>) {
+        let tx_event = self.connection_event_tx.get_or_init(|| tx_event);
+        let current = self.environments.load_full();
+        let environments = current
+            .iter()
+            .map(|selected| {
+                let mut selected = selected.clone();
+                if selected.connection_events_task.is_none() {
+                    selected.connection_events_task = Self::spawn_connection_event_listener(
+                        selected.environment.as_ref(),
+                        selected.selection.environment_id.clone(),
+                        tx_event.clone(),
+                    );
+                }
+                selected
+            })
+            .collect();
+        self.environments.store(Arc::new(environments));
     }
 
     fn resolve_environment(
@@ -760,7 +874,7 @@ url = "ws://127.0.0.1:8765"
     }
 
     #[tokio::test]
-    async fn matching_environment_id_and_cwd_reuse_resolution() {
+    async fn replacement_environment_events_follow_selected_environment() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let first_listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -780,13 +894,15 @@ url = "ws://127.0.0.1:8765"
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),
         };
-        let environments = ThreadEnvironments::new(
+        let (tx_event, rx_event) = async_channel::unbounded();
+        let environments = Arc::new(ThreadEnvironments::new(
             Arc::clone(&manager),
             crate::shell::default_user_shell(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot::default(),
             /*non_blocking_snapshots*/ true,
-        );
+        ));
+        environments.start_connection_event_forwarding(tx_event);
         environments.update_selections(std::slice::from_ref(&selection));
         let initial_snapshot = environments.snapshot().await;
         let second_listener = TcpListener::bind("127.0.0.1:0")
@@ -827,6 +943,30 @@ url = "ws://127.0.0.1:8765"
             .expect("changed environment");
         assert!(initial.resolution.ptr_eq(&reused.resolution));
         assert!(!reused.resolution.ptr_eq(&changed.resolution));
+
+        serve_environment_info(first_listener).await;
+        assert!(
+            timeout(Duration::from_millis(250), rx_event.recv())
+                .await
+                .is_err(),
+            "old environment event should not be forwarded"
+        );
+
+        serve_environment_info(second_listener).await;
+        let event = timeout(Duration::from_secs(5), rx_event.recv())
+            .await
+            .expect("replacement environment event")
+            .expect("event channel");
+        let event = match event.msg {
+            EventMsg::EnvironmentConnected(event) => event,
+            other => panic!("expected connected event, got {other:?}"),
+        };
+        assert_eq!(
+            event,
+            EnvironmentConnectionEvent {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            }
+        );
     }
 
     #[tokio::test]

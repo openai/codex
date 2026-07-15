@@ -4332,6 +4332,46 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/environment/connected"
+              ],
+              "title": "Thread/environment/connectedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/EnvironmentConnectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/environment/connectedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/environment/disconnected"
+              ],
+              "title": "Thread/environment/disconnectedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/EnvironmentConnectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/environment/disconnectedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/settings/updated"
               ],
               "title": "Thread/settings/updatedNotificationMethod",
@@ -9024,6 +9064,23 @@
             "type": "object"
           }
         ]
+      },
+      "EnvironmentConnectionNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "environmentId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environmentId",
+          "threadId"
+        ],
+        "title": "EnvironmentConnectionNotification",
+        "type": "object"
       },
       "ErrorNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
