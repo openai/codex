@@ -2000,9 +2000,9 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         "approval scenario {} result: exit_code={:?} stdout={:?}",
         scenario.name, result.exit_code, result.stdout
     );
-    scenario.expectation.verify(&test, &result)?;
-
-    Ok(())
+    let verification_result = scenario.expectation.verify(&test, &result);
+    test.codex.shutdown_and_wait().await?;
+    verification_result
 }
 
 #[tokio::test(flavor = "current_thread")]
