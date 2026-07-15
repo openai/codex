@@ -28,6 +28,36 @@ pub(crate) struct MentionItem {
     pub(crate) sort_rank: u8,
 }
 
+/// The best fuzzy match for a mention and the display-name positions that can be highlighted.
+///
+/// `display_name_indices` is absent when only an alternate search term matched.
+pub(crate) struct MentionMatch {
+    display_name_indices: Option<Vec<usize>>,
+    score: i32,
+}
+
+impl MentionItem {
+    /// Matches the display name first, then falls back to the best distinct search term.
+    pub(crate) fn fuzzy_match_query(&self, query: &str) -> Option<MentionMatch> {
+        if let Some((indices, score)) = fuzzy_match(&self.display_name, query) {
+            Some(MentionMatch {
+                display_name_indices: Some(indices),
+                score,
+            })
+        } else {
+            self.search_terms
+                .iter()
+                .filter(|term| *term != &self.display_name)
+                .filter_map(|term| fuzzy_match(term, query).map(|(_indices, score)| score))
+                .min()
+                .map(|score| MentionMatch {
+                    display_name_indices: None,
+                    score,
+                })
+        }
+    }
+}
+
 const MENTION_NAME_TRUNCATE_LEN: usize = 28;
 
 pub(crate) struct SkillPopup {
@@ -137,21 +167,8 @@ impl SkillPopup {
                 continue;
             }
 
-            let best_match =
-                if let Some((indices, score)) = fuzzy_match(&mention.display_name, filter) {
-                    Some((Some(indices), score))
-                } else {
-                    mention
-                        .search_terms
-                        .iter()
-                        .filter(|term| *term != &mention.display_name)
-                        .filter_map(|term| fuzzy_match(term, filter).map(|(_indices, score)| score))
-                        .min()
-                        .map(|score| (None, score))
-                };
-
-            if let Some((indices, score)) = best_match {
-                out.push((idx, indices, score));
+            if let Some(mention_match) = mention.fuzzy_match_query(filter) {
+                out.push((idx, mention_match.display_name_indices, mention_match.score));
             }
         }
 
