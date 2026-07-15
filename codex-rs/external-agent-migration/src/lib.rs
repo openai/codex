@@ -21,8 +21,6 @@ const SOURCE_EXTERNAL_AGENT_NAME: &str = "claude";
 const EXTERNAL_AGENT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
 const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
-const COMMAND_SKILL_PREFIX: &str = "source-command";
-const MAX_SKILL_NAME_LEN: usize = 64;
 
 /// Describes source-specific terms that should be rewritten in migrated artifacts.
 #[derive(Clone, Copy)]
@@ -59,34 +57,6 @@ impl RewriteProfile {
 
     pub const fn case_sensitive_term_variants(self) -> &'static [&'static str] {
         self.case_sensitive_term_variants
-    }
-}
-
-/// Controls how migrated commands obtain the description required by a Codex skill.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandDescriptionMode {
-    /// Skip source commands that do not declare a non-empty frontmatter description.
-    RequireFrontmatter,
-    /// Derive a stable description from the source command name when frontmatter is absent.
-    UseSourceNameFallback,
-}
-
-/// Describes source-specific command migration behavior.
-#[derive(Clone, Copy)]
-pub struct CommandMigrationProfile {
-    rewrite_profile: RewriteProfile,
-    description_mode: CommandDescriptionMode,
-}
-
-impl CommandMigrationProfile {
-    pub const fn new(
-        rewrite_profile: RewriteProfile,
-        description_mode: CommandDescriptionMode,
-    ) -> Self {
-        Self {
-            rewrite_profile,
-            description_mode,
-        }
     }
 }
 
@@ -223,70 +193,6 @@ pub fn import_subagents_with_rewrite_profile(
             render_agent_toml(&document.body, &metadata, rewrite_profile)?,
         )?;
         imported.push(metadata.name);
-    }
-
-    Ok(imported)
-}
-
-pub fn count_missing_commands_with_profile(
-    source_commands: &Path,
-    target_skills: &Path,
-    profile: CommandMigrationProfile,
-) -> io::Result<usize> {
-    Ok(missing_command_names_with_profile(source_commands, target_skills, profile)?.len())
-}
-
-pub fn missing_command_names_with_profile(
-    source_commands: &Path,
-    target_skills: &Path,
-    profile: CommandMigrationProfile,
-) -> io::Result<Vec<String>> {
-    Ok(
-        unique_supported_command_sources(source_commands, profile.description_mode)?
-            .into_iter()
-            .filter(|(_source_file, name)| !target_skills.join(name).exists())
-            .map(|(_source_file, name)| name)
-            .collect(),
-    )
-}
-
-pub fn import_commands_with_profile(
-    source_commands: &Path,
-    target_skills: &Path,
-    profile: CommandMigrationProfile,
-) -> io::Result<Vec<String>> {
-    if !source_commands.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    fs::create_dir_all(target_skills)?;
-    let mut imported = Vec::new();
-    for (source_file, name) in
-        unique_supported_command_sources(source_commands, profile.description_mode)?
-    {
-        let document = parse_document(&source_file)?;
-        let target_dir = target_skills.join(&name);
-        if target_dir.exists() {
-            continue;
-        }
-        fs::create_dir_all(&target_dir)?;
-        let source_name = command_source_name(source_commands, &source_file);
-        let Some(description) =
-            command_skill_description(&document, &source_name, profile.description_mode)
-        else {
-            continue;
-        };
-        fs::write(
-            target_dir.join("SKILL.md"),
-            render_command_skill(
-                &document.body,
-                &name,
-                &description,
-                &source_name,
-                profile.rewrite_profile,
-            ),
-        )?;
-        imported.push(name);
     }
 
     Ok(imported)
@@ -851,61 +757,6 @@ fn subagent_target_file(source_file: &Path, target_agents: &Path) -> Option<Path
     Some(target_agents.join(format!("{}.toml", source_file.file_stem()?.to_str()?)))
 }
 
-fn command_source_files(source_commands: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    collect_markdown_files(source_commands, &mut files)?;
-    files.sort();
-    Ok(files)
-}
-
-fn unique_supported_command_sources(
-    source_commands: &Path,
-    description_mode: CommandDescriptionMode,
-) -> io::Result<Vec<(PathBuf, String)>> {
-    let mut by_name = BTreeMap::<String, Vec<PathBuf>>::new();
-    for source_file in command_source_files(source_commands)? {
-        let document = parse_document(&source_file)?;
-        let Some(name) = command_skill_name_if_supported(
-            source_commands,
-            &source_file,
-            &document,
-            description_mode,
-        ) else {
-            continue;
-        };
-        by_name.entry(name).or_default().push(source_file);
-    }
-
-    Ok(by_name
-        .into_iter()
-        .filter_map(|(name, source_files)| {
-            let [source_file] = source_files.as_slice() else {
-                return None;
-            };
-            Some((source_file.clone(), name))
-        })
-        .collect())
-}
-
-fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_markdown_files(&path, files)?;
-        } else if file_type.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("md")
-        {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
 fn parse_document(source_file: &Path) -> io::Result<ParsedDocument> {
     let content = fs::read_to_string(source_file)?;
     Ok(parse_document_content(&content))
@@ -1067,102 +918,6 @@ fn render_agent_body(body: &str, rewrite_profile: RewriteProfile) -> String {
     }
 }
 
-fn command_skill_name(source_commands: &Path, source_file: &Path) -> String {
-    slugify_name(&format!(
-        "{COMMAND_SKILL_PREFIX}-{}",
-        command_source_name(source_commands, source_file)
-    ))
-}
-
-fn command_skill_name_if_supported(
-    source_commands: &Path,
-    source_file: &Path,
-    document: &ParsedDocument,
-    description_mode: CommandDescriptionMode,
-) -> Option<String> {
-    if source_file.file_stem().and_then(|stem| stem.to_str()) == Some("README") {
-        return None;
-    }
-    let source_name = command_source_name(source_commands, source_file);
-    command_skill_description(document, &source_name, description_mode)?;
-    let name = command_skill_name(source_commands, source_file);
-    if name.chars().count() > MAX_SKILL_NAME_LEN {
-        return None;
-    }
-    if has_unsupported_command_template_features(&document.body) {
-        return None;
-    }
-    Some(name)
-}
-
-fn command_skill_description(
-    document: &ParsedDocument,
-    source_name: &str,
-    description_mode: CommandDescriptionMode,
-) -> Option<String> {
-    let frontmatter_description = document
-        .frontmatter
-        .get("description")
-        .and_then(FrontmatterValue::as_scalar)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-    frontmatter_description.or_else(|| match description_mode {
-        CommandDescriptionMode::RequireFrontmatter => None,
-        CommandDescriptionMode::UseSourceNameFallback => {
-            Some(format!("Migrated source command `{source_name}`"))
-        }
-    })
-}
-
-fn command_source_name(source_commands: &Path, source_file: &Path) -> String {
-    source_file
-        .strip_prefix(source_commands)
-        .unwrap_or(source_file)
-        .with_extension("")
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
-fn render_command_skill(
-    body: &str,
-    name: &str,
-    description: &str,
-    source_name: &str,
-    rewrite_profile: RewriteProfile,
-) -> String {
-    let body = rewrite_external_agent_terms(body.trim(), rewrite_profile);
-    let template_body = if body.is_empty() {
-        "No command template body was found.".to_string()
-    } else {
-        body
-    };
-    format!(
-        "---\nname: {}\ndescription: {}\n---\n\n# {name}\n\nUse this skill when the user asks to run the migrated source command `{source_name}`.\n\n## Command Template\n\n{template_body}\n",
-        yaml_string(name),
-        yaml_string(&rewrite_external_agent_terms(description, rewrite_profile)),
-    )
-}
-
-fn has_unsupported_command_template_features(template: &str) -> bool {
-    template.contains("$ARGUMENTS")
-        || contains_numbered_argument_placeholder(template)
-        || (template.contains("{{") && template.contains("}}"))
-        || template.contains("!`")
-        || template.contains("! `")
-        || template
-            .split_whitespace()
-            .any(|token| token.strip_prefix('@').is_some_and(|rest| !rest.is_empty()))
-}
-
-fn contains_numbered_argument_placeholder(template: &str) -> bool {
-    let bytes = template.as_bytes();
-    bytes
-        .windows(2)
-        .any(|window| window[0] == b'$' && window[1].is_ascii_digit())
-}
-
 fn frontmatter_string(
     frontmatter: &BTreeMap<String, FrontmatterValue>,
     key: &str,
@@ -1215,31 +970,6 @@ fn json_u64(value: &JsonValue) -> Option<u64> {
         return None;
     }
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
-}
-
-fn yaml_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn slugify_name(value: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_dash = false;
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if !last_was_dash {
-            slug.push('-');
-            last_was_dash = true;
-        }
-    }
-
-    let slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() {
-        "migrated".to_string()
-    } else {
-        slug
-    }
 }
 
 impl FrontmatterValue {

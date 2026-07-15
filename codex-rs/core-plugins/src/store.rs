@@ -1,3 +1,4 @@
+use crate::command_migration::migrate_plugin_commands;
 use crate::manifest::PluginManifest;
 use crate::manifest::load_plugin_manifest;
 use crate::manifest::parse_plugin_manifest;
@@ -562,6 +563,9 @@ fn replace_plugin_root_atomically(
         })?;
         fs::write(&manifest_path, contents)
             .map_err(|err| PluginStoreError::io("failed to write fallback plugin manifest", err))?;
+    }
+    if let Err(err) = migrate_plugin_commands(&staged_version_root) {
+        tracing::warn!(%err, "failed to migrate plugin commands into skills");
     }
 
     let target_version_root = target_root.join(plugin_version);
