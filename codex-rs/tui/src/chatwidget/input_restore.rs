@@ -253,9 +253,25 @@ impl ChatWidget {
     }
 
     pub(crate) fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
+        let draft = self.bottom_pane.composer_draft_snapshot();
+        let pending_pastes = draft.pending_pastes;
+        let draft_message = UserMessage {
+            text: draft.text,
+            text_elements: draft.text_elements,
+            local_images: draft.local_images,
+            remote_image_urls: draft.remote_image_urls,
+            mention_bindings: draft.mention_bindings,
+        };
+        let mut messages = vec![user_message];
+        if !draft_message.text.is_empty()
+            || !draft_message.local_images.is_empty()
+            || !draft_message.remote_image_urls.is_empty()
+        {
+            messages.push(draft_message);
+        }
         self.restore_composer_state(Self::composer_state_from_user_message(
-            user_message,
-            Vec::new(),
+            merge_user_messages(messages),
+            pending_pastes,
         ));
     }
 

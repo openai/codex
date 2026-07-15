@@ -736,6 +736,52 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
 }
 
 #[tokio::test]
+async fn restored_message_preserves_existing_composer_draft_and_attachments() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let retry_image = PathBuf::from("/tmp/retry.png");
+    let draft_image = PathBuf::from("/tmp/draft.png");
+    let paste_placeholder = "[Pasted Content 5 chars]";
+    let draft_text = format!("[Image #1] {paste_placeholder} draft");
+    chat.bottom_pane.set_composer_text(
+        draft_text,
+        vec![TextElement::new(
+            (0.."[Image #1]".len()).into(),
+            Some("[Image #1]".to_string()),
+        )],
+        vec![draft_image.clone()],
+    );
+    chat.bottom_pane
+        .set_composer_pending_pastes(vec![(paste_placeholder.to_string(), "hello".to_string())]);
+
+    chat.restore_user_message_to_composer(UserMessage {
+        text: "[Image #1] retry prompt".to_string(),
+        local_images: vec![LocalImageAttachment {
+            placeholder: "[Image #1]".to_string(),
+            path: retry_image.clone(),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: vec![TextElement::new(
+            (0.."[Image #1]".len()).into(),
+            Some("[Image #1]".to_string()),
+        )],
+        mention_bindings: Vec::new(),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        format!("[Image #1] retry prompt\n[Image #2] {paste_placeholder} draft")
+    );
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![retry_image, draft_image]
+    );
+    assert_eq!(
+        chat.bottom_pane.composer_pending_pastes(),
+        vec![(paste_placeholder.to_string(), "hello".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());

@@ -63,21 +63,22 @@ impl ChatWidget {
                 .is_some_and(|active| active.turn_id == turn_id && !active.agent_message_started)
     }
 
-    pub(crate) fn prepare_safety_buffering_retry(&mut self) {
-        let safety_buffering_prompt = self.safety_buffering_prompt.take();
+    pub(crate) fn prepare_safety_buffered_retry_submission(&mut self, prompt: UserMessage) {
         self.last_rendered_user_message_display = None;
         self.finalize_turn();
-        self.safety_buffering_prompt = safety_buffering_prompt;
+        self.safety_buffering_prompt = Some(prompt);
         self.input_queue.user_turn_pending_start = true;
     }
 
-    pub(crate) fn fail_safety_buffering_retry(&mut self) {
+    pub(crate) fn commit_safety_buffered_retry_submission(&mut self, prompt: UserMessage) {
+        let display =
+            user_message_display_for_history(prompt, &UserMessageHistoryRecord::UserMessageText);
+        self.on_user_message_display(display);
+    }
+
+    pub(crate) fn cancel_safety_buffered_retry_submission(&mut self) {
         self.input_queue.user_turn_pending_start = false;
         self.clear_safety_buffering();
-        let prompt = self.safety_buffering_prompt.take();
-        if let Some(prompt) = prompt {
-            self.restore_user_message_to_composer(prompt);
-        }
     }
 
     pub(super) fn on_model_safety_buffering_updated(
@@ -112,14 +113,23 @@ impl ChatWidget {
             return;
         }
 
-        let retry_turn = self
-            .safety_buffering
-            .submitted_turn
-            .as_ref()
-            .filter(|(submitted_turn_id, _)| replay_kind.is_none() && submitted_turn_id == &turn_id)
-            .map(|(_, turn)| turn.clone());
+        let retry_turn = if self.side_conversation_active() {
+            None
+        } else {
+            self.safety_buffering
+                .submitted_turn
+                .as_ref()
+                .filter(|(submitted_turn_id, _)| {
+                    replay_kind.is_none() && submitted_turn_id == &turn_id
+                })
+                .map(|(_, turn)| turn.clone())
+        };
         let thread_id = self.thread_id;
-        let can_offer_retry = faster_model.is_some() && retry_turn.is_some() && thread_id.is_some();
+        let retry_prompt = self.safety_buffering_prompt.clone();
+        let can_offer_retry = faster_model.is_some()
+            && retry_turn.is_some()
+            && retry_prompt.is_some()
+            && thread_id.is_some();
         let previous_active = self
             .safety_buffering
             .active
@@ -165,8 +175,8 @@ impl ChatWidget {
         }
         let header = ColumnRenderable::with(header);
         let mut items = Vec::new();
-        if let (Some(faster_model), Some(turn), Some(thread_id)) =
-            (faster_model, retry_turn, thread_id)
+        if let (Some(faster_model), Some(turn), Some(prompt), Some(thread_id)) =
+            (faster_model, retry_turn, retry_prompt, thread_id)
         {
             items.push(SelectionItem {
                 name: "Retry with a faster model".to_string(),
@@ -176,6 +186,7 @@ impl ChatWidget {
                         turn_id: turn_id.clone(),
                         model: faster_model.clone(),
                         turn: turn.clone(),
+                        prompt: prompt.clone(),
                     });
                 })],
                 dismiss_on_select: true,

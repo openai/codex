@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: popup
+---
+  Our systems are thinking a bit more about this request before responding.
+
+› 1. Dismiss and keep waiting
+  2. Learn more
+
+  No action is required. Codex will keep waiting, and this menu will close when
+  the response is ready.

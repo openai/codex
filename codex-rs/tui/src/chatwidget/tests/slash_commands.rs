@@ -2072,62 +2072,6 @@ async fn queued_menu_slash_keeps_agent_turn_complete_notification() {
 }
 
 #[tokio::test]
-async fn slash_copy_uses_latest_surviving_response_after_rollback() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    replay_user_message_text(&mut chat, "user-1", "foo", ReplayKind::ThreadSnapshot);
-    replay_agent_message(
-        &mut chat,
-        "agent-1",
-        "foo response",
-        ReplayKind::ThreadSnapshot,
-    );
-    replay_user_message_text(&mut chat, "user-2", "bar", ReplayKind::ThreadSnapshot);
-    replay_agent_message(
-        &mut chat,
-        "agent-2",
-        "bar response",
-        ReplayKind::ThreadSnapshot,
-    );
-    let _ = drain_insert_history(&mut rx);
-    assert_eq!(chat.last_agent_markdown_text(), Some("bar response"));
-
-    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 1);
-
-    assert_eq!(chat.last_agent_markdown_text(), Some("foo response"));
-    chat.copy_last_agent_markdown_with(|markdown| {
-        assert_eq!(markdown, "foo response");
-        Ok(None)
-    });
-}
-
-#[tokio::test]
-async fn slash_copy_reports_when_rewind_exceeds_retained_copy_history() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    replay_user_message_text(&mut chat, "user-1", "foo", ReplayKind::ThreadSnapshot);
-    replay_agent_message(
-        &mut chat,
-        "agent-1",
-        "foo response",
-        ReplayKind::ThreadSnapshot,
-    );
-    let _ = drain_insert_history(&mut rx);
-
-    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 0);
-    chat.dispatch_command(SlashCommand::Copy);
-
-    let cells = drain_insert_history(&mut rx);
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains(
-            "Cannot copy that response after rewinding. Only the most recent 32 responses are available to /copy."
-        ),
-        "expected evicted-history message, got {rendered:?}"
-    );
-}
-
-#[tokio::test]
 async fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

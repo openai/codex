@@ -1416,40 +1416,6 @@ impl App {
         self.chat_widget.handle_skills_list_response(response);
     }
 
-    pub(super) async fn handle_thread_rollback_response(
-        &mut self,
-        thread_id: ThreadId,
-        num_turns: u32,
-        response: &ThreadRollbackResponse,
-    ) {
-        if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-            let mut store = channel.store.lock().await;
-            store.apply_thread_rollback(response);
-        }
-        if self.active_thread_id == Some(thread_id)
-            && let Some(mut rx) = self.active_thread_rx.take()
-        {
-            let mut disconnected = false;
-            loop {
-                match rx.try_recv() {
-                    Ok(_) => {}
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-
-            if !disconnected {
-                self.active_thread_rx = Some(rx);
-            } else {
-                self.clear_active_thread().await;
-            }
-        }
-        self.apply_non_pending_thread_rollback(num_turns);
-    }
-
     pub(super) fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {
         let needs_refresh = matches!(
             &event,

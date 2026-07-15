@@ -144,14 +144,15 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    let (event_thread_id, event_turn_id, model, turn) = loop {
+    let (event_thread_id, event_turn_id, model, turn, prompt) = loop {
         match rx.try_recv() {
             Ok(AppEvent::RetrySafetyBufferedTurn {
                 thread_id,
                 turn_id,
                 model,
                 turn,
-            }) => break (thread_id, turn_id, model, turn),
+                prompt,
+            }) => break (thread_id, turn_id, model, turn, prompt),
             Ok(_) => continue,
             Err(err) => panic!("expected safety-buffering retry event: {err}"),
         }
@@ -160,10 +161,30 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     assert_eq!(event_turn_id, turn_id);
     assert_eq!(model, "faster-model");
     assert_matches!(turn, Op::UserTurn { .. });
+    assert_eq!(prompt, UserMessage::from("Explain the request"));
     assert!(
         !render_bottom_popup(&chat, /*width*/ 80)
             .contains("Press enter to confirm or esc to go back")
     );
+}
+
+#[tokio::test]
+async fn safety_buffering_does_not_offer_retry_in_side_conversation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_side_conversation_active(/*active*/ true);
+    let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
+            thread_id,
+            turn_id,
+            Some("faster-model"),
+        )),
+        /*replay_kind*/ None,
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("safety_buffering_side_conversation_without_retry", popup);
 }
 
 #[tokio::test]
@@ -188,20 +209,6 @@ async fn safety_buffering_remains_visible_until_turn_completes() {
     handle_turn_completed(&mut chat, turn_id, /*duration_ms*/ None);
 
     assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
-}
-
-#[tokio::test]
-async fn failed_safety_buffering_retry_restores_submitted_prompt() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    start_safety_buffering_test_turn(&mut chat, &mut op_rx);
-
-    chat.prepare_safety_buffering_retry();
-    assert!(chat.input_queue.user_turn_pending_start);
-
-    chat.fail_safety_buffering_retry();
-
-    assert_eq!(chat.composer_text_with_pending(), "Explain the request");
-    assert!(!chat.input_queue.user_turn_pending_start);
 }
 
 #[tokio::test]

@@ -430,22 +430,6 @@ impl App {
         self.chat_widget.clear_esc_backtrack_hint();
     }
 
-    /// Apply rollback semantics for a confirmed safety-buffering retry rollback.
-    ///
-    /// Returns `true` when local transcript state changed.
-    pub(crate) fn apply_non_pending_thread_rollback(&mut self, num_turns: u32) -> bool {
-        if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
-            return false;
-        }
-        self.chat_widget.clear_pending_token_activity_refreshes();
-        self.chat_widget.clear_pending_rate_limit_reset_hint();
-        self.chat_widget
-            .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
-        self.sync_overlay_after_transcript_trim();
-        self.backtrack_render_pending = true;
-        true
-    }
-
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
         let base_id = self.backtrack.base_id?;
         if self.chat_widget.thread_id() != Some(base_id) {
@@ -476,33 +460,6 @@ impl App {
                 mention_bindings: Vec::new(),
             },
         })
-    }
-
-    /// Keep transcript-related UI state aligned after `transcript_cells` was trimmed.
-    ///
-    /// This does three things:
-    /// 1. If transcript overlay is open, replace its committed cells so removed turns disappear.
-    /// 2. If backtrack preview is active, clamp/recompute the highlighted user selection.
-    /// 3. Drop deferred transcript lines buffered while overlay was open to avoid flushing lines
-    ///    for cells that were just removed by the trim.
-    fn sync_overlay_after_transcript_trim(&mut self) {
-        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-            t.replace_cells(self.transcript_cells.clone());
-        }
-        if self.backtrack.overlay_preview_active {
-            let total_users = user_count(&self.transcript_cells);
-            let next_selection = if total_users == 0 {
-                usize::MAX
-            } else {
-                self.backtrack
-                    .nth_user_message
-                    .min(total_users.saturating_sub(1))
-            };
-            self.apply_backtrack_selection_internal(next_selection);
-        }
-        // While overlay is open, we buffer rendered history lines and flush them on close.
-        // If rollback trimmed cells meanwhile, those buffered lines can reference removed turns.
-        self.deferred_history_lines.clear();
     }
 }
 
@@ -580,30 +537,6 @@ pub(crate) fn backtrack_fork_last_turn_id(
     }
 
     bail!("the selected prompt was not found in the persisted thread")
-}
-
-pub(crate) fn trim_transcript_cells_drop_last_n_user_turns(
-    transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
-    num_turns: u32,
-) -> bool {
-    if num_turns == 0 {
-        return false;
-    }
-
-    let user_positions: Vec<usize> = user_positions_iter(transcript_cells).collect();
-    let Some(&first_user_idx) = user_positions.first() else {
-        return false;
-    };
-
-    let turns_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-    let cut_idx = if turns_from_end >= user_positions.len() {
-        first_user_idx
-    } else {
-        user_positions[user_positions.len() - turns_from_end]
-    };
-    let original_len = transcript_cells.len();
-    transcript_cells.truncate(cut_idx);
-    transcript_cells.len() != original_len
 }
 
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
@@ -916,79 +849,6 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[test]
-    fn trim_drop_last_n_user_turns_applies_rollback_semantics() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("after first")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "second".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("after second")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
-        ];
-
-        let changed =
-            trim_transcript_cells_drop_last_n_user_turns(&mut cells, /*num_turns*/ 1);
-
-        assert!(changed);
-        assert_eq!(cells.len(), 2);
-        let first_user = cells[0]
-            .as_any()
-            .downcast_ref::<UserHistoryCell>()
-            .expect("first user");
-        assert_eq!(first_user.message, "first");
-    }
-
-    #[test]
-    fn trim_drop_last_n_user_turns_allows_overflow() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("intro")],
-                /*is_first_line*/ true,
-            )) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("after")],
-                /*is_first_line*/ false,
-            )) as Arc<dyn HistoryCell>,
-        ];
-
-        let changed = trim_transcript_cells_drop_last_n_user_turns(&mut cells, u32::MAX);
-
-        assert!(changed);
-        assert_eq!(cells.len(), 1);
-        let intro = cells[0]
-            .as_any()
-            .downcast_ref::<AgentMessageCell>()
-            .expect("intro agent");
-        let intro_lines = intro.display_lines(u16::MAX);
-        let intro_text: String = intro_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(intro_text, "• intro");
     }
 
     #[test]
