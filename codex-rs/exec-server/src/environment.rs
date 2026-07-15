@@ -29,6 +29,7 @@ use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
@@ -39,6 +40,15 @@ pub const CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR: &str =
 pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN";
 pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
     "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID";
+
+/// The current connection state for one concrete environment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnvironmentConnectionState {
+    /// An initialized exec-server connection is available.
+    Connected,
+    /// No initialized exec-server connection is currently available.
+    Disconnected,
+}
 
 /// Owns the execution/filesystem environments available to the Codex runtime.
 ///
@@ -344,11 +354,7 @@ impl EnvironmentManager {
             ),
             self.local_runtime_paths.clone(),
         ));
-        environment.start_connecting();
-        self.environments
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
+        self.insert_environment(environment_id, environment);
         Ok(())
     }
 
@@ -368,11 +374,7 @@ impl EnvironmentManager {
             })),
             self.local_runtime_paths.clone(),
         ));
-        environment.start_connecting();
-        self.environments
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
+        self.insert_environment(environment_id, environment);
         Ok(DeferredEnvironmentRegistration(completion))
     }
 
@@ -392,12 +394,16 @@ impl EnvironmentManager {
             ExecServerTransportParams::NoiseRendezvous { provider, identity },
             self.local_runtime_paths.clone(),
         ));
-        environment.start_connecting();
+        self.insert_environment(environment_id, environment);
+        Ok(())
+    }
+
+    fn insert_environment(&self, environment_id: String, environment: Arc<Environment>) {
         self.environments
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
-        Ok(())
+            .insert(environment_id, Arc::clone(&environment));
+        environment.start_connecting();
     }
 }
 
@@ -606,6 +612,15 @@ impl Environment {
 
     pub fn is_remote(&self) -> bool {
         self.remote_client.is_some()
+    }
+
+    /// Subscribes to the current connection state for this remote environment.
+    pub fn subscribe_connection_state(
+        &self,
+    ) -> Option<watch::Receiver<EnvironmentConnectionState>> {
+        self.remote_client
+            .as_ref()
+            .map(LazyRemoteExecServerClient::subscribe_connection_state)
     }
 
     pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {

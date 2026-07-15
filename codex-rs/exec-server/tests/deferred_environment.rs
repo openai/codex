@@ -45,6 +45,9 @@ async fn deferred_environment_waits_before_connecting() -> anyhow::Result<()> {
     let registration =
         manager.register_deferred_noise_environment("tools".to_string(), provider.clone())?;
     let environment = manager.get_environment("tools").expect("environment");
+    let connection_state = environment
+        .subscribe_connection_state()
+        .expect("remote environment connection state");
     let mut readiness = Box::pin(environment.wait_until_ready());
 
     assert!(poll!(&mut readiness).is_pending());
@@ -54,6 +57,7 @@ async fn deferred_environment_waits_before_connecting() -> anyhow::Result<()> {
     let error = readiness.await.unwrap_err();
     assert!(error.to_string().contains("test Noise provider called"));
     assert_eq!(provider.calls(), 1);
+    assert!(!connection_state.has_changed()?);
     Ok(())
 }
 

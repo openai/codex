@@ -22,6 +22,7 @@ use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
+use codex_app_server_protocol::EnvironmentConnectionNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
@@ -223,6 +224,26 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::McpServerStatusUpdated(notification))
+                .await;
+        }
+        EventMsg::EnvironmentConnected(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::EnvironmentConnected(
+                    EnvironmentConnectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        environment_id: event.environment_id,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::EnvironmentDisconnected(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::EnvironmentDisconnected(
+                    EnvironmentConnectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        environment_id: event.environment_id,
+                    },
+                ))
                 .await;
         }
         EventMsg::Warning(warning_event) => {
