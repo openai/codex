@@ -7688,26 +7688,23 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     );
 }
 
+struct PendingNoiseConnectProvider;
+
+impl codex_exec_server::NoiseRendezvousConnectProvider for PendingNoiseConnectProvider {
+    fn connect_bundle(
+        &self,
+        _: codex_exec_server::NoiseChannelPublicKey,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<codex_exec_server::NoiseRendezvousConnectBundle, codex_exec_server::ExecServerError>,
+    > {
+        Box::pin(futures::future::pending())
+    }
+}
+
 #[tokio::test]
 async fn deferred_environment_roots_refresh_plugin_availability() {
     struct ReadyPluginContributor;
-
-    struct PendingNoiseConnectProvider;
-
-    impl codex_exec_server::NoiseRendezvousConnectProvider for PendingNoiseConnectProvider {
-        fn connect_bundle(
-            &self,
-            _: codex_exec_server::NoiseChannelPublicKey,
-        ) -> futures::future::BoxFuture<
-            '_,
-            Result<
-                codex_exec_server::NoiseRendezvousConnectBundle,
-                codex_exec_server::ExecServerError,
-            >,
-        > {
-            Box::pin(futures::future::pending())
-        }
-    }
 
     impl codex_extension_api::McpServerContributor<Config> for ReadyPluginContributor {
         fn id(&self) -> &'static str {
@@ -7819,6 +7816,83 @@ async fn deferred_environment_roots_refresh_plugin_availability() {
     assert!(new_runtime.plugins_available());
     assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
     assert!(Arc::ptr_eq(&old_manager, &new_runtime.manager_arc()));
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn conflicting_ready_environment_root_ids_keep_first_location() {
+    let (session, turn_context) = make_session_and_context().await;
+    let environment_manager = session.services.turn_environments.environment_manager();
+    let selected_root =
+        |environment_id: &str, path: &str| codex_protocol::capabilities::SelectedCapabilityRoot {
+            id: "shared-root".to_string(),
+            location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
+                environment_id: environment_id.to_string(),
+                path: PathUri::parse(path).expect("root URI"),
+            },
+        };
+    let selected_roots = [
+        selected_root("executor-a", "file:///plugins/a"),
+        selected_root("executor-b", "file:///plugins/b"),
+    ];
+    let local_environment = turn_context
+        .environments
+        .primary()
+        .expect("ready local environment");
+    let mut turn_environments = Vec::new();
+    for selected_root in &selected_roots {
+        let codex_protocol::capabilities::CapabilityRootLocation::Environment {
+            environment_id,
+            ..
+        } = &selected_root.location;
+        let registration = environment_manager
+            .register_deferred_noise_environment(
+                environment_id.clone(),
+                Arc::new(PendingNoiseConnectProvider),
+            )
+            .expect("register deferred environment");
+        let environment = environment_manager
+            .get_environment(environment_id)
+            .expect("deferred environment");
+        registration
+            .complete(Ok(codex_exec_server::EnvironmentReadyInfo {
+                selected_capability_roots: vec![selected_root.clone()],
+            }))
+            .expect("complete deferred environment");
+        turn_environments.push(TurnEnvironment::new(
+            environment_id.clone(),
+            environment,
+            local_environment.cwd().clone(),
+            local_environment.workspace_roots().to_vec(),
+            local_environment.shell.clone(),
+        ));
+    }
+    let environments = TurnEnvironmentSnapshot {
+        turn_environments,
+        starting: Vec::new(),
+    };
+
+    let resolved_roots = session
+        .resolve_selected_capability_roots_for_step(&environments)
+        .await;
+
+    assert_eq!(
+        resolved_roots
+            .iter()
+            .map(|root| root.selected_root().clone())
+            .collect::<Vec<_>>(),
+        vec![selected_roots[0].clone()]
+    );
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("ignoring selected capability root with conflicting location")
+                    && line.contains("root_id=\"shared-root\"")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or_else(|| Err("expected conflicting root location warning".to_string()))
+    });
 }
 
 #[tokio::test]

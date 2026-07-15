@@ -194,31 +194,45 @@ impl Session {
         &self,
         environments: &TurnEnvironmentSnapshot,
     ) -> Vec<ResolvedSelectedCapabilityRoot> {
-        let mut seen_root_ids = self
+        let thread_root_count = self.services.selected_capability_roots.len();
+        let mut root_locations_by_id = HashMap::new();
+        let mut selected_capability_roots = Vec::new();
+        let mut ready_environment_root_count = 0;
+        for (index, root) in self
             .services
             .selected_capability_roots
             .iter()
-            .map(|root| root.id.as_str())
-            .collect::<HashSet<_>>();
-        let mut selected_capability_roots = self.services.selected_capability_roots.clone();
-        let mut ready_environment_root_count = 0;
-        for root in environments
-            .turn_environments
-            .iter()
-            .flat_map(|environment| environment.environment.selected_capability_roots())
+            .chain(
+                environments
+                    .turn_environments
+                    .iter()
+                    .flat_map(|environment| environment.environment.selected_capability_roots()),
+            )
+            .enumerate()
         {
-            if !seen_root_ids.insert(root.id.as_str()) {
+            if let Some(kept_location) = root_locations_by_id.get(&root.id) {
+                if kept_location != &root.location {
+                    tracing::warn!(
+                        root_id = root.id,
+                        ?kept_location,
+                        ignored_location = ?root.location,
+                        "ignoring selected capability root with conflicting location"
+                    );
+                }
                 continue;
             }
-            if ready_environment_root_count == MAX_SELECTED_CAPABILITY_ROOTS {
-                tracing::warn!(
-                    max_root_count = MAX_SELECTED_CAPABILITY_ROOTS,
-                    "ignoring excess selected capability roots from ready environments"
-                );
-                break;
+            if index >= thread_root_count {
+                if ready_environment_root_count == MAX_SELECTED_CAPABILITY_ROOTS {
+                    tracing::warn!(
+                        max_root_count = MAX_SELECTED_CAPABILITY_ROOTS,
+                        "ignoring excess selected capability roots from ready environments"
+                    );
+                    break;
+                }
+                ready_environment_root_count += 1;
             }
+            root_locations_by_id.insert(root.id.clone(), root.location.clone());
             selected_capability_roots.push(root.clone());
-            ready_environment_root_count += 1;
         }
         self.services
             .turn_environments
