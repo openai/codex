@@ -713,6 +713,131 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_inter_agent_mail_does_not_restart_after_final_answer() {
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_message_item_added("msg-1", "")),
+        chunk(ev_output_text_delta("first answer")),
+        chunk(json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "id": "msg-1",
+                "content": [{"type": "output_text", "text": "first answer"}],
+                "phase": "final_answer",
+            }
+        })),
+        chunk(ev_completed("resp-1")),
+    ];
+
+    let (server, _completions) = start_streaming_sse_server(vec![
+        first_chunks,
+        response_completed_chunks("unexpected-resp-2"),
+    ])
+    .await;
+    let codex = build_codex(&server).await;
+
+    submit_queue_only_agent_mail(&codex, "queued child update").await;
+    submit_user_input(&codex, "first prompt").await;
+    wait_for_turn_complete(&codex).await;
+
+    let mut requests = server.requests().await;
+    assert_eq!(requests.len(), 1);
+    let request: Value = from_slice(&requests[0]).expect("parse request");
+    assert!(
+        request["input"]
+            .as_array()
+            .expect("request input")
+            .iter()
+            .all(|item| item.get("type").and_then(Value::as_str) != Some("agent_message"))
+    );
+
+    submit_user_input(&codex, "second prompt").await;
+    wait_for_turn_complete(&codex).await;
+
+    requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let request: Value = from_slice(&requests[1]).expect("parse request");
+    let input = request["input"].as_array().expect("request input");
+    let agent_message = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("agent_message"))
+        .expect("queued child update should be included in the next turn");
+    assert_eq!(
+        agent_message["content"],
+        json!([{"type": "input_text", "text": "queued child update"}])
+    );
+    let user_input = message_input_texts(&request, "user")
+        .into_iter()
+        .filter(|text| text == "second prompt")
+        .collect::<Vec<_>>();
+    assert_eq!(user_input, vec!["second prompt"]);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn injected_response_item_reopens_turn_after_final_answer() {
+    const INITIAL_PROMPT: &str = "first prompt";
+    const INJECTED_CONTEXT: &str = "late injected context";
+    let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
+
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_message_item_added("msg-1", "")),
+        chunk(ev_output_text_delta("first answer")),
+        chunk(json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "id": "msg-1",
+                "content": [{"type": "output_text", "text": "first answer"}],
+                "phase": "final_answer",
+            }
+        })),
+        // Keep the response open past an observable event so the answer boundary is established
+        // before the late context is injected.
+        chunk(ev_reasoning_item_added("reason-after-final", &["done"])),
+        gated_chunk(
+            gate_completed_rx,
+            vec![
+                ev_reasoning_item("reason-after-final", &["done"], &[]),
+                ev_completed("resp-1"),
+            ],
+        ),
+    ];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+    let codex = build_codex(&server).await;
+
+    submit_user_input(&codex, INITIAL_PROMPT).await;
+    wait_for_reasoning_item_started(&codex).await;
+
+    assert!(
+        codex
+            .inject_if_running(vec![responses::user_message_item(INJECTED_CONTEXT)])
+            .await
+            .is_ok()
+    );
+    let _ = gate_completed_tx.send(());
+
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second: Value = from_slice(&requests[1]).expect("parse second request");
+    let relevant_user_input = message_input_texts(&second, "user")
+        .into_iter()
+        .filter(|text| text == INITIAL_PROMPT || text == INJECTED_CONTEXT)
+        .collect::<Vec<_>>();
+    assert_eq!(relevant_user_input, vec![INITIAL_PROMPT, INJECTED_CONTEXT]);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_input_does_not_preempt_after_reasoning_item() {
     let (gate_reasoning_done_tx, gate_reasoning_done_rx) = oneshot::channel();
 

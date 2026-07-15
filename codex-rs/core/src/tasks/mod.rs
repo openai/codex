@@ -456,9 +456,13 @@ impl Session {
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
-    pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
+    pub(crate) fn maybe_start_turn_for_pending_work(self: &Arc<Self>) -> BoxFuture<'static, ()> {
+        let session = Arc::clone(self);
+        Box::pin(async move {
+            session
+                .maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
+                .await;
+        })
     }
 
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
@@ -805,6 +809,9 @@ impl Session {
         // thread writers may not flush it without another explicit barrier.
         if let Err(err) = self.flush_rollout().await {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
+        }
+        if cleared_active_turn {
+            self.maybe_start_turn_for_pending_work().await;
         }
     }
 
