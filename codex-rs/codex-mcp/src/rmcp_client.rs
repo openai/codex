@@ -79,6 +79,10 @@ use tracing::warn;
 /// MCP server capability indicating that Codex should include [`SandboxState`]
 /// in tool-call request `_meta` under this key.
 pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
+/// Experimental MCP server capability for development and testing only; production servers should
+/// not use it. Its `cacheable: false` property disables sharing tool definitions across connections.
+const MCP_TOOL_CATALOG_CACHE_CAPABILITY: &str = "codex/tool-catalog-cache";
+const MCP_TOOL_CATALOG_CACHEABLE_PROPERTY: &str = "cacheable";
 pub const OPENAI_FORM_CAPABILITY: &str = "openai/form";
 
 pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
@@ -887,6 +891,19 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
+    let server_disables_tool_catalog_cache = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|experimental| experimental.get(MCP_TOOL_CATALOG_CACHE_CAPABILITY))
+        .and_then(|capability| capability.get(MCP_TOOL_CATALOG_CACHEABLE_PROPERTY))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false);
+    if server_disables_tool_catalog_cache
+        && let Some(cache_context) = tool_catalog_cache_context.as_ref()
+    {
+        cache_context.disable();
+    }
     let server_supports_sandbox_state_meta_capability = initialize_result
         .capabilities
         .experimental

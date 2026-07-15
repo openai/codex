@@ -52,6 +52,7 @@ struct ToolCatalogCacheEntry {
 struct ToolCatalogCacheState {
     snapshot: Option<ToolCatalogSnapshot>,
     last_accepted_generation: u64,
+    disabled_by_server: bool,
 }
 
 struct ToolCatalogSnapshot {
@@ -125,9 +126,15 @@ impl McpToolCatalogCacheContext {
         }
     }
 
+    pub(crate) fn disable(&self) {
+        let mut state = lock_unpoisoned(&self.entry.state);
+        state.disabled_by_server = true;
+        state.snapshot = None;
+    }
+
     pub(crate) fn publish_if_newest(&self, ticket: McpToolCatalogFetchTicket, tools: &[ToolInfo]) {
         let mut state = lock_unpoisoned(&self.entry.state);
-        if ticket.generation <= state.last_accepted_generation {
+        if state.disabled_by_server || ticket.generation <= state.last_accepted_generation {
             return;
         }
 
