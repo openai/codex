@@ -53,6 +53,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::Semaphore;
 use tracing::instrument;
 use tracing::warn;
 
@@ -75,6 +76,7 @@ enum PluginLoadScope<'a> {
         restriction_product: Option<Product>,
         skill_config_rules: &'a SkillConfigRules,
         plugin_skill_snapshots: Option<&'a PluginSkillSnapshots>,
+        root_scan_slots: Arc<Semaphore>,
     },
     HooksOnly,
 }
@@ -118,6 +120,7 @@ pub(crate) async fn load_plugins_from_layer_stack(
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
     restriction_product: Option<Product>,
     remote_global_catalog_active: bool,
+    root_scan_slots: Arc<Semaphore>,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     load_plugins_from_layer_stack_with_scope(
@@ -129,6 +132,7 @@ pub(crate) async fn load_plugins_from_layer_stack(
             restriction_product,
             skill_config_rules: &skill_config_rules,
             plugin_skill_snapshots,
+            root_scan_slots,
         },
     )
     .await
@@ -809,6 +813,7 @@ async fn load_plugin(
             restriction_product,
             skill_config_rules,
             plugin_skill_snapshots,
+            root_scan_slots,
         } => {
             loaded_plugin.manifest_name = Some(manifest.display_name().to_string());
             loaded_plugin.manifest_description = manifest.description.clone();
@@ -820,6 +825,7 @@ async fn load_plugin(
                 *restriction_product,
                 skill_config_rules,
                 *plugin_skill_snapshots,
+                Arc::clone(root_scan_slots),
             )
             .await;
             let has_enabled_skills = resolved_skills.has_enabled_skills();
@@ -917,6 +923,7 @@ pub async fn load_plugin_skills(
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
+    root_scan_slots: Arc<Semaphore>,
 ) -> ResolvedPluginSkills {
     load_plugin_skill_inventory(
         plugin_root,
@@ -924,6 +931,7 @@ pub async fn load_plugin_skills(
         manifest,
         restriction_product,
         plugin_skill_snapshots,
+        root_scan_slots,
     )
     .await
     .resolve(skill_config_rules)
@@ -935,6 +943,7 @@ pub(crate) async fn load_plugin_skill_inventory(
     manifest: &PluginManifest,
     restriction_product: Option<Product>,
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
+    root_scan_slots: Arc<Semaphore>,
 ) -> PluginSkillInventory {
     let roots = plugin_skill_roots(plugin_root, &manifest.paths)
         .into_iter()
@@ -947,7 +956,7 @@ pub(crate) async fn load_plugin_skill_inventory(
             plugin_root: Some(plugin_root.clone()),
         })
         .collect::<Vec<_>>();
-    let outcome = load_skills_from_roots(roots, plugin_skill_snapshots).await;
+    let outcome = load_skills_from_roots(roots, plugin_skill_snapshots, root_scan_slots).await;
     let had_errors = !outcome.errors.is_empty();
     let skills = outcome
         .skills

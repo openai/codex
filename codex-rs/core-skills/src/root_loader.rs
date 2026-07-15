@@ -5,8 +5,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use codex_utils_plugins::PluginSkillRoot;
+use futures::StreamExt;
+use tokio::sync::Semaphore;
 
 use crate::SkillLoadOutcome;
+use crate::loader::MAX_CONCURRENT_ROOT_SCANS;
 use crate::loader::SkillRoot;
 use crate::loader::SkillRootSnapshot;
 use crate::loader::load_skill_root;
@@ -40,52 +43,71 @@ impl fmt::Debug for PluginSkillSnapshots {
 pub(crate) async fn load_and_merge_skill_roots<I>(
     roots: I,
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
+    root_scan_slots: &Semaphore,
 ) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot>,
 {
-    let mut root_snapshots = Vec::new();
-    for root in roots {
-        let cache_key = match (
-            root.plugin_id.clone(),
-            root.plugin_namespace.clone(),
-            root.plugin_root.clone(),
-        ) {
-            (Some(plugin_id), Some(plugin_namespace), Some(plugin_root)) => Some(PluginSkillRoot {
-                path: root.path.clone(),
-                plugin_id,
-                plugin_namespace,
-                plugin_root,
-            }),
-            _ => None,
-        };
-        let cached_snapshot = cache_key.as_ref().and_then(|cache_key| {
-            let plugin_skill_snapshots = plugin_skill_snapshots?;
-            plugin_skill_snapshots
-                .snapshots_by_root
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(cache_key)
-                .cloned()
-        });
-        let snapshot = match cached_snapshot {
-            Some(snapshot) => snapshot,
-            None => {
-                let snapshot = load_skill_root(root).await;
-                if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
-                    && let Some(cache_key) = cache_key
-                {
-                    plugin_skill_snapshots
-                        .snapshots_by_root
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(cache_key, snapshot.clone());
+    let mut indexed_root_snapshots = futures::stream::iter(roots.into_iter().enumerate())
+        .map(|(root_index, root)| async move {
+            // Bound root scans across all concurrent loads sharing this pool.
+            let _root_scan_slot = root_scan_slots
+                .acquire()
+                .await
+                .unwrap_or_else(|_| unreachable!());
+            let cache_key = match (
+                root.plugin_id.clone(),
+                root.plugin_namespace.clone(),
+                root.plugin_root.clone(),
+            ) {
+                (Some(plugin_id), Some(plugin_namespace), Some(plugin_root)) => {
+                    Some(PluginSkillRoot {
+                        path: root.path.clone(),
+                        plugin_id,
+                        plugin_namespace,
+                        plugin_root,
+                    })
                 }
-                snapshot
-            }
-        };
-        root_snapshots.push(snapshot);
-    }
+                _ => None,
+            };
+            let cached_snapshot = cache_key.as_ref().and_then(|cache_key| {
+                let plugin_skill_snapshots = plugin_skill_snapshots?;
+                plugin_skill_snapshots
+                    .snapshots_by_root
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(cache_key)
+                    .cloned()
+            });
+
+            let snapshot = match cached_snapshot {
+                Some(snapshot) => snapshot,
+                None => {
+                    let snapshot = load_skill_root(root).await;
+                    if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
+                        && let Some(cache_key) = cache_key
+                    {
+                        plugin_skill_snapshots
+                            .snapshots_by_root
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(cache_key, snapshot.clone());
+                    }
+                    snapshot
+                }
+            };
+            (root_index, snapshot)
+        })
+        // Keep each load's scan queue bounded while avoiding head-of-line blocking.
+        .buffer_unordered(MAX_CONCURRENT_ROOT_SCANS)
+        .collect::<Vec<_>>()
+        .await;
+    // Keep every scan slot productive, then restore root precedence for deterministic merging.
+    indexed_root_snapshots.sort_unstable_by_key(|(root_index, _)| *root_index);
+    let root_snapshots = indexed_root_snapshots
+        .into_iter()
+        .map(|(_, snapshot)| snapshot)
+        .collect();
 
     merge_skill_root_snapshots(root_snapshots)
 }

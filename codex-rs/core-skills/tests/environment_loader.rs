@@ -420,6 +420,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
 
     use codex_core_skills::SkillMetadata;
     use codex_core_skills::SkillPolicy;
+    use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
     use codex_core_skills::loader::SkillRoot;
     use codex_core_skills::loader::load_skills_from_roots;
     use codex_protocol::protocol::SkillScope;
@@ -469,6 +470,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
             plugin_root: None,
         }],
         /*plugin_skill_snapshots*/ None,
+        Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
     );
     fn assert_send<T: Send>(_: &T) {}
     assert_send(&future);

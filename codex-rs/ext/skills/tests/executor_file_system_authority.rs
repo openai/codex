@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
@@ -211,6 +212,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
             plugin_root: None,
         }],
         /*plugin_skill_snapshots*/ None,
+        Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
     )
     .await;
     assert_eq!(outcome.errors, Vec::new());

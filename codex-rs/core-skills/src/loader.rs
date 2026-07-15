@@ -49,8 +49,12 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 use toml::Value as TomlValue;
 use tracing::error;
+
+// TODO(anp): Tune this eight-scan limit after revisiting byte-based backpressure.
+pub const MAX_CONCURRENT_ROOT_SCANS: usize = 8;
 
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
@@ -195,12 +199,13 @@ pub struct SkillRoot {
 pub async fn load_skills_from_roots<I>(
     roots: I,
     plugin_skill_snapshots: Option<&crate::PluginSkillSnapshots>,
+    root_scan_slots: Arc<Semaphore>,
 ) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot> + Send,
     I::IntoIter: Send,
 {
-    crate::root_loader::load_and_merge_skill_roots(roots, plugin_skill_snapshots)
+    crate::root_loader::load_and_merge_skill_roots(roots, plugin_skill_snapshots, &root_scan_slots)
         .boxed()
         .await
 }
@@ -557,6 +562,10 @@ async fn load_skills_under_root(
     .await;
     for warning in warnings {
         error!("{warning}");
+    }
+    // With no skills, there is nothing to canonicalize, parse, or namespace-qualify.
+    if skills.is_empty() {
+        return;
     }
     let root_uri = PathUri::from_abs_path(root);
     let resolved_skills = futures::stream::iter(skills)

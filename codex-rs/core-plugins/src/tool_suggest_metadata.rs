@@ -118,6 +118,7 @@ impl ToolSuggestMetadataCache {
         marketplace_name: &str,
         plugin: &ConfiguredMarketplacePlugin,
         restriction_product: Option<Product>,
+        root_scan_slots: Arc<Semaphore>,
     ) -> Result<Arc<ToolSuggestMetadataFragment>, MarketplaceError> {
         let artifact = PluginArtifactIdentity {
             plugin_id: plugin.id.clone(),
@@ -138,7 +139,13 @@ impl ToolSuggestMetadataCache {
             }
 
             let generation = self.generation();
-            let entry = load_plugin_metadata(marketplace_name, plugin, restriction_product).await;
+            let entry = load_plugin_metadata(
+                marketplace_name,
+                plugin,
+                restriction_product,
+                Arc::clone(&root_scan_slots),
+            )
+            .await;
             if self.cache_entry_if_current(generation, artifact.clone(), entry.clone()) {
                 return entry.map_err(MarketplaceError::InvalidPlugin);
             }
@@ -186,6 +193,7 @@ async fn load_plugin_metadata(
     marketplace_name: &str,
     plugin: &ConfiguredMarketplacePlugin,
     restriction_product: Option<Product>,
+    root_scan_slots: Arc<Semaphore>,
 ) -> ToolSuggestMetadataEntry {
     let plugin_id = PluginId::new(plugin.name.clone(), marketplace_name.to_string()).map_err(
         |err| match err {
@@ -216,6 +224,7 @@ async fn load_plugin_metadata(
         &manifest,
         restriction_product,
         /*plugin_skill_snapshots*/ None,
+        root_scan_slots,
     )
     .await;
     let mut mcp_server_names =
