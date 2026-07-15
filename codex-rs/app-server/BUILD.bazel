@@ -6,10 +6,10 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
         "//codex-rs/code-mode-host:codex-code-mode-host",
+        "//codex-rs/rmcp-client:test_stdio_server",
     ],
     extra_binaries_non_windows = [
         "//codex-rs/cli:codex",
-        "//codex-rs/rmcp-client:test_stdio_server",
     ],
     integration_test_timeout = "long",
     run_tests_with_wine_exec = True,
