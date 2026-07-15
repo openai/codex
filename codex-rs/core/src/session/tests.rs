@@ -9135,6 +9135,61 @@ impl SessionTask for CompletingTask {
     }
 }
 
+struct PendingInputContinuationTask {
+    final_pending_input_check_reached: Arc<tokio::sync::Notify>,
+    allow_initial_run_to_finish: Arc<tokio::sync::Notify>,
+}
+
+impl SessionTask for PendingInputContinuationTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.pending_input_continuation"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        _cancellation_token: CancellationToken,
+    ) -> SessionTaskResult {
+        let session = session.clone_session();
+        assert!(
+            !session
+                .input_queue
+                .has_pending_input(&session.active_turn)
+                .await
+        );
+        self.final_pending_input_check_reached.notify_one();
+        self.allow_initial_run_to_finish.notified().await;
+        Ok(None)
+    }
+
+    fn supports_pending_input_continuation(&self) -> bool {
+        true
+    }
+
+    async fn run_pending_input_continuation(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        ctx: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+    ) -> SessionTaskResult {
+        crate::session::turn::run_turn(
+            session.clone_session(),
+            ctx,
+            session.turn_extension_data(),
+            Vec::new(),
+            /*prewarmed_client_session*/ None,
+            cancellation_token,
+        )
+        .await
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TerminalEventKind {
     TurnComplete,
@@ -9655,6 +9710,100 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             ..
         }) if turn_id == tc.sub_id
     ));
+}
+
+#[test]
+fn task_finish_continues_input_accepted_after_final_pending_input_check() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        // Match the production runtime because this test executes the full sampling future.
+        .thread_stack_size(16 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("build test runtime");
+    runtime.block_on(task_finish_continues_late_input());
+}
+
+async fn task_finish_continues_late_input() {
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("response-1"),
+            ev_completed("response-1"),
+        ]),
+    )
+    .await;
+    let base_url = server.uri();
+    let (session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        move |config| config.model_provider.base_url = Some(base_url),
+    )
+    .await;
+    let final_pending_input_check_reached = Arc::new(tokio::sync::Notify::new());
+    let allow_initial_run_to_finish = Arc::new(tokio::sync::Notify::new());
+
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            PendingInputContinuationTask {
+                final_pending_input_check_reached: Arc::clone(&final_pending_input_check_reached),
+                allow_initial_run_to_finish: Arc::clone(&allow_initial_run_to_finish),
+            },
+        )
+        .await;
+    timeout(
+        StdDuration::from_secs(2),
+        final_pending_input_check_reached.notified(),
+    )
+    .await
+    .expect("task should reach its final pending-input check");
+
+    let client_id = "late-steer-client-id";
+    session
+        .steer_input(
+            vec![UserInput::Text {
+                text: "late steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            /*additional_context*/ Default::default(),
+            Some(&turn_context.sub_id),
+            Some(client_id.to_string()),
+            /*responsesapi_client_metadata*/ None,
+        )
+        .await
+        .expect("steer should be accepted while the task is still active");
+    allow_initial_run_to_finish.notify_one();
+
+    let mut user_message_client_ids = Vec::new();
+    timeout(StdDuration::from_secs(15), async {
+        loop {
+            let event = rx.recv().await.expect("event channel should remain open");
+            match event.msg {
+                EventMsg::UserMessage(event) => {
+                    user_message_client_ids.push(event.client_id);
+                }
+                EventMsg::TurnComplete(_) => break,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("continued task should complete");
+
+    let request = response_mock.single_request();
+    assert_eq!(
+        request
+            .message_input_texts("user")
+            .into_iter()
+            .filter(|text| text == "late steer")
+            .count(),
+        1
+    );
+    assert_eq!(user_message_client_ids, vec![Some(client_id.to_string())]);
+    assert!(session.active_turn.lock().await.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
