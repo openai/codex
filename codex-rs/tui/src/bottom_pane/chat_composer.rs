@@ -4064,6 +4064,12 @@ fn ends_plaintext_at_mention(bytes: &[u8], index: usize) -> bool {
     })
 }
 
+fn ends_plaintext_at_dollar_mention(bytes: &[u8], index: usize) -> bool {
+    bytes
+        .get(index)
+        .is_none_or(|byte| !is_mention_name_char(*byte))
+}
+
 fn starts_plaintext_at_mention(text: &str, index: usize) -> bool {
     if index == 0 {
         return true;
@@ -4114,9 +4120,7 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
         let ends_plaintext_mention = if sigil == b'@' {
             ends_plaintext_at_mention(bytes, end)
         } else {
-            bytes
-                .get(end)
-                .is_none_or(|byte| !is_mention_name_char(*byte))
+            ends_plaintext_at_dollar_mention(bytes, end)
         };
 
         if starts_plaintext_mention && ends_plaintext_mention {
@@ -6501,6 +6505,25 @@ mod tests {
             "skill_popup_targets_unbound_mention_right_of_adjacent_bound_mention",
             /*enhanced_keys_supported*/ false,
             configure_bound_skill_left_of_unbound_skill,
+        );
+    }
+
+    #[test]
+    fn skill_popup_falls_back_from_bound_skill_with_path_suffix_snapshot() {
+        snapshot_composer_state(
+            "skill_popup_falls_back_from_bound_skill_with_path_suffix",
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_skill_mentions(Some(vec![test_skill_metadata("left")]));
+                composer.set_text_content_with_mention_bindings(
+                    "$left  $bound/path".to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                    vec![test_skill_binding("bound")],
+                );
+                composer.draft.textarea.set_cursor("$left  ".len());
+                composer.sync_popups();
+            },
         );
     }
 

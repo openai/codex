@@ -82,6 +82,24 @@ fn current_prefixed_token_falls_back_from_bound_at_token_on_right() {
 }
 
 #[test]
+fn current_prefixed_token_falls_back_from_bound_dollar_suffix_on_right() {
+    for suffix in ["/path", ".config"] {
+        let text = format!("$left  $bound{suffix}");
+        let bound_start = text.find("$bound").expect("bound skill mention");
+        let bound_end = bound_start + "$bound".len();
+        let mut textarea = TextArea::new();
+        textarea.insert_str(&text);
+        textarea.add_element_range(bound_start..bound_end);
+        textarea.set_cursor("$left  ".len());
+
+        assert_eq!(
+            current_prefixed_token_range(&textarea, '$', /*allow_empty*/ true),
+            Some((0.."$left".len(), "left".to_string()))
+        );
+    }
+}
+
+#[test]
 fn current_prefixed_token_targets_later_segment_between_bound_elements() {
     let text = "$bound1$one$bound2$two$bound3";
     let bound2_start = text.find("$bound2").expect("second bound mention");
