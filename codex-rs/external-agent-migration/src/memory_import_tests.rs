@@ -190,6 +190,26 @@ fn removes_project_resources_when_the_source_project_disappears() {
 }
 
 #[test]
+fn uses_scope_file_to_identify_owned_projects() {
+    let root = TempDir::new().expect("create tempdir");
+    let codex_home = root.path().join(".codex");
+    let resources_root = resources_root(&codex_home);
+    fs::create_dir_all(resources_root.join("project-a")).expect("create project resources");
+    fs::write(resources_root.join("project-a/scope.json"), b"{}").expect("write project scope");
+    fs::create_dir(resources_root.join(".project")).expect("create hidden project resources");
+    fs::write(resources_root.join(".project/scope.json"), b"{}")
+        .expect("write hidden project scope");
+    fs::create_dir(resources_root.join("metadata")).expect("create metadata directory");
+    fs::create_dir(resources_root.join(".metadata")).expect("create hidden metadata directory");
+    fs::write(resources_root.join(".DS_Store"), b"metadata").expect("write metadata file");
+
+    assert_eq!(
+        projects_needing_import(&codex_home, &[]).expect("detect removed projects"),
+        BTreeSet::from([".project".to_string(), "project-a".to_string()])
+    );
+}
+
+#[test]
 fn project_rename_removes_the_old_target_and_imports_the_new_target() {
     let root = TempDir::new().expect("create tempdir");
     let codex_home = root.path().join(".codex");
