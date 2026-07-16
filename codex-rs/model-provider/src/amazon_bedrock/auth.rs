@@ -80,7 +80,7 @@ fn non_empty_env_var_from(
         .filter(|value| !value.is_empty())
 }
 
-fn bearer_token_region(
+pub(super) fn bearer_token_region(
     aws: &ModelProviderAwsAuthInfo,
     env_var: impl Fn(&'static str) -> std::result::Result<String, std::env::VarError> + Copy,
 ) -> Result<String> {

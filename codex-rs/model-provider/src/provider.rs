@@ -676,8 +676,7 @@ mod tests {
             provider.account_state(),
             Ok(ProviderAccountState {
                 account: Some(ProviderAccount::AmazonBedrock {
-                    credential_source:
-                        codex_protocol::account::AmazonBedrockCredentialSource::AwsManaged,
+                    uses_codex_managed_credentials: false,
                 }),
                 requires_openai_auth: false,
             })
