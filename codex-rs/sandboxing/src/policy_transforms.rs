@@ -41,21 +41,10 @@ pub fn normalize_additional_permissions(
                             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
                             .unwrap_or(path),
                     },
-                    FileSystemPath::GeneratedDefaultPath { path } => {
-                        FileSystemPath::GeneratedDefaultPath {
-                            path: canonicalize_preserving_symlinks(path.as_path())
-                                .ok()
-                                .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
-                                .unwrap_or(path),
-                        }
-                    }
                     FileSystemPath::GlobPattern { pattern } => {
                         FileSystemPath::GlobPattern { pattern }
                     }
                     FileSystemPath::Special { value } => FileSystemPath::Special { value },
-                    FileSystemPath::GeneratedDefaultSpecial { value } => {
-                        FileSystemPath::GeneratedDefaultSpecial { value }
-                    }
                 };
                 let normalized_entry = FileSystemSandboxEntry {
                     path,
@@ -313,10 +302,7 @@ fn deny_entry_constrains_accepted_grant(
             match &deny_entry.path {
                 FileSystemPath::GlobPattern { pattern } => glob_static_prefix_path(pattern, cwd)
                     .is_some_and(|prefix| paths_overlap(prefix.as_path(), grant_path.as_path())),
-                FileSystemPath::Path { .. }
-                | FileSystemPath::GeneratedDefaultPath { .. }
-                | FileSystemPath::Special { .. }
-                | FileSystemPath::GeneratedDefaultSpecial { .. } => {
+                FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => {
                     resolve_permission_path(&deny_entry.path, cwd).is_some_and(|deny_path| {
                         paths_overlap(deny_path.as_path(), grant_path.as_path())
                     })
@@ -363,14 +349,6 @@ fn materialize_cwd_dependent_entry(
     cwd: &Path,
 ) -> FileSystemSandboxEntry {
     match &entry.path {
-        FileSystemPath::GeneratedDefaultSpecial {
-            value: FileSystemSpecialPath::ProjectRoots { .. },
-        } => resolve_permission_path(&entry.path, cwd)
-            .map(|path| FileSystemSandboxEntry {
-                path: FileSystemPath::GeneratedDefaultPath { path },
-                access: entry.access,
-            })
-            .unwrap_or_else(|| entry.clone()),
         FileSystemPath::Special {
             value: FileSystemSpecialPath::ProjectRoots { .. },
         } => resolve_permission_path(&entry.path, cwd)
@@ -387,48 +365,41 @@ fn materialize_cwd_dependent_entry(
             },
             access: entry.access,
         },
-        FileSystemPath::Path { .. }
-        | FileSystemPath::GeneratedDefaultPath { .. }
-        | FileSystemPath::Special { .. }
-        | FileSystemPath::GeneratedDefaultSpecial { .. } => entry.clone(),
+        FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => entry.clone(),
     }
 }
 
 fn resolve_permission_path(path: &FileSystemPath, cwd: &Path) -> Option<AbsolutePathBuf> {
     match path {
-        FileSystemPath::Path { path } | FileSystemPath::GeneratedDefaultPath { path } => {
-            Some(path.clone())
-        }
+        FileSystemPath::Path { path } => Some(path.clone()),
         FileSystemPath::GlobPattern { .. } => None,
-        FileSystemPath::Special { value } | FileSystemPath::GeneratedDefaultSpecial { value } => {
-            match value {
-                FileSystemSpecialPath::Root => {
-                    let root = cwd.ancestors().last()?;
-                    AbsolutePathBuf::from_absolute_path(root).ok()
-                }
-                FileSystemSpecialPath::ProjectRoots { subpath } => {
-                    let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok()?;
-                    Some(match subpath {
-                        Some(subpath) => {
-                            AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path())
-                        }
-                        None => cwd,
-                    })
-                }
-                FileSystemSpecialPath::Tmpdir => {
-                    let tmpdir = std::env::var_os("TMPDIR")?;
-                    if tmpdir.is_empty() {
-                        None
-                    } else {
-                        AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok()
-                    }
-                }
-                FileSystemSpecialPath::SlashTmp => AbsolutePathBuf::from_absolute_path("/tmp")
-                    .ok()
-                    .filter(|path| path.as_path().is_dir()),
-                FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => None,
+        FileSystemPath::Special { value } => match value {
+            FileSystemSpecialPath::Root => {
+                let root = cwd.ancestors().last()?;
+                AbsolutePathBuf::from_absolute_path(root).ok()
             }
-        }
+            FileSystemSpecialPath::ProjectRoots { subpath } => {
+                let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok()?;
+                Some(match subpath {
+                    Some(subpath) => {
+                        AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path())
+                    }
+                    None => cwd,
+                })
+            }
+            FileSystemSpecialPath::Tmpdir => {
+                let tmpdir = std::env::var_os("TMPDIR")?;
+                if tmpdir.is_empty() {
+                    None
+                } else {
+                    AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok()
+                }
+            }
+            FileSystemSpecialPath::SlashTmp => AbsolutePathBuf::from_absolute_path("/tmp")
+                .ok()
+                .filter(|path| path.as_path().is_dir()),
+            FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => None,
+        },
     }
 }
 
