@@ -18,6 +18,18 @@ use crate::image_url::is_remote_image_url;
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
 
+/// Mirrors the direct-input policy in both request validation and thread capability responses.
+pub(super) fn can_accept_direct_input(
+    multi_agent_version: Option<MultiAgentVersion>,
+    session_source: &SessionSource,
+) -> bool {
+    multi_agent_version != Some(MultiAgentVersion::V2)
+        || !matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        )
+}
+
 fn validate_user_input_image_urls(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
     if input.iter().any(|item| {
         matches!(
@@ -326,12 +338,11 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         thread: &CodexThread,
     ) -> Result<(), JSONRPCErrorError> {
-        if thread.multi_agent_version() == Some(MultiAgentVersion::V2)
-            && matches!(
-                thread.config_snapshot().await.session_source,
-                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-            )
-        {
+        let config_snapshot = thread.config_snapshot().await;
+        if !can_accept_direct_input(
+            thread.multi_agent_version(),
+            &config_snapshot.session_source,
+        ) {
             let error = invalid_request(DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR);
             self.track_error_response(request_id, &error, /*error_type*/ None);
             return Err(error);

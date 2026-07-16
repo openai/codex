@@ -1245,7 +1245,10 @@ impl App {
         started: AppServerStartedThread,
         snapshot: &mut ThreadEventSnapshot,
     ) {
-        let AppServerStartedThread { session, turns } = started;
+        if started.blocks_direct_input {
+            self.agent_navigation.mark_parent_owned(thread_id);
+        }
+        let AppServerStartedThread { session, turns, .. } = started;
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             store.set_session(session.clone(), turns.clone());

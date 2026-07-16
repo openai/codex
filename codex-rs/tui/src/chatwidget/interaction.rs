@@ -168,8 +168,12 @@ impl ChatWidget {
                 && !self.bottom_pane.is_task_running()
                 && self.bottom_pane.no_modal_or_popup_active() =>
             {
-                self.cycle_collaboration_mode();
-                self.refresh_plan_mode_nudge();
+                if self.blocks_direct_input {
+                    self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+                } else {
+                    self.cycle_collaboration_mode();
+                    self.refresh_plan_mode_nudge();
+                }
             }
             _ => {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();

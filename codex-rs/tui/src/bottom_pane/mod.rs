@@ -448,6 +448,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_parent_owned_thread(&mut self) {
+        self.composer.set_parent_owned_thread();
+        self.request_redraw();
+    }
+
     /// Update the key hint shown next to queued messages so it matches the
     /// binding that `ChatWidget` actually listens for.
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: Option<KeyBinding>) {
