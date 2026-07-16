@@ -3,11 +3,15 @@ use codex_app_server_protocol::AppInfo as ApiAppInfo;
 use codex_app_server_protocol::AppMetadata as ApiAppMetadata;
 use codex_app_server_protocol::AppReview as ApiAppReview;
 use codex_app_server_protocol::AppScreenshot as ApiAppScreenshot;
+use codex_app_server_protocol::AppToolSummary as ApiAppToolSummary;
+use codex_app_server_protocol::ConnectorMetadata as ApiConnectorMetadata;
 use codex_connectors::AppBranding;
 use codex_connectors::AppInfo;
 use codex_connectors::AppMetadata;
 use codex_connectors::AppReview;
 use codex_connectors::AppScreenshot;
+use codex_connectors::ConnectorMetadata;
+use codex_connectors::ConnectorToolSummary;
 
 /// Converts connector-domain app metadata owned by `codex-connectors` into the app-server wire
 /// type owned by `codex-app-server-protocol`.
@@ -49,6 +53,43 @@ pub(crate) fn app_info_to_api(app: AppInfo) -> ApiAppInfo {
         is_accessible,
         is_enabled,
         plugin_display_names,
+    }
+}
+
+/// Converts metadata-only connector data into the app-server wire type.
+///
+/// Keeping this separate from app_info_to_api makes it impossible for app/read to accidentally
+/// grow runtime state from the broader app/list shape.
+pub(crate) fn connector_metadata_to_api(metadata: ConnectorMetadata) -> ApiConnectorMetadata {
+    let ConnectorMetadata {
+        id,
+        name,
+        description,
+        icon_url,
+        tool_summaries,
+    } = metadata;
+    ApiConnectorMetadata {
+        id,
+        name,
+        description,
+        icon_url,
+        tool_summaries: tool_summaries.map(|tools| {
+            tools
+                .into_iter()
+                .map(|tool| {
+                    let ConnectorToolSummary {
+                        name,
+                        title,
+                        description,
+                    } = tool;
+                    ApiAppToolSummary {
+                        name,
+                        title,
+                        description,
+                    }
+                })
+                .collect()
+        }),
     }
 }
 
