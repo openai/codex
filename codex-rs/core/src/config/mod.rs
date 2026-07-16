@@ -857,15 +857,28 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
-    /// User-configured maximum number of agent threads that can be open concurrently.
+    /// Whether multi-agent tools are enabled through `[agents]`.
+    pub agents_enabled: bool,
+
+    /// User-configured maximum number of spawned agent threads per session.
     pub agent_max_threads: Option<usize>,
+
+    /// Reserved setting for whether the spawn tool supports agent types.
+    pub agent_support_agent_type: Option<bool>,
+
+    /// Reserved default model for spawned subagents.
+    pub agent_default_subagent_model: Option<String>,
+
+    /// Reserved default reasoning effort for spawned subagents.
+    pub agent_default_subagent_reasoning_effort: Option<ReasoningEffort>,
+
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
 
     /// Whether to record a model-visible message when an agent turn is interrupted.
     pub agent_interrupt_message_enabled: bool,
 
-    /// Maximum nesting depth allowed for spawned agent threads.
+    /// Maximum nesting depth for V1 agent threads. Ignored by V2.
     pub agent_max_depth: i32,
 
     /// User-defined role declarations keyed by role name.
@@ -1420,25 +1433,33 @@ impl ConfigBuilder {
 }
 
 impl Config {
-    pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
+    pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
         if self.features.enabled(Feature::MultiAgentV2) {
-            MultiAgentVersion::V2
-        } else if self.features.enabled(Feature::Collab) {
-            MultiAgentVersion::V1
+            Some(MultiAgentVersion::V2)
+        } else if !self.agents_enabled {
+            Some(MultiAgentVersion::Disabled)
         } else {
-            MultiAgentVersion::Disabled
+            None
         }
     }
 
-    pub(crate) fn validate_multi_agent_v2_config(&self) -> std::io::Result<()> {
-        if self.features.enabled(Feature::MultiAgentV2) && self.agent_max_threads.is_some() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.max_threads cannot be set when features.multi_agent_v2 is enabled",
-            ))
-        } else {
-            Ok(())
-        }
+    pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
+        self.multi_agent_version_override().unwrap_or_else(|| {
+            if self.features.enabled(Feature::Collab) {
+                MultiAgentVersion::V1
+            } else {
+                MultiAgentVersion::Disabled
+            }
+        })
+    }
+
+    pub(crate) fn multi_agent_version_for_model(
+        &self,
+        model_multi_agent_version: Option<MultiAgentVersion>,
+    ) -> MultiAgentVersion {
+        self.multi_agent_version_override()
+            .or(model_multi_agent_version)
+            .unwrap_or_else(|| self.multi_agent_version_from_features())
     }
 
     pub(crate) fn effective_agent_max_threads(
@@ -2516,6 +2537,13 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let base = multi_agent_v2_toml_config(config_toml.features.as_ref());
     let max_concurrent_threads_per_session = base
         .and_then(|config| config.max_concurrent_threads_per_session)
+        .or_else(|| {
+            config_toml
+                .agents
+                .as_ref()
+                .and_then(|agents| agents.max_concurrent_threads_per_session)
+                .map(|max_threads| max_threads.saturating_add(1))
+        })
         .unwrap_or(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
     let default =
         MultiAgentV2Config::defaults_for_max_concurrency(max_concurrent_threads_per_session);
@@ -3558,11 +3586,19 @@ impl Config {
             ));
         }
         validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
-        let agent_max_threads = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        let agents_enabled = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.enabled)
+            .unwrap_or(true);
+        let agent_max_threads = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_concurrent_threads_per_session);
         if agent_max_threads == Some(0) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "agents.max_threads must be at least 1",
+                "agents.max_concurrent_threads_per_session must be at least 1",
             ));
         }
         let agent_max_depth = cfg
@@ -3570,12 +3606,18 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.max_depth)
             .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
-        if agent_max_depth < 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.max_depth must be at least 1",
-            ));
-        }
+        let agent_support_agent_type = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.support_agent_type);
+        let agent_default_subagent_model = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.default_subagent_model.clone());
+        let agent_default_subagent_reasoning_effort = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.default_subagent_reasoning_effort.clone());
         let agent_job_max_runtime_seconds = cfg
             .agents
             .as_ref()
@@ -3926,7 +3968,11 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            agents_enabled,
             agent_max_threads,
+            agent_support_agent_type,
+            agent_default_subagent_model,
+            agent_default_subagent_reasoning_effort,
             agent_max_depth,
             agent_roles,
             memories: memories_config,

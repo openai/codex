@@ -177,14 +177,13 @@ fn save_config_resolved_fields(
     )?);
 
     let agents = lock_config.agents.get_or_insert_with(Default::default);
-    // Multi-agent v2 owns thread fanout through its feature config. Preserve
-    // the legacy agents.max_threads setting only when v2 is disabled.
-    agents.max_threads = if config.features.enabled(Feature::MultiAgentV2) {
-        None
-    } else {
-        config.agent_max_threads
-    };
+    agents.enabled = Some(config.agents_enabled);
+    agents.max_concurrent_threads_per_session = config.agent_max_threads;
     agents.max_depth = Some(config.agent_max_depth);
+    agents.support_agent_type = config.agent_support_agent_type;
+    agents.default_subagent_model = config.agent_default_subagent_model.clone();
+    agents.default_subagent_reasoning_effort =
+        config.agent_default_subagent_reasoning_effort.clone();
     agents.job_max_runtime_seconds = config.agent_job_max_runtime_seconds;
     agents.interrupt_message = Some(config.agent_interrupt_message_enabled);
 
@@ -295,7 +294,6 @@ mod tests {
                 .is_none_or(|debug| debug.config_lockfile.is_none())
         );
         assert!(lock.memories.is_some());
-
         let features = lock
             .features
             .as_ref()

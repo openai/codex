@@ -798,6 +798,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                 .flatten();
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
+            // TODO(jif): Wire `agents.support_agent_type` into the V2 spawn tool surface.
             planned_tools.add_arc(override_tool_exposure(
                 multi_agent_v2_handler(
                     SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
