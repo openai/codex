@@ -3413,6 +3413,78 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_stdin_calls_run_in_parallel_across_sessions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses bash and POSIX file rendezvous commands");
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let start_args = serde_json::to_string(&json!({
+        "cmd": "bash --noprofile --norc",
+        "tty": true,
+        "yield_time_ms": 250,
+    }))?;
+    let cross_session_a = serde_json::to_string(&json!({
+        "session_id": 1000,
+        "chars": ": > .write-stdin-a; while [ ! -e .write-stdin-b ]; do sleep 0.01; done; printf 'alpha-%s\\n' ready; exit\n",
+        "yield_time_ms": 5_000,
+    }))?;
+    let cross_session_b = serde_json::to_string(&json!({
+        "session_id": 1001,
+        "chars": ": > .write-stdin-b; while [ ! -e .write-stdin-a ]; do sleep 0.01; done; printf 'beta-%s\\n' ready; exit\n",
+        "yield_time_ms": 5_000,
+    }))?;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-start-1"),
+                ev_function_call("start-a", "exec_command", &start_args),
+                ev_function_call("start-b", "exec_command", &start_args),
+                ev_completed("resp-start-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-cross-1"),
+                ev_function_call("cross-a", "write_stdin", &cross_session_a),
+                ev_function_call("cross-b", "write_stdin", &cross_session_b),
+                ev_completed("resp-cross-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_unified_exec_turn(&test, "start terminals", PermissionProfile::Disabled).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let outputs = collect_tool_outputs(
+        &response_mock
+            .requests()
+            .into_iter()
+            .map(|request| request.body_json())
+            .collect::<Vec<_>>(),
+    )?;
+    assert_regex_match(".*alpha-ready.*", &outputs["cross-a"].output);
+    assert_regex_match(".*beta-ready.*", &outputs["cross-b"].output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
 async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     skip_if_no_network!(Ok(()));
