@@ -1109,6 +1109,46 @@ text(JSON.stringify(results));
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_write_stdin_calls_run_in_parallel_across_sessions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "write to independent terminal sessions in parallel",
+        r#"
+const sessions = await Promise.all([
+  tools.exec_command({ cmd: "bash --noprofile --norc", tty: true, yield_time_ms: 250 }),
+  tools.exec_command({ cmd: "bash --noprofile --norc", tty: true, yield_time_ms: 250 }),
+]);
+
+const results = await Promise.all([
+  tools.write_stdin({
+    session_id: sessions[0].session_id,
+    chars: ": > .code-mode-a; while [ ! -e .code-mode-b ]; do sleep 0.01; done; printf 'code-alpha-%s\\n' ready; exit\n",
+    yield_time_ms: 5000,
+  }),
+  tools.write_stdin({
+    session_id: sessions[1].session_id,
+    chars: ": > .code-mode-b; while [ ! -e .code-mode-a ]; do sleep 0.01; done; printf 'code-beta-%s\\n' ready; exit\n",
+    yield_time_ms: 5000,
+  }),
+]);
+
+text(JSON.stringify([results[0].output.includes("code-alpha-ready"), results[1].output.includes("code-beta-ready")]));
+"#,
+    )
+    .await?;
+
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let result: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
+    assert_eq!(result, serde_json::json!([true, true]));
+
+    Ok(())
+}
+
 // This model uses token-based tool-output truncation, giving the downstream
 // history assertions a stable `…N tokens truncated…` marker.
 const TOKEN_POLICY_TEST_MODEL: &str = "gpt-5.4";
