@@ -144,10 +144,6 @@ async fn apps_guidance_appears_after_background_recovery_within_a_turn() -> Resu
         apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
             config
                 .features
-                .enable(Feature::DeferredExecutor)
-                .expect("test config should allow feature update");
-            config
-                .features
                 .enable(Feature::DefaultModeRequestUserInput)
                 .expect("test config should allow feature update");
         });

@@ -2849,22 +2849,12 @@ impl Session {
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
     ) -> Arc<StepContext> {
-        let deferred_executor_enabled = turn_context
-            .config
-            .features
-            .enabled(Feature::DeferredExecutor);
-        let environments = if deferred_executor_enabled {
-            // Keep selections fixed for the turn while allowing their startup work to finish.
-            turn_context.environments.refresh_readiness()
-        } else {
-            turn_context.environments.clone()
-        };
-        if deferred_executor_enabled {
-            self.services
-                .agents_md_manager
-                .refresh(&turn_context.config, &environments)
-                .await;
-        }
+        // Keep selections fixed for the turn while allowing their startup work to finish.
+        let environments = turn_context.environments.refresh_readiness();
+        self.services
+            .agents_md_manager
+            .refresh(&turn_context.config, &environments)
+            .await;
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)

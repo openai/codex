@@ -338,32 +338,37 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_does_not_duplicate_initial_environment_context() -> Result<()> {
-    let server = start_mock_server().await;
-    let response_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let mut builder = test_codex().with_config(|config| {
-        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-    });
-    let test = builder.build(&server).await?;
+async fn step_world_state_does_not_duplicate_initial_environment_context() -> Result<()> {
+    for deferred_executor_enabled in [false, true] {
+        let server = start_mock_server().await;
+        let response_mock = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ]),
+        )
+        .await;
+        let mut builder = test_codex().with_config(move |config| {
+            if deferred_executor_enabled {
+                assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            }
+        });
+        let test = builder.build(&server).await?;
 
-    test.submit_turn("report the environment").await?;
+        test.submit_turn("report the environment").await?;
 
-    let user_context = response_mock.single_request().message_input_texts("user");
-    assert_eq!(
-        user_context
-            .iter()
-            .filter(|text| text.contains("<environment_context>"))
-            .count(),
-        1
-    );
+        let user_context = response_mock.single_request().message_input_texts("user");
+        assert_eq!(
+            user_context
+                .iter()
+                .filter(|text| text.contains("<environment_context>"))
+                .count(),
+            1,
+            "deferred executor enabled: {deferred_executor_enabled}",
+        );
+    }
 
     Ok(())
 }

@@ -204,8 +204,7 @@ impl Session {
             .iter()
             .chain(
                 environments
-                    .turn_environments
-                    .iter()
+                    .turn_environments()
                     .flat_map(|environment| environment.environment.selected_capability_roots()),
             )
             .enumerate()
