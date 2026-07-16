@@ -1,0 +1,41 @@
+---
+source: core/src/context/world_state/environments_instructions_tests.rs
+expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&disabled)),\n(Absent, Known(&enabled)), (Known(&disabled), Known(&enabled)),\n(Known(&enabled), Known(&enabled)), (Known(&enabled), Known(&disabled)),\n(Unknown, Known(&disabled)), (Unknown, Known(&enabled)),])"
+---
+Absent -> Absent
+None
+
+Absent -> false
+None
+
+Absent -> true (role - developer)
+<environments_instructions>
+## Execution environments
+Execution environments are separate machines or workspaces with their own files, shell, and installed capabilities. `<environment_context>` lists the environments selected for this task.
+
+An environment marked `starting` is not yet usable. Its files, commands, AGENTS.md instructions, skills, plugins, and MCP tools may become available when startup completes.
+
+Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
+</environments_instructions>
+
+false -> true (role - developer)
+<environments_instructions>
+## Execution environments
+Execution environments are separate machines or workspaces with their own files, shell, and installed capabilities. `<environment_context>` lists the environments selected for this task.
+
+An environment marked `starting` is not yet usable. Its files, commands, AGENTS.md instructions, skills, plugins, and MCP tools may become available when startup completes.
+
+Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
+</environments_instructions>
+
+true -> true
+None
+
+true -> false
+None
+
+Unknown -> false
+None
+
+Unknown -> true
+None
