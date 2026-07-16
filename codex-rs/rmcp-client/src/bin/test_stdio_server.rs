@@ -98,9 +98,24 @@ impl TestToolServer {
         thread_hint_meta.insert("ui".to_string(), json!({ "visibility": [] }));
         thread_hint_tool.meta = Some(thread_hint_meta);
 
+        #[expect(clippy::expect_used)]
+        let encrypted_output_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("encrypted_output tool schema should deserialize");
+        let mut encrypted_output_tool = Tool::new(
+            Cow::Borrowed("encrypted_output"),
+            Cow::Borrowed("Return mixed plaintext and encrypted content for integration tests."),
+            Arc::new(encrypted_output_schema),
+        );
+        encrypted_output_tool.annotations = Some(ToolAnnotations::new().read_only(true));
+
         let mut tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
+            encrypted_output_tool,
             thread_hint_tool,
             Self::client_capabilities_tool(),
             Self::cwd_tool(),
@@ -635,6 +650,22 @@ impl ServerHandler for TestToolServer {
                 });
 
                 Ok(Self::structured_result(structured_content))
+            }
+            "encrypted_output" => {
+                let mut meta = Meta::new();
+                meta.insert("codex/encryptedContent".to_string(), json!(true));
+                let mut result = CallToolResult::success(vec![
+                    rmcp::model::Content::text("Lookup completed"),
+                    rmcp::model::Annotated::new(
+                        rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                            text: "gAAAA-test".to_string(),
+                            meta: Some(meta),
+                        }),
+                        None,
+                    ),
+                ]);
+                result.structured_content = Some(json!({"encrypted_output": "ignored"}));
+                Ok(result)
             }
             "image" => {
                 // Read a data URL (e.g. data:image/png;base64,AAA...) from env and convert to
