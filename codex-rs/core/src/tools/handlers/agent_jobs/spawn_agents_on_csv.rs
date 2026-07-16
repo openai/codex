@@ -300,7 +300,13 @@ pub async fn handle(
 }
 
 fn single_local_environment_cwd(turn: &TurnContext) -> Result<AbsolutePathBuf, FunctionCallError> {
-    let [turn_environment] = turn.environments.turn_environments.as_slice() else {
+    let mut environments = turn.environments.turn_environments();
+    let Some(turn_environment) = environments.next() else {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agents_on_csv requires exactly one local environment".to_string(),
+        ));
+    };
+    if environments.next().is_some() {
         return Err(FunctionCallError::RespondToModel(
             "spawn_agents_on_csv requires exactly one local environment".to_string(),
         ));

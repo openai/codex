@@ -124,9 +124,8 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             reasoning_effort: invocation.turn.effective_reasoning_effort(),
         })
         .and_then(|metadata| to_ascii_json_string(&metadata).ok());
-    let mut environments =
-        Vec::with_capacity(invocation.step_context.environments.turn_environments.len());
-    for environment in &invocation.step_context.environments.turn_environments {
+    let mut environments = Vec::new();
+    for environment in invocation.step_context.environments.turn_environments() {
         // TODO(anp): Migrate extension ToolEnvironment and granted-permission lookup to PathUri
         // so extensions can receive foreign environment cwd values.
         let Ok(native_cwd) = environment.cwd().to_abs_path() else {
@@ -337,8 +336,7 @@ mod tests {
         let truncation_policy = turn.model_info.truncation_policy.into();
         let expected_sandbox_cwds = turn
             .environments
-            .turn_environments
-            .iter()
+            .turn_environments()
             .map(|environment| Some(environment.cwd().clone()))
             .collect::<Vec<_>>();
         let history_item = ResponseItem::Message {

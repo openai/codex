@@ -244,6 +244,7 @@ impl ToolOutput for ViewImageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment_selection::TurnEnvironmentState;
     use crate::session::step_context::StepContext;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
@@ -262,17 +263,17 @@ mod tests {
     fn replace_primary_environment_cwd(turn: &mut crate::TurnContext, cwd: AbsolutePathBuf) {
         let current = turn
             .environments
-            .turn_environments
-            .first()
+            .turn_environments()
+            .next()
             .cloned()
             .expect("default local turn environment");
-        turn.environments.turn_environments[0] = TurnEnvironment::new(
+        turn.environments.environments[0] = TurnEnvironmentState::Ready(TurnEnvironment::new(
             current.environment_id,
             current.environment,
             PathUri::from_abs_path(&cwd),
             Vec::new(),
             current.shell,
-        );
+        ));
     }
 
     #[test]

@@ -208,6 +208,7 @@ async fn build_uploaded_argument_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment_selection::TurnEnvironmentState;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -220,11 +221,10 @@ mod tests {
     fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
         let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");
         turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-        let primary = turn_context
-            .environments
-            .turn_environments
-            .first_mut()
-            .expect("primary environment");
+        let TurnEnvironmentState::Ready(primary) = &mut turn_context.environments.environments[0]
+        else {
+            panic!("expected ready primary environment");
+        };
         *primary = TurnEnvironment::new(
             primary.environment_id.clone(),
             Arc::clone(&primary.environment),

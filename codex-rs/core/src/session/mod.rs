@@ -2430,8 +2430,7 @@ impl Session {
         let turn_environment = match args.environment_id.as_deref() {
             Some(environment_id) => turn_context
                 .environments
-                .turn_environments
-                .iter()
+                .turn_environments()
                 .find(|environment| environment.environment_id == environment_id),
             None => turn_context.environments.primary(),
         };
@@ -2854,9 +2853,9 @@ impl Session {
             .config
             .features
             .enabled(Feature::DeferredExecutor);
-        // Keep the old turn-frozen environment view unless deferred executors are enabled.
         let environments = if deferred_executor_enabled {
-            self.services.turn_environments.snapshot().await
+            // Keep selections fixed for the turn while allowing their startup work to finish.
+            turn_context.environments.refresh_readiness()
         } else {
             turn_context.environments.clone()
         };

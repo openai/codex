@@ -162,8 +162,7 @@ fn resolve_tool_environment<'a>(
         || Ok(environments.primary()),
         |environment_id| {
             environments
-                .turn_environments
-                .iter()
+                .turn_environments()
                 .find(|environment| environment.environment_id == environment_id)
                 .map(Some)
                 .ok_or_else(|| {

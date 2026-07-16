@@ -894,13 +894,21 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
+    assert_eq!(resumed_turn.environments.turn_environments().count(), 1);
     assert_eq!(
-        resumed_turn.environments.turn_environments[0].cwd(),
+        resumed_turn
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd(),
         &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
-        resumed_turn.environments.turn_environments[0].cwd(),
+        resumed_turn
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd(),
         &PathUri::from_abs_path(&selected_cwd)
     );
 
@@ -920,13 +928,21 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments.turn_environments.len(), 1);
+    assert_eq!(forked_turn.environments.turn_environments().count(), 1);
     assert_eq!(
-        forked_turn.environments.turn_environments[0].cwd(),
+        forked_turn
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd(),
         &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
-        forked_turn.environments.turn_environments[0].cwd(),
+        forked_turn
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd(),
         &PathUri::from_abs_path(&selected_cwd)
     );
 }

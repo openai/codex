@@ -1,6 +1,7 @@
 use super::head_tail_buffer::HeadTailBuffer;
 use super::*;
 use crate::codex_thread::BackgroundTerminalInfo;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
@@ -891,8 +892,10 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
-    turn.environments.turn_environments[0].environment =
-        Arc::new(remote_test_env.environment().clone());
+    let TurnEnvironmentState::Ready(environment) = &mut turn.environments.environments[0] else {
+        panic!("expected ready primary environment");
+    };
+    environment.environment = Arc::new(remote_test_env.environment().clone());
 
     #[allow(deprecated)]
     let cwd = turn.cwd.clone();

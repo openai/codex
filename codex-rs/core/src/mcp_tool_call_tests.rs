@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::config::ManagedFeatures;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
@@ -1158,19 +1159,22 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
 async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Result<()> {
     let (_, mut turn_context) = make_session_and_context().await;
     let secondary_cwd = PathUri::parse("file:///C:/remote/project")?;
-    let environment = turn_context.environments.turn_environments[0]
+    let environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
         .environment
         .clone();
     turn_context
         .environments
-        .turn_environments
-        .push(TurnEnvironment::new(
+        .environments
+        .push(TurnEnvironmentState::Ready(TurnEnvironment::new(
             "remote".to_string(),
             environment,
             secondary_cwd.clone(),
             Vec::new(),
             /*shell*/ None,
-        ));
+        )));
 
     let step_context = StepContext::for_test(Arc::new(turn_context));
     let sandbox_cwd = sandbox_cwd_for_mcp_server(&step_context, "remote");

@@ -72,14 +72,12 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
             let environment_id = args.environment_id;
             let already_ready = step_context
                 .environments
-                .turn_environments
-                .iter()
+                .turn_environments()
                 .any(|environment| environment.environment_id == environment_id);
             if !already_ready {
                 let Some(environment) = step_context
                     .environments
-                    .starting
-                    .iter()
+                    .starting()
                     .find(|environment| environment.selection.environment_id == environment_id)
                     .cloned()
                 else {

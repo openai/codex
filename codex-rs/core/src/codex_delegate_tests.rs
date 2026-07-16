@@ -1,4 +1,5 @@
 use super::*;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
@@ -211,7 +212,11 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         crate::session::tests::make_session_and_context_with_rx().await;
     *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
     let parent_ctx_mut = Arc::get_mut(&mut parent_ctx).expect("single turn context ref");
-    parent_ctx_mut.environments.turn_environments[0].environment_id = "remote".to_string();
+    let TurnEnvironmentState::Ready(environment) = &mut parent_ctx_mut.environments.environments[0]
+    else {
+        panic!("expected ready primary environment");
+    };
+    environment.environment_id = "remote".to_string();
 
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);

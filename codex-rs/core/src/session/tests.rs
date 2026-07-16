@@ -8,6 +8,7 @@ use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::environment_selection::ThreadEnvironments;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
 use crate::session::step_context::StepContext;
 use crate::shell::default_user_shell;
@@ -5072,7 +5073,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, absolute_cwd);
     assert_eq!(turn_context.config.cwd, absolute_cwd);
-    assert_eq!(turn_context.environments.turn_environments.len(), 1);
+    assert_eq!(turn_context.environments.turn_environments().count(), 1);
 }
 
 #[tokio::test]
@@ -6055,14 +6056,19 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
             mcp_elicitations: true,
         }))
         .expect("test setup should allow updating approval policy");
-    let current_environment = turn_context_mut.environments.turn_environments[0].clone();
-    turn_context_mut.environments.turn_environments[0] = TurnEnvironment::new(
-        "remote".to_string(),
-        current_environment.environment,
-        PathUri::from_abs_path(&environment_cwd),
-        Vec::new(),
-        current_environment.shell,
-    );
+    let current_environment = turn_context_mut
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
+    turn_context_mut.environments.environments[0] =
+        TurnEnvironmentState::Ready(TurnEnvironment::new(
+            "remote".to_string(),
+            current_environment.environment,
+            PathUri::from_abs_path(&environment_cwd),
+            Vec::new(),
+            current_environment.shell,
+        ));
 
     let call_id = "call-1".to_string();
     let handler = RequestPermissionsHandler;
@@ -6581,16 +6587,25 @@ async fn turn_environments_set_primary_environment() {
         .expect("turn should start");
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments().count(), 1);
     let turn_environment = turn_context
         .environments
         .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments.turn_environments[0].environment
+        &turn_environments
+            .primary()
+            .expect("primary environment")
+            .environment
     ));
-    assert!(!turn_context.environments.turn_environments.is_empty());
+    assert!(
+        turn_context
+            .environments
+            .turn_environments()
+            .next()
+            .is_some()
+    );
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd.as_path(), selected_cwd.as_path());
@@ -6639,14 +6654,17 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
     let turn_context = session.new_default_turn().await;
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments().count(), 1);
     let turn_environment = turn_context
         .environments
         .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments.turn_environments[0].environment
+        &turn_environments
+            .primary()
+            .expect("primary environment")
+            .environment
     ));
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
@@ -6668,31 +6686,41 @@ async fn default_turn_honors_empty_stored_thread_environments() {
     let turn_context = session.new_default_turn().await;
 
     assert!(turn_context.environments.primary().is_none());
-    assert!(turn_context.environments.turn_environments.is_empty());
+    assert!(
+        turn_context
+            .environments
+            .turn_environments()
+            .next()
+            .is_none()
+    );
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
-    assert_eq!(turn_context.environments.turn_environments.len(), 0);
+    assert_eq!(turn_context.environments.turn_environments().count(), 0);
 }
 
 #[tokio::test]
 async fn primary_environment_uses_first_turn_environment() {
     let (_session, mut turn_context) = make_session_and_context().await;
-    let first_environment = turn_context.environments.turn_environments[0].clone();
+    let first_environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
     #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
     let second_cwd_uri = codex_utils_path_uri::PathUri::from_abs_path(&second_cwd);
     turn_context
         .environments
-        .turn_environments
-        .push(TurnEnvironment::new(
+        .environments
+        .push(TurnEnvironmentState::Ready(TurnEnvironment::new(
             "second".to_string(),
             Arc::clone(&first_environment.environment),
             second_cwd_uri.clone(),
             Vec::new(),
             /*shell*/ None,
-        ));
+        )));
 
     assert_eq!(
         turn_context
@@ -6705,16 +6733,20 @@ async fn primary_environment_uses_first_turn_environment() {
     assert_eq!(
         turn_context
             .environments
-            .turn_environments
-            .iter()
+            .turn_environments()
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
             .cwd(),
         &second_cwd_uri
     );
-    assert_eq!(turn_context.environments.turn_environments.len(), 2);
+    assert_eq!(turn_context.environments.turn_environments().count(), 2);
     assert_eq!(
-        turn_context.environments.turn_environments[1].cwd(),
+        turn_context
+            .environments
+            .turn_environments()
+            .nth(1)
+            .expect("second environment")
+            .cwd(),
         &second_cwd_uri
     );
 }
@@ -6738,7 +6770,13 @@ async fn empty_turn_environments_clear_primary_environment() {
         .expect("turn should start");
 
     assert!(turn_context.environments.primary().is_none());
-    assert!(turn_context.environments.turn_environments.is_empty());
+    assert!(
+        turn_context
+            .environments
+            .turn_environments()
+            .next()
+            .is_none()
+    );
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, session.get_config().await.cwd);
@@ -8018,14 +8056,19 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
         )
         .await;
     let cwd = test_path_buf("/new-repo").abs();
-    let environment = current_context.environments.turn_environments[0].clone();
-    current_context.environments.turn_environments[0] = TurnEnvironment::new(
-        environment.environment_id,
-        environment.environment,
-        PathUri::from_abs_path(&cwd),
-        Vec::new(),
-        environment.shell,
-    );
+    let environment = current_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
+    current_context.environments.environments[0] =
+        TurnEnvironmentState::Ready(TurnEnvironment::new(
+            environment.environment_id,
+            environment.environment,
+            PathUri::from_abs_path(&cwd),
+            Vec::new(),
+            environment.shell,
+        ));
 
     let update_items =
         record_context_update_items(&session, previous_context, current_context).await;
@@ -8078,14 +8121,19 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
     let mut config = (*current_context.config).clone();
     config.include_environment_context = false;
     current_context.config = Arc::new(config);
-    let environment = current_context.environments.turn_environments[0].clone();
-    current_context.environments.turn_environments[0] = TurnEnvironment::new(
-        environment.environment_id,
-        environment.environment,
-        PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
-        Vec::new(),
-        environment.shell,
-    );
+    let environment = current_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
+    current_context.environments.environments[0] =
+        TurnEnvironmentState::Ready(TurnEnvironment::new(
+            environment.environment_id,
+            environment.environment,
+            PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
+            Vec::new(),
+            environment.shell,
+        ));
 
     let update_items =
         record_context_update_items(&session, previous_context, current_context).await;
@@ -8806,15 +8854,19 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
 #[tokio::test]
 async fn turn_context_item_stores_local_cwd() {
     let (_session, mut turn_context) = make_session_and_context().await;
-    let environment = turn_context.environments.turn_environments[0].clone();
+    let environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
     let cwd = PathUri::parse("file:///C:/windows").expect("Windows cwd URI");
-    turn_context.environments.turn_environments[0] = TurnEnvironment::new(
+    turn_context.environments.environments[0] = TurnEnvironmentState::Ready(TurnEnvironment::new(
         "remote".to_string(),
         environment.environment,
         cwd,
         Vec::new(),
         environment.shell,
-    );
+    ));
 
     #[allow(deprecated)]
     let local_cwd = turn_context.cwd.clone();
