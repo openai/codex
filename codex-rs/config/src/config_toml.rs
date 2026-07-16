@@ -923,18 +923,17 @@ pub fn validate_model_providers(
 ) -> Result<(), String> {
     validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
-        if key == AMAZON_BEDROCK_PROVIDER_ID {
-            continue;
-        }
-        if provider.aws.is_some() {
-            return Err(format!(
-                "model_providers.{key}: provider aws is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
-            ));
-        }
-        if provider.name.trim().is_empty() {
-            return Err(format!(
-                "model_providers.{key}: provider name must not be empty"
-            ));
+        if key != AMAZON_BEDROCK_PROVIDER_ID {
+            if provider.aws.is_some() {
+                return Err(format!(
+                    "model_providers.{key}: provider aws is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
+                ));
+            }
+            if provider.name.trim().is_empty() {
+                return Err(format!(
+                    "model_providers.{key}: provider name must not be empty"
+                ));
+            }
         }
         provider
             .validate()
@@ -1020,5 +1019,22 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("TOML list of strings"));
         assert!(message.contains("comma-separated strings are not supported"));
+    }
+
+    #[test]
+    fn amazon_bedrock_auth_command_must_not_be_empty() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[model_providers.amazon-bedrock.auth]
+command = "   "
+"#,
+        )
+        .expect_err("empty Amazon Bedrock auth command should be rejected");
+
+        assert!(
+            err.to_string().contains(
+                "model_providers.amazon-bedrock: provider auth.command must not be empty"
+            )
+        );
     }
 }

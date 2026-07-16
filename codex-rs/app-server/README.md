@@ -2010,13 +2010,8 @@ Request:
 Response examples:
 
 ```json
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
-{ "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
 { "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
-{ "id": 1, "result": { "account": { "type": "chatgpt", "email": null, "planType": "enterprise" }, "requiresOpenaiAuth": true } }
-{ "id": 1, "result": { "account": { "type": "amazonBedrock", "credentialSource": "codexManaged" }, "requiresOpenaiAuth": false } }
-{ "id": 1, "result": { "account": { "type": "amazonBedrock", "credentialSource": "awsManaged" }, "requiresOpenaiAuth": false } }
+{ "id": 1, "result": { "account": { "type": "amazonBedrock", "usesCodexManagedCredentials": false }, "requiresOpenaiAuth": false } }
 ```
 
 Field notes:
@@ -2024,7 +2019,7 @@ Field notes:
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `email` is `null` when the ChatGPT account does not have an email address.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
-- Amazon Bedrock reports `credentialSource: "codexManaged"` when it uses a Bedrock API key managed by Codex. Otherwise it reports `credentialSource: "awsManaged"` for the external AWS credential path. This identifies the selected credential source; it does not validate that the AWS credential chain can resolve credentials.
+- Amazon Bedrock reports `usesCodexManagedCredentials: true` when it uses a Bedrock API key managed by Codex. It reports `false` for external credential paths, including the AWS credential chain and configured command auth. This identifies whether Codex-managed credentials are selected; it does not validate that the credential source can resolve credentials.
 
 ### 2) Log in with an API key
 

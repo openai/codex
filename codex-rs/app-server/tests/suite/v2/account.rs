@@ -47,7 +47,6 @@ use codex_login::auth::BedrockApiKeyAuth;
 use codex_login::load_auth_dot_json;
 use codex_login::login_with_api_key;
 use codex_login::login_with_bedrock_api_key;
-use codex_protocol::account::AmazonBedrockCredentialSource;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::AuthMode as DomainAuthMode;
 use core_test_support::responses;
@@ -1555,7 +1554,7 @@ async fn login_managed_bedrock_updates_active_bedrock_account() -> Result<()> {
         read_account(&mut mcp).await?,
         GetAccountResponse {
             account: Some(Account::AmazonBedrock {
-                credential_source: AmazonBedrockCredentialSource::CodexManaged,
+                uses_codex_managed_credentials: true,
             }),
             requires_openai_auth: false,
         }
@@ -2583,11 +2582,50 @@ region = "us-west-2"
 
     let expected = GetAccountResponse {
         account: Some(Account::AmazonBedrock {
-            credential_source: AmazonBedrockCredentialSource::AwsManaged,
+            uses_codex_managed_credentials: false,
         }),
         requires_openai_auth: false,
     };
     assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_user_managed_bedrock_provider() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("amazon-bedrock".to_string()),
+            extra_provider_config: Some(
+                r#"[model_providers.amazon-bedrock]
+base_url = "https://bedrock.example.com/v1"
+
+[model_providers.amazon-bedrock.auth]
+command = "print-token"
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: Some(Account::AmazonBedrock {
+                uses_codex_managed_credentials: false,
+            }),
+            requires_openai_auth: false,
+        }
+    );
     Ok(())
 }
 
@@ -2622,7 +2660,7 @@ region = "us-west-2"
         read_account(&mut mcp).await?,
         GetAccountResponse {
             account: Some(Account::AmazonBedrock {
-                credential_source: AmazonBedrockCredentialSource::AwsManaged,
+                uses_codex_managed_credentials: false,
             }),
             requires_openai_auth: false,
         }
@@ -2692,7 +2730,7 @@ async fn get_account_with_managed_bedrock_provider() -> Result<()> {
         received,
         GetAccountResponse {
             account: Some(Account::AmazonBedrock {
-                credential_source: AmazonBedrockCredentialSource::CodexManaged,
+                uses_codex_managed_credentials: true,
             }),
             requires_openai_auth: false,
         }

@@ -75,6 +75,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_network_proxy::NetworkMode;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
@@ -845,6 +846,53 @@ region = "us-west-2"
 }
 
 #[tokio::test]
+async fn load_config_applies_amazon_bedrock_transport_overrides() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock]
+base_url = "https://bedrock.example.com/v1"
+http_headers = { "X-Custom-Header" = "value" }
+
+[model_providers.amazon-bedrock.auth]
+command = "print-token"
+"#,
+    )
+    .expect("Amazon Bedrock transport overrides should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    let mut expected_provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove("amazon-bedrock")
+        .expect("Amazon Bedrock provider should be built in");
+    expected_provider.base_url = Some("https://bedrock.example.com/v1".to_string());
+    expected_provider.auth = Some(ModelProviderAuthInfo {
+        command: "print-token".to_string(),
+        args: Vec::new(),
+        timeout_ms: std::num::NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+        refresh_interval_ms: 300_000,
+        cwd: std::env::current_dir()
+            .expect("current directory should be available")
+            .try_into()
+            .expect("current directory should be absolute"),
+    });
+    expected_provider
+        .http_headers
+        .get_or_insert_default()
+        .insert("X-Custom-Header".to_string(), "value".to_string());
+
+    assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert_eq!(config.model_provider, expected_provider);
+}
+
+#[tokio::test]
 async fn load_config_rejects_unsupported_amazon_bedrock_overrides() {
     let cfg = toml::from_str::<ConfigToml>(
         r#"
@@ -852,13 +900,8 @@ model_provider = "amazon-bedrock"
 
 [model_providers.amazon-bedrock]
 name = "Custom Bedrock"
-base_url = "https://bedrock.example.com/v1"
 requires_openai_auth = true
 supports_websockets = true
-
-[model_providers.amazon-bedrock.aws]
-profile = "codex-bedrock"
-region = "us-west-2"
 "#,
     )
     .expect("Amazon Bedrock unsupported overrides should deserialize");
@@ -873,7 +916,7 @@ region = "us-west-2"
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported"
     ));
 }
 

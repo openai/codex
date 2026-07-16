@@ -39,16 +39,8 @@ pub enum ProviderAccount {
         plan_type: PlanType,
     },
     AmazonBedrock {
-        credential_source: AmazonBedrockCredentialSource,
+        uses_codex_managed_credentials: bool,
     },
-}
-
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub enum AmazonBedrockCredentialSource {
-    CodexManaged,
-    AwsManaged,
 }
 
 impl PlanType {

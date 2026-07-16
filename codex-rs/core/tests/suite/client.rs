@@ -14,6 +14,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_login::default_client::originator;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
@@ -1282,11 +1283,49 @@ async fn provider_auth_command_refreshes_after_401() {
     send_provider_auth_request(&server, auth_fixture.auth()).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn amazon_bedrock_proxy_uses_command_auth_and_custom_headers() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let auth_fixture = ProviderAuthCommandFixture::new(&["command-token"]).unwrap();
+    let mut provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(AMAZON_BEDROCK_PROVIDER_ID)
+        .expect("Amazon Bedrock provider should be built in");
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.auth = Some(auth_fixture.auth());
+    provider.aws = None;
+    provider
+        .http_headers
+        .get_or_insert_default()
+        .insert("x-some-header".to_string(), "foo".to_string());
+
+    send_request_with_provider(provider).await;
+
+    let request = response.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    assert_eq!(
+        request.header("authorization"),
+        Some("Bearer command-token".to_string())
+    );
+    assert_eq!(request.header("x-amz-date"), None);
+    assert_eq!(request.header("x-some-header"), Some("foo".to_string()));
+    assert_eq!(
+        request.header("x-amzn-mantle-client-agent"),
+        Some("codex".to_string())
+    );
+    assert_eq!(request.body_json()["store"], false);
+}
+
 /// Issues one streamed Responses request through a provider configured with command-backed auth.
 ///
 /// The caller owns the server-side assertions, so this helper only validates that the request
 /// reaches `Completed` without surfacing an auth or transport error to the client.
-#[expect(clippy::unwrap_used)]
 async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuthInfo) {
     let provider = ModelProviderInfo {
         name: "corp".into(),
@@ -1308,6 +1347,11 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         supports_websockets: false,
     };
 
+    send_request_with_provider(provider).await;
+}
+
+#[expect(clippy::unwrap_used)]
+async fn send_request_with_provider(provider: ModelProviderInfo) {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();

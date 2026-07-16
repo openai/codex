@@ -54,7 +54,7 @@ pub(super) fn base_url(region: &str) -> Result<String> {
     }
 }
 
-pub(super) async fn runtime_base_url(
+pub(super) async fn bedrock_mantle_runtime_base_url(
     managed_auth: Option<&BedrockApiKeyAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<String> {
