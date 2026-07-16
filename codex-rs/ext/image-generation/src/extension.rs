@@ -6,6 +6,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadOriginator;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
@@ -94,10 +95,12 @@ impl ToolContributor for ImageGenerationExtension {
         }
 
         vec![Arc::new(ImageGenerationTool::new(
-            CodexImagesBackend::new(create_model_provider(
-                config.provider.clone(),
-                Some(self.auth_manager.clone()),
-            )),
+            CodexImagesBackend::new(
+                create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
+                thread_store
+                    .get::<ThreadOriginator>()
+                    .map(|originator| originator.0.clone()),
+            ),
             config.save_root.clone(),
             thread_store.level_id().to_string(),
         ))]

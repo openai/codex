@@ -47,6 +47,7 @@ pub use contributors::SkillInvocationInput;
 pub use contributors::SkillInvocationKind;
 pub use contributors::ThreadIdleInput;
 pub use contributors::ThreadLifecycleContributor;
+pub use contributors::ThreadOriginator;
 pub use contributors::ThreadResumeInput;
 pub use contributors::ThreadStartInput;
 pub use contributors::ThreadStopInput;

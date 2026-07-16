@@ -2,6 +2,14 @@ use crate::ExtensionData;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 
+/// Trusted, host-resolved billing attribution for a thread.
+///
+/// Extensions may forward this value to first-party APIs. It is seeded by Core
+/// after resolving persisted and host-provided originator state, rather than
+/// from model- or tool-controlled input.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThreadOriginator(pub String);
+
 /// Input supplied when the host starts a runtime for a thread.
 pub struct ThreadStartInput<'a, C> {
     /// Host configuration visible at thread start.

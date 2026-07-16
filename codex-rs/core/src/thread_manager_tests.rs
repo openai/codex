@@ -136,6 +136,24 @@ fn effective_originator_prefers_thread_scoped_sources_before_env_originator() {
             "codex_work_mobile",
         ),
         (
+            Some("codex_work_cca"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_cca",
+        ),
+        (
+            Some("chatgpt_cca"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "chatgpt_cca",
+        ),
+        (
+            Some("chatgpt_cca_extra"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "persisted_originator",
+        ),
+        (
             None,
             Some("persisted_originator"),
             Some("inherited_originator"),

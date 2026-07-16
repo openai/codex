@@ -1,5 +1,4 @@
 use crate::client::ModelClient;
-use crate::client::add_originator_header;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
@@ -25,6 +24,7 @@ use codex_api::map_api_error;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
+use codex_login::default_client::add_originator_header;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;

@@ -204,7 +204,13 @@ pub struct StartThreadOptions {
 
 fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
     let service_name = service_name?.trim();
-    for originator in ["codex_work_desktop", "codex_work_web", "codex_work_mobile"] {
+    for originator in [
+        "codex_work_desktop",
+        "codex_work_web",
+        "codex_work_mobile",
+        "codex_work_cca",
+        "chatgpt_cca",
+    ] {
         if service_name.eq_ignore_ascii_case(originator) {
             return Some(originator.to_string());
         }
