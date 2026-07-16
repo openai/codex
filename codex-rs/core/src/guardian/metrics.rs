@@ -60,6 +60,10 @@ fn emit_guardian_token_usage_histograms(
         ("total", token_usage.total_tokens.max(0)),
         ("input", token_usage.input_tokens.max(0)),
         ("cached_input", token_usage.cached_input()),
+        (
+            "cache_write_input",
+            token_usage.cache_write_input_tokens.max(0),
+        ),
         ("non_cached_input", token_usage.non_cached_input()),
         ("output", token_usage.output_tokens.max(0)),
         (
@@ -348,6 +352,7 @@ mod tests {
             token_usage: Some(TokenUsage {
                 input_tokens: 10,
                 cached_input_tokens: 4,
+                cache_write_input_tokens: 2,
                 output_tokens: 3,
                 reasoning_output_tokens: 2,
                 total_tokens: 15,
@@ -399,6 +404,7 @@ mod tests {
             histogram_sums(&snapshot, GUARDIAN_REVIEW_TOKEN_USAGE_METRIC),
             BTreeMap::from([
                 ("cached_input".to_string(), 4),
+                ("cache_write_input".to_string(), 2),
                 ("input".to_string(), 10),
                 ("non_cached_input".to_string(), 6),
                 ("output".to_string(), 3),
