@@ -27,6 +27,13 @@ use crate::provider::SkillSearchRequest;
 pub struct ExecutorSkillProvider {
     environment_manager: Arc<EnvironmentManager>,
     restriction_product: Option<Product>,
+    environment_access: EnvironmentAccess,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum EnvironmentAccess {
+    Reconnect,
+    ReadyOnly,
 }
 
 impl ExecutorSkillProvider {
@@ -37,6 +44,19 @@ impl ExecutorSkillProvider {
         Self {
             environment_manager,
             restriction_product,
+            environment_access: EnvironmentAccess::Reconnect,
+        }
+    }
+
+    /// Creates a provider whose skill discovery never starts or reconnects an environment.
+    pub fn new_for_inspection(
+        environment_manager: Arc<EnvironmentManager>,
+        restriction_product: Option<Product>,
+    ) -> Self {
+        Self {
+            environment_manager,
+            restriction_product,
+            environment_access: EnvironmentAccess::ReadyOnly,
         }
     }
 }
@@ -60,7 +80,10 @@ impl SkillProvider for ExecutorSkillProvider {
                     ));
                     continue;
                 };
-                let file_system = environment.get_filesystem();
+                let file_system = match self.environment_access {
+                    EnvironmentAccess::Reconnect => environment.get_filesystem(),
+                    EnvironmentAccess::ReadyOnly => environment.get_filesystem_without_reconnect(),
+                };
                 let outcome = load_environment_skills_from_root(
                     file_system.as_ref(),
                     &path,
