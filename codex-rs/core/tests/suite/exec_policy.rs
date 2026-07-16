@@ -9,7 +9,9 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -26,6 +28,8 @@ use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
+
+const COMPLEX_FORCED_RM_COMMAND: &str = "for target in \"\"; do rm -rf \"$target\"; done";
 
 fn collaboration_mode_for_model(model: String) -> CollaborationMode {
     CollaborationMode {
@@ -88,6 +92,146 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
         !output.contains("invariant failed: matched_rules must be non-empty"),
         "unexpected invariant panic surfaced in output: {output}"
     );
+}
+
+#[tokio::test]
+async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+    let call_id = "forced-rm-denied";
+    let args = json!({
+        "command": COMPLEX_FORCED_RM_COMMAND,
+        "timeout_ms": 1_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-forced-rm-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-forced-rm-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-forced-rm-1", "done"),
+            ev_completed("resp-forced-rm-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run the forced rm loop",
+        AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: false,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        PermissionProfile::read_only(),
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function call output should include a string output payload");
+    assert!(
+        output.contains("rm -f style commands are not permitted. Use a safer approach"),
+        "unexpected output: {output}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+    let call_id = "forced-rm-approval";
+    let args = json!({
+        "command": COMPLEX_FORCED_RM_COMMAND,
+        "timeout_ms": 1_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-forced-rm-approval-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-forced-rm-approval-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-forced-rm-approval-1", "done"),
+            ev_completed("resp-forced-rm-approval-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run the forced rm loop",
+        AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        PermissionProfile::read_only(),
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let approval_event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected forced rm to request approval before turn completion");
+    };
+    assert_eq!(
+        approval.command.last().map(String::as_str),
+        Some(COMPLEX_FORCED_RM_COMMAND)
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    Ok(())
 }
 
 #[cfg(windows)]

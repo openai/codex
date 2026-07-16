@@ -123,6 +123,39 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
     parse_shell_script_into_commands(script)
 }
 
+/// Extracts the literal portions of command invocations from a shell script.
+///
+/// Unlike [`parse_shell_lc_plain_commands`], this accepts complex shell syntax
+/// and returns the statically known words from every command node in a valid
+/// syntax tree. Dynamic words and redirections are omitted. This is suitable
+/// for identifying dangerous literal commands, but must not be used to prove
+/// that a command is safe.
+pub(crate) fn parse_shell_lc_literal_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
+    let (_, script) = extract_bash_command(command)?;
+    let tree = try_parse_shell(script)?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+
+    let mut commands = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "command"
+            && let Some(command) = parse_literal_command_from_node(node, script)
+        {
+            commands.push(command);
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+
+    Some(commands)
+}
+
 /// Returns the parsed argv for a single shell command in a here-doc style
 /// script (`<<`), as long as the script contains exactly one command node.
 pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<String>> {
@@ -199,6 +232,46 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
         }
     }
     Some(words)
+}
+
+fn parse_literal_command_from_node(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
+    if cmd.kind() != "command" {
+        return None;
+    }
+
+    let mut words = Vec::new();
+    let mut found_command_name = false;
+    let mut cursor = cmd.walk();
+    for child in cmd.named_children(&mut cursor) {
+        if child.kind() == "command_name" {
+            let command_name = parse_literal_shell_word(child.named_child(0)?, src)?;
+            words.push(command_name);
+            found_command_name = true;
+        } else if found_command_name && let Some(word) = parse_literal_shell_word(child, src) {
+            words.push(word);
+        }
+    }
+
+    found_command_name.then_some(words)
+}
+
+fn parse_literal_shell_word(node: Node<'_>, src: &str) -> Option<String> {
+    match node.kind() {
+        "word" | "number" if is_literal_word_or_number(node) => {
+            Some(node.utf8_text(src.as_bytes()).ok()?.to_owned())
+        }
+        "string" => parse_double_quoted_string(node, src),
+        "raw_string" => parse_raw_string(node, src),
+        "concatenation" => {
+            let mut concatenated = String::new();
+            let mut cursor = node.walk();
+            for part in node.named_children(&mut cursor) {
+                concatenated.push_str(&parse_literal_shell_word(part, src)?);
+            }
+            (!concatenated.is_empty()).then_some(concatenated)
+        }
+        _ => None,
+    }
 }
 
 fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
