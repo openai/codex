@@ -14,16 +14,26 @@ workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+codex-analytics = { workspace = true }
+codex-config = { workspace = true }
+codex-core = { workspace = true }
+codex-core-plugins = { workspace = true }
 codex-hooks = { workspace = true }
+codex-memories-write = { workspace = true }
+codex-otel = { workspace = true }
+codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 codex-app-server-protocol = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

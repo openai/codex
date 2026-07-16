@@ -17,7 +17,7 @@ const SESSION_IMPORT_LEDGER_FILE: &str = "external_agent_session_imports.json";
 const SESSION_HASH_BUFFER_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct ImportedExternalAgentSessionLedger {
+pub(crate) struct ImportedExternalAgentSessionLedger {
     records: Vec<ImportedExternalAgentSessionRecord>,
 }
 
@@ -48,7 +48,7 @@ pub struct ImportedConnectorCandidate {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ImportedSourceState {
+pub(crate) struct ImportedSourceState {
     pub source_modified_at: Option<i64>,
     pub imported_at: i64,
 }
@@ -144,7 +144,7 @@ pub fn read_imported_connector_candidates(
 }
 
 impl ImportedExternalAgentSessionLedger {
-    pub(super) fn source_states(&self) -> HashMap<&Path, ImportedSourceState> {
+    pub(crate) fn source_states(&self) -> HashMap<&Path, ImportedSourceState> {
         let mut states = HashMap::new();
         for record in &self.records {
             states.insert(
@@ -158,7 +158,7 @@ impl ImportedExternalAgentSessionLedger {
         states
     }
 
-    pub(super) fn contains_current_source(&self, source_path: &Path) -> io::Result<bool> {
+    pub(crate) fn contains_current_source(&self, source_path: &Path) -> io::Result<bool> {
         if self.records.is_empty() {
             return Ok(false);
         }
@@ -176,7 +176,7 @@ impl ImportedExternalAgentSessionLedger {
         }))
     }
 
-    pub(super) fn refresh_current_source(
+    pub(crate) fn refresh_current_source(
         &mut self,
         source_path: &Path,
         source_modified_at: i64,
@@ -203,7 +203,7 @@ impl ImportedExternalAgentSessionLedger {
     }
 }
 
-pub(super) fn load_import_ledger(
+pub(crate) fn load_import_ledger(
     codex_home: &Path,
 ) -> io::Result<ImportedExternalAgentSessionLedger> {
     let path = import_ledger_path(codex_home);
@@ -222,7 +222,7 @@ pub(super) fn load_import_ledger(
     })
 }
 
-pub(super) fn save_import_ledger(
+pub(crate) fn save_import_ledger(
     codex_home: &Path,
     ledger: &ImportedExternalAgentSessionLedger,
 ) -> io::Result<()> {

@@ -1,5 +1,5 @@
 mod processor;
-mod service;
+mod protocol;
 mod session_importer;
 
 pub(crate) use processor::ExternalAgentConfigRequestProcessor;

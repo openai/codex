@@ -71,7 +71,8 @@ pub fn detect_imported_cla_session_connectors(
                 if !attributed_server_ids.contains(&uuid) {
                     continue;
                 }
-                let Some(name) = super::normalized_connector_display_name(server.name.as_deref())
+                let Some(name) =
+                    crate::sessions::normalized_connector_display_name(server.name.as_deref())
                 else {
                     continue;
                 };

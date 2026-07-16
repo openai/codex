@@ -3,6 +3,10 @@ use super::hooks_cla::hook_migration_cla;
 use super::hooks_cla::rewrite_hook_command_cla;
 use super::*;
 use pretty_assertions::assert_eq;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use toml::Value as TomlValue;
 
 const TEST_REWRITE_PROFILE: RewriteProfile = RewriteProfile::new(
     "CLAUDE.md",

@@ -1,11 +1,8 @@
 //! Parsing and export helpers for external-agent session histories.
 
-mod connectors_cla;
-mod detect_cla;
-mod detect_cur;
 mod export;
-mod ledger;
-mod records;
+pub(crate) mod ledger;
+pub(crate) mod records;
 mod title;
 
 use codex_protocol::protocol::RolloutItem;
@@ -14,10 +11,10 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub use connectors_cla::ImportedSessionConnectorAttribution;
-pub use connectors_cla::detect_imported_cla_session_connectors;
-pub use detect_cla::detect_recent_cla_sessions;
-pub use detect_cur::detect_recent_cur_sessions;
+pub use crate::detect::sessions::ImportedSessionConnectorAttribution;
+pub use crate::detect::sessions::detect_imported_cla_session_connectors;
+pub use crate::detect::sessions::detect_recent_cla_sessions;
+pub use crate::detect::sessions::detect_recent_cur_sessions;
 use export::load_session_for_import_with_content_sha256;
 pub use ledger::CompletedExternalAgentSessionImport;
 pub use ledger::ImportedConnectorCandidate;
@@ -29,7 +26,7 @@ pub use records::summarize_session;
 
 const SESSION_TITLE_MAX_LEN: usize = 120;
 
-fn normalized_connector_display_name(name: Option<&str>) -> Option<String> {
+pub(crate) fn normalized_connector_display_name(name: Option<&str>) -> Option<String> {
     name.map(str::trim)
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
@@ -145,7 +142,7 @@ fn truncate(text: &str, max_len: usize) -> String {
     format!("{prefix}...")
 }
 
-fn now_unix_seconds() -> i64 {
+pub(crate) fn now_unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)

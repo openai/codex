@@ -2,7 +2,6 @@ use super::RewriteProfile;
 use super::external_agent_config_dir;
 use super::invalid_data_error;
 use super::json_u64;
-use super::rewrite_external_agent_terms;
 use super::rewrite_hook_command_for_source;
 use super::write_hook_migration;
 use codex_hooks::HOOK_EVENT_NAMES;
@@ -193,10 +192,7 @@ pub(super) fn append_convertible_hook_groups_cla(
                     {
                         command_payload.insert(
                             "statusMessage".to_string(),
-                            JsonValue::String(rewrite_external_agent_terms(
-                                status_message,
-                                rewrite_profile,
-                            )),
+                            JsonValue::String(rewrite_profile.rewrite(status_message)),
                         );
                     }
                     hook_commands.push(JsonValue::Object(command_payload));
