@@ -221,6 +221,13 @@ crate.from_cargo(
 bazel_dep(name = "zstd", version = "1.5.7")
 
 crate.annotation(
+    # The Windows lint toolchain cannot reliably materialize blake3's native x86 assembly archives.
+    crate = "blake3",
+    crate_features_select = {
+        "x86_64-pc-windows-gnullvm": ["pure"],
+    },
+)
+crate.annotation(
     crate = "zstd-sys",
     gen_build_script = "on",
     patch_args = ["-p1"],
