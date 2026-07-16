@@ -28,6 +28,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ENVIRONMENTS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
@@ -690,6 +691,9 @@ async fn deferred_executor_loads_agents_md_when_environment_becomes_ready() -> R
     assert_eq!(agents_md_occurrences(&requests[0], AGENTS_CONTENT), 0);
     assert_eq!(agents_md_occurrences(&requests[1], AGENTS_CONTENT), 1);
     assert_eq!(agents_md_occurrences(&requests[2], AGENTS_CONTENT), 1);
+    assert_eq!(environment_instructions_occurrences(&requests[0]), 1);
+    assert_eq!(environment_instructions_occurrences(&requests[1]), 1);
+    assert_eq!(environment_instructions_occurrences(&requests[2]), 1);
     assert_eq!(test.codex.instruction_sources().await, vec![agents_path]);
 
     Ok(())
@@ -700,6 +704,14 @@ fn agents_md_occurrences(request: &ResponsesRequest, contents: &str) -> usize {
         .message_input_texts("user")
         .iter()
         .filter(|text| text.contains(contents))
+        .count()
+}
+
+fn environment_instructions_occurrences(request: &ResponsesRequest) -> usize {
+    request
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains(ENVIRONMENTS_INSTRUCTIONS_OPEN_TAG))
         .count()
 }
 

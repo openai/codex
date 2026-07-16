@@ -3,10 +3,12 @@ use super::step_context::StepContext;
 use crate::connectors;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
+use crate::context::world_state::EnvironmentsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
+use codex_features::Feature;
 
 impl Session {
     #[tracing::instrument(name = "world_state.build", level = "info", skip_all)]
@@ -39,6 +41,13 @@ impl Session {
                 .with_subagents(environment_subagents),
             );
         }
+        world_state.add_section(EnvironmentsInstructionsState::new(
+            turn_context.config.include_environment_context
+                && turn_context
+                    .config
+                    .features
+                    .enabled(Feature::DeferredExecutor),
+        ));
         let apps_available =
             if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
                 let tools = step_context.mcp_tools().await;
