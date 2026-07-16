@@ -1671,6 +1671,7 @@ mod tests {
                 sandbox: None,
                 enforce_managed_network: false,
                 managed_network: None,
+                network_proxy: None,
             })
             .instrument(parent_span)
             .await

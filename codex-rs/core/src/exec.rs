@@ -461,6 +461,7 @@ pub(crate) async fn execute_exec_request(
         exec_server_sandbox: _,
         exec_server_enforce_managed_network: _,
         exec_server_managed_network: _,
+        exec_server_network_proxy: _,
     } = exec_request;
 
     // TODO(anp): Keep PathUri through the local process launch boundary.

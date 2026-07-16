@@ -650,6 +650,29 @@ impl NetworkProxy {
         self.state.current_cfg().await
     }
 
+    /// Captures the static inputs needed to launch a matching executor-local proxy.
+    pub async fn remote_launch_config(&self) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
+        let proxy = crate::RemoteNetworkProxyConfig::from_effective_config(
+            &self.state.current_cfg().await?,
+        )?;
+        let (environment_id, execution_id) = self
+            .execution_scope
+            .as_ref()
+            .map(|scope| {
+                (
+                    Some(scope.environment_id.clone()),
+                    Some(scope.execution_id.clone()),
+                )
+            })
+            .unwrap_or_default();
+        Ok(crate::RemoteNetworkProxyLaunchConfig {
+            proxy,
+            audit_metadata: self.state.audit_metadata().clone(),
+            environment_id,
+            execution_id,
+        })
+    }
+
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.state.add_allowed_domain(host).await
     }
