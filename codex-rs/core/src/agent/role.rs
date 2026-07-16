@@ -241,10 +241,7 @@ pub(crate) mod spawn_tool_spec {
             }
         }
 
-        format!(
-            "Optional type name for the new agent. If omitted, `{DEFAULT_ROLE_NAME}` is used.\nAvailable roles:\n{}",
-            formatted_roles.join("\n"),
-        )
+        format!("Available roles:\n{}", formatted_roles.join("\n"))
     }
 
     fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {

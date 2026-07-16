@@ -863,9 +863,6 @@ pub struct Config {
     /// User-configured maximum number of spawned agent threads per session.
     pub agent_max_threads: Option<usize>,
 
-    /// Reserved setting for whether the spawn tool supports agent types.
-    pub agent_support_agent_type: Option<bool>,
-
     /// Reserved default model for spawned subagents.
     pub agent_default_subagent_model: Option<String>,
 
@@ -3606,10 +3603,6 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.max_depth)
             .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
-        let agent_support_agent_type = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.support_agent_type);
         let agent_default_subagent_model = cfg
             .agents
             .as_ref()
@@ -3970,7 +3963,6 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agents_enabled,
             agent_max_threads,
-            agent_support_agent_type,
             agent_default_subagent_model,
             agent_default_subagent_reasoning_effort,
             agent_max_depth,

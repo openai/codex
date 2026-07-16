@@ -15,6 +15,7 @@ pub const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
+const SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1: &str = "Agent type override for the new agent. Omit to inherit the parent agent type with a full-history fork; otherwise, `default` is used.";
 const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
     "Model override for the new agent. Omit unless an explicit override is needed.";
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
@@ -25,6 +26,7 @@ const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 pub struct SpawnAgentToolOptions {
     pub available_models: Vec<ModelPreset>,
     pub agent_type_description: String,
+    pub expose_agent_type: bool,
     pub hide_agent_type_model_reasoning: bool,
     pub expose_spawn_agent_model_overrides: bool,
     pub multi_agent_version: MultiAgentVersion,
@@ -36,6 +38,7 @@ impl Default for SpawnAgentToolOptions {
         Self {
             available_models: Vec::new(),
             agent_type_description: String::new(),
+            expose_agent_type: true,
             hide_agent_type_model_reasoning: false,
             expose_spawn_agent_model_overrides: false,
             multi_agent_version: MultiAgentVersion::Disabled,
@@ -70,6 +73,9 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
     let mut properties = spawn_agent_common_properties_v1(&options.agent_type_description);
+    if !options.expose_agent_type {
+        properties.remove("agent_type");
+    }
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);
     }
@@ -101,8 +107,10 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
         && !options.hide_agent_type_model_reasoning)
         .then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
-    if options.hide_agent_type_model_reasoning {
+    if !options.expose_agent_type {
         properties.remove("agent_type");
+    }
+    if options.hide_agent_type_model_reasoning {
         properties.remove("service_tier");
     }
     if !options.expose_spawn_agent_model_overrides {
@@ -582,7 +590,9 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
         ("items".to_string(), create_collab_input_items_schema()),
         (
             "agent_type".to_string(),
-            JsonSchema::string(Some(agent_type_description.to_string())),
+            JsonSchema::string(Some(format!(
+                "{SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1}\n{agent_type_description}"
+            ))),
         ),
         (
             "fork_context".to_string(),
@@ -624,7 +634,9 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         ),
         (
             "agent_type".to_string(),
-            JsonSchema::string(Some(agent_type_description.to_string())),
+            JsonSchema::string(Some(format!(
+                "Agent type override for the new agent. Omit unless explicitly asked. Set `fork_turns` to `none` or a positive integer when an explicit override is needed.\n{agent_type_description}"
+            ))),
         ),
         (
             "fork_turns".to_string(),

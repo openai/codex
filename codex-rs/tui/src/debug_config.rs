@@ -71,11 +71,6 @@ fn render_agents_config_lines(config: &Config) -> Vec<Line<'static>> {
         )
         .into(),
         format!(
-            "  - support_agent_type = {} (not yet wired)",
-            format_optional(config.agent_support_agent_type)
-        )
-        .into(),
-        format!(
             "  - default_subagent_model = {} (not yet wired)",
             format_optional(config.agent_default_subagent_model.as_deref())
         )
@@ -654,7 +649,6 @@ mod tests {
 enabled = false
 max_concurrent_threads_per_session = 7
 max_depth = -2
-support_agent_type = true
 default_subagent_model = "gpt-5.6-terra"
 default_subagent_reasoning_effort = "high"
 job_max_runtime_seconds = 900
