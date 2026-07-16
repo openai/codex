@@ -1,9 +1,15 @@
 use std::borrow::Cow;
+use std::time::Duration;
 
+use sqlx::Connection;
 use sqlx::Row;
+use sqlx::SqliteConnection;
 use sqlx::migrate::Migration;
 use sqlx::migrate::Migrator;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
+use uuid::Uuid;
 
 use super::STATE_MIGRATOR;
 use super::repair_legacy_recency_migration_version;
@@ -195,4 +201,44 @@ async fn repairs_recency_migration_that_was_applied_as_version_38() {
         .map(|migration| (migration.version, migration.checksum.to_vec()))
         .collect::<Vec<_>>();
     assert_eq!(applied, expected);
+}
+
+#[tokio::test]
+async fn repair_recency_migration_succeeds_while_another_connection_holds_writer_slot() {
+    let database_path = std::env::temp_dir().join(format!(
+        "codex-state-migrations-test-{}.sqlite",
+        Uuid::new_v4()
+    ));
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_millis(100));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .expect("database should open");
+    STATE_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("current migrations should apply");
+    let mut write_connection = SqliteConnection::connect_with(&options)
+        .await
+        .expect("write connection should open");
+    let write_transaction = write_connection
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .expect("write transaction should acquire the writer slot");
+
+    let repair_result = repair_legacy_recency_migration_version(&pool, &STATE_MIGRATOR).await;
+
+    write_transaction
+        .rollback()
+        .await
+        .expect("write transaction should roll back");
+    drop(write_connection);
+    pool.close().await;
+    let _ = tokio::fs::remove_file(database_path).await;
+    repair_result.expect("current migration history should not need the writer slot");
 }
