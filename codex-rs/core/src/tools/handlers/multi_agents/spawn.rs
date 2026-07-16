@@ -5,7 +5,6 @@ use crate::agent::control::render_input_preview;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
-use crate::agent::role::apply_role_to_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use codex_tools::ToolSpec;
@@ -103,9 +102,7 @@ async fn handle_spawn_agent(
     )
     .await?;
     if !args.fork_context {
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        apply_spawn_agent_role(&session, &mut config, role_name).await?;
     }
     apply_spawn_agent_service_tier(
         &session,
