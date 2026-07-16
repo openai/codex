@@ -40,6 +40,10 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         create_write_stdin_tool()
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
         Box::pin(self.handle_call(invocation))
     }
