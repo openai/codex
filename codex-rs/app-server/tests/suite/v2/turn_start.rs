@@ -856,6 +856,7 @@ async fn turn_start_emits_raw_response_completed_with_upstream_usage() -> Result
                 total_tokens: 37,
                 input_tokens: 30,
                 cached_input_tokens: 11,
+                cache_write_input_tokens: 0,
                 output_tokens: 7,
                 reasoning_output_tokens: 3,
             }),
