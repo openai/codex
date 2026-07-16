@@ -3,7 +3,6 @@ use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
-use crate::agent::role::apply_role_to_config;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
@@ -77,9 +76,7 @@ async fn handle_spawn_agent(
     )
     .await?;
     if !is_full_history_fork {
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        apply_spawn_agent_role(&session, &mut config, role_name).await?;
     }
     apply_spawn_agent_service_tier(
         &session,
