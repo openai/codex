@@ -398,7 +398,6 @@ pub struct McpToolCallAppContext {
     pub link_id: Option<String>,
     pub resource_uri: Option<String>,
     pub app_name: Option<String>,
-    pub template_id: Option<String>,
     pub action_name: Option<String>,
 }
 
@@ -950,7 +949,6 @@ impl From<CoreTurnItem> for ThreadItem {
                         link_id: mcp.link_id,
                         resource_uri: mcp.mcp_app_resource_uri.clone(),
                         app_name: mcp.app_name,
-                        template_id: mcp.template_id,
                         action_name: mcp.action_name,
                     }),
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
