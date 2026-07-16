@@ -7793,14 +7793,13 @@ async fn deferred_environment_roots_refresh_plugin_availability() {
         .primary()
         .expect("ready local environment");
     let environments = TurnEnvironmentSnapshot {
-        turn_environments: vec![TurnEnvironment::new(
+        environments: vec![TurnEnvironmentState::Ready(TurnEnvironment::new(
             "executor".to_string(),
             environment,
             local_environment.cwd().clone(),
             local_environment.workspace_roots().to_vec(),
             local_environment.shell.clone(),
-        )],
-        starting: Vec::new(),
+        ))],
     };
     let resolved_roots = session
         .resolve_selected_capability_roots_for_step(&environments)
@@ -7873,8 +7872,10 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
         ));
     }
     let environments = TurnEnvironmentSnapshot {
-        turn_environments,
-        starting: Vec::new(),
+        environments: turn_environments
+            .into_iter()
+            .map(TurnEnvironmentState::Ready)
+            .collect(),
     };
 
     let resolved_roots = session
