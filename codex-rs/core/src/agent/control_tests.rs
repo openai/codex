@@ -1953,7 +1953,7 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
 }
 
 #[tokio::test]
-async fn spawn_agent_respects_max_threads_limit() {
+async fn spawn_agent_respects_legacy_max_threads_alias() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
         "agents.max_threads".to_string(),
@@ -2008,7 +2008,7 @@ async fn spawn_agent_respects_max_threads_limit() {
 async fn spawn_agent_releases_slot_after_shutdown() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
-        "agents.max_threads".to_string(),
+        "agents.max_concurrent_threads_per_session".to_string(),
         TomlValue::Integer(max_threads as i64),
     )])
     .await;
@@ -2051,7 +2051,7 @@ async fn spawn_agent_releases_slot_after_shutdown() {
 async fn spawn_agent_limit_shared_across_clones() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
-        "agents.max_threads".to_string(),
+        "agents.max_concurrent_threads_per_session".to_string(),
         TomlValue::Integer(max_threads as i64),
     )])
     .await;
@@ -2096,7 +2096,7 @@ async fn spawn_agent_limit_shared_across_clones() {
 async fn resume_agent_respects_max_threads_limit() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
-        "agents.max_threads".to_string(),
+        "agents.max_concurrent_threads_per_session".to_string(),
         TomlValue::Integer(max_threads as i64),
     )])
     .await;
@@ -2152,7 +2152,7 @@ async fn resume_agent_respects_max_threads_limit() {
 async fn resume_agent_releases_slot_after_resume_failure() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
-        "agents.max_threads".to_string(),
+        "agents.max_concurrent_threads_per_session".to_string(),
         TomlValue::Integer(max_threads as i64),
     )])
     .await;

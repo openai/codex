@@ -36,6 +36,22 @@
         "$ref": "#/definitions/AgentRoleToml"
       },
       "properties": {
+        "default_subagent_model": {
+          "description": "Reserved default model for spawned subagents. Currently ignored.",
+          "type": "string"
+        },
+        "default_subagent_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reserved default reasoning effort for spawned subagents. Currently ignored."
+        },
+        "enabled": {
+          "description": "Whether multi-agent tools are enabled. Defaults to true. An enabled `features.multi_agent_v2` setting takes precedence.",
+          "type": "boolean"
+        },
         "interrupt_message": {
           "description": "Whether to record a model-visible message when an agent turn is interrupted. Defaults to true.",
           "type": "boolean"
@@ -46,17 +62,20 @@
           "minimum": 1.0,
           "type": "integer"
         },
-        "max_depth": {
-          "description": "Maximum nesting depth allowed for spawned agent threads. Root sessions start at depth 0.",
-          "format": "int32",
-          "minimum": 1.0,
-          "type": "integer"
-        },
-        "max_threads": {
-          "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",
+        "max_concurrent_threads_per_session": {
+          "description": "Maximum number of spawned agent threads that can be open concurrently per session. When unset, the selected multi-agent backend uses its default.",
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "max_depth": {
+          "description": "Maximum nesting depth for V1 agent threads. Ignored by V2.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "support_agent_type": {
+          "description": "Reserved for controlling whether the spawn tool supports agent types. Currently ignored.",
+          "type": "boolean"
         }
       },
       "type": "object"

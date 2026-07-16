@@ -1,4 +1,5 @@
 use super::*;
+use crate::config_toml::AgentsToml;
 use crate::config_toml::ConfigToml;
 use crate::types::MemoriesToml;
 use pretty_assertions::assert_eq;
@@ -94,6 +95,67 @@ no_memories_if_mcp_or_web_search = false
         r#"
 [memories]
 disable_on_external_context = true
+"#,
+    );
+    assert_eq!(base, expected);
+}
+
+#[test]
+fn merge_toml_values_normalizes_legacy_agents_key_across_layers() {
+    let mut base = parse_toml(
+        r#"
+[agents]
+max_threads = 4
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[agents]
+max_concurrent_threads_per_session = 7
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+[agents]
+max_concurrent_threads_per_session = 7
+"#,
+    );
+    assert_eq!(base, expected);
+
+    let config: ConfigToml = base.try_into().expect("merged config should deserialize");
+    assert_eq!(
+        config.agents,
+        Some(AgentsToml {
+            max_concurrent_threads_per_session: Some(7),
+            ..Default::default()
+        })
+    );
+}
+
+#[test]
+fn merge_toml_values_normalizes_legacy_agents_key_from_overlay() {
+    let mut base = parse_toml(
+        r#"
+[agents]
+max_concurrent_threads_per_session = 4
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[agents]
+max_threads = 7
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+[agents]
+max_concurrent_threads_per_session = 7
 "#,
     );
     assert_eq!(base, expected);
