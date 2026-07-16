@@ -19,6 +19,12 @@ impl ChatWidget {
         if self.elevated_windows_sandbox_setup_required() {
             return;
         }
+        if self.blocks_direct_input {
+            if let Some(user_message) = self.initial_user_message.take() {
+                self.restore_user_message_to_composer(user_message);
+            }
+            return;
+        }
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }

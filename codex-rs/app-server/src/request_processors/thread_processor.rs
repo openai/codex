@@ -1,4 +1,5 @@
 use super::thread_fork_goal::inherit_thread_goal_snapshot;
+use super::turn_processor::can_accept_direct_input;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
@@ -1281,6 +1282,7 @@ impl ThreadRequestProcessor {
         let mut thread = build_thread_from_snapshot(
             thread_id,
             session_configured.session_id.to_string(),
+            thread.multi_agent_version(),
             &config_snapshot,
             session_configured.rollout_path.clone(),
         );
@@ -2297,8 +2299,12 @@ impl ThreadRequestProcessor {
             .load_persisted_thread_for_read(thread_id, include_turns)
             .await?
         {
-            // Persisted metadata-only read: no live thread state is needed.
-            thread
+            if let Some(loaded_thread) = loaded_thread.as_ref() {
+                self.load_live_thread_view(thread_id, include_turns, loaded_thread, Some(thread))
+                    .await?
+            } else {
+                thread
+            }
         } else if let Some(loaded_thread) = loaded_thread.as_ref() {
             // Loaded metadata-only read before persistence is materialized: build
             // the response from the live thread snapshot.
@@ -2426,6 +2432,7 @@ impl ThreadRequestProcessor {
             }
             thread.session_id.clone_from(&fallback_thread.session_id);
             thread.ephemeral = fallback_thread.ephemeral;
+            thread.can_accept_direct_input = fallback_thread.can_accept_direct_input;
             thread
         } else {
             fallback_thread
@@ -2803,6 +2810,7 @@ impl ThreadRequestProcessor {
             let loaded_thread = build_thread_from_snapshot(
                 thread_id,
                 thread.session_configured().session_id.to_string(),
+                thread.multi_agent_version(),
                 &config_snapshot,
                 thread.rollout_path(),
             );
@@ -3383,6 +3391,10 @@ impl ThreadRequestProcessor {
             );
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
             thread_summary.thread_source = config_snapshot.thread_source.clone().map(Into::into);
+            thread_summary.can_accept_direct_input = Some(can_accept_direct_input(
+                existing_thread.multi_agent_version(),
+                &config_snapshot.session_source,
+            ));
             let instruction_sources = existing_thread.legacy_instruction_sources().await;
 
             let listener_command_tx = {
@@ -3594,6 +3606,10 @@ impl ThreadRequestProcessor {
     ) -> std::result::Result<Thread, String> {
         let config_snapshot = thread.config_snapshot().await;
         let session_id = thread.session_configured().session_id.to_string();
+        let can_accept_direct_input = can_accept_direct_input(
+            thread.multi_agent_version(),
+            &config_snapshot.session_source,
+        );
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 let fallback_provider = config_snapshot.model_provider_id.as_str();
@@ -3656,6 +3672,7 @@ impl ThreadRequestProcessor {
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     session_id.clone(),
+                    thread.multi_agent_version(),
                     &config_snapshot,
                     Some(rollout_path.into()),
                 );
@@ -3667,6 +3684,7 @@ impl ThreadRequestProcessor {
             )),
         };
         let mut thread = thread?;
+        thread.can_accept_direct_input = Some(can_accept_direct_input);
         thread.id = thread_id.to_string();
         thread.session_id = session_id;
         thread.path = Some(rollout_path.to_path_buf());
@@ -3926,6 +3944,8 @@ impl ThreadRequestProcessor {
             "thread",
         );
 
+        let config_snapshot = forked_thread.config_snapshot().await;
+
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so they rebuild their visible history from the copied source history instead.
         let mut thread = if session_configured.rollout_path.is_some() {
@@ -3938,10 +3958,10 @@ impl ThreadRequestProcessor {
                 include_turns,
             )
         } else {
-            let config_snapshot = forked_thread.config_snapshot().await;
             let mut thread = build_thread_from_snapshot(
                 thread_id,
                 session_configured.session_id.to_string(),
+                forked_thread.multi_agent_version(),
                 &config_snapshot,
                 /*path*/ None,
             );
@@ -3959,12 +3979,12 @@ impl ThreadRequestProcessor {
         if let Some(name) = source_thread_name {
             set_thread_name_from_title(&mut thread, name);
         }
+        thread.can_accept_direct_input = Some(can_accept_direct_input(
+            forked_thread.multi_agent_version(),
+            &config_snapshot.session_source,
+        ));
         thread.session_id = session_configured.session_id.to_string();
-        thread.thread_source = forked_thread
-            .config_snapshot()
-            .await
-            .thread_source
-            .map(Into::into);
+        thread.thread_source = config_snapshot.thread_source.clone().map(Into::into);
 
         self.thread_watch_manager
             .upsert_thread_silently(thread.clone())
@@ -3976,7 +3996,6 @@ impl ThreadRequestProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
-        let config_snapshot = forked_thread.config_snapshot().await;
         let sandbox = config_snapshot.sandbox_policy().into();
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
@@ -4746,6 +4765,7 @@ pub(crate) fn thread_from_stored_thread(
         agent_nickname: source.get_nickname(),
         agent_role: source.get_agent_role(),
         source: source.into(),
+        can_accept_direct_input: None,
         thread_source: thread.thread_source.map(Into::into),
         git_info,
         name: thread.name,
@@ -4927,6 +4947,7 @@ fn permission_profile_trusts_project(
 fn build_thread_from_snapshot(
     thread_id: ThreadId,
     session_id: String,
+    multi_agent_version: Option<codex_protocol::protocol::MultiAgentVersion>,
     config_snapshot: &ThreadConfigSnapshot,
     path: Option<PathBuf>,
 ) -> Thread {
@@ -4951,6 +4972,10 @@ fn build_thread_from_snapshot(
         agent_nickname: config_snapshot.session_source.get_nickname(),
         agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
+        can_accept_direct_input: Some(can_accept_direct_input(
+            multi_agent_version,
+            &config_snapshot.session_source,
+        )),
         thread_source: config_snapshot.thread_source.clone().map(Into::into),
         git_info: None,
         name: None,
@@ -4994,6 +5019,7 @@ fn build_thread_from_loaded_snapshot(
     build_thread_from_snapshot(
         thread_id,
         loaded_thread.session_configured().session_id.to_string(),
+        loaded_thread.multi_agent_version(),
         config_snapshot,
         loaded_thread.rollout_path(),
     )

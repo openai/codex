@@ -208,6 +208,10 @@ pub struct Thread {
     pub cli_version: String,
     /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
     pub source: SessionSource,
+    /// Whether the app server accepts direct turn input for this loaded thread.
+    /// `None` means the capability is unavailable, such as for an unloaded stored thread.
+    #[experimental("thread.canAcceptDirectInput")]
+    pub can_accept_direct_input: Option<bool>,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.

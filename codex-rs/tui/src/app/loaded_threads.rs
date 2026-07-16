@@ -14,6 +14,7 @@
 //! `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` edges until no new children are
 //! found. The primary thread itself is never included in the output.
 
+use crate::app_server_session::thread_blocks_direct_input;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
@@ -29,6 +30,7 @@ pub(crate) struct LoadedSubagentThread {
     pub(crate) agent_nickname: Option<String>,
     pub(crate) agent_role: Option<String>,
     pub(crate) agent_path: Option<String>,
+    pub(crate) blocks_direct_input: bool,
 }
 
 /// Walks the spawn tree rooted at `primary_thread_id` and returns every descendant subagent.
@@ -84,6 +86,7 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
             threads_by_id
                 .remove(&thread_id)
                 .map(|thread| LoadedSubagentThread {
+                    blocks_direct_input: thread_blocks_direct_input(&thread),
                     thread_id,
                     agent_nickname: thread.agent_nickname,
                     agent_role: thread.agent_role,
@@ -144,6 +147,7 @@ mod tests {
             cwd: test_path_buf("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source,
+            can_accept_direct_input: None,
             thread_source: None,
             agent_nickname: None,
             agent_role: None,
@@ -191,6 +195,7 @@ mod tests {
         );
         child.agent_nickname = Some("Scout".to_string());
         child.agent_role = Some("explorer".to_string());
+        child.can_accept_direct_input = Some(true);
 
         let mut grandchild = test_thread(
             grandchild_thread_id,
@@ -198,7 +203,7 @@ mod tests {
         );
         grandchild.agent_nickname = Some("Atlas".to_string());
         grandchild.agent_role = Some("worker".to_string());
-
+        grandchild.can_accept_direct_input = Some(false);
         let unrelated_child = test_thread(
             unrelated_child_id,
             thread_spawn_source(unrelated_parent_id, /*depth*/ 1, "Other", "researcher"),
@@ -218,12 +223,14 @@ mod tests {
             loaded,
             vec![
                 LoadedSubagentThread {
+                    blocks_direct_input: false,
                     thread_id: child_thread_id,
                     agent_nickname: Some("Scout".to_string()),
                     agent_role: Some("explorer".to_string()),
                     agent_path: None,
                 },
                 LoadedSubagentThread {
+                    blocks_direct_input: true,
                     thread_id: grandchild_thread_id,
                     agent_nickname: Some("Atlas".to_string()),
                     agent_role: Some("worker".to_string()),

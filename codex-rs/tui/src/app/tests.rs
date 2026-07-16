@@ -99,7 +99,11 @@ use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionSource as RolloutSessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -1372,6 +1376,7 @@ async fn open_agent_picker_clears_completed_path_backed_agent_running_state() ->
             agent_path: "/root/child".to_string(),
             is_running_hint: true,
         });
+    assert!(!app.agent_navigation.is_parent_owned(thread_id));
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
 
@@ -1518,6 +1523,147 @@ fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
                 is_running: false,
                 is_closed: false,
             })
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let root = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let root_thread_id = root.session.thread_id;
+        app.enqueue_primary_thread_session(root.session, root.turns)
+            .await?;
+
+        let rollout_dir = app
+            .config
+            .codex_home
+            .join("sessions")
+            .join("2026")
+            .join("01")
+            .join("01");
+        std::fs::create_dir_all(&rollout_dir)?;
+        let mut child_thread_ids = Vec::new();
+        for (index, multi_agent_version) in [MultiAgentVersion::V1, MultiAgentVersion::V2]
+            .into_iter()
+            .enumerate()
+        {
+            let child_thread_id = ThreadId::new();
+            let timestamp = format!("2026-01-01T00:00:0{index}Z");
+            let session_meta = SessionMeta {
+                session_id: child_thread_id.into(),
+                id: child_thread_id,
+                parent_thread_id: Some(root_thread_id),
+                timestamp: timestamp.clone(),
+                cwd: app.config.cwd.to_path_buf(),
+                originator: "codex-tui-test".to_string(),
+                cli_version: "0.0.0".to_string(),
+                source: RolloutSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: root_thread_id,
+                    depth: 1,
+                    agent_path: None,
+                    agent_nickname: Some(format!("child-{index}")),
+                    agent_role: Some("worker".to_string()),
+                }),
+                model_provider: Some(app.config.model_provider_id.clone()),
+                multi_agent_version: Some(multi_agent_version),
+                ..SessionMeta::default()
+            };
+            let rollout_path = rollout_dir.join(format!(
+                "rollout-2026-01-01T00-00-0{index}-{child_thread_id}.jsonl"
+            ));
+            let session_meta_line = serde_json::json!({
+                "timestamp": timestamp,
+                "type": "session_meta",
+                "payload": serde_json::to_value(session_meta)?,
+            });
+            std::fs::write(rollout_path, format!("{session_meta_line}\n"))?;
+
+            assert!(
+                app.attach_live_thread_for_selection(&mut app_server, child_thread_id)
+                    .await?
+            );
+            assert_eq!(
+                app.agent_navigation.is_parent_owned(child_thread_id),
+                multi_agent_version == MultiAgentVersion::V2
+            );
+            child_thread_ids.push(child_thread_id);
+        }
+
+        assert!(app.backfill_loaded_subagent_threads(&mut app_server).await);
+        assert!(!app.agent_navigation.is_parent_owned(child_thread_ids[0]));
+        assert!(app.agent_navigation.is_parent_owned(child_thread_ids[1]));
+
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        app.select_agent_thread(&mut tui, &mut app_server, child_thread_ids[0])
+            .await?;
+        while app_event_rx.try_recv().is_ok() {}
+        app.chat_widget
+            .restore_user_message_to_composer("v1 remains writable".into());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            std::iter::from_fn(|| app_event_rx.try_recv().ok())
+                .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
+        );
+
+        app.select_agent_thread(&mut tui, &mut app_server, child_thread_ids[1])
+            .await?;
+        while app_event_rx.try_recv().is_ok() {}
+        app.chat_widget
+            .restore_user_message_to_composer("v2 stays view-only".into());
+        let draft = app.chat_widget.composer_text_with_pending();
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
+        assert!(
+            !std::iter::from_fn(|| app_event_rx.try_recv().ok())
+                .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
+        );
+
+        let resumed = app_server
+            .resume_thread(
+                app.config.clone(),
+                child_thread_ids[1],
+                app.resume_model_settings(),
+            )
+            .await?;
+        assert!(resumed.blocks_direct_input);
+        app.replace_chat_widget_with_app_server_thread(
+            &mut tui,
+            &mut app_server,
+            resumed,
+            crate::app::session_lifecycle::ThreadAttachPresentation::SessionLineage,
+            /*initial_user_message*/ None,
+        )
+        .await?;
+        while app_event_rx.try_recv().is_ok() {}
+        app.chat_widget
+            .restore_user_message_to_composer("direct resume stays view-only".into());
+        let draft = app.chat_widget.composer_text_with_pending();
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
+        assert!(
+            !std::iter::from_fn(|| app_event_rx.try_recv().ok())
+                .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
         );
         Ok(())
     })
@@ -2947,6 +3093,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 cwd: test_path_buf("/tmp/agent").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
+                can_accept_direct_input: None,
                 thread_source: None,
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
@@ -3042,6 +3189,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 cwd: test_path_buf("/tmp/agent").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
+                can_accept_direct_input: None,
                 thread_source: None,
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
@@ -3104,6 +3252,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         cwd: test_path_buf("/tmp/read").abs(),
         cli_version: "0.0.0".to_string(),
         source: codex_app_server_protocol::SessionSource::Unknown,
+        can_accept_direct_input: None,
         thread_source: None,
         agent_nickname: None,
         agent_role: None,
@@ -3586,6 +3735,7 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
         AppServerStartedThread {
             session: test_thread_session(child_thread_id, test_path_buf("/tmp/child")),
             turns: Vec::new(),
+            blocks_direct_input: false,
         },
         &mut child_snapshot,
     )
@@ -5778,11 +5928,13 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
         AppServerStartedThread {
             session: resumed_session.clone(),
             turns: resumed_turns.clone(),
+            blocks_direct_input: true,
         },
         &mut snapshot,
     )
     .await;
 
+    assert!(app.agent_navigation.is_parent_owned(thread_id));
     assert_eq!(snapshot.session, Some(resumed_session.clone()));
     assert_eq!(snapshot.turns, resumed_turns);
 
