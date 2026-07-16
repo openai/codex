@@ -666,8 +666,7 @@ impl NetworkApprovalService {
             } else {
                 turn_context
                     .environments
-                    .turn_environments
-                    .iter()
+                    .turn_environments()
                     .find(|environment| environment.environment_id == environment_id)
                     .and_then(|environment| environment.cwd().to_abs_path().ok())
                     .unwrap_or_else(|| {

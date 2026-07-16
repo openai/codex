@@ -777,8 +777,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
 fn sandbox_cwd_for_mcp_server(step_context: &StepContext, environment_id: &str) -> Option<PathUri> {
     if let Some(environment) = step_context
         .environments
-        .turn_environments
-        .iter()
+        .turn_environments()
         .find(|environment| environment.environment_id == environment_id)
     {
         return Some(environment.cwd().clone());

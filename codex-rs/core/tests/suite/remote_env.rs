@@ -64,6 +64,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_target_windows;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
@@ -363,6 +364,130 @@ async fn deferred_executor_does_not_duplicate_initial_environment_context() -> R
             .count(),
         1
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn settings_update_does_not_retarget_active_turn_environment() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "pause-turn",
+                    "request_user_input",
+                    &json!({
+                        "questions": [{
+                            "id": "continue",
+                            "header": "Continue",
+                            "question": "Continue after settings update?",
+                            "options": [{
+                                "label": "Yes (Recommended)",
+                                "description": "Continue the test."
+                            }, {
+                                "label": "No",
+                                "description": "Stop the test."
+                            }]
+                        }]
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "first turn done"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "second turn done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        assert!(
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .is_ok()
+        );
+    });
+    let test = builder.build(&server).await?;
+    let initial_cwd = test.config.cwd.clone();
+    let next_workspace = TempDir::new()?;
+    let next_cwd = next_workspace.path().abs();
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "pause before continuing".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentSelections::new(
+                next_cwd.clone(),
+                vec![local(next_cwd.clone())],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes (Recommended)".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("start the next turn").await?;
+
+    let request_texts = response_mock
+        .requests()
+        .iter()
+        .map(|request| request.message_input_texts("user").join("\n"))
+        .collect::<Vec<_>>();
+    let initial_cwd = format!("<cwd>{}</cwd>", initial_cwd.as_path().display());
+    let next_cwd = format!("<cwd>{}</cwd>", next_cwd.as_path().display());
+    assert_eq!(
+        request_texts
+            .iter()
+            .map(|text| text.contains(&next_cwd))
+            .collect::<Vec<_>>(),
+        vec![false, false, true]
+    );
+    assert!(request_texts[0].contains(&initial_cwd));
+    assert!(request_texts[1].contains(&initial_cwd));
 
     Ok(())
 }

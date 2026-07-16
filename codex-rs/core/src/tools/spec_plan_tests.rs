@@ -31,6 +31,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use crate::config::CurrentTimeReminderConfig;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
@@ -341,9 +342,15 @@ impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
 }
 
 fn duplicate_primary_environment(turn: &mut TurnContext) {
-    let mut second_environment = turn.environments.turn_environments[0].clone();
+    let mut second_environment = turn
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
     second_environment.environment_id = "secondary".to_string();
-    turn.environments.turn_environments.push(second_environment);
+    turn.environments
+        .environments
+        .push(TurnEnvironmentState::Ready(second_environment));
 }
 
 fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
@@ -587,20 +594,22 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
             .expect("primary environment")
             .cwd()
             .clone();
-        turn.environments.turn_environments.push(
-            crate::session::turn_context::TurnEnvironment::new(
-                "remote".to_string(),
-                Arc::new(
-                    codex_exec_server::Environment::create_for_tests(Some(
-                        "ws://127.0.0.1:1/remote-exec-server".to_string(),
-                    ))
-                    .expect("remote test environment"),
+        turn.environments
+            .environments
+            .push(TurnEnvironmentState::Ready(
+                crate::session::turn_context::TurnEnvironment::new(
+                    "remote".to_string(),
+                    Arc::new(
+                        codex_exec_server::Environment::create_for_tests(Some(
+                            "ws://127.0.0.1:1/remote-exec-server".to_string(),
+                        ))
+                        .expect("remote test environment"),
+                    ),
+                    remote_cwd,
+                    Vec::new(),
+                    /*shell*/ None,
                 ),
-                remote_cwd,
-                Vec::new(),
-                /*shell*/ None,
-            ),
-        );
+            ));
     })
     .await;
 
@@ -615,7 +624,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
 #[tokio::test]
 async fn environment_count_controls_environment_backed_tools() {
     let no_environment = probe(|turn| {
-        turn.environments.turn_environments.clear();
+        turn.environments.environments.clear();
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
@@ -670,7 +679,7 @@ async fn environment_tools_follow_the_step_context() {
     turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
 
     let environments = turn.environments.clone();
-    turn.environments.turn_environments.clear();
+    turn.environments.environments.clear();
     let turn = Arc::new(turn);
     let step_context = Arc::new(StepContext::new(
         Arc::clone(&turn),
