@@ -583,6 +583,9 @@ impl Session {
                     roots
                 }
             };
+        thread_extension_init.insert(codex_extension_api::ThreadOriginator(
+            session_configuration.originator.clone(),
+        ));
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),

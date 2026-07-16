@@ -18,6 +18,7 @@ use codex_extension_api::parse_tool_input_schema_without_compaction;
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::web_search::WebSearchAction;
 use codex_extension_items::web_search::WebSearchItem;
+use codex_login::default_client::add_originator_header;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
@@ -44,6 +45,7 @@ pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
     pub(crate) provider: SharedModelProvider,
     pub(crate) settings: SearchSettings,
+    pub(crate) originator: Option<String>,
 }
 
 impl ToolExecutor<ToolCall> for WebSearchTool {
@@ -115,12 +117,10 @@ impl WebSearchTool {
                 u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
             ),
         };
-        let mut extra_headers = HeaderMap::new();
-        if let Some(turn_metadata) = call.codex_turn_metadata.as_deref()
-            && let Ok(header_value) = HeaderValue::from_str(turn_metadata)
-        {
-            extra_headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value);
-        }
+        let extra_headers = search_request_headers(
+            self.originator.as_deref(),
+            call.codex_turn_metadata.as_deref(),
+        );
         call.turn_item_emitter
             .emit_started(extension_turn_item(
                 WebSearchItem {
@@ -172,6 +172,20 @@ impl WebSearchTool {
 
         Ok(Box::new(SearchOutput::new(output)))
     }
+}
+
+fn search_request_headers(originator: Option<&str>, turn_metadata: Option<&str>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(turn_metadata) = turn_metadata
+        && let Ok(header_value) = HeaderValue::from_str(turn_metadata)
+    {
+        headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value);
+    }
+
+    if let Some(originator) = originator {
+        add_originator_header(&mut headers, originator);
+    }
+    headers
 }
 
 fn parse_commands(call: &ToolCall) -> Result<SearchCommands, FunctionCallError> {
@@ -245,6 +259,25 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::command_action;
+    use super::search_request_headers;
+    use codex_core::X_CODEX_TURN_METADATA_HEADER;
+
+    #[test]
+    fn search_request_headers_forward_thread_originator_and_turn_metadata() {
+        let headers = search_request_headers(Some("chatgpt_cca"), Some("turn-metadata"));
+        assert_eq!(
+            headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some("chatgpt_cca")
+        );
+        assert_eq!(
+            headers
+                .get(X_CODEX_TURN_METADATA_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("turn-metadata")
+        );
+    }
 
     #[test]
     fn command_action_reports_queries_and_navigation_detail() {

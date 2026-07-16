@@ -100,7 +100,10 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            service_name: Some("chatgpt_cca".to_string()),
+            ..Default::default()
+        })
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -159,6 +162,15 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     );
 
     let search_request = search_request(&server).await?;
+    assert_eq!(
+        search_request
+            .headers
+            .get("originator")
+            .context("standalone search should include the thread originator")?
+            .to_str()
+            .context("standalone search originator should be valid ASCII")?,
+        "chatgpt_cca"
+    );
     let search_body = search_request
         .body_json::<Value>()
         .context("search request body should be JSON")?;

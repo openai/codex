@@ -69,6 +69,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
+use codex_login::default_client::add_originator_header;
 use codex_login::default_client::build_default_reqwest_client_for_route;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
@@ -1882,22 +1883,6 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
     }
     headers
-}
-
-pub(crate) fn add_originator_header(headers: &mut ApiHeaderMap, originator: &str) {
-    let default_originator = codex_login::default_client::originator();
-    if originator == default_originator.value.as_str() {
-        return;
-    }
-
-    match HeaderValue::from_str(originator) {
-        Ok(header_value) => {
-            headers.insert("originator", header_value);
-        }
-        Err(err) => {
-            warn!("ignoring invalid thread originator header value: {err}");
-        }
-    }
 }
 
 fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: bool) {
