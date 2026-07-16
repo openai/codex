@@ -34,7 +34,7 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
     fn spec(&self) -> ToolSpec {
         ToolSpec::Function(ResponsesApiTool {
             name: WAIT_FOR_ENVIRONMENT_TOOL_NAME.to_string(),
-            description: "Wait for a starting environment to become available before continuing."
+            description: "Wait for a selected execution environment marked as `starting` to become available. Use this when the current task needs that environment's files, commands, or installed capabilities. Do not wait if the task can be completed using tools already available, such as connectors. Waiting may take several minutes and blocks other tool calls. If startup fails, continue without that environment."
                 .to_string(),
             strict: false,
             defer_loading: None,
@@ -42,7 +42,8 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
                 BTreeMap::from([(
                     "environment_id".to_string(),
                     JsonSchema::string(Some(
-                        "The id of an environment currently marked as starting.".to_string(),
+                        "The exact environment ID marked as `starting` in `<environment_context>`."
+                            .to_string(),
                     )),
                 )]),
                 /*required*/ Some(vec!["environment_id".to_string()]),
