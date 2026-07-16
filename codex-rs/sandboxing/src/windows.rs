@@ -87,7 +87,7 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         return Ok(None);
     }
 
-    let (mut file_system_sandbox_policy, network_sandbox_policy) =
+    let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
 
     let needs_direct_runtime_enforcement = file_system_sandbox_policy
@@ -106,11 +106,6 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
             file_system_sandbox_policy.kind,
         ));
     }
-
-    // Windows protects built-in metadata defaults through the legacy writable
-    // root projection when those paths exist. Do not turn missing generated
-    // defaults into explicit deny-write sentinels.
-    file_system_sandbox_policy.remove_generated_defaults();
 
     // The restricted-token backend can still enforce split write restrictions,
     // but its WRITE_RESTRICTED token does not make capability SID deny-read ACEs
@@ -226,7 +221,7 @@ pub fn resolve_windows_elevated_filesystem_overrides(
         return Ok(None);
     }
 
-    let (mut file_system_sandbox_policy, network_sandbox_policy) =
+    let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
 
     if !permission_profile_supports_windows_restricted_token_sandbox(permission_profile) {
@@ -236,11 +231,6 @@ pub fn resolve_windows_elevated_filesystem_overrides(
             file_system_sandbox_policy.kind,
         ));
     }
-
-    // Windows protects built-in metadata defaults through the legacy writable
-    // root projection when those paths exist. Do not turn missing generated
-    // defaults into explicit deny-write sentinels.
-    file_system_sandbox_policy.remove_generated_defaults();
 
     let additional_deny_read_paths = codex_windows_sandbox::resolve_windows_deny_read_paths(
         &file_system_sandbox_policy,
@@ -258,12 +248,6 @@ pub fn resolve_windows_elevated_filesystem_overrides(
 
     let needs_direct_runtime_enforcement = file_system_sandbox_policy
         .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd);
-    let has_explicit_write_carveouts = split_writable_roots.iter().any(|writable_root| {
-        writable_root.read_only_subpaths.iter().any(|path| {
-            file_system_sandbox_policy
-                .has_explicit_non_write_entry_for_path_with_cwd(path.as_path(), sandbox_policy_cwd)
-        })
-    });
     let normalize_path = |path: PathBuf| dunce::canonicalize(&path).unwrap_or(path);
     let legacy_projection = compatibility_sandbox_policy_for_permission_profile(
         permission_profile,
@@ -304,9 +288,7 @@ pub fn resolve_windows_elevated_filesystem_overrides(
         Some(split_root_paths)
     };
 
-    let additional_deny_write_paths = if needs_direct_runtime_enforcement
-        || has_explicit_write_carveouts
-    {
+    let additional_deny_write_paths = if needs_direct_runtime_enforcement {
         let mut deny_paths = BTreeSet::new();
         for writable_root in &split_writable_roots {
             let writable_root_path = normalize_path(writable_root.root.to_path_buf());
@@ -327,12 +309,7 @@ pub fn resolve_windows_elevated_filesystem_overrides(
                             == read_only_subpath_suffix
                     })
                 });
-                let explicitly_configured = file_system_sandbox_policy
-                    .has_explicit_non_write_entry_for_path_with_cwd(
-                        read_only_subpath.as_path(),
-                        sandbox_policy_cwd,
-                    );
-                if explicitly_configured || !already_denied_by_legacy {
+                if !already_denied_by_legacy {
                     deny_paths.insert(normalize_path(read_only_subpath.to_path_buf()));
                 }
             }

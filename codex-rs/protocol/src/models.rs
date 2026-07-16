@@ -111,10 +111,7 @@ impl FileSystemPermissions {
     ) -> impl Iterator<Item = (&AbsolutePathBuf, FileSystemAccessMode)> {
         self.entries.iter().filter_map(|entry| match &entry.path {
             FileSystemPath::Path { path } => Some((path, entry.access)),
-            FileSystemPath::GeneratedDefaultPath { .. }
-            | FileSystemPath::GlobPattern { .. }
-            | FileSystemPath::Special { .. }
-            | FileSystemPath::GeneratedDefaultSpecial { .. } => None,
+            FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => None,
         })
     }
 

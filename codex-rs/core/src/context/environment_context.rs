@@ -153,13 +153,13 @@ fn render_file_system_entry(rendered: &mut String, entry: &FileSystemSandboxEntr
     }
     rendered.push_str("\">");
     match &entry.path {
-        FileSystemPath::Path { path } | FileSystemPath::GeneratedDefaultPath { path } => {
+        FileSystemPath::Path { path } => {
             push_text_element(rendered, "path", path.to_string_lossy().as_ref());
         }
         FileSystemPath::GlobPattern { pattern } => {
             push_text_element(rendered, "glob", pattern);
         }
-        FileSystemPath::Special { value } | FileSystemPath::GeneratedDefaultSpecial { value } => {
+        FileSystemPath::Special { value } => {
             let value = render_special_path(value);
             push_text_element(rendered, "special", &value);
         }

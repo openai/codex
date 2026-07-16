@@ -199,59 +199,6 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 
 #[tokio::test]
 #[serial(codex_home)]
-async fn windows_elevated_does_not_create_missing_workspace_metadata() -> anyhow::Result<()> {
-    let codex_home =
-        codex_home_for_windows_sandbox_test("windows-elevated-missing-metadata-codex-home")?;
-    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
-    stage_windows_sandbox_helpers()?;
-    let workspace = TempDir::new()?;
-    let cwd = dunce::canonicalize(workspace.path())?.abs();
-    let permission_profile = PermissionProfile::workspace_write()
-        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
-
-    let output = process_exec_tool_call(
-        ExecParams {
-            command: vec![
-                "cmd.exe".to_string(),
-                "/D".to_string(),
-                "/C".to_string(),
-                "echo sandbox-ok".to_string(),
-            ],
-            cwd: cwd.clone(),
-            expiration: 10_000.into(),
-            capture_policy: ExecCapturePolicy::ShellTool,
-            env: HashMap::new(),
-            network: None,
-            network_environment_id: None,
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            windows_sandbox_level: WindowsSandboxLevel::Elevated,
-            windows_sandbox_private_desktop: false,
-            justification: None,
-            arg0: None,
-        },
-        &permission_profile,
-        &cwd,
-        std::slice::from_ref(&cwd),
-        &None,
-        /*use_legacy_landlock*/ false,
-        /*stdout_stream*/ None,
-    )
-    .await?;
-
-    assert_eq!(output.exit_code, 0, "sandboxed command should complete");
-    for name in codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES {
-        let path = cwd.join(name);
-        assert!(
-            !path.exists(),
-            "elevated setup should not create missing workspace metadata: {}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
-#[serial(codex_home)]
 async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyhow::Result<()> {
     let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());

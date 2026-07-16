@@ -343,11 +343,6 @@ pub enum FileSystemPath {
         // TODO(anp): Use PathUri once permission paths no longer require native-path rollout serialization.
         path: AbsolutePathBuf,
     },
-    /// A concrete path synthesized by a built-in permissions profile rather
-    /// than explicitly configured by the user.
-    GeneratedDefaultPath {
-        path: AbsolutePathBuf,
-    },
     /// A git-style glob pattern. Pattern entries currently support
     /// FileSystemAccessMode::Deny only.
     GlobPattern {
@@ -356,20 +351,6 @@ pub enum FileSystemPath {
     Special {
         value: FileSystemSpecialPath,
     },
-    /// A symbolic path synthesized by a built-in permissions profile rather
-    /// than explicitly configured by the user.
-    GeneratedDefaultSpecial {
-        value: FileSystemSpecialPath,
-    },
-}
-
-impl FileSystemPath {
-    pub fn is_generated_default(&self) -> bool {
-        matches!(
-            self,
-            Self::GeneratedDefaultPath { .. } | Self::GeneratedDefaultSpecial { .. }
-        )
-    }
 }
 
 const PROJECT_ROOTS_GLOB_PATTERN_PREFIX: &str = "codex-project-roots://";
@@ -420,25 +401,6 @@ impl FileSystemSandboxPolicy {
             glob_scan_max_depth: None,
             entries,
         }
-    }
-
-    /// Removes entries synthesized by built-in profiles while preserving
-    /// explicitly configured entries targeting the same paths.
-    pub fn remove_generated_defaults(&mut self) {
-        self.entries
-            .retain(|entry| !entry.path.is_generated_default());
-    }
-
-    pub fn has_explicit_non_write_entry_for_path_with_cwd(&self, path: &Path, cwd: &Path) -> bool {
-        let Some(path) = resolve_candidate_path(path, cwd) else {
-            return false;
-        };
-        let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok();
-        self.entries.iter().any(|entry| {
-            !entry.path.is_generated_default()
-                && !entry.access.can_write()
-                && resolve_entry_path(&entry.path, cwd.as_ref()).as_ref() == Some(&path)
-        })
     }
 
     fn has_root_access(&self, predicate: impl Fn(FileSystemAccessMode) -> bool) -> bool {
@@ -534,12 +496,9 @@ impl FileSystemSandboxPolicy {
                 }
 
                 match &entry.path {
-                    FileSystemPath::Path { .. } | FileSystemPath::GeneratedDefaultPath { .. } => {
-                        !self.has_same_target_write_override(entry)
-                    }
+                    FileSystemPath::Path { .. } => !self.has_same_target_write_override(entry),
                     FileSystemPath::GlobPattern { .. } => true,
-                    FileSystemPath::Special { value }
-                    | FileSystemPath::GeneratedDefaultSpecial { value } => match value {
+                    FileSystemPath::Special { value } => match value {
                         FileSystemSpecialPath::Root => entry.access == FileSystemAccessMode::Deny,
                         FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
                             false
@@ -758,13 +717,6 @@ impl FileSystemSandboxPolicy {
         let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok();
         for entry in &mut self.entries {
             match &entry.path {
-                FileSystemPath::GeneratedDefaultSpecial {
-                    value: FileSystemSpecialPath::ProjectRoots { .. },
-                } => {
-                    if let Some(path) = resolve_file_system_path(&entry.path, cwd.as_ref()) {
-                        entry.path = FileSystemPath::GeneratedDefaultPath { path };
-                    }
-                }
                 FileSystemPath::Special {
                     value: FileSystemSpecialPath::ProjectRoots { .. },
                 } => {
@@ -782,9 +734,7 @@ impl FileSystemSandboxPolicy {
                     }
                 }
                 FileSystemPath::Special { value: _ } => {}
-                FileSystemPath::GeneratedDefaultSpecial { value: _ } => {}
                 FileSystemPath::Path { .. } => {}
-                FileSystemPath::GeneratedDefaultPath { .. } => {}
             }
         }
         self
@@ -799,22 +749,6 @@ impl FileSystemSandboxPolicy {
         let mut entries = Vec::with_capacity(self.entries.len());
         for entry in self.entries {
             match entry.path {
-                FileSystemPath::GeneratedDefaultSpecial {
-                    value: FileSystemSpecialPath::ProjectRoots { subpath },
-                } => {
-                    entries.extend(workspace_roots.iter().map(|root| FileSystemSandboxEntry {
-                        path: FileSystemPath::GeneratedDefaultPath {
-                            path: match subpath.as_ref() {
-                                Some(subpath) => AbsolutePathBuf::resolve_path_against_base(
-                                    subpath,
-                                    root.as_path(),
-                                ),
-                                None => root.clone(),
-                            },
-                        },
-                        access: entry.access,
-                    }));
-                }
                 FileSystemPath::Special {
                     value: FileSystemSpecialPath::ProjectRoots { subpath },
                 } => {
@@ -852,21 +786,9 @@ impl FileSystemSandboxPolicy {
                         access: entry.access,
                     });
                 }
-                FileSystemPath::GeneratedDefaultPath { path } => {
-                    entries.push(FileSystemSandboxEntry {
-                        path: FileSystemPath::GeneratedDefaultPath { path },
-                        access: entry.access,
-                    });
-                }
                 FileSystemPath::Special { value } => {
                     entries.push(FileSystemSandboxEntry {
                         path: FileSystemPath::Special { value },
-                        access: entry.access,
-                    });
-                }
-                FileSystemPath::GeneratedDefaultSpecial { value } => {
-                    entries.push(FileSystemSandboxEntry {
-                        path: FileSystemPath::GeneratedDefaultSpecial { value },
                         access: entry.access,
                     });
                 }
@@ -1173,10 +1095,7 @@ impl FileSystemSandboxPolicy {
                 FileSystemPath::GlobPattern { pattern } => {
                     Some(AbsolutePathBuf::resolve_path_against_base(pattern, cwd))
                 }
-                FileSystemPath::Path { .. }
-                | FileSystemPath::GeneratedDefaultPath { .. }
-                | FileSystemPath::Special { .. }
-                | FileSystemPath::GeneratedDefaultSpecial { .. } => None,
+                FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => None,
             })
             .map(|pattern| pattern.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
@@ -1219,8 +1138,7 @@ impl FileSystemSandboxPolicy {
                 for entry in &self.entries {
                     match &entry.path {
                         FileSystemPath::GlobPattern { .. } => {}
-                        FileSystemPath::Path { path }
-                        | FileSystemPath::GeneratedDefaultPath { path } => {
+                        FileSystemPath::Path { path } => {
                             if entry.access.can_write() {
                                 if cwd_absolute.as_ref().is_some_and(|cwd| cwd == path) {
                                     workspace_root_writable = true;
@@ -1229,8 +1147,7 @@ impl FileSystemSandboxPolicy {
                                 }
                             }
                         }
-                        FileSystemPath::Special { value }
-                        | FileSystemPath::GeneratedDefaultSpecial { value } => match value {
+                        FileSystemPath::Special { value } => match value {
                             FileSystemSpecialPath::Root => match entry.access {
                                 FileSystemAccessMode::Deny => {}
                                 FileSystemAccessMode::Read => {}
@@ -1372,13 +1289,9 @@ fn resolve_file_system_path(
     cwd: Option<&AbsolutePathBuf>,
 ) -> Option<AbsolutePathBuf> {
     match path {
-        FileSystemPath::Path { path } | FileSystemPath::GeneratedDefaultPath { path } => {
-            Some(path.clone())
-        }
+        FileSystemPath::Path { path } => Some(path.clone()),
         FileSystemPath::GlobPattern { .. } => None,
-        FileSystemPath::Special { value } | FileSystemPath::GeneratedDefaultSpecial { value } => {
-            resolve_file_system_special_path(value, cwd)
-        }
+        FileSystemPath::Special { value } => resolve_file_system_special_path(value, cwd),
     }
 }
 
@@ -1422,32 +1335,16 @@ fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
 /// by `has_write_narrowing_entries`.
 fn file_system_paths_share_target(left: &FileSystemPath, right: &FileSystemPath) -> bool {
     match (left, right) {
-        (
-            FileSystemPath::Path { path: left }
-            | FileSystemPath::GeneratedDefaultPath { path: left },
-            FileSystemPath::Path { path: right }
-            | FileSystemPath::GeneratedDefaultPath { path: right },
-        ) => left == right,
-        (
-            FileSystemPath::Special { value: left }
-            | FileSystemPath::GeneratedDefaultSpecial { value: left },
-            FileSystemPath::Special { value: right }
-            | FileSystemPath::GeneratedDefaultSpecial { value: right },
-        ) => special_paths_share_target(left, right),
+        (FileSystemPath::Path { path: left }, FileSystemPath::Path { path: right }) => {
+            left == right
+        }
+        (FileSystemPath::Special { value: left }, FileSystemPath::Special { value: right }) => {
+            special_paths_share_target(left, right)
+        }
         (FileSystemPath::Path { path }, FileSystemPath::Special { value })
-        | (FileSystemPath::Path { path }, FileSystemPath::GeneratedDefaultSpecial { value })
-        | (FileSystemPath::GeneratedDefaultPath { path }, FileSystemPath::Special { value })
-        | (
-            FileSystemPath::GeneratedDefaultPath { path },
-            FileSystemPath::GeneratedDefaultSpecial { value },
-        )
-        | (FileSystemPath::Special { value }, FileSystemPath::Path { path })
-        | (FileSystemPath::Special { value }, FileSystemPath::GeneratedDefaultPath { path })
-        | (FileSystemPath::GeneratedDefaultSpecial { value }, FileSystemPath::Path { path })
-        | (
-            FileSystemPath::GeneratedDefaultSpecial { value },
-            FileSystemPath::GeneratedDefaultPath { path },
-        ) => special_path_matches_absolute_path(value, path),
+        | (FileSystemPath::Special { value }, FileSystemPath::Path { path }) => {
+            special_path_matches_absolute_path(value, path)
+        }
         (
             FileSystemPath::GlobPattern { pattern: left },
             FileSystemPath::GlobPattern { pattern: right },
@@ -1773,7 +1670,7 @@ fn append_default_read_only_project_root_subpath_if_no_explicit_rule(
 ) {
     append_default_read_only_entry_if_no_explicit_rule(
         entries,
-        FileSystemPath::GeneratedDefaultSpecial {
+        FileSystemPath::Special {
             value: FileSystemSpecialPath::project_roots(Some(subpath.into())),
         },
     );
@@ -2073,19 +1970,19 @@ mod tests {
                     access: FileSystemAccessMode::Write,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::GeneratedDefaultSpecial {
+                    path: FileSystemPath::Special {
                         value: FileSystemSpecialPath::project_roots(Some(".git".into())),
                     },
                     access: FileSystemAccessMode::Read,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::GeneratedDefaultSpecial {
+                    path: FileSystemPath::Special {
                         value: FileSystemSpecialPath::project_roots(Some(".agents".into())),
                     },
                     access: FileSystemAccessMode::Read,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::GeneratedDefaultSpecial {
+                    path: FileSystemPath::Special {
                         value: FileSystemSpecialPath::project_roots(Some(".codex".into())),
                     },
                     access: FileSystemAccessMode::Read,
@@ -2232,7 +2129,7 @@ mod tests {
         ];
         expected_entries.extend(PROTECTED_METADATA_PATH_NAMES.iter().map(|name| {
             FileSystemSandboxEntry {
-                path: FileSystemPath::GeneratedDefaultSpecial {
+                path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::project_roots(Some((*name).into())),
                 },
                 access: FileSystemAccessMode::Read,

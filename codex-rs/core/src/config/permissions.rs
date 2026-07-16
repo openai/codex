@@ -249,8 +249,6 @@ fn insert_filesystem_permission_toml(
         FileSystemPath::Special { value } => {
             insert_special_filesystem_permission_toml(entries, value, entry.access);
         }
-        FileSystemPath::GeneratedDefaultPath { .. }
-        | FileSystemPath::GeneratedDefaultSpecial { .. } => {}
     }
 }
 
