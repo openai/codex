@@ -1168,6 +1168,7 @@ async fn list_apps_paginates_results() -> Result<()> {
             break;
         }
     }
+    mcp.clear_message_buffer();
 
     let second_request = mcp
         .send_apps_list_request(AppsListParams {
@@ -1207,6 +1208,16 @@ async fn list_apps_paginates_results() -> Result<()> {
 
     assert_eq!(second_page, expected_second);
     assert!(second_cursor.is_none());
+
+    let duplicate_update = timeout(
+        Duration::from_millis(150),
+        read_app_list_updated_notification(&mut mcp),
+    )
+    .await;
+    assert!(
+        duplicate_update.is_err(),
+        "cached app/list page emitted a duplicate full-list update"
+    );
 
     server_handle.abort();
     Ok(())
@@ -1580,6 +1591,40 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
     } = to_response(refetch_response)?;
     assert_eq!(refetch_data, expected_final);
     assert!(refetch_next_cursor.is_none());
+
+    mcp.clear_message_buffer();
+    let cached_request = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+    let cached_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cached_request)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: cached_data,
+        next_cursor: cached_next_cursor,
+    } = to_response(cached_response)?;
+    assert_eq!(cached_data, expected_final);
+    assert!(cached_next_cursor.is_none());
+
+    let cached_update = read_app_list_updated_notification(&mut mcp).await?;
+    assert_eq!(cached_update.data, expected_final);
+
+    let duplicate_update = timeout(
+        Duration::from_millis(150),
+        read_app_list_updated_notification(&mut mcp),
+    )
+    .await;
+    assert!(
+        duplicate_update.is_err(),
+        "cached initial app/list emitted more than one full-list update"
+    );
 
     server_handle.abort();
     Ok(())

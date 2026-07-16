@@ -244,19 +244,23 @@ impl AppsRequestProcessor {
         let mut all_loaded = false;
         let mut codex_apps_ready = true;
         let mut last_notified_apps = None;
+        let mut sent_app_list_update = false;
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
             let merged = connectors::with_app_enabled_state(
                 merge_loaded_apps(all_connectors.as_deref(), accessible_connectors.as_deref()),
                 &config,
             );
-            if should_send_app_list_updated_notification(
+            if !force_refetch {
+                last_notified_apps = Some(merged);
+            } else if should_send_app_list_updated_notification(
                 merged.as_slice(),
                 accessible_loaded,
                 all_loaded,
             ) {
                 send_app_list_updated_notification(outgoing, merged.clone()).await;
                 last_notified_apps = Some(merged);
+                sent_app_list_update = true;
             }
         }
 
@@ -313,10 +317,16 @@ impl AppsRequestProcessor {
                 merged.as_slice(),
                 accessible_loaded,
                 all_loaded,
-            ) && last_notified_apps.as_ref() != Some(&merged)
+            ) && (last_notified_apps.as_ref() != Some(&merged)
+                || (!force_refetch
+                    && start == 0
+                    && accessible_loaded
+                    && all_loaded
+                    && !sent_app_list_update))
             {
                 send_app_list_updated_notification(outgoing, merged.clone()).await;
                 last_notified_apps = Some(merged.clone());
+                sent_app_list_update = true;
             }
 
             if accessible_loaded && all_loaded {
