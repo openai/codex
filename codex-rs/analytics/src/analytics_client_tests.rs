@@ -4389,7 +4389,6 @@ async fn turn_event_counts_completed_tool_items() {
             link_id: None,
             resource_uri: None,
             app_name: None,
-            template_id: None,
             action_name: None,
         }),
         mcp_app_resource_uri: None,

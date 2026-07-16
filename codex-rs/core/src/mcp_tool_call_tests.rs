@@ -87,7 +87,6 @@ fn approval_metadata(
         tool_title: tool_title.map(str::to_string),
         tool_description: tool_description.map(str::to_string),
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     }
@@ -1224,11 +1223,9 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
         /*tool_description*/ None,
     );
     metadata.link_id = Some("link_fedcba9876543210fedcba9876543210".to_string());
-    metadata.template_id = Some("calendar_template".to_string());
     metadata.codex_apps_meta = Some(
         serde_json::json!({
             "resource_uri": "/asdk_app_0123456789abcdef0123456789abcdef/link_fedcba9876543210fedcba9876543210/create_event",
-            "template_id": "calendar_template",
         })
         .as_object()
         .cloned()
@@ -1242,7 +1239,6 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
             link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
             mcp_app_resource_uri: None,
             app_name: Some("Calendar".to_string()),
-            template_id: Some("calendar_template".to_string()),
             action_name: Some("create_event".to_string()),
             plugin_id: None,
         }
@@ -1254,7 +1250,6 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
             link_id: None,
             mcp_app_resource_uri: None,
             app_name: None,
-            template_id: None,
             action_name: None,
             plugin_id: None,
         }
@@ -1279,7 +1274,6 @@ async fn mcp_tool_call_item_includes_app_identity() {
             link_id: Some("link_fedcba9876543210fedcba9876543210".to_string()),
             mcp_app_resource_uri: None,
             app_name: Some("Calendar".to_string()),
-            template_id: Some("calendar_template".to_string()),
             action_name: Some("create_event".to_string()),
             plugin_id: Some("sample@test".to_string()),
         },
@@ -1328,7 +1322,6 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         tool_title: Some("Create Event".to_string()),
         tool_description: Some("Create a calendar event.".to_string()),
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: Some(
             serde_json::json!({
                 "resource_uri": "connector://calendar/tools/calendar_create_event",
@@ -1817,7 +1810,6 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         tool_title: None,
         tool_description: None,
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -2520,7 +2512,6 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -2597,7 +2588,6 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -2657,7 +2647,6 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         tool_title: Some("Create entities".to_string()),
         tool_description: None,
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -2796,7 +2785,6 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         tool_title: Some("Create entities".to_string()),
         tool_description: None,
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -2886,7 +2874,6 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Reads calendar data.".to_string()),
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -2943,7 +2930,6 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -3001,7 +2987,6 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
@@ -3057,7 +3042,6 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         mcp_app_resource_uri: None,
-        template_id: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };

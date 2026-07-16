@@ -465,7 +465,6 @@ impl McpToolCallItem {
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
             link_id: self.link_id.clone(),
             app_name: self.app_name.clone(),
-            template_id: self.template_id.clone(),
             action_name: self.action_name.clone(),
             plugin_id: self.plugin_id.clone(),
         })
@@ -489,7 +488,6 @@ impl McpToolCallItem {
             connector_id: self.connector_id.clone(),
             link_id: self.link_id.clone(),
             app_name: self.app_name.clone(),
-            template_id: self.template_id.clone(),
             action_name: self.action_name.clone(),
             plugin_id: self.plugin_id.clone(),
             duration: self.duration?,
