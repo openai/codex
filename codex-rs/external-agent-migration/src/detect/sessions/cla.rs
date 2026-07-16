@@ -1,17 +1,11 @@
-use super::ExternalAgentSessionMigration;
-use super::ledger::load_import_ledger;
-use super::ledger::save_import_ledger;
-use super::now_unix_seconds;
-use super::summarize_session;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+#[cfg(test)]
+use super::common::SESSION_IMPORT_MAX_COUNT;
+use super::common::SessionFileCandidate;
+use super::common::detect_recent_sessions;
+use crate::sessions::ExternalAgentSessionMigration;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::time::Duration;
-
-const SESSION_IMPORT_MAX_COUNT: usize = 50;
-const SESSION_IMPORT_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 pub fn detect_recent_cla_sessions(
     external_agent_home: &Path,
@@ -22,10 +16,7 @@ pub fn detect_recent_cla_sessions(
         return Ok(Vec::new());
     }
 
-    let now = now_unix_seconds();
-    let mut ledger = load_import_ledger(codex_home)?;
-    let source_states = ledger.source_states();
-    let mut file_candidates = BinaryHeap::with_capacity(SESSION_IMPORT_MAX_COUNT + 1);
+    let mut candidates = Vec::new();
     for project_entry in fs::read_dir(projects_root)? {
         let Ok(project_entry) = project_entry else {
             continue;
@@ -45,78 +36,25 @@ pub fn detect_recent_cla_sessions(
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-            let Ok(modified_at) = metadata.modified() else {
-                continue;
-            };
-            let Ok(modified_at) = modified_at.duration_since(std::time::UNIX_EPOCH) else {
-                continue;
-            };
-            if (modified_at.as_secs() as i64)
-                < now.saturating_sub(SESSION_IMPORT_MAX_AGE.as_secs() as i64)
-            {
-                continue;
-            }
-            let Ok(modified_at_nanos) = i64::try_from(modified_at.as_nanos()) else {
-                continue;
-            };
-            let Ok(source_path) = fs::canonicalize(&path) else {
-                continue;
-            };
-            if let Some(state) = source_states.get(source_path.as_path())
-                && (state.source_modified_at == Some(modified_at_nanos)
-                    || state.source_modified_at.is_none()
-                        && modified_at.as_secs() as i64 <= state.imported_at)
-            {
-                continue;
-            }
-            file_candidates.push((Reverse(modified_at_nanos), path));
-            if file_candidates.len() > SESSION_IMPORT_MAX_COUNT {
-                file_candidates.pop();
-            }
+            candidates.push(SessionFileCandidate {
+                path,
+                fallback_cwd: None,
+            });
         }
     }
-
-    drop(source_states);
-    let file_candidates = file_candidates.into_sorted_vec();
-    let mut migrations = Vec::new();
-    let mut ledger_changed = false;
-    for (modified_at, path) in file_candidates {
-        match ledger.refresh_current_source(&path, modified_at.0) {
-            Ok(false) => {}
-            Ok(true) => {
-                ledger_changed = true;
-                continue;
-            }
-            Err(_) => continue,
-        }
-        let Ok(Some(summary)) = summarize_session(&path) else {
-            continue;
-        };
-        let migration = summary.migration;
-        if !migration.cwd.is_dir() {
-            continue;
-        }
-        migrations.push(migration);
-    }
-    if ledger_changed {
-        save_import_ledger(codex_home, &ledger)?;
-    }
-
-    Ok(migrations)
+    detect_recent_sessions(codex_home, candidates, /*require_existing_cwd*/ true)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::ledger::record_imported_session;
     use super::*;
+    use crate::sessions::ledger::record_imported_session;
     use codex_protocol::ThreadId;
     use serde_json::Value as JsonValue;
     use std::fs::FileTimes;
     use std::fs::OpenOptions;
     use std::path::Path;
+    use std::time::Duration;
     use std::time::SystemTime;
     use tempfile::TempDir;
 

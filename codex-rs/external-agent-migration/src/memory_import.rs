@@ -1,8 +1,5 @@
-use super::ExternalAgentConfigMigrationItem;
-use super::ExternalAgentConfigMigrationItemType;
-use super::MigrationDetails;
-use codex_external_agent_migration::ExternalMemoryFile;
-use codex_external_agent_migration::discover_external_memory_files;
+use crate::ExternalMemoryFile;
+use crate::discover_external_memory_files;
 use codex_rollout::StateDbHandle;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -48,31 +45,6 @@ struct ProjectScope<'a> {
     cwd: &'a Path,
 }
 
-pub(super) fn detect(
-    codex_home: &Path,
-    external_agent_home: &Path,
-) -> io::Result<Option<ExternalAgentConfigMigrationItem>> {
-    let memory_files = discover_external_memory_files(external_agent_home)?;
-    let memory = projects_needing_import(codex_home, &memory_files)?;
-    if memory.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(ExternalAgentConfigMigrationItem {
-        item_type: ExternalAgentConfigMigrationItemType::Memory,
-        description: format!(
-            "Import memory files from {} to {}",
-            external_agent_home.join("projects").display(),
-            resources_root(codex_home).display()
-        ),
-        cwd: None,
-        details: Some(MigrationDetails {
-            memory: memory.into_iter().collect(),
-            ..Default::default()
-        }),
-    }))
-}
-
 pub(super) async fn import(
     codex_home: &Path,
     external_agent_home: &Path,
@@ -112,7 +84,7 @@ pub(super) async fn import(
     Ok(copy_outcome)
 }
 
-fn projects_needing_import(
+pub(crate) fn projects_needing_import(
     codex_home: &Path,
     memory_files: &[ExternalMemoryFile],
 ) -> io::Result<BTreeSet<String>> {
@@ -390,5 +362,5 @@ fn invalid_data_error(message: impl Into<String>) -> io::Error {
 }
 
 #[cfg(test)]
-#[path = "memory_tests.rs"]
+#[path = "memory_import_tests.rs"]
 mod tests;

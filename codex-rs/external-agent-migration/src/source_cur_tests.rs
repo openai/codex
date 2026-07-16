@@ -1,26 +1,32 @@
 use super::*;
+use crate::InstructionSourceGroup;
+use crate::detect::plugins::detect_cur_plugins;
+use crate::migration_source::PluginDetectionContext;
+use crate::model::MigrationDetails;
+use crate::model::PluginsMigration;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use tempfile::TempDir;
+use toml::Value as TomlValue;
 
 #[test]
 fn effective_settings_merge_sandbox_configuration() {
     let root = TempDir::new().expect("tempdir");
-    let source_dir = root.path().join(CONFIG_DIR);
-    let source_settings = source_dir.join(HOME_CONFIG_FILE);
+    let source_dir = root.path().join(CurSource::CONFIG_DIR);
+    let source_settings = source_dir.join(CurSource::HOME_CONFIG_FILE);
     fs::create_dir_all(&source_dir).expect("source directory");
     fs::write(&source_settings, r#"{"env":{"FOO":"bar"}}"#).expect("source settings");
     fs::write(
-        source_dir.join(SANDBOX_CONFIG_FILE),
+        source_dir.join(CurSource::SANDBOX_CONFIG_FILE),
         r#"{"type":"read_only"}"#,
     )
     .expect("sandbox settings");
 
     assert_eq!(
-        effective_settings(&source_dir, &source_settings).expect("effective settings"),
+        CurSource::effective_settings(&source_dir, &source_settings).expect("effective settings"),
         Some(serde_json::json!({
             "env": {"FOO": "bar"},
-            (SANDBOX_SETTINGS_KEY): {"type": "read_only"}
+            (CurSource::SANDBOX_SETTINGS_KEY): {"type": "read_only"}
         }))
     );
 }
@@ -30,7 +36,7 @@ fn append_config_maps_workspace_permissions() {
     let root = TempDir::new().expect("tempdir");
     let writable_root = root.path().join("generated");
     let settings = serde_json::json!({
-        (SANDBOX_SETTINGS_KEY): {
+        (CurSource::SANDBOX_SETTINGS_KEY): {
             "type": "workspace_readwrite",
             "additionalReadwritePaths": [writable_root.display().to_string(), "relative/path"],
             "disableTmpWrite": true,
@@ -39,7 +45,7 @@ fn append_config_maps_workspace_permissions() {
     });
     let mut config = toml::map::Map::new();
 
-    append_config(&mut config, settings.as_object().expect("settings object"));
+    CurSource::append_config(&mut config, settings.as_object().expect("settings object"));
 
     let mut workspace_write = toml::map::Map::new();
     workspace_write.insert(
@@ -112,10 +118,10 @@ fn detects_uninstalled_plugin_from_configured_marketplace() {
     let configured_plugin_ids = HashSet::new();
     let configured_marketplace_plugins =
         BTreeMap::from([("acme".to_string(), HashSet::from(["sample".to_string()]))]);
-    let source_settings = root.path().join(HOME_CONFIG_FILE);
+    let source_settings = root.path().join(CurSource::HOME_CONFIG_FILE);
     let source_root = root.path().join("repo");
 
-    let detected = detect_plugins(&PluginDetectionContext {
+    let detected = detect_cur_plugins(&PluginDetectionContext {
         external_agent_home: root.path(),
         source_settings: &source_settings,
         source_root: &source_root,
@@ -142,18 +148,18 @@ fn detects_uninstalled_plugin_from_configured_marketplace() {
 #[test]
 fn detects_legacy_repo_instruction_file() {
     let root = TempDir::new().expect("tempdir");
-    let source = root.path().join(LEGACY_RULES_FILE);
+    let source = root.path().join(CurSource::LEGACY_RULES_FILE);
     fs::write(&source, "Use the source agent carefully.\n").expect("legacy rules");
 
     assert_eq!(
-        repo_instruction_source_groups(root.path()).expect("instruction sources"),
+        CurSource::repo_instruction_source_groups(root.path()).expect("instruction sources"),
         vec![InstructionSourceGroup {
             scope: root.path().to_path_buf(),
             sources: vec![source.clone()],
         }]
     );
     assert_eq!(
-        read_instruction_source(&source).expect("instruction contents"),
+        CurSource::read_instruction_source(&source).expect("instruction contents"),
         "Use the source agent carefully.\n"
     );
 }

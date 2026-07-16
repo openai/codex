@@ -62,7 +62,7 @@ fn discover_project_memory(
             continue;
         }
         let project_key = project_entry.file_name().to_string_lossy().into_owned();
-        let project_cwd = detect_project_cwd(&project_entry.path())?;
+        let project_cwd = project_cwd_from_sessions(&project_entry.path())?;
         collect_markdown_files(
             &memory_root,
             &memory_root,
@@ -74,7 +74,7 @@ fn discover_project_memory(
     Ok(())
 }
 
-fn detect_project_cwd(project_root: &Path) -> io::Result<Option<PathBuf>> {
+fn project_cwd_from_sessions(project_root: &Path) -> io::Result<Option<PathBuf>> {
     let mut sessions = fs::read_dir(project_root)?
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()

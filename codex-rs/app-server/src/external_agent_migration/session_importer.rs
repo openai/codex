@@ -5,6 +5,8 @@ use chrono::Utc;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_core::config::ConfigOverrides;
+use codex_external_agent_migration::ExternalAgentConfigImportItemResult;
+use codex_external_agent_migration::record_import_error;
 use codex_external_agent_migration::sessions::CompletedExternalAgentSessionImport;
 use codex_external_agent_migration::sessions::ExternalAgentSessionMigration;
 use codex_external_agent_migration::sessions::ImportedExternalAgentSession;
@@ -30,8 +32,6 @@ use codex_thread_store::UpdateThreadMetadataParams;
 use futures::StreamExt;
 use tokio::sync::Semaphore;
 
-use super::service::ExternalAgentConfigImportItemResult;
-use super::service::record_import_error;
 use crate::config_manager::ConfigManager;
 
 const SESSION_IMPORT_CONCURRENCY: usize = 5;

@@ -1,7 +1,6 @@
 use super::RewriteProfile;
 use super::invalid_data_error;
 use super::json_u64;
-use super::rewrite_external_agent_terms;
 use super::rewrite_hook_command_for_source;
 use super::write_hook_migration;
 use codex_hooks::HOOK_EVENT_NAMES_WITH_MATCHERS;
@@ -123,10 +122,7 @@ fn hook_migration_cur(
             if let Some(status_message) = handler.get("statusMessage").and_then(JsonValue::as_str) {
                 command_payload.insert(
                     "statusMessage".to_string(),
-                    JsonValue::String(rewrite_external_agent_terms(
-                        status_message,
-                        rewrite_profile,
-                    )),
+                    JsonValue::String(rewrite_profile.rewrite(status_message)),
                 );
             }
 

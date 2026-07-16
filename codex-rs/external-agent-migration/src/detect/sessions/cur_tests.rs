@@ -3,6 +3,7 @@ use codex_protocol::ThreadId;
 use pretty_assertions::assert_eq;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
+use std::time::Duration;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
@@ -191,15 +192,19 @@ fn detects_cur_sessions_in_batches_and_redetects_modified_imports() {
 
     assert_eq!(sessions, expected);
     for session in &sessions {
-        super::super::ledger::record_imported_session(root.path(), &session.path, ThreadId::new())
-            .expect("record import");
+        crate::sessions::ledger::record_imported_session(
+            root.path(),
+            &session.path,
+            ThreadId::new(),
+        )
+        .expect("record import");
     }
 
     assert_eq!(
         detect_recent_cur_sessions(&external_agent_home, root.path()).expect("detect sessions"),
         vec![oldest_session.clone()]
     );
-    super::super::ledger::record_imported_session(
+    crate::sessions::ledger::record_imported_session(
         root.path(),
         &oldest_session.path,
         ThreadId::new(),

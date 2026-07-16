@@ -1,8 +1,11 @@
-use codex_external_agent_migration::RewriteProfile;
-use codex_external_agent_migration::sessions::ExternalAgentSessionMigration;
-use codex_external_agent_migration::sessions::SessionMetadataMode;
-use codex_external_agent_migration::sessions::detect_recent_cla_sessions;
-use codex_external_agent_migration::sessions::detect_recent_cur_sessions;
+use crate::ClaSource;
+use crate::CurSource;
+use crate::RewriteProfile;
+use crate::detect::plugins;
+use crate::detect::sessions::detect_recent_cla_sessions;
+use crate::detect::sessions::detect_recent_cur_sessions;
+use crate::sessions::ExternalAgentSessionMigration;
+use crate::sessions::SessionMetadataMode;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -11,15 +14,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
-use super::MigrationDetails;
-use super::source_cla;
-use super::source_cur;
+use crate::model::MigrationDetails;
+use crate::scope::MigrationScope;
+use crate::source_cla;
+use crate::source_cur;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct InstructionSourceGroup {
-    pub(super) scope: PathBuf,
-    pub(super) sources: Vec<PathBuf>,
-}
+pub(super) use crate::InstructionSourceGroup;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MarketplaceImportSource {
@@ -49,18 +49,10 @@ pub(super) enum ExternalAgentSource {
     Cur,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SourceFeature {
-    Config,
-    Memory,
-    Plugins,
-    Sessions,
-}
-
 impl ExternalAgentSource {
     pub(super) fn from_migration_source(migration_source: Option<&str>) -> Self {
         if migration_source
-            .is_some_and(|source| source.eq_ignore_ascii_case(source_cur::MIGRATION_SOURCE))
+            .is_some_and(|source| source.eq_ignore_ascii_case(CurSource::MIGRATION_SOURCE))
         {
             Self::Cur
         } else {
@@ -70,33 +62,23 @@ impl ExternalAgentSource {
 
     pub(super) fn config_dir(self) -> &'static str {
         match self {
-            Self::Cla => source_cla::CONFIG_DIR,
-            Self::Cur => source_cur::CONFIG_DIR,
+            Self::Cla => ClaSource::CONFIG_DIR,
+            Self::Cur => CurSource::CONFIG_DIR,
         }
     }
 
-    pub(super) fn supports(self, feature: SourceFeature) -> bool {
-        match (self, feature) {
-            (
-                Self::Cla,
-                SourceFeature::Config
-                | SourceFeature::Memory
-                | SourceFeature::Plugins
-                | SourceFeature::Sessions,
-            ) => true,
-            (
-                Self::Cur,
-                SourceFeature::Config | SourceFeature::Plugins | SourceFeature::Sessions,
-            ) => true,
-            (Self::Cur, SourceFeature::Memory) => false,
+    pub(super) fn supports_memory(self) -> bool {
+        match self {
+            Self::Cla => true,
+            Self::Cur => false,
         }
     }
 
-    pub(super) fn settings_file_name(self, project_scope: bool) -> &'static str {
-        match (self, project_scope) {
-            (Self::Cla, _) => "settings.json",
-            (Self::Cur, false) => source_cur::HOME_CONFIG_FILE,
-            (Self::Cur, true) => source_cur::PROJECT_CONFIG_FILE,
+    pub(super) fn settings_file_name(self, scope: &MigrationScope) -> &'static str {
+        match (self, scope) {
+            (Self::Cla, _) => ClaSource::SETTINGS_FILE,
+            (Self::Cur, MigrationScope::Home) => CurSource::HOME_CONFIG_FILE,
+            (Self::Cur, MigrationScope::Repository { .. }) => CurSource::PROJECT_CONFIG_FILE,
         }
     }
 
@@ -106,30 +88,37 @@ impl ExternalAgentSource {
         source_settings: &Path,
     ) -> io::Result<Option<JsonValue>> {
         match self {
-            Self::Cla => source_cla::effective_settings(source_settings),
-            Self::Cur => source_cur::effective_settings(source_config_dir, source_settings),
+            Self::Cla => ClaSource::effective_settings(source_settings),
+            Self::Cur => CurSource::effective_settings(source_config_dir, source_settings),
         }
     }
 
-    pub(super) fn detect_plugins(
+    pub(super) fn build_config(self, settings: &JsonValue) -> io::Result<TomlValue> {
+        match self {
+            Self::Cla => ClaSource::build_config(settings),
+            Self::Cur => CurSource::build_config(settings),
+        }
+    }
+
+    pub(super) fn plugin_migration(
         self,
         context: PluginDetectionContext<'_>,
     ) -> io::Result<Option<DetectedSourcePlugins>> {
         match self {
-            Self::Cla => Ok(source_cla::detect_plugins(&context)),
-            Self::Cur if context.repo_root.is_none() => source_cur::detect_plugins(&context),
+            Self::Cla => Ok(plugins::detect_cla_plugins(&context)),
+            Self::Cur if context.repo_root.is_none() => plugins::detect_cur_plugins(&context),
             Self::Cur => Ok(None),
         }
     }
 
-    pub(super) fn can_detect_plugins(self, settings: Option<&JsonValue>) -> bool {
+    pub(super) fn supports_plugin_migration(self, settings: Option<&JsonValue>) -> bool {
         match self {
-            Self::Cla => source_cla::can_detect_plugins(settings),
+            Self::Cla => plugins::can_detect_cla_plugins(settings),
             Self::Cur => true,
         }
     }
 
-    pub(super) fn detect_recent_sessions(
+    pub(super) fn recent_sessions(
         self,
         external_agent_home: &Path,
         codex_home: &Path,
@@ -149,7 +138,7 @@ impl ExternalAgentSource {
 
     pub(super) fn connector_metadata_roots(self, external_agent_home: &Path) -> Vec<PathBuf> {
         match self {
-            Self::Cla => source_cla::connector_metadata_roots(external_agent_home),
+            Self::Cla => ClaSource::connector_metadata_roots(external_agent_home),
             Self::Cur => Vec::new(),
         }
     }
@@ -161,7 +150,7 @@ impl ExternalAgentSource {
         source_settings: &Path,
     ) -> io::Result<BTreeMap<String, MarketplaceImportSource>> {
         match self {
-            Self::Cla => Ok(source_cla::effective_settings(source_settings)?
+            Self::Cla => Ok(ClaSource::effective_settings(source_settings)?
                 .as_ref()
                 .map(|settings| {
                     source_cla::marketplace_import_sources(
@@ -175,17 +164,6 @@ impl ExternalAgentSource {
         }
     }
 
-    pub(super) fn append_config(
-        self,
-        root: &mut toml::map::Map<String, TomlValue>,
-        settings: &serde_json::Map<String, JsonValue>,
-    ) {
-        match self {
-            Self::Cla => source_cla::append_config(root, settings),
-            Self::Cur => source_cur::append_config(root, settings),
-        }
-    }
-
     pub(super) fn build_mcp_config(
         self,
         source_root: &Path,
@@ -194,8 +172,8 @@ impl ExternalAgentSource {
         settings: Option<&JsonValue>,
     ) -> io::Result<TomlValue> {
         match self {
-            Self::Cla => source_cla::build_mcp_config(source_root, external_agent_home, settings),
-            Self::Cur => source_cur::build_mcp_config(source_config_dir),
+            Self::Cla => ClaSource::build_mcp_config(source_root, external_agent_home, settings),
+            Self::Cur => CurSource::build_mcp_config(source_config_dir),
         }
     }
 
@@ -215,8 +193,8 @@ impl ExternalAgentSource {
         repo_root: &Path,
     ) -> io::Result<Vec<InstructionSourceGroup>> {
         match self {
-            Self::Cla => source_cla::repo_instruction_source_groups(repo_root),
-            Self::Cur => source_cur::repo_instruction_source_groups(repo_root),
+            Self::Cla => ClaSource::repo_instruction_source_groups(repo_root),
+            Self::Cur => CurSource::repo_instruction_source_groups(repo_root),
         }
     }
 
@@ -225,15 +203,15 @@ impl ExternalAgentSource {
         external_agent_home: &Path,
     ) -> io::Result<Vec<PathBuf>> {
         match self {
-            Self::Cla => source_cla::home_instruction_sources(external_agent_home),
+            Self::Cla => ClaSource::home_instruction_sources(external_agent_home),
             Self::Cur => Ok(Vec::new()),
         }
     }
 
     pub(super) fn read_instruction_source(self, path: &Path) -> io::Result<String> {
         match self {
-            Self::Cla => source_cla::read_instruction_source(path),
-            Self::Cur => source_cur::read_instruction_source(path),
+            Self::Cla => ClaSource::read_instruction_source(path),
+            Self::Cur => CurSource::read_instruction_source(path),
         }
     }
 
@@ -276,8 +254,8 @@ impl ExternalAgentSource {
         target_agents: &Path,
     ) -> io::Result<Vec<String>> {
         match self {
-            Self::Cla => source_cla::import_source_subagents(source_agents, target_agents),
-            Self::Cur => source_cur::import_source_subagents(source_agents, target_agents),
+            Self::Cla => ClaSource::import_subagents(source_agents, target_agents),
+            Self::Cur => CurSource::import_subagents(source_agents, target_agents),
         }
     }
 
@@ -287,15 +265,15 @@ impl ExternalAgentSource {
         target_hooks: &Path,
     ) -> io::Result<Vec<String>> {
         match self {
-            Self::Cla => source_cla::source_hook_event_names(source_dir, target_hooks),
-            Self::Cur => source_cur::source_hook_event_names(source_dir, target_hooks),
+            Self::Cla => ClaSource::hook_event_names(source_dir, target_hooks),
+            Self::Cur => CurSource::hook_event_names(source_dir, target_hooks),
         }
     }
 
     pub(super) fn import_hooks(self, source_dir: &Path, target_hooks: &Path) -> io::Result<bool> {
         match self {
-            Self::Cla => source_cla::import_source_hooks(source_dir, target_hooks),
-            Self::Cur => source_cur::import_source_hooks(source_dir, target_hooks),
+            Self::Cla => ClaSource::import_hooks(source_dir, target_hooks),
+            Self::Cur => CurSource::import_hooks(source_dir, target_hooks),
         }
     }
 
