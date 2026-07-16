@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_features::Feature;
+use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
@@ -7,6 +8,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -292,6 +294,8 @@ async fn spawn_agents_on_csv_runs_and_exports() -> Result<()> {
             .features
             .enable(Feature::Sqlite)
             .expect("test config should allow feature update");
+        config.agent_default_subagent_model = Some("gpt-5.4".to_string());
+        config.agent_default_subagent_reasoning_effort = Some(ReasoningEffort::High);
     });
     let test = builder.build(&server).await?;
 
@@ -319,6 +323,27 @@ async fn spawn_agents_on_csv_runs_and_exports() -> Result<()> {
     assert!(output.contains("result_json"));
     assert!(output.contains("item_id"));
     assert!(output.contains("\"item_id\""));
+    let worker_settings = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|request| {
+            let body = serde_json::from_slice::<Value>(&decode_body_bytes(&request)).ok()?;
+            if has_function_call_output(&body) {
+                return None;
+            }
+            extract_job_and_item(&body)?;
+            Some((
+                body["model"].as_str().map(str::to_string),
+                body["reasoning"]["effort"].as_str().map(str::to_string),
+            ))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        worker_settings,
+        vec![(Some("gpt-5.4".to_string()), Some("high".to_string())); 2]
+    );
     Ok(())
 }
 

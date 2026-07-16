@@ -863,10 +863,10 @@ pub struct Config {
     /// User-configured maximum number of spawned agent threads per session.
     pub agent_max_threads: Option<usize>,
 
-    /// Reserved default model for spawned subagents.
+    /// Default model for spawned subagents when the spawn call does not select one.
     pub agent_default_subagent_model: Option<String>,
 
-    /// Reserved default reasoning effort for spawned subagents.
+    /// Default reasoning effort for spawned subagents when the spawn call does not select one.
     pub agent_default_subagent_reasoning_effort: Option<ReasoningEffort>,
 
     /// Maximum runtime in seconds for agent job workers before they are failed.

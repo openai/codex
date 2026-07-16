@@ -37,7 +37,7 @@
       },
       "properties": {
         "default_subagent_model": {
-          "description": "Reserved default model for spawned subagents. Currently ignored.",
+          "description": "Default model for spawned subagents when the spawn call does not select one.",
           "type": "string"
         },
         "default_subagent_reasoning_effort": {
@@ -46,7 +46,7 @@
               "$ref": "#/definitions/ReasoningEffort"
             }
           ],
-          "description": "Reserved default reasoning effort for spawned subagents. Currently ignored."
+          "description": "Default reasoning effort for spawned subagents when the spawn call does not select one."
         },
         "enabled": {
           "description": "Whether multi-agent tools are enabled. Defaults to true. An enabled `features.multi_agent_v2` setting takes precedence.",
