@@ -874,6 +874,40 @@ async fn image_helpers_reject_remote_urls() {
 }
 
 #[tokio::test]
+async fn image_helpers_reject_invalid_image_outputs() {
+    let image_url =
+        "Error executing tool exec: Expected at least one message to convert to CallToolResult";
+    for source in [
+        format!("image({image_url:?}, \"original\");"),
+        format!("generatedImage({{ image_url: {image_url:?} }});"),
+    ] {
+        let service = InProcessCodeModeSession::new();
+
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                source,
+                yield_time_ms: None,
+                ..execute_request("")
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items: Vec::new(),
+                error_text: Some(
+                    "Tool call failed: invalid image output. Pass a base64 data URI instead"
+                        .to_string(),
+                ),
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn image_helper_rejects_unsupported_detail() {
     let service = InProcessCodeModeSession::new();
 
