@@ -4004,7 +4004,6 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "codex-utils-string",
- "opentelemetry_sdk",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",

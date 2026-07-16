@@ -1,4 +1,6 @@
+mod fielded_bm25;
 mod weighted_lexical;
+pub(crate) use fielded_bm25::FieldedBm25SkillSelector;
 pub(crate) use weighted_lexical::WeightedLexicalSkillSelector;
 
 /// Metadata searched by a cheap skill selector.
