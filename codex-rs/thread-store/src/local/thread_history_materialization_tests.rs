@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::time::Duration;
 
+use chrono::Utc;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
@@ -9,6 +10,7 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
@@ -27,6 +29,9 @@ use super::super::test_support::test_config;
 use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
+use crate::ListTurnsParams;
+use crate::SortDirection;
+use crate::StoredTurnItemsView;
 use crate::ThreadPersistenceMetadata;
 use crate::ThreadStore;
 
@@ -304,11 +309,33 @@ WHERE thread_id = ? AND turn_id = ? AND item_id = ?
 }
 
 #[tokio::test]
-async fn turn_creation_recovers_summary_ids_from_earlier_items() {
+async fn summary_items_use_final_answers_and_ignore_commentary() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let config = test_config(home.path());
     let thread_id = ThreadId::default();
+    let runtime = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .expect("state runtime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        home.path().join("missing-rollout.jsonl"),
+        Utc::now(),
+        SessionSource::Cli,
+    );
+    builder.history_mode = ThreadHistoryMode::Paginated;
+    runtime
+        .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
+        .await
+        .expect("seed thread metadata");
+    let store = LocalThreadStore::new(config, Some(runtime));
     create_paginated_thread(&store, thread_id).await;
+    store
+        .persist_thread(thread_id)
+        .await
+        .expect("persist session metadata");
 
     store
         .append_items(AppendThreadItemsParams {
@@ -326,41 +353,78 @@ async fn turn_creation_recovers_summary_ids_from_earlier_items() {
                 completed_item(
                     thread_id,
                     "turn-1",
-                    TurnItem::AgentMessage(AgentMessageItem {
-                        id: "agent-1".to_string(),
-                        content: vec![AgentMessageContent::Text {
-                            text: "done".to_string(),
-                        }],
-                        phase: None,
-                        memory_citation: None,
-                    }),
+                    agent_message("commentary-1", MessagePhase::Commentary),
+                ),
+                completed_item(
+                    thread_id,
+                    "turn-1",
+                    agent_message("final-1", MessagePhase::FinalAnswer),
                 ),
             ],
         })
         .await
-        .expect("append items before turn");
+        .expect("append items before turn lifecycle");
     store
         .append_items(AppendThreadItemsParams {
             thread_id,
             items: vec![turn_started("turn-1"), turn_completed("turn-1")],
         })
         .await
-        .expect("append turn lifecycle");
-
-    let pool = codex_state::open_thread_history_db(home.path())
+        .expect("append delayed turn lifecycle");
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("turn-2"),
+                completed_item(
+                    thread_id,
+                    "turn-2",
+                    TurnItem::UserMessage(UserMessageItem {
+                        id: "user-2".to_string(),
+                        client_id: None,
+                        content: Vec::new(),
+                    }),
+                ),
+                completed_item(
+                    thread_id,
+                    "turn-2",
+                    agent_message("commentary-2", MessagePhase::Commentary),
+                ),
+                turn_completed("turn-2"),
+            ],
+        })
         .await
-        .expect("open thread history db");
-    let summary_ids = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        "SELECT first_user_item_id, final_agent_item_id FROM thread_turns WHERE thread_id = ? AND turn_id = ?",
-    )
-    .bind(thread_id.to_string())
-    .bind("turn-1")
-    .fetch_one(&pool)
-    .await
-    .expect("read turn summary ids");
+        .expect("append commentary-only turn");
+
+    let summary = store
+        .list_turns(ListTurnsParams {
+            thread_id,
+            include_archived: false,
+            cursor: None,
+            page_size: 2,
+            sort_direction: SortDirection::Asc,
+            items_view: StoredTurnItemsView::Summary,
+        })
+        .await
+        .expect("list turn summaries");
     assert_eq!(
-        summary_ids,
-        (Some("user-1".to_string()), Some("agent-1".to_string()))
+        summary
+            .turns
+            .iter()
+            .map(|turn| {
+                (
+                    turn.turn_id.as_str(),
+                    turn.items
+                        .iter()
+                        .map(|item| item.item_id.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            ("turn-1", vec!["user-1", "final-1"]),
+            ("turn-2", vec!["user-2"]),
+        ]
     );
 }
 
@@ -915,6 +979,17 @@ fn completed_item(thread_id: ThreadId, turn_id: &str, item: TurnItem) -> Rollout
         item,
         completed_at_ms: 1,
     }))
+}
+
+fn agent_message(id: &str, phase: MessagePhase) -> TurnItem {
+    TurnItem::AgentMessage(AgentMessageItem {
+        id: id.to_string(),
+        content: vec![AgentMessageContent::Text {
+            text: id.to_string(),
+        }],
+        phase: Some(phase),
+        memory_citation: None,
+    })
 }
 
 async fn projection_state(pool: &sqlx::SqlitePool, thread_id: ThreadId) -> (i64, i64) {
