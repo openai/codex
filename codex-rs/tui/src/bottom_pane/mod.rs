@@ -66,8 +66,12 @@ pub(crate) use app_link_view::AppLinkElicitationTarget;
 pub(crate) use app_link_view::AppLinkSuggestionType;
 pub(crate) use app_link_view::AppLinkView;
 pub(crate) use app_link_view::AppLinkViewParams;
+pub(crate) use approval_overlay::ApplyPatchApprovalRequest;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+pub(crate) use approval_overlay::ExecApprovalRequest;
+pub(crate) use approval_overlay::McpElicitationApprovalRequest;
+pub(crate) use approval_overlay::PermissionsApprovalRequest;
 pub(crate) use approval_overlay::format_requested_permissions_rule;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
@@ -1906,7 +1910,7 @@ mod tests {
     }
 
     fn exec_request() -> ApprovalRequest {
-        ApprovalRequest::Exec {
+        ApprovalRequest::Exec(ExecApprovalRequest {
             thread_id: codex_protocol::ThreadId::new(),
             thread_label: None,
             id: "1".to_string(),
@@ -1919,7 +1923,7 @@ mod tests {
             ],
             network_approval_context: None,
             additional_permissions: None,
-        }
+        })
     }
 
     #[derive(Default)]

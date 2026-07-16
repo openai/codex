@@ -219,7 +219,7 @@ impl App {
                 let proposed_execpolicy_amendment = params.proposed_execpolicy_amendment.clone();
                 let proposed_network_policy_amendments =
                     params.proposed_network_policy_amendments.clone();
-                Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+                let approval = ExecApprovalRequest {
                     thread_id,
                     thread_label,
                     id: params
@@ -243,10 +243,14 @@ impl App {
                     }),
                     network_approval_context,
                     additional_permissions,
-                }))
+                };
+                Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec(
+                    approval,
+                )))
             }
             ServerRequest::FileChangeRequestApproval { params, .. } => Some(
-                ThreadInteractiveRequest::Approval(ApprovalRequest::ApplyPatch {
+                ThreadInteractiveRequest::Approval(ApprovalRequest::ApplyPatch(
+                    ApplyPatchApprovalRequest {
                     thread_id,
                     thread_label,
                     id: params.item_id.clone(),
@@ -260,7 +264,8 @@ impl App {
                         .await
                         .map(crate::app_server_approval_conversions::file_update_changes_to_display)
                         .unwrap_or_default(),
-                }),
+                    },
+                )),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 if let Some(params) = AppLinkViewParams::from_url_app_server_request(
@@ -284,13 +289,13 @@ impl App {
                             message,
                             ..
                         } => Some(ThreadInteractiveRequest::Approval(
-                            ApprovalRequest::McpElicitation {
+                            ApprovalRequest::McpElicitation(McpElicitationApprovalRequest {
                                 thread_id,
                                 thread_label,
                                 server_name: params.server_name.clone(),
                                 request_id: request_id.clone(),
                                 message: message.clone(),
-                            },
+                            }),
                         )),
                         codex_app_server_protocol::McpServerElicitationRequest::OpenAiForm {
                             ..
@@ -319,14 +324,14 @@ impl App {
                     )
                 })?;
                 Some(ThreadInteractiveRequest::Approval(
-                    ApprovalRequest::Permissions {
+                    ApprovalRequest::Permissions(PermissionsApprovalRequest {
                         thread_id,
                         thread_label,
                         call_id: params.item_id.clone(),
                         environment_id: params.environment_id.clone(),
                         reason: params.reason.clone(),
                         permissions,
-                    },
+                    }),
                 ))
             }
             _ => None,
@@ -350,20 +355,17 @@ impl App {
     }
 
     fn render_inactive_patch_preview(&mut self, request: &ApprovalRequest) {
-        let ApprovalRequest::ApplyPatch {
-            thread_label,
-            cwd,
-            changes,
-            ..
-        } = request
-        else {
+        let ApprovalRequest::ApplyPatch(request) = request else {
             return;
         };
-        if thread_label.is_none() || changes.is_empty() {
+        if request.thread_label.is_none() || request.changes.is_empty() {
             return;
         }
         self.chat_widget
-            .add_to_history(history_cell::new_patch_event(changes.clone(), cwd));
+            .add_to_history(history_cell::new_patch_event(
+                request.changes.clone(),
+                &request.cwd,
+            ));
     }
 
     pub(super) async fn pending_inactive_thread_requests(&self) -> Vec<(ThreadId, ServerRequest)> {
