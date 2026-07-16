@@ -130,12 +130,11 @@ struct ResponseCompletedUsage {
 
 impl From<ResponseCompletedUsage> for TokenUsage {
     fn from(val: ResponseCompletedUsage) -> Self {
+        let input_tokens_details = val.input_tokens_details.unwrap_or_default();
         TokenUsage {
             input_tokens: val.input_tokens,
-            cached_input_tokens: val
-                .input_tokens_details
-                .map(|d| d.cached_tokens)
-                .unwrap_or(0),
+            cached_input_tokens: input_tokens_details.cached_tokens,
+            cache_write_input_tokens: input_tokens_details.cache_write_tokens,
             output_tokens: val.output_tokens,
             reasoning_output_tokens: val
                 .output_tokens_details
@@ -146,9 +145,11 @@ impl From<ResponseCompletedUsage> for TokenUsage {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ResponseCompletedInputTokensDetails {
     cached_tokens: i64,
+    #[serde(default)]
+    cache_write_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -803,6 +804,33 @@ mod tests {
             }
             other => panic!("unexpected third event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_cache_write_token_usage() {
+        let usage: ResponseCompletedUsage = serde_json::from_value(json!({
+            "input_tokens": 100,
+            "input_tokens_details": {
+                "cached_tokens": 40,
+                "cache_write_tokens": 60
+            },
+            "output_tokens": 10,
+            "output_tokens_details": { "reasoning_tokens": 5 },
+            "total_tokens": 110
+        }))
+        .expect("valid response usage");
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 40,
+                cache_write_input_tokens: 60,
+                output_tokens: 10,
+                reasoning_output_tokens: 5,
+                total_tokens: 110,
+            }
+        );
     }
 
     #[tokio::test]

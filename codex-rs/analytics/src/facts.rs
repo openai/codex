@@ -420,6 +420,7 @@ pub struct CodexCompactionEvent {
     pub retained_image_count: Option<usize>,
     pub compaction_summary_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_write_input_tokens: Option<i64>,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,

@@ -303,6 +303,7 @@ pub struct GuardianReviewEventParams {
     pub completed_at: Option<u64>,
     pub input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_write_input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
@@ -385,6 +386,10 @@ impl GuardianReviewTrackContext {
                 .token_usage
                 .as_ref()
                 .map(|usage| usage.cached_input_tokens),
+            cache_write_input_tokens: result
+                .token_usage
+                .as_ref()
+                .map(|usage| usage.cache_write_input_tokens),
             output_tokens: result.token_usage.as_ref().map(|usage| usage.output_tokens),
             reasoning_output_tokens: result
                 .token_usage
@@ -822,6 +827,7 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) retained_image_count: Option<usize>,
     pub(crate) compaction_summary_tokens: Option<i64>,
     pub(crate) cached_input_tokens: Option<i64>,
+    pub(crate) cache_write_input_tokens: Option<i64>,
     pub(crate) started_at: u64,
     pub(crate) completed_at: u64,
     pub(crate) duration_ms: Option<u64>,
@@ -901,6 +907,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) image_generation_count: Option<usize>,
     pub(crate) input_tokens: Option<i64>,
     pub(crate) cached_input_tokens: Option<i64>,
+    pub(crate) cache_write_input_tokens: Option<i64>,
     pub(crate) output_tokens: Option<i64>,
     pub(crate) reasoning_output_tokens: Option<i64>,
     pub(crate) total_tokens: Option<i64>,
@@ -1170,6 +1177,7 @@ pub(crate) fn codex_compaction_event_params(
         retained_image_count: input.retained_image_count,
         compaction_summary_tokens: input.compaction_summary_tokens,
         cached_input_tokens: input.cached_input_tokens,
+        cache_write_input_tokens: input.cache_write_input_tokens,
         started_at: input.started_at,
         completed_at: input.completed_at,
         duration_ms: input.duration_ms,

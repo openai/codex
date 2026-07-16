@@ -2687,6 +2687,9 @@ fn codex_turn_event_params(
         cached_input_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.cached_input_tokens),
+        cache_write_input_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.cache_write_input_tokens),
         output_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.output_tokens),

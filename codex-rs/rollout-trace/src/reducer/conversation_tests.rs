@@ -276,6 +276,7 @@ fn incremental_request_carries_prior_request_and_response_items_forward() -> any
             "token_usage": {
                 "input_tokens": 10,
                 "cached_input_tokens": 1,
+                "cache_write_input_tokens": 3,
                 "output_tokens": 5,
                 "reasoning_output_tokens": 2,
                 "total_tokens": 15
@@ -329,6 +330,13 @@ fn incremental_request_carries_prior_request_and_response_items_forward() -> any
     assert_eq!(
         first.usage.as_ref().map(|usage| usage.input_tokens),
         Some(10),
+    );
+    assert_eq!(
+        first
+            .usage
+            .as_ref()
+            .map(|usage| usage.cache_write_input_tokens),
+        Some(3),
     );
 
     Ok(())

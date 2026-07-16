@@ -277,6 +277,7 @@ async fn run_remote_compact_task_inner_impl(
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
         analytics_details.compaction_summary_tokens = Some(token_usage.output_tokens);
         analytics_details.cached_input_tokens = Some(token_usage.cached_input_tokens);
+        analytics_details.cache_write_input_tokens = Some(token_usage.cache_write_input_tokens);
     }
     let (compacted_history, retained_images) =
         build_v2_compacted_history(&prompt_input, compaction_output);
@@ -835,6 +836,7 @@ mod tests {
                 token_usage: Some(TokenUsage {
                     input_tokens: 123_456,
                     cached_input_tokens: 7_890,
+                    cache_write_input_tokens: 0,
                     output_tokens: 42,
                     reasoning_output_tokens: 5,
                     total_tokens: 123_498,
@@ -854,6 +856,7 @@ mod tests {
             Some(TokenUsage {
                 input_tokens: 123_456,
                 cached_input_tokens: 7_890,
+                cache_write_input_tokens: 0,
                 output_tokens: 42,
                 reasoning_output_tokens: 5,
                 total_tokens: 123_498,

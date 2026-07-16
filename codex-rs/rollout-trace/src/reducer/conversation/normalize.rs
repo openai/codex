@@ -49,6 +49,7 @@ pub(super) fn token_usage_from_value(value: &Value) -> Option<TokenUsage> {
     Some(TokenUsage {
         input_tokens: u64_field(value, "input_tokens")?,
         cached_input_tokens: u64_field(value, "cached_input_tokens")?,
+        cache_write_input_tokens: u64_field(value, "cache_write_input_tokens").unwrap_or(0),
         output_tokens: u64_field(value, "output_tokens")?,
         reasoning_output_tokens: u64_field(value, "reasoning_output_tokens")?,
     })
