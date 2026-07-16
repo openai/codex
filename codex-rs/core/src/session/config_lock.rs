@@ -180,7 +180,6 @@ fn save_config_resolved_fields(
     agents.enabled = Some(config.agents_enabled);
     agents.max_concurrent_threads_per_session = config.agent_max_threads;
     agents.max_depth = Some(config.agent_max_depth);
-    agents.support_agent_type = config.agent_support_agent_type;
     agents.default_subagent_model = config.agent_default_subagent_model.clone();
     agents.default_subagent_reasoning_effort =
         config.agent_default_subagent_reasoning_effort.clone();

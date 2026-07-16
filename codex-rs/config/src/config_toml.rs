@@ -688,9 +688,6 @@ pub struct AgentsToml {
     pub max_concurrent_threads_per_session: Option<usize>,
     /// Maximum nesting depth for V1 agent threads. Ignored by V2.
     pub max_depth: Option<i32>,
-    /// Reserved for controlling whether the spawn tool supports agent types.
-    /// Currently ignored.
-    pub support_agent_type: Option<bool>,
     /// Reserved default model for spawned subagents. Currently ignored.
     pub default_subagent_model: Option<String>,
     /// Reserved default reasoning effort for spawned subagents. Currently ignored.

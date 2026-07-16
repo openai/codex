@@ -48,6 +48,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             incompatible,
         ],
         agent_type_description: "role help".to_string(),
+        expose_agent_type: true,
         hide_agent_type_model_reasoning: false,
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V2,
@@ -96,10 +97,6 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
-        properties.get("agent_type"),
-        Some(&JsonSchema::string(Some("role help".to_string())))
-    );
-    assert_eq!(
         properties
             .get("model")
             .and_then(|schema| schema.description.as_deref()),
@@ -132,6 +129,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
     let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
         available_models: Vec::new(),
         agent_type_description: "role help".to_string(),
+        expose_agent_type: true,
         hide_agent_type_model_reasoning: false,
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V1,
@@ -158,6 +156,12 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties.get("agent_type"),
+        Some(&JsonSchema::string(Some(format!(
+            "{SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1}\nrole help"
+        ))))
+    );
     assert_eq!(
         properties
             .get("message")
@@ -190,6 +194,7 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
             model_preset("sixth", /*show_in_picker*/ true),
         ],
         agent_type_description: "role help".to_string(),
+        expose_agent_type: true,
         hide_agent_type_model_reasoning: false,
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V2,
@@ -235,6 +240,7 @@ fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
         available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
         agent_type_description: "role help".to_string(),
+        expose_agent_type: false,
         hide_agent_type_model_reasoning: true,
         expose_spawn_agent_model_overrides: true,
         multi_agent_version: MultiAgentVersion::V2,
@@ -267,6 +273,7 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
         available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
         agent_type_description: "role help".to_string(),
+        expose_agent_type: false,
         hide_agent_type_model_reasoning: true,
         expose_spawn_agent_model_overrides: false,
         multi_agent_version: MultiAgentVersion::V2,

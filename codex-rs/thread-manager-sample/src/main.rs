@@ -242,7 +242,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tool_output_token_limit: None,
         agents_enabled: true,
         agent_max_threads: Some(6),
-        agent_support_agent_type: None,
         agent_default_subagent_model: None,
         agent_default_subagent_reasoning_effort: None,
         agent_job_max_runtime_seconds: None,

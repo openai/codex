@@ -72,10 +72,6 @@
           "description": "Maximum nesting depth for V1 agent threads. Ignored by V2.",
           "format": "int32",
           "type": "integer"
-        },
-        "support_agent_type": {
-          "description": "Reserved for controlling whether the spawn tool supports agent types. Currently ignored.",
-          "type": "boolean"
         }
       },
       "type": "object"
