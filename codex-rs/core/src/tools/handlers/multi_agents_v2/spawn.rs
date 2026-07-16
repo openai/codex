@@ -61,26 +61,22 @@ async fn handle_spawn_agent(
     let child_depth = next_thread_spawn_depth(&session_source);
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    // TODO(jif): Apply `agents.default_subagent_model` as the default model here.
-    // TODO(jif): Apply `agents.default_subagent_reasoning_effort` as the default effort here.
     if let Some(service_tier) = args.service_tier.as_ref() {
         config.service_tier = Some(service_tier.clone());
     }
-    if matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory)) {
-        reject_full_fork_spawn_overrides(
-            role_name,
-            args.model.as_deref(),
-            args.reasoning_effort.clone(),
-        )?;
-    } else {
-        apply_requested_spawn_agent_model_overrides(
-            &session,
-            turn.as_ref(),
-            &mut config,
-            args.model.as_deref(),
-            args.reasoning_effort.clone(),
-        )
-        .await?;
+    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
+    if is_full_history_fork {
+        reject_full_fork_agent_type_override(role_name)?;
+    }
+    apply_requested_spawn_agent_model_overrides(
+        &session,
+        turn.as_ref(),
+        &mut config,
+        args.model.as_deref(),
+        args.reasoning_effort.clone(),
+    )
+    .await?;
+    if !is_full_history_fork {
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;

@@ -201,14 +201,12 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     Ok(config)
 }
 
-pub(crate) fn reject_full_fork_spawn_overrides(
+pub(crate) fn reject_full_fork_agent_type_override(
     agent_type: Option<&str>,
-    model: Option<&str>,
-    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), FunctionCallError> {
-    if agent_type.is_some() || model.is_some() || reasoning_effort.is_some() {
+    if agent_type.is_some() {
         return Err(FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
+            "Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork.".to_string(),
         ));
     }
     Ok(())
@@ -249,6 +247,9 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     requested_model: Option<&str>,
     requested_reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), FunctionCallError> {
+    let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
+    let requested_reasoning_effort = requested_reasoning_effort
+        .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
     if requested_model.is_none() && requested_reasoning_effort.is_none() {
         return Ok(());
     }

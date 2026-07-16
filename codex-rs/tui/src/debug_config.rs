@@ -71,12 +71,12 @@ fn render_agents_config_lines(config: &Config) -> Vec<Line<'static>> {
         )
         .into(),
         format!(
-            "  - default_subagent_model = {} (not yet wired)",
+            "  - default_subagent_model = {}",
             format_optional(config.agent_default_subagent_model.as_deref())
         )
         .into(),
         format!(
-            "  - default_subagent_reasoning_effort = {} (not yet wired)",
+            "  - default_subagent_reasoning_effort = {}",
             format_optional(config.agent_default_subagent_reasoning_effort.as_ref())
         )
         .into(),

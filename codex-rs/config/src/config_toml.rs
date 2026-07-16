@@ -688,9 +688,9 @@ pub struct AgentsToml {
     pub max_concurrent_threads_per_session: Option<usize>,
     /// Maximum nesting depth for V1 agent threads. Ignored by V2.
     pub max_depth: Option<i32>,
-    /// Reserved default model for spawned subagents. Currently ignored.
+    /// Default model for spawned subagents when the spawn call does not select one.
     pub default_subagent_model: Option<String>,
-    /// Reserved default reasoning effort for spawned subagents. Currently ignored.
+    /// Default reasoning effort for spawned subagents when the spawn call does not select one.
     pub default_subagent_reasoning_effort: Option<ReasoningEffort>,
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]

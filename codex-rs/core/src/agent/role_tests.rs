@@ -183,8 +183,8 @@ async fn apply_role_preserves_unspecified_keys() {
     config.main_execve_wrapper_exe = Some(PathBuf::from("/tmp/codex-execve-wrapper"));
     let role_path = write_role_config(
         &home,
-        "effort-only.toml",
-        "developer_instructions = \"Stay focused\"\nmodel_reasoning_effort = \"high\"",
+        "instructions-only.toml",
+        "developer_instructions = \"Stay focused\"",
     )
     .await;
     config.agent_roles.insert(
@@ -196,12 +196,17 @@ async fn apply_role_preserves_unspecified_keys() {
         },
     );
 
+    config.model = Some("spawn-model".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::Low);
+
     apply_role_to_config(&mut config, Some("custom"))
         .await
         .expect("custom role should apply");
 
-    assert_eq!(config.model.as_deref(), Some("base-model"));
-    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        (config.model.as_deref(), config.model_reasoning_effort),
+        (Some("spawn-model"), Some(ReasoningEffort::Low)),
+    );
     assert_eq!(
         config.codex_linux_sandbox_exe,
         Some(PathBuf::from("/tmp/codex-linux-sandbox"))
