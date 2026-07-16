@@ -6,6 +6,8 @@ use codex_code_mode_protocol::ImageDetail;
 
 const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
 const REMOTE_IMAGE_URL_ERROR: &str = "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI instead";
+const INVALID_IMAGE_URL_ERROR: &str =
+    "Tool call failed: invalid image output. Pass a base64 data URI instead";
 const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
 
 pub(super) fn serialize_output_text(
@@ -59,9 +61,14 @@ pub(super) fn normalize_output_image(
         if image_url.is_empty() {
             return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
         }
-        let lower = image_url.to_ascii_lowercase();
-        if lower.starts_with("http://") || lower.starts_with("https://") {
+        let Some((scheme, _)) = image_url.split_once(':') else {
+            return Err(INVALID_IMAGE_URL_ERROR.to_string());
+        };
+        if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
             return Err(REMOTE_IMAGE_URL_ERROR.to_string());
+        }
+        if !scheme.eq_ignore_ascii_case("data") {
+            return Err(INVALID_IMAGE_URL_ERROR.to_string());
         }
 
         let detail = detail_override.or(detail);
