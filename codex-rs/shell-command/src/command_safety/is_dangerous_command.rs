@@ -17,7 +17,7 @@ const MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH: usize = 8;
 
 /// Returns the dangerous-command rule matched by an already-tokenized command.
 pub fn dangerous_command_match(command: &[String]) -> Option<DangerousCommandMatch> {
-    dangerous_command_match_with_depth(command, 0)
+    dangerous_command_match_with_depth(command, /*wrapper_depth*/ 0)
 }
 
 fn dangerous_command_match_with_depth(

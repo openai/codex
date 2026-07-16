@@ -96,6 +96,8 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
 
 #[tokio::test]
 async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
+
     let server = start_mock_server().await;
     let mut builder = test_codex();
     let test = builder.build_with_auto_env(&server).await?;
@@ -134,7 +136,7 @@ async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected
             mcp_elicitations: true,
         }),
         PermissionProfile::read_only(),
-        None,
+        /*collaboration_mode*/ None,
     )
     .await?;
 
@@ -158,6 +160,8 @@ async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected
 
 #[tokio::test]
 async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
+
     let server = start_mock_server().await;
     let mut builder = test_codex();
     let test = builder.build_with_auto_env(&server).await?;
@@ -196,7 +200,7 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
             mcp_elicitations: true,
         }),
         PermissionProfile::read_only(),
-        None,
+        /*collaboration_mode*/ None,
     )
     .await?;
 
