@@ -443,6 +443,7 @@ impl InMemoryThreadStore {
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),
             history_mode: params.history_mode,
+            history_base: None,
             subagent_history_start_ordinal: params.subagent_history_start_ordinal,
             multi_agent_version: params.multi_agent_version,
             context_window: Some(SessionContextWindow::new(params.initial_window_id.clone())),
