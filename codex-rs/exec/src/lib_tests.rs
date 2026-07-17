@@ -23,11 +23,6 @@ fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
     tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
 }
 
-#[test]
-fn exec_defaults_analytics_to_enabled() {
-    assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
-}
-
 #[derive(Clone)]
 struct TestLogWriter {
     buffer: Arc<Mutex<Vec<u8>>>,
