@@ -1,5 +1,4 @@
 use crate::context::ApprovalPromptContext;
-use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentModeInstructions;
@@ -63,25 +62,6 @@ fn build_permissions_update_item(
         )
         .render(),
     )
-}
-
-fn build_collaboration_mode_update_item(
-    previous: Option<&TurnContextItem>,
-    next: &TurnContext,
-) -> Option<String> {
-    if !next.config.include_collaboration_mode_instructions {
-        return None;
-    }
-
-    let prev = previous?;
-    let collaboration_mode = next.collaboration_mode();
-    if prev.collaboration_mode.as_ref() != Some(&collaboration_mode) {
-        // If the next mode has empty developer instructions, this returns None and we emit no
-        // update, so prior collaboration instructions remain in the prompt history.
-        Some(CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)?.render())
-    } else {
-        None
-    }
 }
 
 fn build_multi_agent_mode_update_item(
@@ -257,7 +237,6 @@ pub(crate) fn build_settings_update_items(
         // any other context diffs on this turn.
         build_model_instructions_update_item(previous_turn_settings, next),
         build_permissions_update_item(previous, next, exec_policy),
-        build_collaboration_mode_update_item(previous, next),
         build_multi_agent_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
