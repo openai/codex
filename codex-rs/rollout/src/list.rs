@@ -1278,19 +1278,37 @@ fn event_msg_preview(event: &EventMsg) -> Option<String> {
 /// Read the SessionMetaLine from the head of a rollout file for reuse by
 /// callers that need the session metadata (e.g. to derive a cwd for config).
 pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
-    let head = read_head_for_summary(path).await?;
-    let Some(first) = head.first() else {
-        return Err(io::Error::other(format!(
-            "rollout at {} is empty",
-            path.display()
-        )));
-    };
-    serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
-        io::Error::other(format!(
-            "rollout at {} does not start with session metadata",
-            path.display()
-        ))
-    })
+    let mut lines = compression::open_rollout_line_reader(path).await?;
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                crate::recorder::reject_unknown_thread_history_mode(&value)?;
+            }
+            continue;
+        };
+        match rollout_line.item {
+            RolloutItem::SessionMeta(session_meta_line) => return Ok(session_meta_line),
+            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+                return Err(io::Error::other(format!(
+                    "rollout at {} does not start with session metadata",
+                    path.display()
+                )));
+            }
+            RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::WorldState(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+    Err(io::Error::other(format!(
+        "rollout at {} is empty",
+        path.display()
+    )))
 }
 
 async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {

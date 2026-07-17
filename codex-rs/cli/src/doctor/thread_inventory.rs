@@ -5,9 +5,10 @@ use super::Config;
 use super::DoctorCheck;
 use super::DoctorIssue;
 use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_rollout::RolloutRecorder;
 use codex_state::ThreadStateAuditRow;
 use codex_utils_path::normalize_for_path_comparison;
 use std::collections::BTreeMap;
@@ -18,6 +19,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 const MAX_PARITY_SCAN_FILES: usize = 10_000;
+const MAX_ROLLOUT_HEADER_LINES: usize = 64;
 const SAMPLE_LIMIT: usize = 5;
 const SUMMARY_LIMIT: usize = 8;
 const CHECK_ID: &str = "state.rollout_db_parity";
@@ -43,6 +45,12 @@ enum RolloutThreadId {
     Id(String),
     MalformedName,
     Unusable(String),
+}
+
+#[derive(serde::Deserialize)]
+struct RolloutLineType {
+    #[serde(rename = "type")]
+    item_type: String,
 }
 
 impl RolloutScan {
@@ -503,14 +511,54 @@ async fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) 
 }
 
 async fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
-    let items = match RolloutRecorder::load_rollout_items(path).await {
-        Ok((items, _, _)) => items,
+    let mut lines = match codex_rollout::open_rollout_line_reader(path).await {
+        Ok(lines) => lines,
         Err(err) => return RolloutThreadId::Unusable(err.to_string()),
     };
-    if items.is_empty() {
-        return RolloutThreadId::Unusable("no parseable rollout items".to_string());
+    let mut has_legacy_item = false;
+
+    for _ in 0..MAX_ROLLOUT_HEADER_LINES {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) if line.trim().is_empty() => continue,
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => return RolloutThreadId::Unusable(err.to_string()),
+        };
+        let item_type = match serde_json::from_str::<RolloutLineType>(line.trim()) {
+            Ok(line) => line.item_type,
+            Err(_) => continue,
+        };
+        if item_type == "session_meta" {
+            return match serde_json::from_str::<RolloutLine>(line.trim()) {
+                Ok(line) => match line.item {
+                    RolloutItem::SessionMeta(session_meta) => {
+                        RolloutThreadId::Id(session_meta.meta.id.to_string())
+                    }
+                    _ => RolloutThreadId::Unusable(format!(
+                        "rollout at {} has invalid session metadata",
+                        path.display()
+                    )),
+                },
+                Err(_) => RolloutThreadId::Unusable(format!(
+                    "rollout at {} has invalid session metadata",
+                    path.display()
+                )),
+            };
+        }
+        if !has_legacy_item {
+            has_legacy_item = serde_json::from_str::<RolloutLine>(line.trim()).is_ok();
+        }
     }
-    codex_rollout::builder_from_items(items.as_slice(), path)
+
+    if !has_legacy_item {
+        return RolloutThreadId::Unusable(format!(
+            "rollout at {} has no usable header record",
+            path.display()
+        ));
+    }
+    // Legacy rollouts can omit session metadata, so use the validated filename fallback after
+    // the bounded prefix without retaining the first item or loading the full history.
+    codex_rollout::builder_from_items(&[], path)
         .map(|builder| RolloutThreadId::Id(builder.id.to_string()))
         .unwrap_or(RolloutThreadId::MalformedName)
 }
@@ -678,8 +726,6 @@ where
 mod tests {
     use super::*;
     use codex_protocol::ThreadId;
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
     use pretty_assertions::assert_eq;
     use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::sqlite::SqlitePoolOptions;
@@ -779,12 +825,276 @@ mod tests {
                 .as_deref()
                 .is_some_and(|remedy| remedy.starts_with("Restart Codex"))
         }));
-        assert!(
-            check
-                .details
-                .iter()
-                .any(|detail| detail.contains(missing_path.to_string_lossy().as_ref()))
-        );
+        let missing_sample = check
+            .details
+            .iter()
+            .find_map(|detail| detail.strip_prefix("rollout DB missing active sample: "))
+            .expect("missing active sample");
+        assert_eq!(Path::new(missing_sample), missing_path.as_path());
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_uses_metadata_id_when_filename_and_db_disagree() {
+        let fixture = Fixture::new().await;
+        let filename_id = "00000000-0000-0000-0000-000000000001";
+        let metadata_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
+            .expect("metadata thread id");
+        let path =
+            fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", filename_id);
+        let contents = std::fs::read_to_string(&path).expect("rollout file");
+        let mut rollout_line =
+            serde_json::from_str::<RolloutLine>(contents.trim()).expect("rollout line");
+        let RolloutItem::SessionMeta(session_meta) = &mut rollout_line.item else {
+            panic!("expected session metadata");
+        };
+        session_meta.meta.session_id = metadata_id.into();
+        session_meta.meta.id = metadata_id;
+        session_meta.meta.timestamp = "not-a-timestamp".to_string();
+        let contents = serde_json::to_string(&rollout_line).expect("rollout line");
+        std::fs::write(&path, format!("{contents}\n")).expect("rollout file");
+        fixture
+            .insert_thread_row(filename_id, path.as_path(), /*archived*/ false)
+            .await;
+
+        let check = thread_inventory_check_for_roots(
+            fixture.codex_home.path(),
+            fixture.sqlite_home.path(),
+            "test-provider",
+        )
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_detail(&check, "rollout DB scan errors", "0");
+        assert_detail(&check, "rollout DB missing active rows", "1");
+        assert_detail(&check, "rollout DB stale rows", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_ignores_invalid_utf8_after_session_metadata() {
+        let fixture = Fixture::new().await;
+        let thread_id = "00000000-0000-0000-0000-000000000001";
+        let path = fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", thread_id);
+        let mut contents = std::fs::read(&path).expect("rollout file");
+        contents.resize(contents.len() + 128 * 1024, 0xff);
+        contents.push(b'\n');
+        std::fs::write(&path, contents).expect("rollout file");
+        fixture
+            .insert_thread_row(thread_id, path.as_path(), /*archived*/ false)
+            .await;
+
+        let check = thread_inventory_check_for_roots(
+            fixture.codex_home.path(),
+            fixture.sqlite_home.path(),
+            "test-provider",
+        )
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_detail(&check, "rollout DB scan errors", "0");
+        assert_detail(&check, "rollout DB missing active rows", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_id_from_rollout_falls_back_for_legacy_non_meta_record() {
+        let home = TempDir::new().expect("temp dir");
+        let thread_id = "00000000-0000-0000-0000-000000000001";
+        let valid_path = home
+            .path()
+            .join(format!("rollout-2025-01-02T10-00-00-{thread_id}.jsonl"));
+        let malformed_path = home.path().join("rollout-not-a-valid-name.jsonl");
+        let legacy_line = serde_json::json!({
+            "timestamp": "2025-01-02T10:00:00Z",
+            "type": "compacted",
+            "payload": {"message": "legacy history"},
+        });
+        std::fs::write(&valid_path, format!("not-json\n{legacy_line}\n")).expect("legacy rollout");
+        std::fs::write(&malformed_path, format!("{legacy_line}\n")).expect("legacy rollout");
+
+        assert!(matches!(
+            thread_id_from_rollout(&valid_path).await,
+            RolloutThreadId::Id(id) if id == thread_id
+        ));
+        assert!(matches!(
+            thread_id_from_rollout(&malformed_path).await,
+            RolloutThreadId::MalformedName
+        ));
+    }
+
+    #[tokio::test]
+    async fn thread_id_from_rollout_uses_metadata_after_pre_header_record() {
+        let fixture = Fixture::new().await;
+        let filename_id = "00000000-0000-0000-0000-000000000001";
+        let metadata_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
+            .expect("metadata thread id");
+        let path =
+            fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", filename_id);
+        let contents = std::fs::read_to_string(&path).expect("rollout file");
+        let mut rollout_line =
+            serde_json::from_str::<RolloutLine>(contents.trim()).expect("rollout line");
+        let RolloutItem::SessionMeta(session_meta) = &mut rollout_line.item else {
+            panic!("expected session metadata");
+        };
+        session_meta.meta.session_id = metadata_id.into();
+        session_meta.meta.id = metadata_id;
+        let response_item = serde_json::json!({
+            "timestamp": "2025-01-02T10:00:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "before metadata"}],
+            },
+        });
+        let session_meta = serde_json::to_string(&rollout_line).expect("rollout line");
+        std::fs::write(&path, format!("{response_item}\n{session_meta}\n")).expect("rollout file");
+
+        assert!(matches!(
+            thread_id_from_rollout(&path).await,
+            RolloutThreadId::Id(id) if id == metadata_id.to_string()
+        ));
+    }
+
+    #[tokio::test]
+    async fn thread_id_from_rollout_uses_metadata_at_header_line_limit() {
+        let fixture = Fixture::new().await;
+        let filename_id = "00000000-0000-0000-0000-000000000001";
+        let metadata_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
+            .expect("metadata thread id");
+        let path =
+            fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", filename_id);
+        let contents = std::fs::read_to_string(&path).expect("rollout file");
+        let mut rollout_line =
+            serde_json::from_str::<RolloutLine>(contents.trim()).expect("rollout line");
+        let RolloutItem::SessionMeta(session_meta) = &mut rollout_line.item else {
+            panic!("expected session metadata");
+        };
+        session_meta.meta.session_id = metadata_id.into();
+        session_meta.meta.id = metadata_id;
+        let legacy_line = serde_json::json!({
+            "timestamp": "2025-01-02T10:00:00Z",
+            "type": "compacted",
+            "payload": {
+                "message": "legacy history",
+                "replacement_history": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "x".repeat(/*n*/ 1024 * 1024),
+                    }],
+                }],
+            },
+        });
+        let mut lines = vec![legacy_line.to_string(); MAX_ROLLOUT_HEADER_LINES - 1];
+        lines.push(serde_json::to_string(&rollout_line).expect("rollout line"));
+        std::fs::write(&path, format!("{}\n", lines.join("\n"))).expect("rollout file");
+
+        assert!(matches!(
+            thread_id_from_rollout(&path).await,
+            RolloutThreadId::Id(id) if id == metadata_id.to_string()
+        ));
+    }
+
+    #[tokio::test]
+    async fn thread_id_from_rollout_stops_after_legacy_header_line_limit() {
+        let home = TempDir::new().expect("temp dir");
+        let thread_id = "00000000-0000-0000-0000-000000000001";
+        let path = home
+            .path()
+            .join(format!("rollout-2025-01-02T10-00-00-{thread_id}.jsonl"));
+        let legacy_line = serde_json::json!({
+            "timestamp": "2025-01-02T10:00:00Z",
+            "type": "compacted",
+            "payload": {"message": "legacy history"},
+        });
+        let mut contents = format!(
+            "{}\n",
+            vec![legacy_line.to_string(); MAX_ROLLOUT_HEADER_LINES].join("\n")
+        )
+        .into_bytes();
+        contents.extend([0xff, 0xfe, b'\n']);
+        std::fs::write(&path, contents).expect("legacy rollout");
+
+        assert!(matches!(
+            thread_id_from_rollout(&path).await,
+            RolloutThreadId::Id(id) if id == thread_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn thread_id_from_rollout_rejects_unusable_headers() {
+        let home = TempDir::new().expect("temp dir");
+        let empty_path = home
+            .path()
+            .join("rollout-2025-01-02T10-00-00-00000000-0000-0000-0000-000000000001.jsonl");
+        let invalid_path = home
+            .path()
+            .join("rollout-2025-01-02T10-00-01-00000000-0000-0000-0000-000000000002.jsonl");
+        let invalid_utf8_path = home
+            .path()
+            .join("rollout-2025-01-02T10-00-02-00000000-0000-0000-0000-000000000003.jsonl");
+        let unknown_history_mode_path = home
+            .path()
+            .join("rollout-2025-01-02T10-00-03-00000000-0000-0000-0000-000000000004.jsonl");
+        let missing_path = home
+            .path()
+            .join("rollout-2025-01-02T10-00-04-00000000-0000-0000-0000-000000000005.jsonl");
+        std::fs::write(&empty_path, " \n\t\n").expect("empty rollout");
+        std::fs::write(&invalid_path, "not-json\n{also-invalid}\n").expect("invalid rollout");
+        std::fs::write(&invalid_utf8_path, [0xff, 0xfe, b'\n']).expect("invalid utf8 rollout");
+        let unknown_history_mode = serde_json::json!({
+            "timestamp": "2025-01-02T10:00:03Z",
+            "type": "session_meta",
+            "payload": {
+                "session_id": "00000000-0000-0000-0000-000000000004",
+                "id": "00000000-0000-0000-0000-000000000004",
+                "timestamp": "2025-01-02T10:00:03Z",
+                "cwd": ".",
+                "originator": "test",
+                "cli_version": "test",
+                "source": "cli",
+                "model_provider": "test-provider",
+                "history_mode": "future",
+            },
+        });
+        std::fs::write(
+            &unknown_history_mode_path,
+            format!(
+                "{unknown_history_mode}\n{}\n",
+                serde_json::json!({
+                    "timestamp": "2025-01-02T10:00:04Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "session_id": "00000000-0000-0000-0000-000000000005",
+                        "id": "00000000-0000-0000-0000-000000000005",
+                        "timestamp": "2025-01-02T10:00:04Z",
+                        "cwd": ".",
+                        "originator": "test",
+                        "cli_version": "test",
+                        "source": "cli",
+                        "model_provider": "test-provider",
+                    },
+                })
+            ),
+        )
+        .expect("unknown history mode rollout");
+
+        for path in [
+            &empty_path,
+            &invalid_path,
+            &invalid_utf8_path,
+            &unknown_history_mode_path,
+            &missing_path,
+        ] {
+            assert!(
+                matches!(
+                    thread_id_from_rollout(path).await,
+                    RolloutThreadId::Unusable(_)
+                ),
+                "{} should be unusable",
+                path.display()
+            );
+        }
     }
 
     struct Fixture {
