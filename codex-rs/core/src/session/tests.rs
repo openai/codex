@@ -200,6 +200,7 @@ impl StepContext {
             Arc::clone(&turn),
             environments,
             Vec::new(),
+            /*executor_capability_discovery*/ None,
             crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
             /*loaded_agents_md*/ None,
         ))
@@ -7813,7 +7814,12 @@ async fn deferred_environment_roots_refresh_plugin_availability() {
     );
 
     let new_runtime = session
-        .mcp_runtime_for_step(&turn_context, &environments, &resolved_roots)
+        .mcp_runtime_for_step(
+            &turn_context,
+            &environments,
+            &resolved_roots,
+            /*executor_capability_discovery*/ None,
+        )
         .await;
 
     assert!(!old_runtime.plugins_available());

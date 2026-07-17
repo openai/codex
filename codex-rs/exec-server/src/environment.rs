@@ -9,6 +9,8 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use futures::FutureExt;
 
+use crate::CapabilityRootsDiscoverParams;
+use crate::CapabilityRootsDiscoverResponse;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
@@ -710,6 +712,19 @@ impl Environment {
         match &self.remote_client {
             Some(client) => client.environment_info().await,
             None => Ok(EnvironmentInfo::local()),
+        }
+    }
+
+    /// Discovers plugin and skill manifests through the environment's high-level discovery API.
+    pub async fn discover_capability_roots(
+        &self,
+        params: CapabilityRootsDiscoverParams,
+    ) -> Result<CapabilityRootsDiscoverResponse, ExecServerError> {
+        match &self.remote_client {
+            Some(client) => client.get().await?.discover_capability_roots(params).await,
+            None => crate::discover_capability_roots(self.filesystem.as_ref(), params)
+                .await
+                .map_err(|error| ExecServerError::Protocol(error.to_string())),
         }
     }
 

@@ -687,6 +687,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             &first_session.services.thread_extension_data,
             &first_originator,
             /*ready_selected_capability_roots*/ &[],
+            /*executor_capability_discovery*/ None,
         )
         .await;
     let second_session = &second_thread.thread.session;
@@ -700,6 +701,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             &second_session.services.thread_extension_data,
             &second_originator,
             /*ready_selected_capability_roots*/ &[],
+            /*executor_capability_discovery*/ None,
         )
         .await;
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_core_skills::loader::EnvironmentSkillMetadata;
+use codex_core_skills::loader::load_environment_skills_from_discovery;
 use codex_core_skills::loader::load_environment_skills_from_root;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -44,6 +45,9 @@ impl ExecutorSkillProvider {
 impl SkillProvider for ExecutorSkillProvider {
     fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
         Box::pin(async move {
+            if let Some(discovery) = query.executor_capability_discovery {
+                return Ok(self.list_from_discovery(&discovery));
+            }
             let mut catalog = SkillCatalog::default();
             for selected_root in query.executor_roots {
                 let selected_root_id = selected_root.id;
@@ -74,6 +78,7 @@ impl SkillProvider for ExecutorSkillProvider {
                         authority.clone(),
                         &selected_root_id,
                         &environment_id,
+                        /*instructions*/ None,
                     ));
                 }
             }
@@ -94,6 +99,12 @@ impl SkillProvider for ExecutorSkillProvider {
                 return Err(SkillProviderError::new(
                     "executor skill resource does not match its package",
                 ));
+            }
+            if let Some(contents) = request.resource.environment_contents() {
+                return Ok(SkillReadResult {
+                    resource: request.resource.clone(),
+                    contents: contents.to_string(),
+                });
             }
             let Some((environment_id, resource_path)) = request.resource.environment_path() else {
                 return Err(SkillProviderError::new(
@@ -128,11 +139,50 @@ impl SkillProvider for ExecutorSkillProvider {
     }
 }
 
+impl ExecutorSkillProvider {
+    fn list_from_discovery(
+        &self,
+        snapshot: &codex_exec_server::ExecutorCapabilityDiscoverySnapshot,
+    ) -> SkillCatalog {
+        let mut catalog = SkillCatalog::default();
+        for root in snapshot.roots() {
+            let selected_root_id = &root.selected_root.id;
+            let CapabilityRootLocation::Environment { environment_id, .. } =
+                &root.selected_root.location;
+            let discovery = match &root.result {
+                Ok(discovery) => discovery.as_ref(),
+                Err(error) => {
+                    catalog.warnings.push(format!(
+                        "Selected capability root `{selected_root_id}` discovery failed: {error}"
+                    ));
+                    continue;
+                }
+            };
+            let outcome =
+                load_environment_skills_from_discovery(discovery, self.restriction_product);
+            catalog.warnings.extend(outcome.warnings);
+            let authority =
+                SkillAuthority::new(SkillSourceKind::Executor, selected_root_id.clone());
+            for skill in outcome.skills {
+                catalog.push_entry(catalog_entry_from_skill(
+                    &skill.metadata,
+                    authority.clone(),
+                    selected_root_id,
+                    environment_id,
+                    Some(skill.instructions),
+                ));
+            }
+        }
+        catalog
+    }
+}
+
 fn catalog_entry_from_skill(
     skill: &EnvironmentSkillMetadata,
     authority: SkillAuthority,
     selected_root_id: &str,
     environment_id: &str,
+    instructions: Option<String>,
 ) -> SkillCatalogEntry {
     let skill_path = skill.path_to_skills_md.inferred_native_path_string();
     let normalized_path = match skill.path_to_skills_md.infer_path_convention() {
@@ -143,16 +193,25 @@ fn catalog_entry_from_skill(
         "skill://{selected_root_id}/{}",
         normalized_path.trim_start_matches('/')
     );
+    let main_prompt = match instructions {
+        Some(contents) => SkillResourceId::environment_with_contents(
+            display_path.clone(),
+            environment_id,
+            skill.path_to_skills_md.clone(),
+            contents,
+        ),
+        None => SkillResourceId::environment(
+            display_path.clone(),
+            environment_id,
+            skill.path_to_skills_md.clone(),
+        ),
+    };
     let entry = SkillCatalogEntry::new(
         SkillPackageId(display_path.clone()),
         authority,
         skill.name.clone(),
         skill.description.clone(),
-        SkillResourceId::environment(
-            display_path.clone(),
-            environment_id,
-            skill.path_to_skills_md.clone(),
-        ),
+        main_prompt,
     )
     .with_short_description(skill.short_description.clone())
     .with_display_path(display_path)

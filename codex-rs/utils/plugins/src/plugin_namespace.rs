@@ -1,17 +1,11 @@
 //! Resolve plugin namespace from skill file paths by walking ancestors for `plugin.json`.
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server_protocol::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
-
-/// Ordered plugin manifest paths recognized beneath a plugin root.
-pub const DISCOVERABLE_PLUGIN_MANIFEST_PATHS: &[&str] = &[
-    ".codex-plugin/plugin.json",
-    ".claude-plugin/plugin.json",
-    ".cursor-plugin/plugin.json",
-];
 
 pub fn find_plugin_manifest_path(plugin_root: &Path) -> Option<PathBuf> {
     DISCOVERABLE_PLUGIN_MANIFEST_PATHS

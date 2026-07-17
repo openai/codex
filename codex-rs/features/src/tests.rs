@@ -28,6 +28,19 @@ fn under_development_features_are_disabled_by_default() {
 }
 
 #[test]
+fn executor_capability_discovery_is_an_opt_in_map_feature() {
+    let mut features = Features::with_defaults();
+    assert!(!features.enabled(Feature::ExecutorCapabilityDiscovery));
+
+    features.apply_map(&BTreeMap::from([(
+        "executor_capability_discovery".to_string(),
+        true,
+    )]));
+
+    assert!(features.enabled(Feature::ExecutorCapabilityDiscovery));
+}
+
+#[test]
 fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {

@@ -14,6 +14,8 @@ use tokio_util::task::TaskTracker;
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
+use crate::protocol::CapabilityRootsDiscoverParams;
+use crate::protocol::CapabilityRootsDiscoverResponse;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::EnvironmentStatus;
 use crate::protocol::EnvironmentStatusKind;
@@ -256,6 +258,14 @@ impl ExecServerHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.read_file(params).await
+    }
+
+    pub(crate) async fn discover_capability_roots(
+        &self,
+        params: CapabilityRootsDiscoverParams,
+    ) -> Result<CapabilityRootsDiscoverResponse, JSONRPCErrorError> {
+        self.require_initialized_for("capability discovery")?;
+        self.file_system.discover_capability_roots(params).await
     }
 
     pub(crate) async fn fs_open(

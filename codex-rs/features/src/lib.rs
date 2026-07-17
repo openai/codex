@@ -170,6 +170,8 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Discover selected-root plugin and skill manifests through one high-level exec-server RPC.
+    ExecutorCapabilityDiscovery,
     /// Removed compatibility flag for plugin-bundled lifecycle hooks.
     PluginHooks,
     /// Allow the in-app browser pane in desktop apps.
@@ -1115,6 +1117,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "plugins",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ExecutorCapabilityDiscovery,
+        key: "executor_capability_discovery",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PluginHooks,

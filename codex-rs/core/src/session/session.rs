@@ -717,6 +717,7 @@ impl Session {
                     thread_extension_data_for_mcp,
                     &mcp_originator,
                     /*ready_selected_capability_roots*/ &[],
+                    /*executor_capability_discovery*/ None,
                 )
                 .await;
             let mcp_config = &mcp_projection.config;

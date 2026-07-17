@@ -77,6 +77,7 @@ impl SkillToolContext {
                             include_bundled_skills: false,
                             include_orchestrator_skills: true,
                             mcp_resources: self.mcp_resources.clone(),
+                            executor_capability_discovery: None,
                         }),
                     )
                     .await
