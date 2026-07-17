@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 pub struct AppCommand {
-    /// Workspace path to open in Codex Desktop.
+    /// Workspace path to open in the Desktop app.
     #[arg(value_name = "PATH", default_value = ".")]
     pub path: PathBuf,
 
