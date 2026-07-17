@@ -236,6 +236,7 @@ use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
+use self::turn::agent_message_text;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
@@ -1885,12 +1886,44 @@ impl Session {
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
-        let Some((text, phase)) = realtime_text_for_event(msg) else {
-            return;
-        };
         if self.conversation.running_state().await.is_none() {
             return;
         }
+        match msg {
+            EventMsg::ItemStarted(event) => {
+                if let TurnItem::AgentMessage(item) = &event.item {
+                    self.conversation
+                        .register_handoff_stream_item(
+                            item.id.clone(),
+                            item.phase.clone(),
+                            agent_message_text(item),
+                        )
+                        .await;
+                }
+                return;
+            }
+            EventMsg::AgentMessageContentDelta(event) => {
+                if let Err(err) = self
+                    .conversation
+                    .stream_handoff_delta(&event.item_id, event.delta.clone())
+                    .await
+                {
+                    debug!("failed to stream event text to realtime conversation: {err}");
+                }
+                return;
+            }
+            EventMsg::ItemCompleted(event) => {
+                if let TurnItem::AgentMessage(item) = &event.item
+                    && self.conversation.finish_handoff_stream_item(&item.id).await
+                {
+                    return;
+                }
+            }
+            _ => {}
+        }
+        let Some((text, phase)) = realtime_text_for_event(msg) else {
+            return;
+        };
         if let Err(err) = self.conversation.handoff_out(text, phase).await {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }

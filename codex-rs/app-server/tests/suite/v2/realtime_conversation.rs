@@ -88,8 +88,6 @@ const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
     "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 const RESPONSE_ITEM_PREFIX: &str =
     "Use the following context to inform future responses, but do not speak it to the user.";
-const RESPONSE_HANDOFF_PREFIX: &str =
-    "Silent Codex context. Do not speak, acknowledge, or summarize this item.";
 
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
@@ -334,7 +332,6 @@ impl RealtimeE2eHarness {
             offer_sdp,
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
-            /*codex_response_handoff_prefix*/ None,
             RealtimeConversationVersion::V1,
         )
         .await
@@ -348,7 +345,6 @@ impl RealtimeE2eHarness {
             offer_sdp,
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ Some(true),
-            /*codex_response_handoff_prefix*/ None,
             RealtimeConversationVersion::V1,
         )
         .await
@@ -359,7 +355,6 @@ impl RealtimeE2eHarness {
         offer_sdp: &str,
         client_managed_handoffs: Option<bool>,
         codex_responses_as_items: Option<bool>,
-        codex_response_handoff_prefix: Option<&str>,
         version: RealtimeConversationVersion,
     ) -> Result<StartedWebrtcRealtime> {
         // Starts realtime through the public JSON-RPC method, then waits for the same client-visible
@@ -373,7 +368,6 @@ impl RealtimeE2eHarness {
                 codex_response_item_prefix: codex_responses_as_items
                     .unwrap_or(false)
                     .then(|| RESPONSE_ITEM_PREFIX.to_string()),
-                codex_response_handoff_prefix: codex_response_handoff_prefix.map(str::to_string),
                 codex_responses_as_items,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -434,7 +428,6 @@ impl RealtimeE2eHarness {
                 codex_response_item_prefix: codex_responses_as_items
                     .unwrap_or(false)
                     .then(|| RESPONSE_ITEM_PREFIX.to_string()),
-                codex_response_handoff_prefix: None,
                 codex_responses_as_items,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -466,7 +459,6 @@ impl RealtimeE2eHarness {
                 client_managed_handoffs: None,
                 flush_transcript_tail_on_session_end: None,
                 codex_response_item_prefix: None,
-                codex_response_handoff_prefix: None,
                 codex_responses_as_items: None,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -738,7 +730,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
-            codex_response_handoff_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
@@ -1033,7 +1024,6 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
-            codex_response_handoff_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1135,7 +1125,6 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
-            codex_response_handoff_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Text,
@@ -1323,7 +1312,6 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
-            codex_response_handoff_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1431,7 +1419,6 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
-            codex_response_handoff_prefix: None,
             thread_id: thread_id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1625,7 +1612,6 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
             "v=offer\r\n",
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
-            /*codex_response_handoff_prefix*/ None,
             RealtimeConversationVersion::V3,
         )
         .await?;
@@ -1727,7 +1713,7 @@ async fn webrtc_v1_default_automatic_output_uses_handoff_append() -> Result<()> 
         json!({
             "type": "conversation.handoff.append",
             "handoff_id": "codex",
-            "output_text": "legacy automatic speech",
+            "output_text": "\"Agent Final Message\":\n\nlegacy automatic speech",
         })
     );
 
@@ -1756,7 +1742,6 @@ async fn webrtc_v1_client_managed_handoffs_disable_automatic_output() -> Result<
             "v=offer\r\n",
             /*client_managed_handoffs*/ Some(true),
             /*codex_responses_as_items*/ None,
-            /*codex_response_handoff_prefix*/ None,
             RealtimeConversationVersion::V1,
         )
         .await?;
@@ -1807,58 +1792,6 @@ async fn webrtc_v1_client_managed_handoffs_disable_automatic_output() -> Result<
             "type": "conversation.handoff.append",
             "handoff_id": "codex",
             "output_text": "client-selected speech",
-        })
-    );
-
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn webrtc_v1_final_automatic_handoff_omits_silent_prefix() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let mut harness = RealtimeE2eHarness::new(
-        RealtimeTestVersion::V1,
-        main_loop_responses(vec![create_final_assistant_message_sse_response(
-            "background progress",
-        )?]),
-        realtime_sideband(vec![realtime_sideband_connection(vec![
-            vec![
-                session_updated("sess_v1_prefixed_handoff"),
-                json!({
-                    "type": "conversation.handoff.requested",
-                    "handoff_id": "handoff_prefixed",
-                    "item_id": "item_prefixed",
-                    "input_transcript": "run the background task"
-                }),
-            ],
-            vec![],
-            vec![],
-        ])]),
-    )
-    .await?;
-
-    let started = harness
-        .start_webrtc_realtime_with_codex_response_routing(
-            "v=offer\r\n",
-            /*client_managed_handoffs*/ None,
-            /*codex_responses_as_items*/ None,
-            Some(RESPONSE_HANDOFF_PREFIX),
-            RealtimeConversationVersion::V1,
-        )
-        .await?;
-    assert_eq!(started.started.version, RealtimeConversationVersion::V1);
-    let _ = harness
-        .read_notification::<TurnCompletedNotification>("turn/completed")
-        .await?;
-
-    assert_eq!(
-        harness.sideband_outbound_request(/*request_index*/ 1).await,
-        json!({
-            "type": "conversation.handoff.append",
-            "handoff_id": "handoff_prefixed",
-            "output_text": "background progress",
         })
     );
 
@@ -2980,7 +2913,6 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
-            codex_response_handoff_prefix: None,
             thread_id: thread_start.thread.id,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3050,7 +2982,6 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
-            codex_response_handoff_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
