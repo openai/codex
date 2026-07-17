@@ -32,6 +32,10 @@ impl ContextualUserFragment for RealtimeEndInstructions {
         )
     }
 
+    fn matches_text(text: &str) -> bool {
+        text.contains(END_INSTRUCTIONS.trim())
+    }
+
     fn body(&self) -> String {
         format!("\n{}\n\nReason: {}\n", END_INSTRUCTIONS.trim(), self.reason)
     }
