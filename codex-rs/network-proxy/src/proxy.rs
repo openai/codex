@@ -650,6 +650,29 @@ impl NetworkProxy {
         self.state.current_cfg().await
     }
 
+    /// Captures the static inputs needed to launch a matching executor-local proxy.
+    pub async fn remote_launch_config(&self) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
+        let proxy = crate::RemoteNetworkProxyConfig::from_effective_config(
+            &self.state.current_cfg().await?,
+        )?;
+        let (environment_id, execution_id) = self
+            .execution_scope
+            .as_ref()
+            .map(|scope| {
+                (
+                    Some(scope.environment_id.clone()),
+                    Some(scope.execution_id.clone()),
+                )
+            })
+            .unwrap_or_default();
+        Ok(crate::RemoteNetworkProxyLaunchConfig {
+            proxy,
+            audit_metadata: self.state.audit_metadata().clone(),
+            environment_id,
+            execution_id,
+        })
+    }
+
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.state.add_allowed_domain(host).await
     }
@@ -1215,6 +1238,30 @@ mod tests {
         assert_eq!(legacy_env, local.env);
 
         handle.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_launch_config_carries_execution_scope() -> Result<()> {
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig::default()));
+        let proxy = match NetworkProxy::builder().state(state).build().await {
+            Ok(proxy) => proxy,
+            Err(err) => {
+                if err
+                    .chain()
+                    .any(|cause| cause.to_string().contains("Operation not permitted"))
+                {
+                    return Ok(());
+                }
+                return Err(err);
+            }
+        };
+
+        let scoped = proxy.for_execution("remote-env", "execution-1", "token-1".to_string())?;
+        let launch = scoped.remote_launch_config().await?;
+
+        assert_eq!(launch.environment_id.as_deref(), Some("remote-env"));
+        assert_eq!(launch.execution_id.as_deref(), Some("execution-1"));
         Ok(())
     }
 

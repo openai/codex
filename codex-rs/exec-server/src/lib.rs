@@ -112,6 +112,7 @@ pub use protocol::CapabilityRootsDiscoverResponse;
 pub use protocol::CapabilityTextFile;
 pub use protocol::DiscoveredPluginFiles;
 pub use protocol::DiscoveredSkillFiles;
+pub use protocol::EnvironmentCapabilities;
 pub use protocol::EnvironmentInfo;
 pub use protocol::EnvironmentStatus;
 pub use protocol::EnvironmentStatusKind;

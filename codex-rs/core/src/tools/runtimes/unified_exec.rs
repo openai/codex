@@ -328,7 +328,33 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             launch_sandbox_permissions,
         ));
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
-        let (env, managed_network_context) = match managed_network {
+        let (env, managed_network_context, network_proxy_launch) = match managed_network {
+            Some(network) if environment_is_remote => {
+                let launch = network.remote_launch_config().await.map_err(|err| {
+                    ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
+                })?;
+                if !launch.proxy.enabled {
+                    (env, None, None)
+                } else {
+                    let environment_info =
+                        req.turn_environment
+                            .environment
+                            .info()
+                            .await
+                            .map_err(|err| {
+                                ToolError::Codex(CodexErr::Io(io::Error::other(format!(
+                                    "failed to query exec-server capabilities: {err}"
+                                ))))
+                            })?;
+                    if !environment_info.capabilities.network_proxy_launch {
+                        return Err(ToolError::Rejected(
+                            "selected exec-server does not support executor-local network proxy launches"
+                                .to_string(),
+                        ));
+                    }
+                    (env, None, Some(launch))
+                }
+            }
             Some(network) => {
                 let prepared = network
                     .prepare_for_optional_environment(
@@ -341,9 +367,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             req.turn_environment.environment_id
                         ))))
                     })?;
-                (prepared.env, Some(prepared.sandbox_context))
+                (prepared.env, Some(prepared.sandbox_context), None)
             }
-            None => (env, None),
+            None => (env, None, None),
         };
         let explicit_env_overrides = req.explicit_env_overrides.clone();
         #[cfg(unix)]
@@ -480,6 +506,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 options,
                 attempt,
                 managed_network,
+                network_proxy_launch,
                 /*environment_id*/ Some(&req.turn_environment.environment_id),
                 req.exec_server_env_config.clone(),
                 req.tty,

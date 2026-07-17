@@ -67,7 +67,6 @@ impl ToolOrchestrator {
             &tool_ctx.session,
             &tool_ctx.turn.sub_id,
             managed_network_active,
-            attempt.sandbox,
             tool.network_approval_spec(req, tool_ctx),
         )
         .await
