@@ -29,6 +29,18 @@ use tokio_util::sync::CancellationToken;
 use crate::session_runtime as runtime;
 use crate::session_runtime::SessionRuntime;
 
+const YIELD_GRACE_PERIOD: Duration = Duration::from_secs(1);
+const MIN_YIELD_TIME_FOR_GRACE: Duration = Duration::from_secs(10);
+
+fn yield_timeout(yield_time_ms: u64) -> Duration {
+    let yield_time = Duration::from_millis(yield_time_ms);
+    if yield_time >= MIN_YIELD_TIME_FOR_GRACE {
+        yield_time.saturating_add(YIELD_GRACE_PERIOD)
+    } else {
+        yield_time
+    }
+}
+
 pub struct NoopCodeModeSessionDelegate;
 
 impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
@@ -105,7 +117,7 @@ impl InProcessCodeModeSession {
             .runtime
             .execute(
                 runtime_request(request),
-                runtime::ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
+                runtime::ObserveMode::YieldAfter(yield_timeout(yield_time_ms)),
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -160,7 +172,7 @@ impl InProcessCodeModeSession {
             .runtime
             .begin_observe(
                 &runtime_cell_id,
-                runtime::ObserveMode::YieldAfter(Duration::from_millis(yield_time_ms)),
+                runtime::ObserveMode::YieldAfter(yield_timeout(yield_time_ms)),
             )
             .await
         {
