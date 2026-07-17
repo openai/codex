@@ -552,67 +552,6 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-#[ignore] // Ignored while we have a better way to test this.
-async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {
-    let (session, turn) = test_session_and_turn().await;
-
-    let result = exec_command(
-        &session,
-        &turn,
-        "echo codex",
-        /*yield_time_ms*/ 120_000,
-        /*workdir*/ None,
-    )
-    .await?;
-
-    assert!(result.process_id.is_some());
-    assert!(
-        result
-            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
-            .contains("codex")
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore] // Ignored while we have a better way to test this.
-async fn completed_commands_do_not_persist_sessions() -> anyhow::Result<()> {
-    let (session, turn) = test_session_and_turn().await;
-    let result = exec_command(
-        &session,
-        &turn,
-        "echo codex",
-        /*yield_time_ms*/ 2_500,
-        /*workdir*/ None,
-    )
-    .await?;
-
-    assert!(
-        result.process_id.is_some(),
-        "completed command should report a process id"
-    );
-    assert!(
-        result
-            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
-            .contains("codex")
-    );
-
-    assert!(
-        session
-            .services
-            .unified_exec_manager
-            .process_store
-            .lock()
-            .await
-            .processes
-            .is_empty()
-    );
-
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
