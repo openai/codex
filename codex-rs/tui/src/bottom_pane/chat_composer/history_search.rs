@@ -305,9 +305,10 @@ impl ChatComposer {
     ///
     /// `Found` previews the matching entry, `Pending` keeps the footer in a waiting state while an
     /// async persistent entry lookup is outstanding, `AtBoundary` preserves the current match, and
-    /// `NotFound` restores the original draft while keeping the query available for further edits.
-    /// Treating `AtBoundary` like `NotFound` would produce the visible "no match" flicker at the
-    /// end of a one-result search and desynchronize Up/Down counts.
+    /// `NotFound` restores the original draft while keeping the query available for further edits,
+    /// and `Unavailable` does the same without claiming there was no match. Treating `AtBoundary`
+    /// like `NotFound` would produce the visible "no match" flicker at the end of a one-result
+    /// search and desynchronize Up/Down counts.
     pub(super) fn apply_history_search_result(&mut self, result: HistorySearchResult) {
         match result {
             HistorySearchResult::Found(entry) => {
@@ -326,13 +327,17 @@ impl ChatComposer {
                     search.status = HistorySearchStatus::Match;
                 }
             }
-            HistorySearchResult::NotFound => {
+            result @ (HistorySearchResult::NotFound | HistorySearchResult::Unavailable) => {
                 let original_draft = self
                     .history_search
                     .as_ref()
                     .map(|search| search.original_draft.clone());
                 if let Some(search) = self.history_search.as_mut() {
-                    search.status = HistorySearchStatus::NoMatch;
+                    search.status = if matches!(result, HistorySearchResult::NotFound) {
+                        HistorySearchStatus::NoMatch
+                    } else {
+                        HistorySearchStatus::Idle
+                    };
                 }
                 if let Some(original_draft) = original_draft {
                     self.restore_draft(original_draft);
@@ -494,6 +499,7 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::super::super::chat_composer_history::HistoryEntry;
+    use super::super::super::chat_composer_history::HistorySearchResult;
     use super::super::super::footer::FooterMode;
     use super::super::ChatComposer;
     use super::HistorySearchStatus;
@@ -522,6 +528,32 @@ mod tests {
         assert!(composer.history_search_active());
         assert!(composer.draft.textarea.is_empty());
         assert_eq!(composer.footer_mode(), FooterMode::HistorySearch);
+    }
+
+    #[test]
+    fn unavailable_history_search_restores_idle_draft() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
+        composer.begin_history_search();
+        composer.apply_history_search_result(HistorySearchResult::Pending);
+
+        composer.apply_history_search_result(HistorySearchResult::Unavailable);
+
+        assert_eq!(composer.draft.textarea.text(), "draft");
+        assert!(
+            composer
+                .history_search
+                .as_ref()
+                .is_some_and(|search| matches!(search.status, HistorySearchStatus::Idle))
+        );
     }
 
     #[test]

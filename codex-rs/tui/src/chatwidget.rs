@@ -1175,13 +1175,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_history_entry_response(&mut self, event: HistoryLookupResponse) {
-        let HistoryLookupResponse {
-            offset,
-            log_id,
-            entry,
-        } = event;
-        self.bottom_pane
-            .on_history_entry_response(log_id, offset, entry);
+        self.bottom_pane.on_history_lookup_response(event);
     }
 
     pub(crate) fn pre_draw_tick(&mut self) {

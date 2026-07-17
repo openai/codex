@@ -182,7 +182,7 @@ async fn replayed_user_messages_seed_composer_history() {
         };
         offset
     };
-    let response = |offset, entry: &str| HistoryLookupResponse {
+    let response = |offset, entry: &str| HistoryLookupResponse::Entry {
         offset,
         log_id: 1,
         entry: Some(entry.to_string()),
