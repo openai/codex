@@ -1,0 +1,21 @@
+---
+source: core/src/context/world_state/collaboration_mode_tests.rs
+expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&default)),\n(Known(&default), Known(&default)),\n(Known(&old_default), Known(&new_default)), (Known(&default), Known(&plan)),\n(Unknown, Known(&default)),])"
+---
+Absent -> Absent
+None
+
+Absent -> "default" (role - developer)
+<collaboration_mode>pair with the user</collaboration_mode>
+
+"default" -> "default"
+None
+
+"default" -> "default"
+None
+
+"default" -> "plan" (role - developer)
+<collaboration_mode>make a plan</collaboration_mode>
+
+Unknown -> "default"
+None

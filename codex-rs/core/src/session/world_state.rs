@@ -3,6 +3,7 @@ use super::step_context::StepContext;
 use crate::connectors;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
+use crate::context::world_state::CollaborationModeState;
 use crate::context::world_state::EnvironmentsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::PluginsInstructionsState;
@@ -32,6 +33,12 @@ impl Session {
 
         let mut world_state = WorldState::default();
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
+        if turn_context.config.include_collaboration_mode_instructions
+            && let Some(collaboration_mode) =
+                CollaborationModeState::from_collaboration_mode(&turn_context.collaboration_mode())
+        {
+            world_state.add_section(collaboration_mode);
+        }
         if turn_context.config.include_environment_context {
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(

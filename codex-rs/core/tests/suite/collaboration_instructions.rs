@@ -355,7 +355,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()> {
+async fn collaboration_mode_update_ignores_instruction_changes_within_same_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -425,7 +425,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
     let first_text = collab_xml(first_text);
     let second_text = collab_xml(second_text);
     assert_eq!(count_messages_containing(&dev_texts, &first_text), 1);
-    assert_eq!(count_messages_containing(&dev_texts, &second_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &second_text), 0);
 
     Ok(())
 }
