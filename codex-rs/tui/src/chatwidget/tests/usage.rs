@@ -1,4 +1,3 @@
-use super::super::reset_credits::RateLimitResetScope;
 use super::super::reset_credits::ResetCreditOption;
 use super::super::reset_credits::reset_credit_options;
 use super::*;
@@ -58,20 +57,47 @@ fn expiry_timestamp(day: u32, hour: u32, minute: u32) -> i64 {
         .timestamp()
 }
 
+fn show_rate_limit_reset_confirmation_from_event(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> u64 {
+    let Ok(AppEvent::OpenRateLimitResetConfirmation {
+        picker_request_id,
+        confirmation_gate,
+        credit_id,
+        reset_title,
+        reset_detail,
+        reset_description,
+    }) = rx.try_recv()
+    else {
+        panic!("expected reset confirmation event");
+    };
+    assert!(chat.show_rate_limit_reset_confirmation(
+        picker_request_id,
+        confirmation_gate,
+        credit_id,
+        reset_title,
+        reset_detail,
+        reset_description,
+    ));
+    picker_request_id
+}
+
 #[test]
-fn reset_credit_options_use_scope_label_for_unknown_reset_type() {
+fn reset_credit_options_use_generic_copy_when_backend_copy_is_missing() {
     let mut credit = reset_credit("future-credit", /*expires_at*/ None);
     credit.reset_type = RateLimitResetType::Unknown;
 
     assert_eq!(
-        reset_credit_options(
-            &detailed_reset_credits(/*available_count*/ 1, vec![credit]),
-            RateLimitResetScope::WeeklyAndFiveHour,
-        ),
+        reset_credit_options(&detailed_reset_credits(
+            /*available_count*/ 1,
+            vec![credit],
+        )),
         vec![ResetCreditOption {
             credit_id: Some("future-credit".to_string()),
-            name: "Full reset (Weekly + 5h)".to_string(),
-            description: "Does not expire.".to_string(),
+            name: "Full reset".to_string(),
+            detail: Some("Does not expire.".to_string()),
+            description: "Reset your current usage limits.".to_string(),
         }]
     );
 }
@@ -400,66 +426,67 @@ async fn rate_limit_reset_picker_wraps_expiry_details_snapshot() {
 }
 
 #[tokio::test]
-async fn usage_limit_reset_confirmation_uses_monthly_copy_for_monthly_limits_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    set_chatgpt_auth(&mut chat);
-    let mut states = Vec::new();
-
-    chat.plan_type = Some(PlanType::Free);
-    let free_request_id = chat.show_rate_limit_reset_loading_popup();
+async fn rate_limit_reset_confirmation_uses_backend_copy_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let expiry = expiry_timestamp(/*day*/ 18, /*hour*/ 9, /*minute*/ 39);
+    let mut credit =
+        reset_credit_with_title("weekly-credit", Some(expiry), "Full reset (Weekly + 5 hr)");
+    credit.description = Some("Reset your weekly and 5-hour usage limits.".to_string());
+    let request_id = chat.show_rate_limit_reset_loading_popup();
     assert!(chat.finish_rate_limit_reset_credits_refresh(
-        free_request_id,
+        request_id,
         Vec::new(),
         Ok(detailed_reset_credits(
             /*available_count*/ 1,
-            vec![reset_credit("free-credit", /*expires_at*/ None)],
+            vec![credit],
         )),
     ));
-    states.push(format!(
-        "Free:\n{}",
-        render_bottom_popup(&chat, /*width*/ 80)
-    ));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    dismiss_popup(&mut chat);
-    chat.plan_type = Some(PlanType::Go);
-    let go_request_id = chat.show_rate_limit_reset_loading_popup();
-    assert!(chat.finish_rate_limit_reset_credits_refresh(
-        go_request_id,
-        Vec::new(),
-        Ok(reset_credits(/*available_count*/ 1)),
-    ));
-    states.push(format!("Go:\n{}", render_bottom_popup(&chat, /*width*/ 80)));
-
-    dismiss_popup(&mut chat);
-    let mut monthly_business_snapshot = snapshot(/*percent*/ 50.0);
-    monthly_business_snapshot.plan_type = Some(PlanType::Business);
-    monthly_business_snapshot
-        .primary
-        .as_mut()
-        .expect("monthly business snapshot primary window")
-        .window_duration_mins = Some(30 * 24 * 60);
-    let business_request_id = chat.show_rate_limit_reset_loading_popup();
-    assert!(chat.finish_rate_limit_reset_credits_refresh(
-        business_request_id,
-        vec![monthly_business_snapshot],
-        Ok(detailed_reset_credits(
-            /*available_count*/ 1,
-            vec![reset_credit("business-credit", /*expires_at*/ None)],
-        )),
-    ));
-    states.push(format!(
-        "Business with monthly window:\n{}",
-        render_bottom_popup(&chat, /*width*/ 80)
+    let Ok(AppEvent::OpenRateLimitResetConfirmation {
+        picker_request_id,
+        confirmation_gate,
+        credit_id,
+        reset_title,
+        reset_detail,
+        reset_description,
+    }) = rx.try_recv()
+    else {
+        panic!("expected reset confirmation event");
+    };
+    assert_eq!(
+        (
+            picker_request_id,
+            credit_id.as_deref(),
+            reset_title.as_str(),
+            reset_detail.as_deref(),
+            reset_description.as_str(),
+        ),
+        (
+            request_id,
+            Some("weekly-credit"),
+            "Full reset (Weekly + 5 hr)",
+            Some("Expires 09:39 on 18 Jun 2026."),
+            "Reset your weekly and 5-hour usage limits.",
+        )
+    );
+    assert!(chat.show_rate_limit_reset_confirmation(
+        picker_request_id,
+        confirmation_gate,
+        credit_id,
+        reset_title,
+        reset_detail,
+        reset_description,
     ));
 
     assert_chatwidget_snapshot!(
-        "usage_limit_reset_confirmation_monthly",
-        states.join("\n---\n")
+        "rate_limit_reset_confirmation",
+        render_bottom_popup(&chat, /*width*/ 80)
     );
 }
 
 #[tokio::test]
-async fn rate_limit_reset_confirmation_selects_cancel_by_default() {
+async fn rate_limit_reset_confirmation_no_and_escape_return_to_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let request_id = chat.show_rate_limit_reset_loading_popup();
     assert!(chat.finish_rate_limit_reset_credits_refresh(
@@ -467,17 +494,60 @@ async fn rate_limit_reset_confirmation_selects_cancel_by_default() {
         Vec::new(),
         Ok(reset_credits(/*available_count*/ 1)),
     ));
+    let picker = render_bottom_popup(&chat, /*width*/ 80);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
+    assert!(rx.try_recv().is_err());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(render_bottom_popup(&chat, /*width*/ 80), picker);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(render_bottom_popup(&chat, /*width*/ 80), picker);
 
-    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(render_bottom_popup(&chat, /*width*/ 80), picker);
     assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn reset_picker_allows_only_one_pending_confirmation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let request_id = chat.show_rate_limit_reset_loading_popup();
+    let first_expiry = expiry_timestamp(/*day*/ 18, /*hour*/ 9, /*minute*/ 39);
+    assert!(chat.finish_rate_limit_reset_credits_refresh(
+        request_id,
+        Vec::new(),
+        Ok(detailed_reset_credits(
+            /*available_count*/ 2,
+            vec![
+                reset_credit_with_title("credit-1", Some(first_expiry), "First reset"),
+                reset_credit_with_title("credit-2", /*expires_at*/ None, "Second reset"),
+            ],
+        )),
+    ));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
+    assert!(rx.try_recv().is_err());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
+
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Second reset · Does not expire."));
 }
 
 #[tokio::test]
 async fn rate_limit_reset_picker_starts_with_soonest_expiries_and_keeps_all_rows_reachable() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.plan_type = Some(PlanType::Business);
     let request_id = chat.show_rate_limit_reset_loading_popup();
     let first_expiry = expiry_timestamp(/*day*/ 18, /*hour*/ 9, /*minute*/ 39);
     let credits = (0..9)
@@ -502,18 +572,25 @@ async fn rate_limit_reset_picker_starts_with_soonest_expiries_and_keeps_all_rows
     );
     assert!(!rendered.contains("Full reset ("), "{rendered}");
 
-    for _ in 0..9 {
+    for _ in 0..8 {
         chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::ConsumeRateLimitResetCredit {
-            idempotency_key,
+        Ok(AppEvent::OpenRateLimitResetConfirmation {
+            picker_request_id,
+            confirmation_gate: _,
             credit_id,
-        }) if Uuid::parse_str(&idempotency_key).is_ok()
+            reset_title,
+            reset_detail,
+            reset_description,
+        }) if picker_request_id == request_id
             && credit_id.as_deref() == Some("credit-8")
+            && reset_title == "Full reset"
+            && reset_detail.as_deref() == Some("Expires 09:39 on 26 Jun 2026.")
+            && reset_description == "Reset your current usage limits."
     );
 }
 
@@ -524,19 +601,46 @@ async fn rate_limit_reset_confirmation_can_use_reset() {
     assert!(chat.finish_rate_limit_reset_credits_refresh(
         request_id,
         Vec::new(),
-        Ok(reset_credits(/*available_count*/ 1)),
+        Ok(detailed_reset_credits(
+            /*available_count*/ 1,
+            vec![reset_credit("credit-1", /*expires_at*/ None)],
+        )),
     ));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    show_rate_limit_reset_confirmation_from_event(&mut chat, &mut rx);
+    assert!(rx.try_recv().is_err());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::ConsumeRateLimitResetCredit {
-            idempotency_key,
-            credit_id,
-        }) if Uuid::parse_str(&idempotency_key).is_ok() && credit_id.is_none()
+    let Ok(AppEvent::ConsumeRateLimitResetCredit {
+        idempotency_key,
+        credit_id,
+    }) = rx.try_recv()
+    else {
+        panic!("expected reset consume event");
+    };
+    assert!(Uuid::parse_str(&idempotency_key).is_ok());
+    assert_eq!(credit_id.as_deref(), Some("credit-1"));
+
+    assert_eq!(chat.start_rate_limit_reset_consumption("wrong-key"), None);
+    let consume_request_id = chat
+        .start_rate_limit_reset_consumption(&idempotency_key)
+        .expect("confirmed reset should start consumption");
+    assert_eq!(
+        chat.start_rate_limit_reset_consumption(&idempotency_key),
+        None
     );
+    assert!(!chat.finish_rate_limit_reset_consume(
+        consume_request_id,
+        idempotency_key,
+        credit_id,
+        Ok(consume_response(
+            ConsumeAccountRateLimitResetCreditOutcome::NothingToReset,
+        )),
+    ));
+    dismiss_popup(&mut chat);
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
 }
 
 #[tokio::test]
@@ -552,13 +656,21 @@ async fn rate_limit_reset_retry_reuses_idempotency_key() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::ConsumeRateLimitResetCredit {
-            idempotency_key,
-            credit_id,
-        }) if idempotency_key == "stable-redeem-id"
-            && credit_id.as_deref() == Some("credit-1")
+    let Ok(AppEvent::ConsumeRateLimitResetCredit {
+        idempotency_key,
+        credit_id,
+    }) = rx.try_recv()
+    else {
+        panic!("expected reset retry event");
+    };
+    assert_eq!(
+        (idempotency_key.as_str(), credit_id.as_deref()),
+        ("stable-redeem-id", Some("credit-1"))
+    );
+    assert_eq!(chat.start_rate_limit_reset_consumption("wrong-key"), None);
+    assert!(
+        chat.start_rate_limit_reset_consumption(&idempotency_key)
+            .is_some()
     );
 }
 
@@ -795,14 +907,48 @@ async fn rate_limit_reset_success_updates_popup_beneath_overlay() {
 
 #[tokio::test]
 async fn account_change_dismisses_reset_popup_beneath_overlay() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
-    chat.show_rate_limit_reset_loading_popup();
+    let request_id = chat.show_rate_limit_reset_loading_popup();
+    assert!(chat.finish_rate_limit_reset_credits_refresh(
+        request_id,
+        Vec::new(),
+        Ok(reset_credits(/*available_count*/ 1)),
+    ));
+    assert!(chat.show_rate_limit_reset_confirmation(
+        request_id,
+        Arc::new(AtomicBool::new(true)),
+        /*credit_id*/ None,
+        "Full reset".to_string(),
+        /*reset_detail*/ None,
+        "Reset your current usage limits.".to_string(),
+    ));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let Ok(AppEvent::ConsumeRateLimitResetCredit {
+        idempotency_key,
+        credit_id: None,
+    }) = rx.try_recv()
+    else {
+        panic!("expected reset consume event");
+    };
     show_usage_test_overlay(&mut chat);
 
     chat.update_account_state(
         /*status_account_display*/ None, /*plan_type*/ None,
         /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ false,
+    );
+    assert!(!chat.show_rate_limit_reset_confirmation(
+        request_id,
+        Arc::new(AtomicBool::new(true)),
+        /*credit_id*/ None,
+        "Stale reset".to_string(),
+        /*reset_detail*/ None,
+        "This stale confirmation should be ignored.".to_string(),
+    ));
+    assert_eq!(
+        chat.start_rate_limit_reset_consumption(&idempotency_key),
+        None
     );
     assert_eq!(
         chat.bottom_pane.active_view_id(),

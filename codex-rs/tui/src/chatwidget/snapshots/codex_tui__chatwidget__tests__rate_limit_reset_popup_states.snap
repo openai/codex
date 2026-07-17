@@ -12,9 +12,9 @@ expression: "states.join(\"\\n---\\n\")"
   Usage limit resets
   2 usage limit resets available.
 
-› 1. Cancel
-  2. Full reset (Weekly + 5 hr)  Expires 09:39 on 18 Jun 2026.
-  3. Full reset (Weekly + 5 hr)  Expires 08:59 on 27 Jun 2026.
+› 1. Full reset (Weekly + 5 hr)  Expires 09:39 on 18 Jun 2026.
+  2. Full reset (Weekly + 5 hr)  Expires 08:59 on 27 Jun 2026.
+  3. Cancel
 
   Press enter to confirm or esc to go back
 ---
