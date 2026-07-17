@@ -4454,6 +4454,7 @@ dependencies = [
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",
+ "codex-otel",
  "codex-protocol",
  "codex-tools",
  "http 1.4.0",
