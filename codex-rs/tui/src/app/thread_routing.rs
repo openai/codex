@@ -930,17 +930,32 @@ impl App {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
         };
-
-        let (should_send, pending_status) = {
+        let (should_send, pending_status, turn_stopped) = {
             let mut guard = store.lock().await;
             if guard.session.is_none()
                 && let Some(session) = inferred_session
             {
                 guard.session = Some(session);
             }
+            let turn_stopped = match &notification {
+                ServerNotification::TurnCompleted(notification) => {
+                    guard.active_turn_id() == Some(notification.turn.id.as_str())
+                }
+                ServerNotification::ThreadClosed(_) => true,
+                _ => false,
+            };
             guard.push_notification(notification.clone());
-            (guard.active, guard.side_parent_pending_status())
+            (
+                guard.active,
+                guard.side_parent_pending_status(),
+                turn_stopped,
+            )
         };
+        if matches!(notification, ServerNotification::TurnStarted(_)) {
+            self.agent_navigation.mark_running(thread_id);
+        } else if turn_stopped {
+            self.agent_navigation.mark_stopped(thread_id);
+        }
         let notification_status_change = SideParentStatusChange::for_notification(&notification);
 
         if should_send {

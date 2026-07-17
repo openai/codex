@@ -1418,7 +1418,94 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
 }
 
 #[tokio::test]
-async fn open_agent_picker_clears_completed_path_backed_agent_running_state() -> Result<()> {
+async fn open_agent_picker_preserves_running_hints_until_observed_completion() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    app.thread_event_channels
+        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 4));
+    app.agent_navigation
+        .record_sub_agent_activity(SubAgentActivityDisplay {
+            thread_id,
+            agent_path: "/root/child".to_string(),
+            is_running_hint: true,
+        });
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    let mut expected_entry = AgentPickerThreadEntry {
+        agent_nickname: None,
+        agent_role: None,
+        agent_path: Some("/root/child".to_string()),
+        is_running: true,
+        is_closed: false,
+    };
+    assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
+    let status = loop {
+        let event = app_event_rx.try_recv().expect("agent status history cell");
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            if rendered.contains("/agent") {
+                break rendered;
+            }
+        }
+    };
+    assert_snapshot!(status, @r###"
+    /agent
+    Sub-agents running
+
+      • `/root/child`
+        No recent activity yet.
+    "###);
+
+    app.enqueue_thread_notification(
+        thread_id,
+        turn_completed_notification(thread_id, "turn-older", TurnStatus::Completed),
+    )
+    .await?;
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
+    app.enqueue_thread_notification(thread_id, turn_started_notification(thread_id, "turn-1"))
+        .await?;
+    app.enqueue_thread_notification(
+        thread_id,
+        turn_completed_notification(thread_id, "turn-1", TurnStatus::Completed),
+    )
+    .await?;
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    expected_entry.is_running = false;
+    assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
+    app.agent_navigation
+        .record_sub_agent_activity(SubAgentActivityDisplay {
+            thread_id,
+            agent_path: "/root/child".to_string(),
+            is_running_hint: true,
+        });
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    expected_entry.is_running = false;
+    assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
+    app.enqueue_thread_notification(thread_id, turn_started_notification(thread_id, "turn-2"))
+        .await?;
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    expected_entry.is_running = true;
+    assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
+    Ok(())
+}
+
+#[tokio::test]
+async fn open_agent_picker_clears_running_hint_from_completed_snapshot() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
@@ -1426,17 +1513,14 @@ async fn open_agent_picker_clears_completed_path_backed_agent_running_state() ->
     .await
     .expect("embedded app server");
     let thread_id = ThreadId::new();
-    let channel = ThreadEventChannel::new(/*capacity*/ 4);
-    {
-        let mut store = channel.store.lock().await;
-        store.push_notification(turn_started_notification(thread_id, "turn-1"));
-        store.push_notification(turn_completed_notification(
-            thread_id,
-            "turn-1",
-            TurnStatus::Completed,
-        ));
-    }
-    app.thread_event_channels.insert(thread_id, channel);
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(thread_id, test_path_buf("/tmp/project")),
+            vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())],
+        ),
+    );
     app.agent_navigation
         .record_sub_agent_activity(SubAgentActivityDisplay {
             thread_id,

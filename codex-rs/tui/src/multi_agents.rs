@@ -288,10 +288,15 @@ pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentAc
     else {
         return None;
     };
+    let is_running_hint = match kind {
+        SubAgentActivityKind::Started => true,
+        SubAgentActivityKind::Interacted => return None,
+        SubAgentActivityKind::Interrupted => false,
+    };
     Some(SubAgentActivityDisplay {
         thread_id: parse_thread_id(agent_thread_id)?,
         agent_path: agent_path.clone(),
-        is_running_hint: !matches!(kind, SubAgentActivityKind::Interrupted),
+        is_running_hint,
     })
 }
 
@@ -673,6 +678,18 @@ mod tests {
     use ratatui::style::Color;
     use ratatui::style::Modifier;
     use std::collections::HashMap;
+
+    #[test]
+    fn interacted_sub_agent_activity_does_not_change_liveness() {
+        let item = ThreadItem::SubAgentActivity {
+            id: "activity-1".to_string(),
+            kind: SubAgentActivityKind::Interacted,
+            agent_thread_id: ThreadId::new().to_string(),
+            agent_path: "/root/child".to_string(),
+        };
+
+        assert_eq!(sub_agent_activity_display(&item), None);
+    }
 
     #[test]
     fn collab_events_snapshot() {
