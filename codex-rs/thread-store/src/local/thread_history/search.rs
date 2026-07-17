@@ -235,6 +235,8 @@ fn searchable_text(item: &ThreadItem) -> Option<Cow<'_, str>> {
                     UserInput::Text { text, .. } => Some(strip_user_message_prefix(text)),
                     UserInput::Image { .. }
                     | UserInput::LocalImage { .. }
+                    | UserInput::Audio { .. }
+                    | UserInput::LocalAudio { .. }
                     | UserInput::Skill { .. }
                     | UserInput::Mention { .. } => None,
                 })
