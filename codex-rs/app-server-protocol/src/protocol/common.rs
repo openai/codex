@@ -630,6 +630,13 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadSearchResponse,
     },
+    #[experimental("thread/searchOccurrences")]
+    ThreadSearchOccurrences => "thread/searchOccurrences" {
+        params: v2::ThreadSearchOccurrencesParams,
+        // Explicitly concurrent: this reads persisted paginated history.
+        serialization: None,
+        response: v2::ThreadSearchOccurrencesResponse,
+    },
     ThreadLoadedList => "thread/loaded/list" {
         params: v2::ThreadLoadedListParams,
         serialization: None,

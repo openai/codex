@@ -9,9 +9,11 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
 mod read;
+mod search;
 
 pub(super) use read::list_items;
 pub(super) use read::list_turns;
+pub(super) use search::search_thread_occurrences;
 
 pub(super) async fn next_rollout_byte_offset(
     store: &LocalThreadStore,
@@ -285,9 +287,11 @@ INSERT INTO thread_items (
     item_id,
     rollout_ordinal,
     created_at_ms,
+    item_type,
     item_json
-) VALUES (?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, json_extract(?, '$.type'), ?)
 ON CONFLICT(thread_id, turn_id, item_id) DO UPDATE SET
+    item_type = excluded.item_type,
     item_json = excluded.item_json
             "#,
         )
@@ -296,6 +300,7 @@ ON CONFLICT(thread_id, turn_id, item_id) DO UPDATE SET
         .bind(item_id.as_str())
         .bind(rollout_ordinal)
         .bind(created_at_ms)
+        .bind(item_json.as_str())
         .bind(item_json)
         .execute(&mut **transaction)
         .await
