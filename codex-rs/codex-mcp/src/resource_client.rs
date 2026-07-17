@@ -3,13 +3,13 @@ use std::sync::Weak;
 
 use anyhow::Context;
 use anyhow::Result;
-use arc_swap::ArcSwap;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 
 use crate::McpConnectionManager;
+use crate::McpRuntime;
 
 /// One page of resources returned by an MCP server.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,16 +27,15 @@ pub struct McpResourceReadResult {
     pub contents: Vec<ResourceContent>,
 }
 
-/// Session-scoped access to MCP resources through the currently installed manager.
+/// Session-scoped access to MCP resources through the thread runtime.
 ///
-/// The client retains the manager's shared publication handle rather than a manager
-/// snapshot, so calls automatically use replacements installed during startup and refresh.
+/// Calls automatically use the connection set most recently published by the runtime.
 #[derive(Clone)]
 pub struct McpResourceClient {
-    manager: Arc<ArcSwap<McpConnectionManager>>,
+    runtime: Arc<McpRuntime>,
 }
 
-/// Opaque identity for the manager currently used by an MCP resource client.
+/// Opaque identity for the connection set currently used by an MCP resource client.
 #[derive(Clone)]
 pub struct McpResourceClientCacheKey(Weak<McpConnectionManager>);
 
@@ -57,21 +56,21 @@ impl std::fmt::Debug for McpResourceClient {
 }
 
 impl McpResourceClient {
-    /// Creates a resource client backed by the session's replaceable MCP manager.
-    pub fn new(manager: Arc<ArcSwap<McpConnectionManager>>) -> Self {
-        Self { manager }
+    /// Creates a resource client backed by the thread's MCP runtime.
+    pub fn new(runtime: Arc<McpRuntime>) -> Self {
+        Self { runtime }
     }
 
-    /// Returns an identity that changes whenever the published manager changes.
+    /// Returns an identity that changes whenever the published connection set changes.
     pub fn cache_key(&self) -> McpResourceClientCacheKey {
-        McpResourceClientCacheKey(Arc::downgrade(&self.manager.load_full()))
+        McpResourceClientCacheKey(Arc::downgrade(&self.runtime.snapshot()))
     }
 
-    /// Returns whether the current manager contains the named server.
+    /// Returns whether the current connection set contains the named server.
     ///
     /// This does not wait for server startup or imply that startup succeeded.
     pub async fn has_server(&self, server: &str) -> bool {
-        self.manager.load_full().contains_server(server)
+        self.runtime.snapshot().contains_server(server)
     }
 
     /// Lists one resource page from the named server.
@@ -83,8 +82,8 @@ impl McpResourceClient {
         let params =
             cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
         let result = self
-            .manager
-            .load_full()
+            .runtime
+            .snapshot()
             .list_resources(server, params)
             .await?;
         let resources = result
@@ -101,8 +100,8 @@ impl McpResourceClient {
     /// Reads one resource from the named server.
     pub async fn read_resource(&self, server: &str, uri: &str) -> Result<McpResourceReadResult> {
         let result = self
-            .manager
-            .load_full()
+            .runtime
+            .snapshot()
             .read_resource(server, ReadResourceRequestParams::new(uri.to_string()))
             .await?;
         let contents = result

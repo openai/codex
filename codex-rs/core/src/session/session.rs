@@ -1036,20 +1036,16 @@ impl Session {
                     config.analytics_enabled,
                 )
             });
-            // Keep one stable manager handle for the session so extension resource clients
-            // automatically observe the manager installed at startup and on later refreshes.
-            let mcp_connection_manager = Arc::new(arc_swap::ArcSwap::from_pointee(
+            let mcp_runtime = Arc::new(McpRuntime::new(Arc::new(
                 McpConnectionManager::new_uninitialized_with_permission_profile(
                     &config.permissions.approval_policy,
                     config.permissions.permission_profile(),
                     config.prefix_mcp_tool_names(),
                 ),
-            ));
+            )));
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
-            session_extension_data.insert(McpResourceClient::new(Arc::clone(
-                &mcp_connection_manager,
-            )));
+            session_extension_data.insert(McpResourceClient::new(Arc::clone(&mcp_runtime)));
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1062,15 +1058,10 @@ impl Session {
             }
 
             let services = SessionServices {
-                // Initialize the MCP connection manager with an uninitialized
-                // instance. It will be replaced with one created via
-                // McpConnectionManager::new() once all its constructor args are
-                // available. This also ensures `SessionConfigured` is emitted
-                // before any MCP-related events. It is reasonable to consider
-                // changing this to use Option or OnceCell, though the current
-                // setup is straightforward enough and performs well.
-                mcp_connection_manager,
-                mcp_runtime: arc_swap::ArcSwapOption::empty(),
+                // Start with an empty connection set. The initialized set is
+                // published after SessionConfigured so MCP events follow it.
+                mcp_runtime,
+                mcp_runtime_snapshot: arc_swap::ArcSwapOption::empty(),
                 mcp_projection_lock: Mutex::new(()),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
@@ -1257,7 +1248,7 @@ impl Session {
             ))
             .await;
             sess.services
-                .install_mcp_connection_manager(
+                .install_mcp_runtime(
                     Arc::new(mcp_projection.config),
                     mcp_projection.plugins_available,
                     mcp_runtime_context,

@@ -1,14 +1,15 @@
 //! Runtime support for Model Context Protocol (MCP) servers.
 //!
-//! This module contains data that describes the runtime environment in which MCP
-//! servers execute, plus the sandbox state payload sent to capable servers and a
-//! tiny shared metrics helper. Transport startup and orchestration live in
-//! [`crate::rmcp_client`] and [`crate::connection_manager`].
+//! This module contains the thread-owned MCP runtime and data that describes the
+//! environment in which MCP servers execute. Transport startup lives in
+//! [`crate::rmcp_client`] and connection-set behavior lives in
+//! [`crate::connection_manager`].
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::HttpClient;
@@ -17,6 +18,38 @@ use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::McpConnectionManager;
+
+/// Owns the currently published MCP connection set for one Codex thread.
+///
+/// Replacements are published atomically. Callers that already hold a snapshot
+/// keep the previous connection set alive until their work completes.
+pub struct McpRuntime {
+    connections: ArcSwap<McpConnectionManager>,
+}
+
+impl McpRuntime {
+    pub fn new(connections: Arc<McpConnectionManager>) -> Self {
+        Self {
+            connections: ArcSwap::from(connections),
+        }
+    }
+
+    pub fn snapshot(&self) -> Arc<McpConnectionManager> {
+        self.connections.load_full()
+    }
+
+    pub fn replace(&self, connections: McpConnectionManager) -> Arc<McpConnectionManager> {
+        let connections = Arc::new(connections);
+        self.connections.store(Arc::clone(&connections));
+        connections
+    }
+
+    pub async fn shutdown(&self) {
+        self.snapshot().shutdown().await;
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
