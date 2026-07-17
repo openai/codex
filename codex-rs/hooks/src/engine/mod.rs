@@ -14,6 +14,8 @@ use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
@@ -69,6 +71,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
@@ -254,6 +257,14 @@ impl ClaudeHooksEngine {
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
         crate::events::stop::preview(&self.handlers, request)
+    }
+
+    pub(crate) fn preview_session_end(&self) -> Vec<HookRunSummary> {
+        crate::events::session_end::preview(&self.handlers)
+    }
+
+    pub(crate) async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
+        crate::events::session_end::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {

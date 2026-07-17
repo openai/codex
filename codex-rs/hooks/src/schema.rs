@@ -27,6 +27,7 @@ const PRE_COMPACT_INPUT_FIXTURE: &str = "pre-compact.command.input.schema.json";
 const PRE_COMPACT_OUTPUT_FIXTURE: &str = "pre-compact.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
+const SESSION_END_INPUT_FIXTURE: &str = "session-end.command.input.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
 const USER_PROMPT_SUBMIT_OUTPUT_FIXTURE: &str = "user-prompt-submit.command.output.schema.json";
 const SUBAGENT_START_INPUT_FIXTURE: &str = "subagent-start.command.input.schema.json";
@@ -495,6 +496,19 @@ pub(crate) struct SessionStartCommandInput {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "session-end.command.input")]
+pub(crate) struct SessionEndCommandInput {
+    pub session_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "session_end_hook_event_name_schema")]
+    pub hook_event_name: String,
+    #[schemars(schema_with = "session_end_reason_schema")]
+    pub reason: String,
+}
+
 impl SessionStartCommandInput {
     pub(crate) fn new(
         session_id: impl Into<String>,
@@ -647,6 +661,10 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<SessionStartCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(SESSION_END_INPUT_FIXTURE),
+        schema_json::<SessionEndCommandInput>()?,
+    )?;
+    write_schema(
         &generated_dir.join(USER_PROMPT_SUBMIT_INPUT_FIXTURE),
         schema_json::<UserPromptSubmitCommandInput>()?,
     )?;
@@ -735,6 +753,14 @@ fn canonicalize_json(value: &Value) -> Value {
 
 fn session_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionStart")
+}
+
+fn session_end_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("SessionEnd")
+}
+
+fn session_end_reason_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("other")
 }
 
 fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -839,6 +865,7 @@ mod tests {
     use super::PreCompactCommandInput;
     use super::PreToolUseCommandInput;
     use super::PreToolUseCommandOutputWire;
+    use super::SESSION_END_INPUT_FIXTURE;
     use super::SESSION_START_INPUT_FIXTURE;
     use super::SESSION_START_OUTPUT_FIXTURE;
     use super::STOP_INPUT_FIXTURE;
@@ -903,6 +930,9 @@ mod tests {
             }
             SESSION_START_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/session-start.command.output.schema.json")
+            }
+            SESSION_END_INPUT_FIXTURE => {
+                include_str!("../schema/generated/session-end.command.input.schema.json")
             }
             USER_PROMPT_SUBMIT_INPUT_FIXTURE => {
                 include_str!("../schema/generated/user-prompt-submit.command.input.schema.json")
@@ -969,6 +999,7 @@ mod tests {
             PRE_TOOL_USE_OUTPUT_FIXTURE,
             SESSION_START_INPUT_FIXTURE,
             SESSION_START_OUTPUT_FIXTURE,
+            SESSION_END_INPUT_FIXTURE,
             USER_PROMPT_SUBMIT_INPUT_FIXTURE,
             USER_PROMPT_SUBMIT_OUTPUT_FIXTURE,
             SUBAGENT_START_INPUT_FIXTURE,

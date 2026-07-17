@@ -315,6 +315,13 @@
           },
           "type": "array"
         },
+        "SessionEnd": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "SessionStart": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"

@@ -1310,6 +1310,13 @@
           },
           "type": "array"
         },
+        "SessionEnd": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "SessionStart": {
           "default": [],
           "items": {

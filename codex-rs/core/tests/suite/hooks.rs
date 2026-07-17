@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::StartThreadOptions;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_features::Feature;
@@ -18,9 +19,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -172,6 +176,41 @@ else:
     });
 
     fs::write(&script_path, script).context("write stop hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_session_end_hook(home: &Path) -> Result<()> {
+    let script_path = home.join("session_end_hook.py");
+    let log_path = home.join("session_end_hook_log.jsonl");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+transcript = Path(payload["transcript_path"])
+payload["transcript_exists"] = transcript.exists()
+payload["transcript_text"] = transcript.read_text(encoding="utf-8") if transcript.exists() else ""
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+print(json.dumps({{"continue": False, "decision": "block", "reason": "ignored"}}))
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionEnd": [{
+                "matcher": "other",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write session end hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -1217,6 +1256,99 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
     );
     assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_end_flushes_transcript_and_ignores_control_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "persisted answer"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_session_end_hook(home).expect("write session end hook fixture");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("persist this before shutdown").await?;
+    test.codex.shutdown_and_wait().await?;
+
+    let inputs = read_hook_inputs_from_log(
+        test.codex_home_path()
+            .join("session_end_hook_log.jsonl")
+            .as_path(),
+    )?;
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0]["hook_event_name"], "SessionEnd");
+    assert_eq!(inputs[0]["reason"], "other");
+    assert_eq!(inputs[0]["transcript_exists"], true);
+    let transcript = inputs[0]["transcript_text"]
+        .as_str()
+        .expect("session end transcript text");
+    assert!(transcript.contains("persist this before shutdown"));
+    assert!(transcript.contains("persisted answer"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_end_skips_subagents() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_session_end_hook(home).expect("write session end hook fixture");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+    for source in [
+        SubAgentSource::Review,
+        SubAgentSource::ThreadSpawn {
+            parent_thread_id: test.session_configured.thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        },
+    ] {
+        let subagent = test
+            .thread_manager
+            .start_thread_with_options(StartThreadOptions {
+                config: test.config.clone(),
+                allow_provider_model_fallback: false,
+                initial_history: InitialHistory::New,
+                history_mode: None,
+                session_source: Some(SessionSource::SubAgent(source)),
+                thread_source: None,
+                dynamic_tools: Vec::new(),
+                metrics_service_name: None,
+                parent_trace: None,
+                environments: Vec::new(),
+                thread_extension_init: Default::default(),
+                supports_openai_form_elicitation: false,
+            })
+            .await?;
+
+        subagent.thread.shutdown_and_wait().await?;
+    }
+
+    assert!(
+        !test
+            .codex_home_path()
+            .join("session_end_hook_log.jsonl")
+            .exists(),
+        "subagents must not run SessionEnd hooks"
+    );
     Ok(())
 }
 
