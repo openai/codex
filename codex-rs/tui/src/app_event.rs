@@ -9,6 +9,8 @@
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
@@ -331,6 +333,16 @@ pub(crate) enum AppEvent {
 
     /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
+
+    /// Confirm the reset credit selected from the reset-credit picker.
+    OpenRateLimitResetConfirmation {
+        picker_request_id: u64,
+        confirmation_gate: Arc<AtomicBool>,
+        credit_id: Option<String>,
+        reset_title: String,
+        reset_detail: Option<String>,
+        reset_description: String,
+    },
 
     /// Consume one reset credit using a stable idempotency key.
     ConsumeRateLimitResetCredit {

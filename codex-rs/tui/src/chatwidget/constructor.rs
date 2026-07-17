@@ -130,6 +130,8 @@ impl ChatWidget {
             completed_token_activity_output: None,
             next_token_activity_request_id: 0,
             pending_rate_limit_reset_request_id: None,
+            pending_rate_limit_reset_idempotency_key: None,
+            rate_limit_reset_picker_request_id: None,
             pending_rate_limit_reset_hint_request_id: None,
             pending_usage_menu_rate_limit_request_id: None,
             pending_rate_limit_reset_hint: None,

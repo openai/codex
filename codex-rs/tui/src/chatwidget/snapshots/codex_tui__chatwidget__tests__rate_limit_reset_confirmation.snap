@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/usage.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Use this reset?
+  Full reset (Weekly + 5 hr) · Expires 09:39 on 18 Jun 2026.
+
+  1. Yes, use reset  Reset your weekly and 5-hour usage limits.
+› 2. No, go back     Choose a different reset.
+
+  Press enter to confirm or esc to go back
