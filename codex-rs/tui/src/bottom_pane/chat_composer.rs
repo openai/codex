@@ -164,6 +164,7 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::ui_consts::FOOTER_INDENT_COLS;
+use codex_message_history::HistoryBatchCursor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -186,6 +187,7 @@ use ratatui::widgets::WidgetRef;
 use super::chat_composer_history::ChatComposerHistory;
 use super::chat_composer_history::HistoryEntry;
 use super::chat_composer_history::HistoryEntryResponse;
+use super::chat_composer_history::HistorySearchResult;
 use super::command_popup::CommandItem;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
@@ -936,6 +938,46 @@ impl ChatComposer {
             }
             HistoryEntryResponse::Ignored => false,
         }
+    }
+
+    pub(crate) fn on_history_batch_response(
+        &mut self,
+        log_id: u64,
+        cursor: HistoryBatchCursor,
+        entries: Vec<crate::app_event::HistoryBatchEntryResponse>,
+        next_older_cursor: Option<HistoryBatchCursor>,
+    ) -> bool {
+        let result = self.history.on_batch_response(
+            log_id,
+            cursor,
+            entries,
+            next_older_cursor,
+            &self.app_event_tx,
+        );
+        self.apply_history_batch_result(result)
+    }
+
+    /// Applies a failed batch lookup without conflating it with history exhaustion.
+    ///
+    /// The history state machine either schedules a bounded retry, preserves an existing match, or
+    /// returns the search UI to its idle draft when no match has been selected yet.
+    pub(crate) fn on_history_batch_error(
+        &mut self,
+        log_id: u64,
+        cursor: HistoryBatchCursor,
+    ) -> bool {
+        let result = self
+            .history
+            .on_batch_error(log_id, cursor, &self.app_event_tx);
+        self.apply_history_batch_result(result)
+    }
+
+    fn apply_history_batch_result(&mut self, result: Option<HistorySearchResult>) -> bool {
+        let Some(result) = result else {
+            return false;
+        };
+        self.apply_history_search_result(result);
+        true
     }
 
     pub(crate) fn record_replayed_user_message_history(&mut self, entry: HistoryEntry) {
@@ -4978,6 +5020,21 @@ mod tests {
                     .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+            },
+        );
+
+        snapshot_composer_state(
+            "footer_mode_history_search_unavailable",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
+                composer.begin_history_search();
+                for ch in ['g', 'i', 't'] {
+                    let _ = composer
+                        .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+                }
+                composer.apply_history_search_result(HistorySearchResult::Pending);
+                composer.apply_history_search_result(HistorySearchResult::Unavailable);
             },
         );
 
