@@ -1,5 +1,6 @@
 use crate::endpoint::realtime_websocket::protocol::FramelessContentType;
 use crate::endpoint::realtime_websocket::protocol::FramelessInputTextContent;
+use crate::endpoint::realtime_websocket::protocol::RealtimeContextAppendChannel;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use serde_json::Value;
@@ -10,15 +11,21 @@ const CONTEXT_APPEND_MAX_BYTES: usize = 500;
 pub(super) fn delegation_context_append_message(
     delegation_item_id: String,
     text: String,
+    channel: Option<RealtimeContextAppendChannel>,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::DelegationContextAppend {
         delegation_item_id,
+        channel,
         content: input_text_content(text),
     }
 }
 
-pub(super) fn session_context_append_message(text: String) -> RealtimeOutboundMessage {
+pub(super) fn session_context_append_message(
+    text: String,
+    channel: Option<RealtimeContextAppendChannel>,
+) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::SessionContextAppend {
+        channel,
         content: input_text_content(text),
     }
 }

@@ -44,6 +44,7 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_protocol::protocol::CodexResponseHandoffMode;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
@@ -332,6 +333,7 @@ impl RealtimeE2eHarness {
             offer_sdp,
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
+            /*codex_response_handoff_mode*/ None,
             RealtimeConversationVersion::V1,
         )
         .await
@@ -345,6 +347,7 @@ impl RealtimeE2eHarness {
             offer_sdp,
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ Some(true),
+            /*codex_response_handoff_mode*/ None,
             RealtimeConversationVersion::V1,
         )
         .await
@@ -355,6 +358,7 @@ impl RealtimeE2eHarness {
         offer_sdp: &str,
         client_managed_handoffs: Option<bool>,
         codex_responses_as_items: Option<bool>,
+        codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
         version: RealtimeConversationVersion,
     ) -> Result<StartedWebrtcRealtime> {
         // Starts realtime through the public JSON-RPC method, then waits for the same client-visible
@@ -368,6 +372,7 @@ impl RealtimeE2eHarness {
                 codex_response_item_prefix: codex_responses_as_items
                     .unwrap_or(false)
                     .then(|| RESPONSE_ITEM_PREFIX.to_string()),
+                codex_response_handoff_mode,
                 codex_responses_as_items,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -428,6 +433,7 @@ impl RealtimeE2eHarness {
                 codex_response_item_prefix: codex_responses_as_items
                     .unwrap_or(false)
                     .then(|| RESPONSE_ITEM_PREFIX.to_string()),
+                codex_response_handoff_mode: None,
                 codex_responses_as_items,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -451,7 +457,10 @@ impl RealtimeE2eHarness {
             .await
     }
 
-    async fn start_frameless_bidi_realtime(&mut self) -> Result<ThreadRealtimeStartedNotification> {
+    async fn start_frameless_bidi_realtime(
+        &mut self,
+        codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
+    ) -> Result<ThreadRealtimeStartedNotification> {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -459,6 +468,7 @@ impl RealtimeE2eHarness {
                 client_managed_handoffs: None,
                 flush_transcript_tail_on_session_end: None,
                 codex_response_item_prefix: None,
+                codex_response_handoff_mode,
                 codex_responses_as_items: None,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -730,6 +740,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
             thread_id: thread_start.thread.id.clone(),
             model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
@@ -1024,6 +1035,7 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1125,6 +1137,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Text,
@@ -1312,6 +1325,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1419,6 +1433,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
             thread_id: thread_id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1612,6 +1627,7 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
             "v=offer\r\n",
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
+            /*codex_response_handoff_mode*/ None,
             RealtimeConversationVersion::V3,
         )
         .await?;
@@ -1742,6 +1758,7 @@ async fn webrtc_v1_client_managed_handoffs_disable_automatic_output() -> Result<
             "v=offer\r\n",
             /*client_managed_handoffs*/ Some(true),
             /*codex_responses_as_items*/ None,
+            /*codex_response_handoff_mode*/ None,
             RealtimeConversationVersion::V1,
         )
         .await?;
@@ -1792,6 +1809,74 @@ async fn webrtc_v1_client_managed_handoffs_disable_automatic_output() -> Result<
             "type": "conversation.handoff.append",
             "handoff_id": "codex",
             "output_text": "client-selected speech",
+        })
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_v1_ignores_codex_response_handoff_mode() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut commentary = responses::ev_assistant_message("msg-commentary", "background progress");
+    commentary["item"]["phase"] = json!("commentary");
+    let mut final_answer = responses::ev_assistant_message("msg-final", "background complete");
+    final_answer["item"]["phase"] = json!("final_answer");
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V1,
+        main_loop_responses(vec![responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            commentary,
+            final_answer,
+            responses::ev_completed("resp-1"),
+        ])]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v1_channel_handoff"),
+                json!({
+                    "type": "conversation.handoff.requested",
+                    "handoff_id": "handoff_channel",
+                    "item_id": "item_channel",
+                    "input_transcript": "run the background task"
+                }),
+            ],
+            vec![],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_webrtc_realtime_with_codex_response_routing(
+            "v=offer\r\n",
+            /*client_managed_handoffs*/ None,
+            /*codex_responses_as_items*/ None,
+            /*codex_response_handoff_mode*/ Some(CodexResponseHandoffMode::BemTags),
+            RealtimeConversationVersion::V1,
+        )
+        .await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    let _ = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await,
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "handoff_channel",
+            "output_text": "background progress",
+        })
+    );
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 2).await,
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": "handoff_channel",
+            "output_text": "\"Agent Final Message\":\n\nbackground complete",
         })
     );
 
@@ -2138,114 +2223,123 @@ async fn websocket_v2_assistant_output_without_handoff_reaches_realtime_context(
 }
 
 #[tokio::test]
-async fn websocket_v3_frameless_delegation_runs_codex_and_appends_context() -> Result<()> {
+async fn websocket_v3_routes_handoffs_by_session_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let mut harness = RealtimeE2eHarness::new(
-        RealtimeTestVersion::V1,
-        main_loop_responses(vec![create_final_assistant_message_sse_response(
-            "delegated from frameless",
-        )?]),
-        realtime_sideband(vec![realtime_sideband_connection(vec![
-            vec![
-                session_started("sess_frameless"),
-                json!({
-                    "type": "delegation.created",
-                    "offset_ms": 100,
-                    "item": {
-                        "id": "delegation_frameless",
-                        "type": "delegation",
-                        "target": "client",
-                        "content": [{
-                            "type": "input_text",
-                            "text": "delegate from frameless"
-                        }]
-                    }
-                }),
+    for (mode, expected_channels) in [
+        (None, [None, None, None, None]),
+        (
+            Some(CodexResponseHandoffMode::Commentary),
+            [
+                Some("commentary"),
+                Some("commentary"),
+                Some("commentary"),
+                Some("commentary"),
             ],
-            vec![],
-            vec![],
-            vec![],
-        ])]),
-    )
-    .await?;
+        ),
+        (
+            Some(CodexResponseHandoffMode::BemTags),
+            [
+                Some("commentary"),
+                Some("commentary"),
+                Some("speakable"),
+                Some("speakable"),
+            ],
+        ),
+    ] {
+        let analysis_text = "<|start|>assistant<|channel|>analysis<|message|>silent context<|end|>";
+        let commentary_text =
+            "<|start|>assistant<|channel|>commentary<|message|>still working<|end|>";
+        let final_text = "<|start|>assistant<|channel|>final<|message|>finished<|end|>";
+        let fallback_text = "unparsable BEM output";
+        let analysis = responses::ev_assistant_message("msg-analysis", analysis_text);
+        let commentary = responses::ev_assistant_message("msg-commentary", commentary_text);
+        let final_answer = responses::ev_assistant_message("msg-final", final_text);
+        let fallback = responses::ev_assistant_message("msg-fallback", fallback_text);
+        let mut harness = RealtimeE2eHarness::new(
+            RealtimeTestVersion::V1,
+            main_loop_responses(vec![responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                analysis,
+                commentary,
+                final_answer,
+                fallback,
+                responses::ev_completed("resp-1"),
+            ])]),
+            realtime_sideband(vec![realtime_sideband_connection(vec![
+                vec![
+                    session_started("sess_frameless"),
+                    json!({
+                        "type": "delegation.created",
+                        "offset_ms": 100,
+                        "item": {
+                            "id": "delegation_frameless",
+                            "type": "delegation",
+                            "target": "client",
+                            "content": [{
+                                "type": "input_text",
+                                "text": "delegate from frameless"
+                            }]
+                        }
+                    }),
+                ],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+            ])]),
+        )
+        .await?;
 
-    let started = harness.start_frameless_bidi_realtime().await?;
-    assert_eq!(started.version, RealtimeConversationVersion::V3);
+        let started = harness.start_frameless_bidi_realtime(mode).await?;
+        assert_eq!(started.version, RealtimeConversationVersion::V3);
+        let _ = harness
+            .read_notification::<TurnCompletedNotification>("turn/completed")
+            .await?;
 
-    let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
-    assert_eq!(session_update["type"], "session.update");
-    assert_eq!(session_update["session"]["delegation"]["type"], "client");
-    assert_eq!(
-        harness.realtime_server.single_handshake().uri(),
-        "/v1/live?model=gpt-live-1-boulder-alpha"
-    );
-    assert_eq!(
+        for (request_index, (text, channel)) in
+            [analysis_text, commentary_text, final_text, fallback_text]
+                .into_iter()
+                .zip(expected_channels)
+                .enumerate()
+        {
+            let mut expected = json!({
+                "type": "delegation.context.append",
+                "delegation_item_id": "delegation_frameless",
+                "content": [{
+                    "type": "input_text",
+                    "text": text
+                }]
+            });
+            if let Some(channel) = channel {
+                expected["channel"] = json!(channel);
+            }
+            assert_eq!(
+                harness
+                    .sideband_outbound_request(/*request_index*/ request_index + 1)
+                    .await,
+                expected
+            );
+        }
+
         harness
-            .realtime_server
-            .single_handshake()
-            .header("openai-alpha")
-            .as_deref(),
-        Some("quicksilver=v2")
-    );
+            .append_speech(harness.thread_id.clone(), "manual spoken update")
+            .await?;
+        assert_eq!(
+            harness.sideband_outbound_request(/*request_index*/ 5).await,
+            json!({
+                "type": "session.context.append",
+                "content": [{
+                    "type": "input_text",
+                    "text": "manual spoken update"
+                }],
+                "channel": "speakable"
+            })
+        );
 
-    let turn_started = harness
-        .read_notification::<TurnStartedNotification>("turn/started")
-        .await?;
-    assert_eq!(turn_started.thread_id, harness.thread_id);
-    let turn_completed = harness
-        .read_notification::<TurnCompletedNotification>("turn/completed")
-        .await?;
-    assert_eq!(turn_completed.thread_id, harness.thread_id);
-
-    let requests = harness.main_loop_responses_requests().await?;
-    assert_eq!(requests.len(), 1);
-    assert!(
-        response_request_contains_text(&requests[0], "delegate from frameless"),
-        "delegated Responses request should contain Frameless input: {}",
-        requests[0]
-    );
-    assert_eq!(
-        harness.sideband_outbound_request(/*request_index*/ 1).await,
-        json!({
-            "type": "delegation.context.append",
-            "delegation_item_id": "delegation_frameless",
-            "content": [{
-                "type": "input_text",
-                "text": "\"Agent Final Message\":\n\ndelegated from frameless"
-            }]
-        })
-    );
-
-    harness
-        .append_speech(harness.thread_id.clone(), "standalone frameless update")
-        .await?;
-    assert_eq!(
-        harness.sideband_outbound_request(/*request_index*/ 2).await,
-        json!({
-            "type": "session.context.append",
-            "content": [{
-                "type": "input_text",
-                "text": "standalone frameless update"
-            }]
-        })
-    );
-
-    harness
-        .append_text(harness.thread_id.clone(), "frameless text context")
-        .await?;
-    assert_eq!(
-        harness.sideband_outbound_request(/*request_index*/ 3).await,
-        json!({
-            "type": "session.context.append",
-            "content": [{
-                "type": "input_text",
-                "text": "frameless text context"
-            }]
-        })
-    );
-
-    harness.shutdown().await;
+        harness.shutdown().await;
+    }
     Ok(())
 }
 
@@ -2913,6 +3007,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
             thread_id: thread_start.thread.id,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2982,6 +3077,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,

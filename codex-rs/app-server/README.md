@@ -172,7 +172,7 @@ Example with notification opt-out:
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, optionally pass `model` and `version` to override configured realtime selection for this session only, and pass `includeStartupContext: false` to omit Codex's generated startup context. Version `"v1"` uses legacy Bidi `conversation.handoff.*`, `"v2"` uses the Realtime Voice API, and `"v3"` preserves V1 Codex Voice behavior while using Frameless Bidi `delegation.*`. V1 and V3 send commentary as raw handoff appends and label final or phase-less agent output with `"Agent Final Message":`; V3 streams these appends as Codex produces text deltas. Pass `clientManagedHandoffs: true` to disable automatic Codex response delivery so only the client's explicit append calls produce handoffs. Pass `codexResponsesAsItems: true` to send automatic Codex responses as realtime conversation items instead, and optionally pass `codexResponseItemPrefix` to prepend experiment instructions to those items. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a Bidi WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`. Conversation `version: "v2"` requests remain unsupported for WebRTC.
+- `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, optionally pass `model` and `version` to override configured realtime selection for this session only, and pass `includeStartupContext: false` to omit Codex's generated startup context. Version `"v1"` uses legacy Bidi `conversation.handoff.*`, `"v2"` uses the Realtime Voice API, and `"v3"` preserves V1 Codex Voice behavior while using Frameless Bidi `delegation.*`. For V3 automatic Codex text, `codexResponseHandoffMode` accepts `"thinking"` (the default; all output uses channel-less thinking appends), `"commentary"` (all output uses the commentary channel), or `"bemTags"` (the raw BEM envelope selects the API channel: BEM `analysis` and `commentary` use `commentary`, while BEM `final` and unparsable output use `speakable`). The BEM envelope remains in the appended text for the frontend model to interpret. V1 and V2 ignore this setting. V3 handoffs do not prepend the legacy `"Agent Final Message"` label. Pass `clientManagedHandoffs: true` to disable automatic Codex response delivery so only the client's explicit append calls produce handoffs. Pass `codexResponsesAsItems: true` to send automatic Codex responses as realtime conversation items instead, and optionally pass `codexResponseItemPrefix` to prepend experiment instructions to those items. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a Bidi WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`. Conversation `version: "v2"` requests remain unsupported for WebRTC.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
 - `thread/realtime/appendText` — append text input to the active realtime session with a required `role` of `user`, `developer`, or `assistant` (experimental); returns `{}`. Older clients that omit `role` default to `user`.
 - `thread/realtime/appendSpeech` — append text that the realtime model should speak to the user (experimental); returns `{}`.
@@ -923,11 +923,16 @@ Pass `codexResponsesAsItems: true` to inject automatic Codex responses with
 path. When using that mode, `codexResponseItemPrefix` can prepend short
 experiment instructions to each automatic Codex response item. Omit
 `codexResponsesAsItems`, or pass `false`, to preserve the default speakable
-behavior. In that default mode, V1 and V3 append commentary without a prefix
-and label final or phase-less agent output with `"Agent Final Message":`. V3
-emits each text delta as a `delegation.context.append` instead of waiting for
-the completed agent message. Older clients may continue to send the removed
-`codexResponseHandoffPrefix` field; the server ignores unknown request fields.
+behavior. In V3, automatic handoffs default to
+`codexResponseHandoffMode: "thinking"`, which omits the context append `channel`
+for every automatic response. Pass `"commentary"` to route every response to
+commentary, or `"bemTags"` to route BEM commentary tags to `commentary`, final
+tags to `speakable`, and analysis tags to `commentary`. Unparsable BEM output
+falls back to `speakable`. BEM routing reads the raw envelope and preserves it
+in the appended text for the frontend model. This
+setting has no effect on V1 or V2. V3 handoffs never prepend the legacy `"Agent Final Message"` label. Older
+clients may continue to send the removed `codexResponseHandoffPrefix` field; the
+server ignores unknown request fields.
 Call
 `thread/realtime/appendText` to append app-provided realtime text items, or
 `thread/realtime/appendSpeech` when the app decides a realtime update should be

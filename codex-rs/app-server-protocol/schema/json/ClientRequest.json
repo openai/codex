@@ -288,6 +288,14 @@
       ],
       "type": "object"
     },
+    "CodexResponseHandoffMode": {
+      "enum": [
+        "thinking",
+        "commentary",
+        "bemTags"
+      ],
+      "type": "string"
+    },
     "CollaborationMode": {
       "description": "Collaboration mode for a Codex session.",
       "properties": {
