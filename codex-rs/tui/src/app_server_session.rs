@@ -453,7 +453,7 @@ impl AppServerSession {
                 request_id,
                 params: ExternalAgentConfigImportParams {
                     migration_items,
-                    source: Some(migration_source.clone()),
+                    source: Some("cli".to_string()),
                     migration_source: Some(migration_source),
                 },
             })
