@@ -2,6 +2,8 @@ use super::*;
 use crate::app_info::app_info_to_api;
 use crate::app_info::connector_metadata_to_api;
 
+mod installed;
+
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
@@ -442,7 +444,7 @@ impl AppsRequestProcessor {
 }
 
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
-// `app/list` is the legacy request-path baseline for the future `app/installed` endpoint;
+// `app/list` is the legacy request-path baseline for the `app/installed` endpoint;
 // `path=legacy` keeps it separate from the new snapshot-backed implementation in dashboards.
 const APPS_INSTALLED_DURATION_METRIC: &str = "codex.apps.installed.duration_ms";
 
