@@ -1356,7 +1356,7 @@ async fn logout_managed_bedrock_restores_default_account() -> Result<()> {
         read_account(&mut mcp).await?,
         GetAccountResponse {
             account: Some(Account::AmazonBedrock {
-                credential_source: AmazonBedrockCredentialSource::CodexManaged,
+                uses_codex_managed_credentials: true,
             }),
             requires_openai_auth: false,
         }
