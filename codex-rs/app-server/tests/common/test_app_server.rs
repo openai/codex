@@ -176,6 +176,12 @@ impl TestAppServer {
         self.process.wait().await
     }
 
+    /// Closes stdio and waits for app-server's graceful thread teardown to finish.
+    pub async fn shutdown_gracefully(&mut self) -> std::io::Result<ExitStatus> {
+        drop(self.stdin.take());
+        self.process.wait().await
+    }
+
     /// Returns the automatically selected test environment retained by this server.
     ///
     /// Tests can use the environment to arrange target-native filesystem fixtures before starting

@@ -126,7 +126,7 @@ enum RawPluginManifestMcpServers {
 enum RawPluginManifestHooks {
     Path(String),
     Paths(Vec<String>),
-    Inline(HooksFile),
+    Inline(Box<HooksFile>),
     InlineList(Vec<HooksFile>),
     Invalid(JsonValue),
 }
@@ -311,7 +311,7 @@ fn resolve_manifest_hooks(
         }
         RawPluginManifestHooks::Inline(hooks) => {
             Some(codex_plugin::manifest::PluginManifestHooks::Inline(vec![
-                hooks,
+                *hooks,
             ]))
         }
         RawPluginManifestHooks::InlineList(hooks) => (!hooks.is_empty())

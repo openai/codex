@@ -609,6 +609,8 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     }
     sess.services.mcp_runtime.shutdown().await;
     sess.guardian_review_session.shutdown().await;
+
+    crate::hook_runtime::run_session_end_hooks(sess).await;
 }
 
 async fn emit_thread_stop_lifecycle(sess: &Session) {

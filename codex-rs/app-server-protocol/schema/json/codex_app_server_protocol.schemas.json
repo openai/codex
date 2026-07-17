@@ -11118,6 +11118,7 @@
           "preCompact",
           "postCompact",
           "sessionStart",
+          "sessionEnd",
           "userPromptSubmit",
           "subagentStart",
           "subagentStop",
@@ -12109,6 +12110,13 @@
             "type": "array"
           },
           "PreToolUse": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "SessionEnd": {
+            "default": [],
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
             },
