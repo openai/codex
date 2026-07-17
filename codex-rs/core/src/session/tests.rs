@@ -8180,7 +8180,7 @@ async fn record_context_update_items(
 }
 
 #[tokio::test]
-async fn build_settings_update_items_emits_realtime_start_when_session_becomes_live() {
+async fn record_context_updates_emits_realtime_start_when_session_becomes_live() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);
     let mut current_context = previous_context
@@ -8191,12 +8191,8 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
         .await;
     current_context.realtime_active = true;
 
-    let update_items = session
-        .build_settings_update_items(
-            Some(&previous_context.to_turn_context_item()),
-            &current_context,
-        )
-        .await;
+    let update_items =
+        record_context_update_items(&session, previous_context, current_context).await;
 
     let developer_texts = developer_input_texts(&update_items);
     assert!(
@@ -8208,7 +8204,7 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
 }
 
 #[tokio::test]
-async fn build_settings_update_items_emits_realtime_end_when_session_stops_being_live() {
+async fn record_context_updates_emits_realtime_end_when_session_stops_being_live() {
     let (session, mut previous_context) = make_session_and_context().await;
     previous_context.realtime_active = true;
     let mut current_context = previous_context
@@ -8219,12 +8215,8 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
         .await;
     current_context.realtime_active = false;
 
-    let update_items = session
-        .build_settings_update_items(
-            Some(&previous_context.to_turn_context_item()),
-            &current_context,
-        )
-        .await;
+    let update_items =
+        record_context_update_items(&session, Arc::new(previous_context), current_context).await;
 
     let developer_texts = developer_input_texts(&update_items);
     assert!(
@@ -8236,41 +8228,7 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
 }
 
 #[tokio::test]
-async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_end() {
-    let (session, previous_context) = make_session_and_context().await;
-    let mut previous_context_item = previous_context.to_turn_context_item();
-    previous_context_item.realtime_active = None;
-    let previous_turn_settings = PreviousTurnSettings {
-        model: previous_context.model_info.slug.clone(),
-        comp_hash: None,
-        realtime_active: Some(true),
-    };
-    let mut current_context = previous_context
-        .with_model(
-            previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
-        )
-        .await;
-    current_context.realtime_active = false;
-
-    session
-        .set_previous_turn_settings(Some(previous_turn_settings))
-        .await;
-    let update_items = session
-        .build_settings_update_items(Some(&previous_context_item), &current_context)
-        .await;
-
-    let developer_texts = developer_input_texts(&update_items);
-    assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("Reason: inactive")),
-        "expected a realtime end update from previous turn settings, got {developer_texts:?}"
-    );
-}
-
-#[tokio::test]
-async fn build_initial_context_uses_previous_realtime_state() {
+async fn build_initial_context_describes_active_realtime_state() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.realtime_active = true;
     let turn_context = Arc::new(turn_context);
@@ -8282,20 +8240,6 @@ async fn build_initial_context_uses_previous_realtime_state() {
             .iter()
             .any(|text| text.contains("<realtime_conversation>")),
         "expected initial context to describe active realtime state, got {developer_texts:?}"
-    );
-
-    let previous_context_item = turn_context.to_turn_context_item();
-    {
-        let mut state = session.state.lock().await;
-        state.set_reference_context_item(Some(previous_context_item));
-    }
-    let resumed_context = build_initial_context(&session, &turn_context).await;
-    let resumed_developer_texts = developer_input_texts(&resumed_context);
-    assert!(
-        !resumed_developer_texts
-            .iter()
-            .any(|text| text.contains("<realtime_conversation>")),
-        "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
     );
 }
 
@@ -8798,29 +8742,6 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
         EventMsg::Warning(WarningEvent { message })
             if message == "Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
     ));
-}
-
-#[tokio::test]
-async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
-    let (session, turn_context) = make_session_and_context().await;
-    let previous_turn_settings = PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        comp_hash: None,
-        realtime_active: Some(true),
-    };
-
-    session
-        .set_previous_turn_settings(Some(previous_turn_settings))
-        .await;
-    let turn_context = Arc::new(turn_context);
-    let initial_context = build_initial_context(&session, &turn_context).await;
-    let developer_texts = developer_input_texts(&initial_context);
-    assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("Reason: inactive")),
-        "expected initial context to describe an ended realtime session, got {developer_texts:?}"
-    );
 }
 
 #[tokio::test]

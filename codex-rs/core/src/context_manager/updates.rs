@@ -4,9 +4,6 @@ use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
-use crate::context::RealtimeEndInstructions;
-use crate::context::RealtimeStartInstructions;
-use crate::context::RealtimeStartWithInstructions;
 use crate::session::PreviousTurnSettings;
 use crate::session::turn_context::TurnContext;
 use codex_execpolicy::Policy;
@@ -83,43 +80,6 @@ fn build_multi_agent_mode_update_item(
         }
         None => None,
     }
-}
-
-pub(crate) fn build_realtime_update_item(
-    previous: Option<&TurnContextItem>,
-    previous_turn_settings: Option<&PreviousTurnSettings>,
-    next: &TurnContext,
-) -> Option<String> {
-    match (
-        previous.and_then(|item| item.realtime_active),
-        next.realtime_active,
-    ) {
-        (Some(true), false) => Some(RealtimeEndInstructions::new("inactive").render()),
-        (Some(false), true) | (None, true) => Some(
-            if let Some(instructions) = next
-                .config
-                .experimental_realtime_start_instructions
-                .as_deref()
-            {
-                RealtimeStartWithInstructions::new(instructions).render()
-            } else {
-                RealtimeStartInstructions.render()
-            },
-        ),
-        (Some(true), true) | (Some(false), false) => None,
-        (None, false) => previous_turn_settings
-            .and_then(|settings| settings.realtime_active)
-            .filter(|realtime_active| *realtime_active)
-            .map(|_| RealtimeEndInstructions::new("inactive").render()),
-    }
-}
-
-pub(crate) fn build_initial_realtime_item(
-    previous: Option<&TurnContextItem>,
-    previous_turn_settings: Option<&PreviousTurnSettings>,
-    next: &TurnContext,
-) -> Option<String> {
-    build_realtime_update_item(previous, previous_turn_settings, next)
 }
 
 fn build_personality_update_item(
@@ -238,7 +198,6 @@ pub(crate) fn build_settings_update_items(
         build_model_instructions_update_item(previous_turn_settings, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_multi_agent_mode_update_item(previous, next),
-        build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
     ]
     .into_iter()

@@ -3193,16 +3193,9 @@ impl Session {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let mut separate_developer_sections = Vec::<String>::new();
-        let (
-            reference_context_item,
-            previous_turn_settings,
-            base_instructions,
-            session_source,
-            auto_compact_window_ids,
-        ) = {
+        let (previous_turn_settings, base_instructions, session_source, auto_compact_window_ids) = {
             let state = self.state.lock().await;
             (
-                state.reference_context_item(),
                 state.previous_turn_settings(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
@@ -3259,13 +3252,6 @@ impl Session {
             && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
-        }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
-            reference_context_item.as_ref(),
-            previous_turn_settings.as_ref(),
-            turn_context,
-        ) {
-            developer_sections.push(realtime_update);
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality

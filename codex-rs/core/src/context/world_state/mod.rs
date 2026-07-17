@@ -4,6 +4,7 @@ mod collaboration_mode;
 mod environment;
 mod environments_instructions;
 mod plugins_instructions;
+mod realtime;
 #[cfg(test)]
 mod test_support;
 
@@ -27,6 +28,7 @@ pub(crate) use collaboration_mode::CollaborationModeState;
 pub(crate) use environment::EnvironmentsState;
 pub(crate) use environments_instructions::EnvironmentsInstructionsState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
+pub(crate) use realtime::RealtimeState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn snapshot(&self) -> Option<Value>;
