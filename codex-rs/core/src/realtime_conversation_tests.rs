@@ -4,6 +4,7 @@ use super::realtime_delegation_from_handoff;
 use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
 use super::wrap_realtime_delegation_input;
+use crate::context::RealtimeDelegationSource;
 use async_channel::bounded;
 use codex_api::RealtimeEventParser;
 use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -104,7 +105,11 @@ fn ignores_empty_handoff_request_input_transcript() {
 #[test]
 fn wraps_realtime_delegation_input() {
     assert_eq!(
-        wrap_realtime_delegation_input("hello", /*transcript_delta*/ None),
+        wrap_realtime_delegation_input(
+            "hello",
+            /*transcript_delta*/ None,
+            RealtimeDelegationSource::Handoff,
+        ),
         "<realtime_delegation>\n  <input>hello</input>\n</realtime_delegation>"
     );
 }
@@ -112,7 +117,11 @@ fn wraps_realtime_delegation_input() {
 #[test]
 fn wraps_realtime_delegation_input_with_xml_escaping() {
     assert_eq!(
-        wrap_realtime_delegation_input("use a < b && c > d", Some("saw <that>")),
+        wrap_realtime_delegation_input(
+            "use a < b && c > d",
+            Some("saw <that>"),
+            RealtimeDelegationSource::Handoff,
+        ),
         "<realtime_delegation>\n  <input>use a &lt; b &amp;&amp; c &gt; d</input>\n  <transcript_delta>saw &lt;that&gt;</transcript_delta>\n</realtime_delegation>"
     );
 }
@@ -120,7 +129,11 @@ fn wraps_realtime_delegation_input_with_xml_escaping() {
 #[test]
 fn wraps_realtime_delegation_input_with_xml_escaping_without_transcript() {
     assert_eq!(
-        wrap_realtime_delegation_input("use a < b && c > d", /*transcript_delta*/ None),
+        wrap_realtime_delegation_input(
+            "use a < b && c > d",
+            /*transcript_delta*/ None,
+            RealtimeDelegationSource::Handoff,
+        ),
         "<realtime_delegation>\n  <input>use a &lt; b &amp;&amp; c &gt; d</input>\n</realtime_delegation>"
     );
 }
