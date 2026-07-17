@@ -23,13 +23,14 @@ fn migration_item_type_label(item_type: ExternalAgentConfigMigrationItemType) ->
 pub fn record_import_error(
     result: &mut ExternalAgentConfigImportItemResult,
     failure_stage: &'static str,
+    sub_error_type: Option<&str>,
     message: impl Into<String>,
     source: Option<String>,
 ) {
     result.record_error(ExternalAgentConfigImportRawError {
         item_type: result.item_type,
         error_type: None,
-        sub_error_type: None,
+        sub_error_type: sub_error_type.map(str::to_string),
         failure_stage: failure_stage.to_string(),
         message: message.into(),
         cwd: result.cwd.clone(),

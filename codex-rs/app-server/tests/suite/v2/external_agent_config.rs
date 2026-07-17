@@ -1243,6 +1243,12 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
     assert_eq!(completed.item_type_results.len(), 1);
     assert_eq!(completed.item_type_results[0].successes.len(), 0);
     assert_eq!(completed.item_type_results[0].failures.len(), 1);
+    assert_eq!(
+        completed.item_type_results[0].failures[0]
+            .sub_error_type
+            .as_deref(),
+        Some("session_not_detected")
+    );
 
     let event = wait_for_analytics_event(
         &analytics_server,
@@ -1270,6 +1276,7 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
     assert_eq!(event_params["type"], "SESSIONS");
     assert_eq!(event_params["failure_stage"], "session_missing");
     assert_eq!(event_params["error_type"], "session_missing");
+    assert_eq!(event_params["sub_error_type"], "session_not_detected");
     assert!(event_params.get("raw_errors").is_none());
     assert!(event_params.get("message").is_none());
 

@@ -270,6 +270,7 @@ impl ExternalAgentConfigRequestProcessor {
                             record_import_error(
                                 &mut item_result,
                                 "plugin_import",
+                                /*sub_error_type*/ None,
                                 error.to_string(),
                                 /*source*/ None,
                             );
@@ -400,6 +401,7 @@ impl ExternalAgentConfigRequestProcessor {
                         record_import_error(
                             &mut item_result,
                             "session_missing",
+                            Some("session_not_detected"),
                             format!(
                                 "external agent session was not detected for import: {}",
                                 session.path.display()
@@ -412,6 +414,7 @@ impl ExternalAgentConfigRequestProcessor {
                         record_import_error(
                             &mut item_result,
                             "session_source_path",
+                            Some("failed_to_resolve_session_source_path"),
                             err.to_string(),
                             Some(session.path.display().to_string()),
                         );
