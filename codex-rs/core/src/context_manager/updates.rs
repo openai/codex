@@ -95,9 +95,11 @@ fn build_multi_agent_mode_update_item(
     }
 
     match effective_multi_agent_mode {
-        Some(multi_agent_mode) => Some(MultiAgentModeInstructions::new(multi_agent_mode).render()),
+        Some(multi_agent_mode) => MultiAgentModeInstructions::from_mode(multi_agent_mode)
+            .map(|instructions| instructions.render()),
         None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => {
-            Some(MultiAgentModeInstructions::new(MultiAgentMode::ExplicitRequestOnly).render())
+            MultiAgentModeInstructions::from_mode(MultiAgentMode::ExplicitRequestOnly)
+                .map(|instructions| instructions.render())
         }
         None => None,
     }

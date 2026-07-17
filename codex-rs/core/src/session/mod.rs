@@ -3428,10 +3428,10 @@ impl Session {
         {
             items.push(usage_hint_message);
         }
-        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(turn_context) {
-            items.push(ContextualUserFragment::into(
-                MultiAgentModeInstructions::new(multi_agent_mode),
-            ));
+        if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(turn_context)
+            && let Some(instructions) = MultiAgentModeInstructions::from_mode(multi_agent_mode)
+        {
+            items.push(ContextualUserFragment::into(instructions));
         }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
