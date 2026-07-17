@@ -193,7 +193,7 @@ async fn configured_mode_hint_uses_custom_mode_across_reasoning_efforts() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_configured_mode_hint_suppresses_builtin_text() -> Result<()> {
+async fn empty_configured_mode_hint_emits_no_mode_message() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -220,7 +220,62 @@ async fn empty_configured_mode_hint_suppresses_builtin_text() -> Result<()> {
             count_containing(&texts, NO_SPAWN_TEXT),
             count_containing(&texts, PROACTIVE_TEXT),
         ),
-        (1, 0, 0)
+        (0, 0, 0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_configured_mode_hint_to_empty_emits_no_update() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        (1..=2)
+            .map(|index| {
+                sse(vec![
+                    ev_response_created(&format!("resp-{index}")),
+                    ev_completed(&format!("resp-{index}")),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+    let initial = test_codex()
+        .with_config(configure_custom_mode_hint)
+        .build(&server)
+        .await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    submit_turn(&initial.codex, "before resume", /*effort*/ None).await?;
+    drop(initial);
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        configure_multi_agent_v2(config);
+        config.multi_agent_v2.multi_agent_mode_hint_text = Some(String::new());
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    submit_turn(&resumed.codex, "after resume", /*effort*/ None).await?;
+
+    let requests = responses.requests();
+    let first_input = requests[0].input();
+    let first_texts = developer_texts(&first_input);
+    let resumed_input = requests[1].input();
+    let resumed_texts = developer_texts(&resumed_input);
+    assert_eq!(
+        (
+            count_containing(&first_texts, MULTI_AGENT_MODE_OPEN_TAG),
+            count_containing(&resumed_texts, MULTI_AGENT_MODE_OPEN_TAG),
+            count_containing(&resumed_texts, CUSTOM_MODE_HINT_TEXT),
+        ),
+        (1, 1, 1)
     );
 
     Ok(())

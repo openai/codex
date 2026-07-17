@@ -12,8 +12,15 @@ pub(crate) struct MultiAgentModeInstructions {
 }
 
 impl MultiAgentModeInstructions {
-    pub(crate) fn new(multi_agent_mode: MultiAgentMode) -> Self {
-        Self { multi_agent_mode }
+    pub(crate) fn from_mode(multi_agent_mode: MultiAgentMode) -> Option<Self> {
+        if matches!(
+            &multi_agent_mode,
+            MultiAgentMode::Custom(hint_text) if hint_text.is_empty()
+        ) {
+            return None;
+        }
+
+        Some(Self { multi_agent_mode })
     }
 }
 
