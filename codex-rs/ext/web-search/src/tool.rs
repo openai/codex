@@ -40,6 +40,7 @@ use crate::schema::commands_schema;
 pub(crate) const WEB_NAMESPACE: &str = "web";
 pub(crate) const RUN_TOOL_NAME: &str = "run";
 const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
+const RESULTS_PAYLOAD_BYTES_METRIC: &str = "codex.web_search.results.payload_bytes";
 
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
@@ -140,6 +141,13 @@ impl WebSearchTool {
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
         let output = response.output;
         let results = response.results;
+        if let Some(results) = results.as_ref()
+            && let Some(metrics) = codex_otel::global()
+            && let Ok(payload) = serde_json::to_vec(results)
+        {
+            let payload_bytes = i64::try_from(payload.len()).unwrap_or(i64::MAX);
+            let _ = metrics.histogram(RESULTS_PAYLOAD_BYTES_METRIC, payload_bytes, &[]);
+        }
         let legacy_action = match &command_action {
             WebSearchAction::Search { query, queries } => CoreWebSearchAction::Search {
                 query: query.clone(),
