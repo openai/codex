@@ -345,6 +345,9 @@ pub enum PluginShareUpdateDiscoverability {
     #[serde(rename = "PRIVATE")]
     #[ts(rename = "PRIVATE")]
     Private,
+    #[serde(rename = "LISTED")]
+    #[ts(rename = "LISTED")]
+    Listed,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
