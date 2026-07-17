@@ -54,13 +54,18 @@ use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
+use codex_utils_output_truncation::approx_bytes_for_tokens;
+use codex_utils_string::take_bytes_at_char_boundary;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -75,6 +80,9 @@ const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
 const REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET: usize = 1_000;
+const HANDOFF_STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
+const HANDOFF_STREAM_TRUNCATION_MARKER: &str = "\n…output truncated…\n";
+const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
 const STANDALONE_HANDOFF_ID: &str = "codex";
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 const DEFAULT_FRAMELESS_REALTIME_MODEL: &str = "gpt-live-1-boulder-alpha";
@@ -113,13 +121,137 @@ enum RealtimeSessionKind {
 #[derive(Clone, Debug)]
 struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
-    active_handoff: Arc<Mutex<Option<String>>>,
     last_output_text: Arc<Mutex<Option<String>>>,
+    stream: Arc<Mutex<RealtimeHandoffStreamState>>,
     client_managed_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
-    codex_response_handoff_prefix: Option<String>,
     session_kind: RealtimeSessionKind,
+    event_parser: RealtimeEventParser,
+}
+
+#[derive(Debug, Default)]
+struct RealtimeHandoffStreamState {
+    active_handoff: Option<String>,
+    items: HashMap<String, RealtimeStreamedItem>,
+}
+
+#[derive(Debug)]
+struct RealtimeStreamedItem {
+    handoff_id: String,
+    phase: Option<MessagePhase>,
+    sent_bytes: usize,
+    buffered_text: String,
+    tail_text: String,
+    truncated: bool,
+    last_flush_at: Instant,
+    flush_scheduled: bool,
+}
+
+impl RealtimeStreamedItem {
+    fn next_flush_delay(&self) -> Duration {
+        HANDOFF_STREAM_FLUSH_INTERVAL.saturating_sub(self.last_flush_at.elapsed())
+    }
+
+    fn output_prefix(&self) -> &'static str {
+        if self.sent_bytes == 0 && !matches!(self.phase, Some(MessagePhase::Commentary)) {
+            AGENT_FINAL_MESSAGE_PREFIX
+        } else {
+            ""
+        }
+    }
+
+    fn stream_head_byte_limit(&self) -> usize {
+        let output_byte_limit = approx_bytes_for_tokens(REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET);
+        output_byte_limit.saturating_sub(HANDOFF_STREAM_TRUNCATION_MARKER.len()) / 2
+    }
+
+    fn tail_byte_limit(&self) -> usize {
+        approx_bytes_for_tokens(REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET)
+            .saturating_sub(self.stream_head_byte_limit())
+            .saturating_sub(HANDOFF_STREAM_TRUNCATION_MARKER.len())
+    }
+
+    fn streamable_text_bytes(&self) -> usize {
+        self.stream_head_byte_limit()
+            .saturating_sub(self.sent_bytes)
+            .saturating_sub(self.output_prefix().len())
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.truncated {
+            self.tail_text.push_str(text);
+            self.tail_text =
+                take_last_bytes_at_char_boundary(&self.tail_text, self.tail_byte_limit())
+                    .to_string();
+            return;
+        }
+
+        self.buffered_text.push_str(text);
+        let output_byte_limit = approx_bytes_for_tokens(REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET);
+        let remaining_text_bytes = output_byte_limit
+            .saturating_sub(self.sent_bytes)
+            .saturating_sub(self.output_prefix().len());
+        if self.buffered_text.len() <= remaining_text_bytes {
+            return;
+        }
+
+        let head_bytes =
+            take_bytes_at_char_boundary(&self.buffered_text, self.streamable_text_bytes()).len();
+        self.tail_text =
+            take_last_bytes_at_char_boundary(&self.buffered_text, self.tail_byte_limit())
+                .to_string();
+        self.buffered_text.truncate(head_bytes);
+        self.truncated = true;
+    }
+
+    fn drain_stream_chunk(&mut self) -> Option<String> {
+        let prefix = self.output_prefix();
+        let available_text_bytes = self.streamable_text_bytes();
+        if self.buffered_text.is_empty() || available_text_bytes == 0 {
+            return None;
+        }
+
+        let requested_bytes = available_text_bytes.min(self.buffered_text.len());
+        let split_at = take_bytes_at_char_boundary(&self.buffered_text, requested_bytes).len();
+        if split_at == 0 {
+            return None;
+        }
+        let text = self.buffered_text.drain(..split_at).collect::<String>();
+        let text = format!("{prefix}{text}");
+        self.sent_bytes += text.len();
+        Some(text)
+    }
+
+    fn drain_final_chunk(&mut self) -> Option<String> {
+        let prefix = self.output_prefix();
+        if !self.truncated {
+            if self.buffered_text.is_empty() {
+                return None;
+            }
+            let text = self.buffered_text.drain(..).collect::<String>();
+            let text = format!("{prefix}{text}");
+            self.sent_bytes += text.len();
+            return Some(text);
+        }
+
+        let head = self.buffered_text.drain(..).collect::<String>();
+        let tail = self.tail_text.drain(..).collect::<String>();
+        let text = format!("{prefix}{head}{HANDOFF_STREAM_TRUNCATION_MARKER}{tail}");
+        self.sent_bytes += text.len();
+        Some(text)
+    }
+}
+
+fn take_last_bytes_at_char_boundary(text: &str, max_bytes: usize) -> &str {
+    let mut start = text.len().saturating_sub(max_bytes);
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -227,19 +359,25 @@ impl RealtimeHandoffState {
         client_managed_handoffs: bool,
         codex_responses_as_items: bool,
         codex_response_item_prefix: Option<String>,
-        codex_response_handoff_prefix: Option<String>,
         session_kind: RealtimeSessionKind,
+        event_parser: RealtimeEventParser,
     ) -> Self {
         Self {
             output_tx,
-            active_handoff: Arc::new(Mutex::new(None)),
             last_output_text: Arc::new(Mutex::new(None)),
+            stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
             client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
-            codex_response_handoff_prefix,
             session_kind,
+            event_parser,
         }
+    }
+
+    fn streams_handoff_append(&self) -> bool {
+        self.event_parser == RealtimeEventParser::FramelessBidi
+            && !self.client_managed_handoffs
+            && !self.codex_responses_as_items
     }
 }
 
@@ -262,7 +400,6 @@ struct RealtimeStart {
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
-    codex_response_handoff_prefix: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
@@ -321,7 +458,6 @@ impl RealtimeConversationManager {
             flush_transcript_tail_on_session_end,
             codex_responses_as_items,
             codex_response_item_prefix,
-            codex_response_handoff_prefix,
             realtime_call_api_provider,
             session_config,
             model_client,
@@ -350,8 +486,8 @@ impl RealtimeConversationManager {
             client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
-            codex_response_handoff_prefix,
             session_kind,
+            event_parser,
         );
         let input_channels = RealtimeInputChannels {
             text_rx,
@@ -532,11 +668,8 @@ impl RealtimeConversationManager {
         if handoff.client_managed_handoffs {
             return Ok(());
         }
-        let response_handoff_prefix = match phase {
-            Some(MessagePhase::Commentary) => handoff.codex_response_handoff_prefix.clone(),
-            Some(MessagePhase::FinalAnswer) | None => None,
-        };
-        let active_handoff = handoff.active_handoff.lock().await.clone();
+        let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
+        let active_handoff = handoff.stream.lock().await.active_handoff.clone();
         let output = match active_handoff {
             Some(handoff_id) => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
@@ -548,15 +681,10 @@ impl RealtimeConversationManager {
                             handoff.codex_response_item_prefix.as_deref(),
                         ),
                     }
-                } else if handoff.session_kind == RealtimeSessionKind::V1
-                    && handoff.codex_response_handoff_prefix.is_some()
-                {
+                } else if handoff.session_kind == RealtimeSessionKind::V1 && is_commentary {
                     RealtimeOutbound::HandoffAppend {
                         handoff_id,
-                        text: realtime_backend_item(
-                            output_text,
-                            response_handoff_prefix.as_deref(),
-                        ),
+                        text: output_text,
                     }
                 } else {
                     RealtimeOutbound::HandoffUpdate {
@@ -577,8 +705,8 @@ impl RealtimeConversationManager {
                     }
                 } else {
                     RealtimeOutbound::StandaloneHandoff {
-                        text: if handoff.session_kind == RealtimeSessionKind::V1 {
-                            realtime_backend_item(output_text, response_handoff_prefix.as_deref())
+                        text: if handoff.session_kind == RealtimeSessionKind::V1 && !is_commentary {
+                            format!("{AGENT_FINAL_MESSAGE_PREFIX}{output_text}")
                         } else {
                             output_text
                         },
@@ -592,6 +720,119 @@ impl RealtimeConversationManager {
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
+    }
+
+    pub(crate) async fn register_handoff_stream_item(
+        &self,
+        item_id: String,
+        phase: Option<MessagePhase>,
+        initial_text: String,
+    ) {
+        let handoff = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.handoff.clone())
+        };
+        let Some(handoff) = handoff else {
+            return;
+        };
+        if !handoff.streams_handoff_append() {
+            return;
+        }
+        let flush_delay = {
+            let mut stream = handoff.stream.lock().await;
+            let Some(handoff_id) = stream.active_handoff.clone() else {
+                return;
+            };
+            let mut streamed_item = RealtimeStreamedItem {
+                handoff_id,
+                phase,
+                sent_bytes: 0,
+                buffered_text: String::new(),
+                tail_text: String::new(),
+                truncated: false,
+                last_flush_at: Instant::now(),
+                flush_scheduled: false,
+            };
+            streamed_item.push_text(&initial_text);
+            let flush_delay = if streamed_item.buffered_text.is_empty() {
+                None
+            } else {
+                streamed_item.flush_scheduled = true;
+                Some(streamed_item.next_flush_delay())
+            };
+            stream.items.insert(item_id.clone(), streamed_item);
+            flush_delay
+        };
+        if let Some(flush_delay) = flush_delay {
+            schedule_streamed_handoff_flush(&handoff, item_id, flush_delay);
+        }
+    }
+
+    pub(crate) async fn stream_handoff_delta(
+        &self,
+        item_id: &str,
+        delta: String,
+    ) -> CodexResult<()> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        let handoff = {
+            let guard = self.state.lock().await;
+            let Some(state) = guard.as_ref() else {
+                return Err(CodexErr::InvalidRequest(
+                    "conversation is not running".to_string(),
+                ));
+            };
+            state.handoff.clone()
+        };
+        if !handoff.streams_handoff_append() {
+            return Ok(());
+        }
+        let flush_delay = {
+            let mut stream = handoff.stream.lock().await;
+            let Some(streamed_item) = stream.items.get_mut(item_id) else {
+                return Ok(());
+            };
+            streamed_item.push_text(&delta);
+            if streamed_item.flush_scheduled || streamed_item.streamable_text_bytes() == 0 {
+                None
+            } else {
+                streamed_item.flush_scheduled = true;
+                Some(streamed_item.next_flush_delay())
+            }
+        };
+        if let Some(flush_delay) = flush_delay {
+            schedule_streamed_handoff_flush(&handoff, item_id.to_string(), flush_delay);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn finish_handoff_stream_item(&self, item_id: &str) -> bool {
+        let handoff = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.handoff.clone())
+        };
+        let Some(handoff) = handoff else {
+            return false;
+        };
+        if !handoff.streams_handoff_append() {
+            return false;
+        }
+        let Some(mut streamed_item) = handoff.stream.lock().await.items.remove(item_id) else {
+            return false;
+        };
+        let chunk = streamed_item.drain_final_chunk();
+        let sent_output = streamed_item.sent_bytes > 0;
+        if let Some(text) = chunk {
+            let _ = handoff
+                .output_tx
+                .send(RealtimeOutbound::HandoffAppend {
+                    handoff_id: streamed_item.handoff_id,
+                    text,
+                })
+                .await;
+        }
+        sent_output
     }
 
     pub(crate) async fn append_speech(&self, text: String) -> CodexResult<()> {
@@ -635,7 +876,7 @@ impl RealtimeConversationManager {
             RealtimeSessionKind::V2 => {}
         }
 
-        let Some(handoff_id) = handoff.active_handoff.lock().await.clone() else {
+        let Some(handoff_id) = handoff.stream.lock().await.active_handoff.clone() else {
             return Ok(());
         };
         let Some(output_text) = handoff.last_output_text.lock().await.clone() else {
@@ -664,7 +905,11 @@ impl RealtimeConversationManager {
             guard.as_ref().map(|state| state.handoff.clone())
         };
         if let Some(handoff) = handoff {
-            *handoff.active_handoff.lock().await = None;
+            {
+                let mut stream = handoff.stream.lock().await;
+                stream.active_handoff = None;
+                stream.items.clear();
+            }
             *handoff.last_output_text.lock().await = None;
         }
     }
@@ -742,7 +987,6 @@ struct PreparedRealtimeConversationStart {
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
-    codex_response_handoff_prefix: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
@@ -828,7 +1072,6 @@ async fn prepare_realtime_start(
         flush_transcript_tail_on_session_end: params.flush_transcript_tail_on_session_end,
         codex_responses_as_items: params.codex_responses_as_items,
         codex_response_item_prefix: params.codex_response_item_prefix,
-        codex_response_handoff_prefix: params.codex_response_handoff_prefix,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -1000,7 +1243,6 @@ async fn handle_start_inner(
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,
         codex_response_item_prefix,
-        codex_response_handoff_prefix,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -1019,7 +1261,6 @@ async fn handle_start_inner(
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,
         codex_response_item_prefix,
-        codex_response_handoff_prefix,
         realtime_call_api_provider,
         session_config,
         model_client: sess.services.model_client.clone(),
@@ -1458,6 +1699,37 @@ async fn handle_text_input(
     Ok(())
 }
 
+async fn flush_streamed_handoff_item(handoff: &RealtimeHandoffState, item_id: &str) {
+    let (handoff_id, text) = {
+        let mut stream = handoff.stream.lock().await;
+        let Some(streamed_item) = stream.items.get_mut(item_id) else {
+            return;
+        };
+        streamed_item.flush_scheduled = false;
+        let Some(text) = streamed_item.drain_stream_chunk() else {
+            return;
+        };
+        streamed_item.last_flush_at = Instant::now();
+        (streamed_item.handoff_id.clone(), text)
+    };
+    let _ = handoff
+        .output_tx
+        .send(RealtimeOutbound::HandoffAppend { handoff_id, text })
+        .await;
+}
+
+fn schedule_streamed_handoff_flush(
+    handoff: &RealtimeHandoffState,
+    item_id: String,
+    flush_delay: Duration,
+) {
+    let handoff = handoff.clone();
+    let _flush_task = tokio::spawn(async move {
+        tokio::time::sleep(flush_delay).await;
+        flush_streamed_handoff_item(&handoff, &item_id).await;
+    });
+}
+
 async fn handle_handoff_output(
     handoff_output: Result<RealtimeOutbound, RecvError>,
     writer: &RealtimeWebsocketWriter,
@@ -1508,7 +1780,7 @@ async fn handle_handoff_output(
             }
             RealtimeOutbound::HandoffUpdate { handoff_id, text }
             | RealtimeOutbound::HandoffAppend { handoff_id, text } => {
-                let active_handoff = handoff_state.active_handoff.lock().await.clone();
+                let active_handoff = handoff_state.stream.lock().await.active_handoff.clone();
                 match active_handoff {
                     Some(active_handoff) if active_handoff == handoff_id => {}
                     Some(_) | None => {
@@ -1661,10 +1933,12 @@ async fn handle_realtime_server_event(
 
             match session_kind {
                 RealtimeSessionKind::V1 => {
-                    *handoff_state.active_handoff.lock().await = Some(handoff.handoff_id.clone());
+                    let mut stream = handoff_state.stream.lock().await;
+                    stream.items.clear();
+                    stream.active_handoff = Some(handoff.handoff_id.clone());
                 }
                 RealtimeSessionKind::V2 => {
-                    let active_handoff = handoff_state.active_handoff.lock().await.clone();
+                    let active_handoff = handoff_state.stream.lock().await.active_handoff.clone();
                     match active_handoff {
                         Some(_) => {
                             if let Err(err) = writer
@@ -1688,7 +1962,7 @@ async fn handle_realtime_server_event(
                                 .await?;
                         }
                         None => {
-                            *handoff_state.active_handoff.lock().await =
+                            handoff_state.stream.lock().await.active_handoff =
                                 Some(handoff.handoff_id.clone());
                         }
                     }
