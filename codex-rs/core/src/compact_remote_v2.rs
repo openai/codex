@@ -516,7 +516,7 @@ fn message_text_token_count(item: &ResponseItem) -> usize {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 approx_token_count(text)
             }
-            ContentItem::InputImage { .. } => 0,
+            ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => 0,
         })
         .sum()
 }
@@ -556,7 +556,9 @@ fn truncate_message_text_to_token_budget(
                     truncated_content.push(content_item);
                 }
             }
-            ContentItem::InputImage { .. } => truncated_content.push(content_item),
+            ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => {
+                truncated_content.push(content_item);
+            }
         }
     }
 

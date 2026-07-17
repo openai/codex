@@ -345,7 +345,7 @@ fn response_item_contains_message_text(item: &ResponseItem, needle: &str) -> boo
     };
     content.iter().any(|item| match item {
         ContentItem::InputText { text } | ContentItem::OutputText { text } => text.contains(needle),
-        ContentItem::InputImage { .. } => false,
+        ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => false,
     })
 }
 

@@ -308,6 +308,12 @@ pub enum UserInput {
         detail: Option<ImageDetail>,
         path: PathBuf,
     },
+    Audio {
+        url: String,
+    },
+    LocalAudio {
+        path: PathBuf,
+    },
     Skill {
         name: String,
         path: PathBuf,
@@ -333,6 +339,8 @@ impl UserInput {
                 detail,
             },
             UserInput::LocalImage { path, detail } => CoreUserInput::LocalImage { path, detail },
+            UserInput::Audio { url } => CoreUserInput::Audio { audio_url: url },
+            UserInput::LocalAudio { path } => CoreUserInput::LocalAudio { path },
             UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
             UserInput::Mention { name, path } => CoreUserInput::Mention { name, path },
         }
@@ -354,6 +362,8 @@ impl From<CoreUserInput> for UserInput {
                 detail,
             },
             CoreUserInput::LocalImage { path, detail } => UserInput::LocalImage { path, detail },
+            CoreUserInput::Audio { audio_url } => UserInput::Audio { url: audio_url },
+            CoreUserInput::LocalAudio { path } => UserInput::LocalAudio { path },
             CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
             CoreUserInput::Mention { name, path } => UserInput::Mention { name, path },
             _ => unreachable!("unsupported user input variant"),
@@ -367,6 +377,8 @@ impl UserInput {
             UserInput::Text { text, .. } => text.chars().count(),
             UserInput::Image { .. }
             | UserInput::LocalImage { .. }
+            | UserInput::Audio { .. }
+            | UserInput::LocalAudio { .. }
             | UserInput::Skill { .. }
             | UserInput::Mention { .. } => 0,
         }

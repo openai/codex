@@ -844,7 +844,9 @@ mod tests {
                             .iter()
                             .map(|item| match item {
                                 ContentItem::InputText { text } => text.as_str(),
-                                ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => {
+                                ContentItem::InputImage { .. }
+                                | ContentItem::InputAudio { .. }
+                                | ContentItem::OutputText { .. } => {
                                     panic!("expected input text content, got {item:?}")
                                 }
                             })

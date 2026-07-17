@@ -750,6 +750,10 @@ pub(crate) fn render_input_preview(input: &[UserInput]) -> String {
             UserInput::LocalImage { path, .. } => {
                 format!("[local_image:{}]", path.display())
             }
+            UserInput::Audio { .. } => "[audio]".to_string(),
+            UserInput::LocalAudio { path } => {
+                format!("[local_audio:{}]", path.display())
+            }
             UserInput::Skill { name, path, .. } => {
                 format!("[skill:${name}]({})", path.display())
             }

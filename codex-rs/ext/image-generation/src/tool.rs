@@ -363,7 +363,9 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             ResponseItem::Message { content, .. } => {
                 image_urls.extend(content.iter().rev().filter_map(|item| match item {
                     ContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
-                    ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
+                    ContentItem::InputText { .. }
+                    | ContentItem::InputAudio { .. }
+                    | ContentItem::OutputText { .. } => None,
                 }));
             }
             ResponseItem::FunctionCallOutput {
@@ -417,6 +419,7 @@ fn output_image_urls(output: &FunctionCallOutputPayload) -> impl Iterator<Item =
         .filter_map(|item| match item {
             FunctionCallOutputContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
             FunctionCallOutputContentItem::InputText { .. }
+            | FunctionCallOutputContentItem::InputAudio { .. }
             | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
 }
