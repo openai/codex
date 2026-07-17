@@ -625,6 +625,8 @@ pub struct PluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
+    #[serde(default)]
+    pub must_show_installation_interstitial: Option<bool>,
     pub auth_policy: PluginAuthPolicy,
     /// Availability state for installing and using the plugin.
     #[serde(default)]

@@ -184,6 +184,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,
                     install_policy_source: None,
+                    must_show_installation_interstitial: Some(false),
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
@@ -613,6 +614,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,
                     install_policy_source: None,
+                    must_show_installation_interstitial: Some(false),
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
@@ -1230,6 +1232,7 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,
                     install_policy_source: None,
+                    must_show_installation_interstitial: Some(false),
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
@@ -1357,6 +1360,7 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
             }
         ],
         "installation_policy": "AVAILABLE",
+        "must_show_installation_interstitial": false,
         "authentication_policy": "ON_USE",
         "release": {
             "version": "0.1.0",

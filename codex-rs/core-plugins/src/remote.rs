@@ -156,6 +156,7 @@ pub struct RemoteInstalledPlugin {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
+    pub must_show_installation_interstitial: Option<bool>,
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
@@ -174,6 +175,7 @@ pub struct RemotePluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
+    pub must_show_installation_interstitial: Option<bool>,
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
@@ -572,6 +574,8 @@ struct RemotePluginDirectoryItem {
     share_principals: Option<Vec<RemotePluginDirectorySharePrincipal>>,
     installation_policy: PluginInstallPolicy,
     installation_policy_source: Option<RemotePluginInstallPolicySource>,
+    #[serde(default)]
+    must_show_installation_interstitial: Option<bool>,
     authentication_policy: PluginAuthPolicy,
     #[serde(rename = "status", default)]
     availability: PluginAvailability,
@@ -1079,6 +1083,7 @@ pub fn group_remote_installed_plugins_by_marketplaces(
             enabled: plugin.enabled,
             install_policy: plugin.install_policy,
             install_policy_source: plugin.install_policy_source,
+            must_show_installation_interstitial: plugin.must_show_installation_interstitial,
             auth_policy: plugin.auth_policy,
             availability: plugin.availability,
             interface: plugin.interface.clone(),
@@ -1516,6 +1521,7 @@ fn build_remote_plugin_summary(
         install_policy_source: plugin
             .installation_policy_source
             .and_then(RemotePluginInstallPolicySource::into_protocol),
+        must_show_installation_interstitial: plugin.must_show_installation_interstitial,
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),
@@ -1598,6 +1604,7 @@ fn remote_installed_plugin_to_cache_entry(
         install_policy_source: plugin
             .installation_policy_source
             .and_then(RemotePluginInstallPolicySource::into_protocol),
+        must_show_installation_interstitial: plugin.must_show_installation_interstitial,
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),

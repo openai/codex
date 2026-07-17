@@ -3680,6 +3680,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     install_policy_source: Some(PluginInstallPolicySource::WorkspaceSetting),
+                    must_show_installation_interstitial: None,
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: PluginAvailability::Available,
                     interface: None,
@@ -3703,6 +3704,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     "enabled": false,
                     "installPolicy": "AVAILABLE",
                     "installPolicySource": "WORKSPACE_SETTING",
+                    "mustShowInstallationInterstitial": null,
                     "authPolicy": "ON_USE",
                     "availability": "AVAILABLE",
                     "interface": null,
@@ -3731,6 +3733,7 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     assert_eq!(summary.availability, PluginAvailability::Available);
     assert_eq!(summary.local_version, None);
     assert_eq!(summary.share_context, None);
+    assert_eq!(summary.must_show_installation_interstitial, None);
 }
 
 #[test]
