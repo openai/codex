@@ -168,9 +168,22 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
         Command::new(&shell.program)
     };
     if shell.program.is_empty() {
+        #[cfg(windows)]
+        command.raw_arg(format!(r#""{}""#, handler.command));
+
+        #[cfg(not(windows))]
         command.arg(&handler.command);
     } else {
         command.args(&shell.args);
+
+        #[cfg(windows)]
+        if shell.args.iter().any(|arg| arg.eq_ignore_ascii_case("/c")) {
+            command.raw_arg(format!(r#""{}""#, handler.command));
+        } else {
+            command.arg(&handler.command);
+        }
+
+        #[cfg(not(windows))]
         command.arg(&handler.command);
     }
     command.envs(&handler.env);
@@ -194,3 +207,7 @@ fn default_shell_command() -> Command {
         command
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "command_runner_tests.rs"]
+mod tests;
