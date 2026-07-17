@@ -349,10 +349,10 @@ fn composite_cell_preserves_child_web_links() {
 
     assert_eq!(
         lines[2].hyperlinks,
-        vec![crate::terminal_hyperlinks::TerminalHyperlink {
-            columns: 0..destination.len(),
-            destination: destination.to_string(),
-        }]
+        vec![crate::terminal_hyperlinks::TerminalHyperlink::web(
+            /*columns*/ 0..destination.len(),
+            destination.to_string(),
+        )]
     );
 }
 

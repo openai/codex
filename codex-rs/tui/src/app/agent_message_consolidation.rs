@@ -17,6 +17,7 @@ use super::resize_reflow::trailing_run_start;
 use crate::app_event::ConsolidationScrollbackReflow;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::inline_visualization::InlineVisualizationContext;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 
@@ -26,6 +27,7 @@ impl App {
         tui: &mut tui::Tui,
         source: String,
         cwd: PathBuf,
+        inline_visualization_context: Option<InlineVisualizationContext>,
         scrollback_reflow: ConsolidationScrollbackReflow,
         deferred_history_cell: Option<Box<dyn HistoryCell>>,
     ) -> Result<()> {
@@ -52,8 +54,13 @@ impl App {
             tracing::debug!(
                 "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
             );
-            let consolidated: Arc<dyn HistoryCell> =
-                Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
+            let consolidated: Arc<dyn HistoryCell> = Arc::new(
+                history_cell::AgentMarkdownCell::new_with_inline_visualizations(
+                    source,
+                    &cwd,
+                    inline_visualization_context,
+                ),
+            );
             self.transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
 

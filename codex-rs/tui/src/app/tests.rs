@@ -5036,6 +5036,7 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
         "Final answer:\n\n| Pattern | Outcome |\n| --- | --- |\n| Table tail | Preserved |"
             .to_string(),
         PathBuf::from("/tmp"),
+        /*inline_visualization_context*/ None,
         ConsolidationScrollbackReflow::Required,
         /*deferred_history_cell*/ None,
     )?;

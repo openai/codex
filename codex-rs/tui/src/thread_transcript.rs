@@ -10,6 +10,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::split_reasoning_summary_parts;
+use crate::inline_visualization::InlineVisualizationContext;
 use crate::multi_agents::sub_agent_activity_summary;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
@@ -31,6 +32,7 @@ pub(crate) async fn load_session_transcript(
     app_server: &mut AppServerSession,
     thread_id: ThreadId,
     raw_reasoning_visibility: RawReasoningVisibility,
+    codex_home: Option<&std::path::Path>,
 ) -> std::io::Result<TranscriptCells> {
     let thread = app_server
         .thread_read(thread_id, /*include_turns*/ true)
@@ -39,14 +41,21 @@ pub(crate) async fn load_session_transcript(
     Ok(thread_to_transcript_cells(
         &thread,
         raw_reasoning_visibility,
+        codex_home,
     ))
 }
 
 pub(crate) fn thread_to_transcript_cells(
     thread: &Thread,
     raw_reasoning_visibility: RawReasoningVisibility,
+    codex_home: Option<&std::path::Path>,
 ) -> TranscriptCells {
     let cwd = thread.cwd.as_path();
+    let inline_visualization_context = codex_home.and_then(|codex_home| {
+        ThreadId::from_string(&thread.id)
+            .ok()
+            .and_then(|thread_id| InlineVisualizationContext::new(codex_home, thread_id))
+    });
     let mut cells: TranscriptCells = Vec::new();
     for item in thread.turns.iter().flat_map(|turn| turn.items.iter()) {
         match item {
@@ -85,9 +94,10 @@ pub(crate) fn thread_to_transcript_cells(
             ThreadItem::AgentMessage { text, .. } => {
                 let parsed = parse_assistant_markdown(text, cwd);
                 if !parsed.visible_markdown.trim().is_empty() {
-                    cells.push(Arc::new(AgentMarkdownCell::new(
+                    cells.push(Arc::new(AgentMarkdownCell::new_with_inline_visualizations(
                         parsed.visible_markdown,
                         cwd,
+                        inline_visualization_context.clone(),
                     )));
                 }
             }

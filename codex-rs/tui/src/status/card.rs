@@ -893,10 +893,10 @@ impl HistoryCell for StatusHistoryCell {
             if let Some(start_byte) = visible.find(CHATGPT_USAGE_URL) {
                 let start = visible[..start_byte].width();
                 line.hyperlinks
-                    .push(crate::terminal_hyperlinks::TerminalHyperlink {
-                        columns: start..start + CHATGPT_USAGE_URL.width(),
-                        destination: CHATGPT_USAGE_URL.to_string(),
-                    });
+                    .push(crate::terminal_hyperlinks::TerminalHyperlink::web(
+                        start..start + CHATGPT_USAGE_URL.width(),
+                        CHATGPT_USAGE_URL.to_string(),
+                    ));
             }
         }
         lines

@@ -27,6 +27,46 @@ use crate::wrapping::adaptive_wrap_line;
 pub(crate) struct TerminalHyperlink {
     pub(crate) columns: Range<usize>,
     pub(crate) destination: String,
+    destination_kind: DestinationKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DestinationKind {
+    Web,
+    TrustedFile,
+}
+
+impl TerminalHyperlink {
+    pub(crate) fn web(columns: Range<usize>, destination: String) -> Self {
+        Self {
+            columns,
+            destination,
+            destination_kind: DestinationKind::Web,
+        }
+    }
+
+    pub(crate) fn retarget_to_trusted_file(&mut self, destination: &Url) {
+        // Keep file URLs out of the general Markdown link path. Only generated visualization links
+        // are promoted to this destination kind.
+        debug_assert_eq!(destination.scheme(), "file");
+        self.destination = destination.to_string();
+        self.destination_kind = DestinationKind::TrustedFile;
+    }
+
+    fn with_columns(&self, columns: Range<usize>) -> Self {
+        Self {
+            columns,
+            destination: self.destination.clone(),
+            destination_kind: self.destination_kind,
+        }
+    }
+
+    fn terminal_destination(&self) -> Option<String> {
+        match self.destination_kind {
+            DestinationKind::Web => web_destination(&self.destination),
+            DestinationKind::TrustedFile => trusted_file_destination(&self.destination),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -54,10 +94,8 @@ impl HyperlinkLine {
         if end > start
             && let Some(destination) = destination.and_then(web_destination)
         {
-            self.hyperlinks.push(TerminalHyperlink {
-                columns: start..end,
-                destination,
-            });
+            self.hyperlinks
+                .push(TerminalHyperlink::web(start..end, destination));
         }
     }
 
@@ -194,11 +232,7 @@ pub(crate) fn remap_wrapped_line(
                 .iter()
                 .find(|link| link.columns.contains(&source_column))
             {
-                push_link_range(
-                    line,
-                    output_column..output_column + width,
-                    &link.destination,
-                );
+                push_link_range(line, output_column..output_column + width, link);
             }
             source_column += width;
             output_column += width;
@@ -223,21 +257,19 @@ fn longest_suffix_matching_prefix(rendered: &str, source: &str) -> Option<usize>
         .find(|index| source.starts_with(&rendered[*index..]) && *index < rendered.len())
 }
 
-fn push_link_range(line: &mut HyperlinkLine, range: Range<usize>, destination: &str) {
+fn push_link_range(line: &mut HyperlinkLine, range: Range<usize>, link: &TerminalHyperlink) {
     if range.is_empty() {
         return;
     }
     if let Some(previous) = line.hyperlinks.last_mut()
-        && previous.destination == destination
+        && previous.destination == link.destination
+        && previous.destination_kind == link.destination_kind
         && previous.columns.end == range.start
     {
         previous.columns.end = range.end;
         return;
     }
-    line.hyperlinks.push(TerminalHyperlink {
-        columns: range,
-        destination: destination.to_string(),
-    });
+    line.hyperlinks.push(link.with_columns(range));
 }
 
 pub(crate) fn web_links_in_text(text: &str) -> Vec<TerminalHyperlink> {
@@ -262,10 +294,7 @@ pub(crate) fn web_links_in_text(text: &str) -> Vec<TerminalHyperlink> {
         };
         let start = text[..raw_start + trimmed_start].width();
         let end = start + candidate.width();
-        links.push(TerminalHyperlink {
-            columns: start..end,
-            destination,
-        });
+        links.push(TerminalHyperlink::web(start..end, destination));
     }
     links
 }
@@ -308,15 +337,22 @@ fn has_unmatched_closing_delimiter(candidate: &str, closing: char) -> bool {
 }
 
 pub(crate) fn web_destination(destination: &str) -> Option<String> {
-    let safe_destination = destination
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .collect::<String>();
+    let safe_destination = sanitized_destination(destination);
     let parsed = Url::parse(&safe_destination).ok()?;
     matches!(parsed.scheme(), "http" | "https")
         .then(|| parsed.host_str())
         .flatten()?;
     Some(safe_destination)
+}
+
+fn trusted_file_destination(destination: &str) -> Option<String> {
+    let safe_destination = sanitized_destination(destination);
+    let parsed = Url::parse(&safe_destination).ok()?;
+    (parsed.scheme() == "file" && parsed.to_file_path().is_ok()).then_some(safe_destination)
+}
+
+fn sanitized_destination(destination: &str) -> String {
+    destination.chars().filter(|ch| !ch.is_control()).collect()
 }
 
 pub(crate) fn osc8_hyperlink(destination: &str, text: &str) -> String {
@@ -388,7 +424,7 @@ pub(crate) fn decorate_spans(line: &HyperlinkLine) -> Vec<Span<'static>> {
                     append_to_last_span(&mut out, "\x1b]8;;\x07");
                 }
                 active_destination = selected_link_index
-                    .and_then(|index| web_destination(&line.hyperlinks[index].destination));
+                    .and_then(|index| line.hyperlinks[index].terminal_destination());
                 if let Some(destination) = active_destination.as_ref() {
                     push_styled_content(
                         &mut out,
@@ -474,7 +510,12 @@ pub(crate) fn mark_buffer_hyperlinks(
                     if cell.skip || cell.symbol().trim().is_empty() {
                         continue;
                     }
-                    let symbol = osc8_hyperlink(&link.destination, cell.symbol());
+                    let symbol = link.terminal_destination().map_or_else(
+                        || cell.symbol().to_string(),
+                        |destination| {
+                            format!("\x1b]8;;{destination}\x07{}\x1b]8;;\x07", cell.symbol())
+                        },
+                    );
                     cell.set_symbol(&symbol);
                 }
             }
@@ -536,10 +577,10 @@ mod tests {
     fn discovers_punctuated_web_url_columns() {
         assert_eq!(
             web_links_in_text("See (https://example.com/a)."),
-            vec![TerminalHyperlink {
-                columns: 5..26,
-                destination: "https://example.com/a".to_string(),
-            }]
+            vec![TerminalHyperlink::web(
+                /*columns*/ 5..26,
+                "https://example.com/a".to_string(),
+            )]
         );
     }
 
@@ -548,10 +589,10 @@ mod tests {
         let destination = "https://en.wikipedia.org/wiki/Function_(mathematics)";
         assert_eq!(
             web_links_in_text(&format!("See ({destination}).")),
-            vec![TerminalHyperlink {
-                columns: 5..5 + destination.width(),
-                destination: destination.to_string(),
-            }]
+            vec![TerminalHyperlink::web(
+                /*columns*/ 5..5 + destination.width(),
+                destination.to_string(),
+            )]
         );
     }
 
@@ -560,10 +601,10 @@ mod tests {
         let destination = "https://example.com/a/very/long/path";
         let line = HyperlinkLine {
             line: Line::from(destination),
-            hyperlinks: vec![TerminalHyperlink {
-                columns: 0..destination.width(),
-                destination: destination.to_string(),
-            }],
+            hyperlinks: vec![TerminalHyperlink::web(
+                /*columns*/ 0..destination.width(),
+                destination.to_string(),
+            )],
         };
 
         assert_eq!(
@@ -579,19 +620,19 @@ mod tests {
     #[test]
     fn wrapping_maps_repeated_link_labels_by_source_position() {
         let mut source = HyperlinkLine::new(Line::from("here here"));
-        source.hyperlinks.push(TerminalHyperlink {
-            columns: 5..9,
-            destination: "https://example.com".to_string(),
-        });
+        source.hyperlinks.push(TerminalHyperlink::web(
+            /*columns*/ 5..9,
+            "https://example.com".to_string(),
+        ));
 
         let wrapped = remap_wrapped_line(&source, vec![Line::from("here here")]);
 
         assert_eq!(
             wrapped[0].hyperlinks,
-            vec![TerminalHyperlink {
-                columns: 5..9,
-                destination: "https://example.com".to_string(),
-            }]
+            vec![TerminalHyperlink::web(
+                /*columns*/ 5..9,
+                "https://example.com".to_string(),
+            )]
         );
     }
 
@@ -599,10 +640,10 @@ mod tests {
     fn buffer_hyperlinks_follow_word_wrapping() {
         let destination = "https://example.com/path";
         let mut line = HyperlinkLine::new(Line::from(format!("See {destination} now")));
-        line.hyperlinks.push(TerminalHyperlink {
-            columns: 4..4 + destination.width(),
-            destination: destination.to_string(),
-        });
+        line.hyperlinks.push(TerminalHyperlink::web(
+            /*columns*/ 4..4 + destination.width(),
+            destination.to_string(),
+        ));
         let area = Rect::new(
             /*x*/ 0, /*y*/ 0, /*width*/ 18, /*height*/ 4,
         );
@@ -623,5 +664,29 @@ mod tests {
             })
             .collect::<String>();
         assert_eq!(linked_text, destination);
+    }
+
+    #[test]
+    fn trusted_file_destination_receives_osc8_without_enabling_plain_file_links() {
+        let temp_dir = tempfile::tempdir().expect("temp directory");
+        let file_url = Url::from_file_path(temp_dir.path().join("viewer.html"))
+            .expect("test path should convert to file URL");
+        let mut link = TerminalHyperlink::web(
+            /*columns*/ 0..4,
+            "https://codex.invalid/viewer".to_string(),
+        );
+        link.retarget_to_trusted_file(&file_url);
+        let line = HyperlinkLine {
+            line: Line::from("view"),
+            hyperlinks: vec![link],
+        };
+
+        assert_eq!(
+            decorate_spans(&line),
+            vec![Span::from(format!(
+                "\x1b]8;;{file_url}\x07view\x1b]8;;\x07"
+            ))]
+        );
+        assert_eq!(osc8_hyperlink(file_url.as_str(), "view"), "view");
     }
 }

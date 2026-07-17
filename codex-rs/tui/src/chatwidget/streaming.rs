@@ -45,10 +45,17 @@ impl ChatWidget {
             if let Some(source) = source {
                 let source =
                     parse_assistant_markdown(&source, self.config.cwd.as_path()).visible_markdown;
+                let inline_visualization_context = self.thread_id.and_then(|thread_id| {
+                    crate::inline_visualization::InlineVisualizationContext::from_config(
+                        &self.config,
+                        thread_id,
+                    )
+                });
                 self.note_stream_consolidation_queued();
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
+                    inline_visualization_context,
                     scrollback_reflow,
                     deferred_history_cell,
                 });
@@ -408,10 +415,17 @@ impl ChatWidget {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.transcript.needs_final_message_separator = false;
             }
-            self.stream_controller = Some(StreamController::new(
+            let inline_visualization_context = self.thread_id.and_then(|thread_id| {
+                crate::inline_visualization::InlineVisualizationContext::from_config(
+                    &self.config,
+                    thread_id,
+                )
+            });
+            self.stream_controller = Some(StreamController::new_with_inline_visualizations(
                 self.current_stream_width(/*reserved_cols*/ 2),
                 &self.config.cwd,
                 self.history_render_mode(),
+                inline_visualization_context,
             ));
         }
         if let Some(controller) = self.stream_controller.as_mut()

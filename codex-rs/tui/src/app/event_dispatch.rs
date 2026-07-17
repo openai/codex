@@ -317,6 +317,7 @@ impl App {
             AppEvent::ConsolidateAgentMessage {
                 source,
                 cwd,
+                inline_visualization_context,
                 scrollback_reflow,
                 deferred_history_cell,
             } => {
@@ -324,6 +325,7 @@ impl App {
                     tui,
                     source,
                     cwd,
+                    inline_visualization_context,
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;

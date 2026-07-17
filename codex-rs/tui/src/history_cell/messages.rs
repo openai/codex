@@ -365,6 +365,7 @@ impl HistoryCell for AgentMessageCell {
 pub(crate) struct AgentMarkdownCell {
     markdown_source: String,
     cwd: PathBuf,
+    inline_visualization_context: Option<crate::inline_visualization::InlineVisualizationContext>,
 }
 
 impl AgentMarkdownCell {
@@ -373,10 +374,26 @@ impl AgentMarkdownCell {
     /// `markdown_source` must be the raw source accumulated by the stream controller, not already
     /// wrapped terminal lines. Passing rendered lines here would make future resize reflow preserve
     /// stale wrapping instead of repairing it.
+    #[cfg(test)]
     pub(crate) fn new(markdown_source: String, cwd: &Path) -> Self {
+        Self::new_with_inline_visualizations(
+            markdown_source,
+            cwd,
+            /*inline_visualization_context*/ None,
+        )
+    }
+
+    pub(crate) fn new_with_inline_visualizations(
+        markdown_source: String,
+        cwd: &Path,
+        inline_visualization_context: Option<
+            crate::inline_visualization::InlineVisualizationContext,
+        >,
+    ) -> Self {
         Self {
             markdown_source,
             cwd: cwd.to_path_buf(),
+            inline_visualization_context,
         }
     }
 }
@@ -399,10 +416,11 @@ impl HistoryCell for AgentMarkdownCell {
 
         // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
         // " " prefix prepended below.
-        let lines = crate::markdown::render_markdown_agent_with_links_and_cwd(
+        let lines = crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations(
             &self.markdown_source,
             Some(wrap_width),
             Some(self.cwd.as_path()),
+            self.inline_visualization_context.as_ref(),
         );
         prefix_hyperlink_lines(lines, "• ".dim(), "  ".into())
     }
