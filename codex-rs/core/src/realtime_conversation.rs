@@ -16,6 +16,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ApiError;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
+use codex_api::RealtimeContextAppendChannel;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
@@ -36,6 +37,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CodexResponseHandoffMode;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationSpeechParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -73,6 +75,11 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
+mod bem;
+
+use self::bem::ChannelParser as BemChannelParser;
+use self::bem::message_phase as bem_message_phase;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const TEXT_IN_QUEUE_CAPACITY: usize = 64;
@@ -121,13 +128,20 @@ enum RealtimeSessionKind {
 #[derive(Clone, Debug)]
 struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
-    last_output_text: Arc<Mutex<Option<String>>>,
+    last_output: Arc<Mutex<Option<RealtimeHandoffOutput>>>,
     stream: Arc<Mutex<RealtimeHandoffStreamState>>,
     client_managed_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
+    codex_response_handoff_mode: CodexResponseHandoffMode,
     session_kind: RealtimeSessionKind,
     event_parser: RealtimeEventParser,
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeHandoffOutput {
+    text: String,
+    phase: Option<MessagePhase>,
 }
 
 #[derive(Debug, Default)]
@@ -140,6 +154,8 @@ struct RealtimeHandoffStreamState {
 struct RealtimeStreamedItem {
     handoff_id: String,
     phase: Option<MessagePhase>,
+    bem_channel_parser: Option<BemChannelParser>,
+    prefix_final_message: bool,
     sent_bytes: usize,
     buffered_text: String,
     tail_text: String,
@@ -154,7 +170,10 @@ impl RealtimeStreamedItem {
     }
 
     fn output_prefix(&self) -> &'static str {
-        if self.sent_bytes == 0 && !matches!(self.phase, Some(MessagePhase::Commentary)) {
+        if self.prefix_final_message
+            && self.sent_bytes == 0
+            && !matches!(self.phase, Some(MessagePhase::Commentary))
+        {
             AGENT_FINAL_MESSAGE_PREFIX
         } else {
             ""
@@ -179,6 +198,36 @@ impl RealtimeStreamedItem {
     }
 
     fn push_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        let text = if let Some(parser) = self.bem_channel_parser.as_mut() {
+            let Some(text) = parser.push(text) else {
+                return;
+            };
+            self.phase = parser.phase();
+            text
+        } else {
+            text.to_string()
+        };
+        self.push_output_text(&text);
+    }
+
+    fn finish_input(&mut self) {
+        let Some(parser) = self.bem_channel_parser.as_mut() else {
+            return;
+        };
+        self.phase = parser.phase();
+        let text = parser.finish();
+        if self.phase.is_none() && !text.is_empty() {
+            warn!("BEM output ended before a recognized channel header was received");
+            self.phase = Some(MessagePhase::FinalAnswer);
+        }
+        self.push_output_text(&text);
+    }
+
+    fn push_output_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
@@ -256,12 +305,35 @@ fn take_last_bytes_at_char_boundary(text: &str, max_bytes: usize) -> &str {
 
 #[derive(Debug, PartialEq, Eq)]
 enum RealtimeOutbound {
-    StandaloneHandoff { text: String },
-    HandoffUpdate { handoff_id: String, text: String },
-    HandoffAppend { handoff_id: String, text: String },
-    CompletedHandoff { handoff_id: String, text: String },
-    ConversationItem { text: String },
-    HandoffCompleteAck { handoff_id: String },
+    StandaloneHandoff {
+        text: String,
+        phase: Option<MessagePhase>,
+    },
+    StandaloneSpeech {
+        text: String,
+    },
+    HandoffUpdate {
+        handoff_id: String,
+        text: String,
+        phase: Option<MessagePhase>,
+    },
+    HandoffAppend {
+        handoff_id: String,
+        text: String,
+        phase: Option<MessagePhase>,
+    },
+    CompletedHandoff {
+        handoff_id: String,
+        text: String,
+        phase: Option<MessagePhase>,
+    },
+    ConversationItem {
+        text: String,
+        phase: Option<MessagePhase>,
+    },
+    HandoffCompleteAck {
+        handoff_id: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -359,16 +431,18 @@ impl RealtimeHandoffState {
         client_managed_handoffs: bool,
         codex_responses_as_items: bool,
         codex_response_item_prefix: Option<String>,
+        codex_response_handoff_mode: CodexResponseHandoffMode,
         session_kind: RealtimeSessionKind,
         event_parser: RealtimeEventParser,
     ) -> Self {
         Self {
             output_tx,
-            last_output_text: Arc::new(Mutex::new(None)),
+            last_output: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
             client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
+            codex_response_handoff_mode,
             session_kind,
             event_parser,
         }
@@ -378,6 +452,11 @@ impl RealtimeHandoffState {
         self.event_parser == RealtimeEventParser::FramelessBidi
             && !self.client_managed_handoffs
             && !self.codex_responses_as_items
+    }
+
+    fn routes_handoff_by_bem(&self) -> bool {
+        self.event_parser == RealtimeEventParser::FramelessBidi
+            && self.codex_response_handoff_mode == CodexResponseHandoffMode::BemTags
     }
 }
 
@@ -400,6 +479,7 @@ struct RealtimeStart {
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
+    codex_response_handoff_mode: CodexResponseHandoffMode,
     realtime_call_api_provider: Option<ApiProvider>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
@@ -458,6 +538,7 @@ impl RealtimeConversationManager {
             flush_transcript_tail_on_session_end,
             codex_responses_as_items,
             codex_response_item_prefix,
+            codex_response_handoff_mode,
             realtime_call_api_provider,
             session_config,
             model_client,
@@ -486,6 +567,7 @@ impl RealtimeConversationManager {
             client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
+            codex_response_handoff_mode,
             session_kind,
             event_parser,
         );
@@ -668,28 +750,45 @@ impl RealtimeConversationManager {
         if handoff.client_managed_handoffs {
             return Ok(());
         }
+        let phase = if handoff.routes_handoff_by_bem() {
+            match bem_message_phase(&output_text) {
+                Some(phase) => Some(phase),
+                None => {
+                    warn!("BEM output did not contain a recognized channel header");
+                    Some(MessagePhase::FinalAnswer)
+                }
+            }
+        } else {
+            phase
+        };
         let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
         let active_handoff = handoff.stream.lock().await.active_handoff.clone();
         let output = match active_handoff {
             Some(handoff_id) => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
-                *handoff.last_output_text.lock().await = Some(output_text.clone());
+                *handoff.last_output.lock().await = Some(RealtimeHandoffOutput {
+                    text: output_text.clone(),
+                    phase: phase.clone(),
+                });
                 if handoff.codex_responses_as_items {
                     RealtimeOutbound::ConversationItem {
                         text: realtime_backend_item(
                             output_text,
                             handoff.codex_response_item_prefix.as_deref(),
                         ),
+                        phase,
                     }
-                } else if handoff.session_kind == RealtimeSessionKind::V1 && is_commentary {
+                } else if handoff.event_parser == RealtimeEventParser::V1 && is_commentary {
                     RealtimeOutbound::HandoffAppend {
                         handoff_id,
                         text: output_text,
+                        phase,
                     }
                 } else {
                     RealtimeOutbound::HandoffUpdate {
                         handoff_id,
                         text: output_text,
+                        phase,
                     }
                 }
             }
@@ -702,14 +801,16 @@ impl RealtimeConversationManager {
                             output_text,
                             handoff.codex_response_item_prefix.as_deref(),
                         ),
+                        phase,
                     }
                 } else {
                     RealtimeOutbound::StandaloneHandoff {
-                        text: if handoff.session_kind == RealtimeSessionKind::V1 && !is_commentary {
+                        text: if handoff.event_parser == RealtimeEventParser::V1 && !is_commentary {
                             format!("{AGENT_FINAL_MESSAGE_PREFIX}{output_text}")
                         } else {
                             output_text
                         },
+                        phase,
                     }
                 }
             }
@@ -745,7 +846,15 @@ impl RealtimeConversationManager {
             };
             let mut streamed_item = RealtimeStreamedItem {
                 handoff_id,
-                phase,
+                phase: if handoff.routes_handoff_by_bem() {
+                    None
+                } else {
+                    phase
+                },
+                bem_channel_parser: handoff
+                    .routes_handoff_by_bem()
+                    .then(BemChannelParser::default),
+                prefix_final_message: handoff.event_parser == RealtimeEventParser::V1,
                 sent_bytes: 0,
                 buffered_text: String::new(),
                 tail_text: String::new(),
@@ -821,6 +930,7 @@ impl RealtimeConversationManager {
         let Some(mut streamed_item) = handoff.stream.lock().await.items.remove(item_id) else {
             return false;
         };
+        streamed_item.finish_input();
         let chunk = streamed_item.drain_final_chunk();
         let sent_output = streamed_item.sent_bytes > 0;
         if let Some(text) = chunk {
@@ -829,6 +939,7 @@ impl RealtimeConversationManager {
                 .send(RealtimeOutbound::HandoffAppend {
                     handoff_id: streamed_item.handoff_id,
                     text,
+                    phase: streamed_item.phase,
                 })
                 .await;
         }
@@ -852,7 +963,7 @@ impl RealtimeConversationManager {
 
         handoff
             .output_tx
-            .send(RealtimeOutbound::StandaloneHandoff {
+            .send(RealtimeOutbound::StandaloneSpeech {
                 text: realtime_backend_output(text, handoff.session_kind),
             })
             .await
@@ -879,7 +990,7 @@ impl RealtimeConversationManager {
         let Some(handoff_id) = handoff.stream.lock().await.active_handoff.clone() else {
             return Ok(());
         };
-        let Some(output_text) = handoff.last_output_text.lock().await.clone() else {
+        let Some(last_output) = handoff.last_output.lock().await.clone() else {
             return Ok(());
         };
 
@@ -888,7 +999,8 @@ impl RealtimeConversationManager {
         } else {
             RealtimeOutbound::CompletedHandoff {
                 handoff_id,
-                text: output_text,
+                text: last_output.text,
+                phase: last_output.phase,
             }
         };
 
@@ -910,7 +1022,7 @@ impl RealtimeConversationManager {
                 stream.active_handoff = None;
                 stream.items.clear();
             }
-            *handoff.last_output_text.lock().await = None;
+            *handoff.last_output.lock().await = None;
         }
     }
 
@@ -987,6 +1099,7 @@ struct PreparedRealtimeConversationStart {
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
+    codex_response_handoff_mode: CodexResponseHandoffMode,
     realtime_call_api_provider: Option<ApiProvider>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
@@ -1072,6 +1185,7 @@ async fn prepare_realtime_start(
         flush_transcript_tail_on_session_end: params.flush_transcript_tail_on_session_end,
         codex_responses_as_items: params.codex_responses_as_items,
         codex_response_item_prefix: params.codex_response_item_prefix,
+        codex_response_handoff_mode: params.codex_response_handoff_mode,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -1243,6 +1357,7 @@ async fn handle_start_inner(
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,
         codex_response_item_prefix,
+        codex_response_handoff_mode,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -1261,6 +1376,7 @@ async fn handle_start_inner(
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,
         codex_response_item_prefix,
+        codex_response_handoff_mode,
         realtime_call_api_provider,
         session_config,
         model_client: sess.services.model_client.clone(),
@@ -1700,7 +1816,7 @@ async fn handle_text_input(
 }
 
 async fn flush_streamed_handoff_item(handoff: &RealtimeHandoffState, item_id: &str) {
-    let (handoff_id, text) = {
+    let (handoff_id, text, phase) = {
         let mut stream = handoff.stream.lock().await;
         let Some(streamed_item) = stream.items.get_mut(item_id) else {
             return;
@@ -1710,11 +1826,19 @@ async fn flush_streamed_handoff_item(handoff: &RealtimeHandoffState, item_id: &s
             return;
         };
         streamed_item.last_flush_at = Instant::now();
-        (streamed_item.handoff_id.clone(), text)
+        (
+            streamed_item.handoff_id.clone(),
+            text,
+            streamed_item.phase.clone(),
+        )
     };
     let _ = handoff
         .output_tx
-        .send(RealtimeOutbound::HandoffAppend { handoff_id, text })
+        .send(RealtimeOutbound::HandoffAppend {
+            handoff_id,
+            text,
+            phase,
+        })
         .await;
 }
 
@@ -1730,6 +1854,26 @@ fn schedule_streamed_handoff_flush(
     });
 }
 
+fn v3_output_writer(
+    writer: &RealtimeWebsocketWriter,
+    phase: Option<&MessagePhase>,
+    handoff_mode: CodexResponseHandoffMode,
+) -> RealtimeWebsocketWriter {
+    let channel = match handoff_mode {
+        CodexResponseHandoffMode::Thinking => None,
+        CodexResponseHandoffMode::Commentary => Some(RealtimeContextAppendChannel::Commentary),
+        CodexResponseHandoffMode::BemTags => match phase {
+            Some(MessagePhase::FinalAnswer) => Some(RealtimeContextAppendChannel::Speakable),
+            Some(MessagePhase::Commentary) => Some(RealtimeContextAppendChannel::Commentary),
+            None => Some(RealtimeContextAppendChannel::Speakable),
+        },
+    };
+    match channel {
+        Some(channel) => writer.clone().with_context_append_channel(channel),
+        None => writer.clone(),
+    }
+}
+
 async fn handle_handoff_output(
     handoff_output: Result<RealtimeOutbound, RecvError>,
     writer: &RealtimeWebsocketWriter,
@@ -1739,34 +1883,117 @@ async fn handle_handoff_output(
     response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
     let handoff_output = handoff_output.context("handoff output channel closed")?;
-
     let result = match event_parser {
-        RealtimeEventParser::V1 | RealtimeEventParser::FramelessBidi => match handoff_output {
-            RealtimeOutbound::StandaloneHandoff { text } => {
+        RealtimeEventParser::V1 => match handoff_output {
+            RealtimeOutbound::StandaloneHandoff { text, phase: _ } => {
                 writer
                     .send_standalone_handoff(STANDALONE_HANDOFF_ID.to_string(), text)
                     .await
             }
-            RealtimeOutbound::HandoffUpdate { handoff_id, text }
-            | RealtimeOutbound::CompletedHandoff { handoff_id, text } => {
+            RealtimeOutbound::StandaloneSpeech { text } => {
+                writer
+                    .send_standalone_handoff(STANDALONE_HANDOFF_ID.to_string(), text)
+                    .await
+            }
+            RealtimeOutbound::HandoffUpdate {
+                handoff_id,
+                text,
+                phase: _,
+            }
+            | RealtimeOutbound::CompletedHandoff {
+                handoff_id,
+                text,
+                phase: _,
+            } => {
                 writer
                     .send_conversation_function_call_output(handoff_id, text)
                     .await
             }
-            RealtimeOutbound::HandoffAppend { handoff_id, text } => {
+            RealtimeOutbound::HandoffAppend {
+                handoff_id,
+                text,
+                phase: _,
+            } => {
                 writer
                     .send_conversation_handoff_append(handoff_id, text)
                     .await
             }
-            RealtimeOutbound::ConversationItem { text } => {
+            RealtimeOutbound::ConversationItem { text, phase: _ } => {
                 writer
                     .send_conversation_item_create(text, ConversationTextRole::Developer)
                     .await
             }
             RealtimeOutbound::HandoffCompleteAck { .. } => Ok(()),
         },
+        RealtimeEventParser::FramelessBidi => match handoff_output {
+            RealtimeOutbound::StandaloneHandoff { text, phase } => {
+                v3_output_writer(
+                    writer,
+                    phase.as_ref(),
+                    handoff_state.codex_response_handoff_mode,
+                )
+                .send_standalone_handoff(STANDALONE_HANDOFF_ID.to_string(), text)
+                .await
+            }
+            RealtimeOutbound::StandaloneSpeech { text } => {
+                writer
+                    .clone()
+                    .with_context_append_channel(RealtimeContextAppendChannel::Speakable)
+                    .send_standalone_handoff(STANDALONE_HANDOFF_ID.to_string(), text)
+                    .await
+            }
+            RealtimeOutbound::HandoffUpdate {
+                handoff_id,
+                text,
+                phase,
+            } => {
+                v3_output_writer(
+                    writer,
+                    phase.as_ref(),
+                    handoff_state.codex_response_handoff_mode,
+                )
+                .send_conversation_function_call_output(handoff_id, text)
+                .await
+            }
+            RealtimeOutbound::HandoffAppend {
+                handoff_id,
+                text,
+                phase,
+            } => {
+                v3_output_writer(
+                    writer,
+                    phase.as_ref(),
+                    handoff_state.codex_response_handoff_mode,
+                )
+                .send_conversation_handoff_append(handoff_id, text)
+                .await
+            }
+            RealtimeOutbound::CompletedHandoff {
+                handoff_id,
+                text,
+                phase,
+            } => {
+                v3_output_writer(
+                    writer,
+                    phase.as_ref(),
+                    handoff_state.codex_response_handoff_mode,
+                )
+                .send_conversation_function_call_output(handoff_id, text)
+                .await
+            }
+            RealtimeOutbound::ConversationItem { text, phase } => {
+                v3_output_writer(
+                    writer,
+                    phase.as_ref(),
+                    handoff_state.codex_response_handoff_mode,
+                )
+                .send_conversation_item_create(text, ConversationTextRole::Developer)
+                .await
+            }
+            RealtimeOutbound::HandoffCompleteAck { .. } => Ok(()),
+        },
         RealtimeEventParser::RealtimeV2 => match handoff_output {
-            RealtimeOutbound::StandaloneHandoff { text } => {
+            RealtimeOutbound::StandaloneHandoff { text, phase: _ } => {
                 if let Err(err) = writer
                     .send_conversation_item_create(text, ConversationTextRole::User)
                     .await
@@ -1778,8 +2005,28 @@ async fn handle_handoff_output(
                         .await;
                 }
             }
-            RealtimeOutbound::HandoffUpdate { handoff_id, text }
-            | RealtimeOutbound::HandoffAppend { handoff_id, text } => {
+            RealtimeOutbound::StandaloneSpeech { text } => {
+                if let Err(err) = writer
+                    .send_conversation_item_create(text, ConversationTextRole::User)
+                    .await
+                {
+                    Err(err)
+                } else {
+                    return response_create_queue
+                        .request_create(writer, events_tx, "standalone handoff")
+                        .await;
+                }
+            }
+            RealtimeOutbound::HandoffUpdate {
+                handoff_id,
+                text,
+                phase: _,
+            }
+            | RealtimeOutbound::HandoffAppend {
+                handoff_id,
+                text,
+                phase: _,
+            } => {
                 let active_handoff = handoff_state.stream.lock().await.active_handoff.clone();
                 match active_handoff {
                     Some(active_handoff) if active_handoff == handoff_id => {}
@@ -1795,6 +2042,7 @@ async fn handle_handoff_output(
             RealtimeOutbound::CompletedHandoff {
                 handoff_id,
                 text: _,
+                phase: _,
             } => {
                 if let Err(err) = writer
                     .send_conversation_function_call_output(
@@ -1810,7 +2058,7 @@ async fn handle_handoff_output(
                         .await;
                 }
             }
-            RealtimeOutbound::ConversationItem { text } => {
+            RealtimeOutbound::ConversationItem { text, phase: _ } => {
                 writer
                     .send_conversation_item_create(text, ConversationTextRole::Developer)
                     .await

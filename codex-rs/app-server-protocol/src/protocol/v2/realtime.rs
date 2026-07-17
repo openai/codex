@@ -1,3 +1,4 @@
+use codex_protocol::protocol::CodexResponseHandoffMode;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
@@ -74,12 +75,18 @@ pub struct ThreadRealtimeStartParams {
     /// TODO: Remove this rollout knob once transcript-tail flushing is always enabled.
     #[ts(optional = nullable)]
     pub flush_transcript_tail_on_session_end: Option<bool>,
+    // TODO: Remove this experiment-only delivery path after response-item testing is complete.
     /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
     #[ts(optional = nullable)]
     pub codex_responses_as_items: Option<bool>,
+    // TODO: Remove this experiment-only prefix with `codex_responses_as_items`.
     /// Optional prefix added to automatic Codex response items when `codexResponsesAsItems` is true.
     #[ts(optional = nullable)]
     pub codex_response_item_prefix: Option<String>,
+    /// Selects how automatic Codex responses are routed in Frameless Bidi sessions. Omitted values
+    /// default to `thinking`. Realtime V1 and V2 ignore this setting.
+    #[ts(optional = nullable)]
+    pub codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,

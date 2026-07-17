@@ -52,6 +52,7 @@ pub use crate::endpoint::MemoriesClient;
 pub use crate::endpoint::ModelsClient;
 pub use crate::endpoint::RealtimeCallClient;
 pub use crate::endpoint::RealtimeCallResponse;
+pub use crate::endpoint::RealtimeContextAppendChannel;
 pub use crate::endpoint::RealtimeEventParser;
 pub use crate::endpoint::RealtimeOutputModality;
 pub use crate::endpoint::RealtimeSessionConfig;

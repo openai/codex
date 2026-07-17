@@ -25,6 +25,14 @@ pub enum RealtimeSessionMode {
     Transcription,
 }
 
+/// Selects the semantic stream used for Frameless Bidi context appends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeContextAppendChannel {
+    Speakable,
+    Commentary,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeSessionConfig {
     pub instructions: String,
@@ -51,10 +59,14 @@ pub(super) enum RealtimeOutboundMessage {
     #[serde(rename = "delegation.context.append")]
     DelegationContextAppend {
         delegation_item_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel: Option<RealtimeContextAppendChannel>,
         content: Vec<FramelessInputTextContent>,
     },
     #[serde(rename = "session.context.append")]
     SessionContextAppend {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel: Option<RealtimeContextAppendChannel>,
         content: Vec<FramelessInputTextContent>,
     },
     #[serde(rename = "session.close")]

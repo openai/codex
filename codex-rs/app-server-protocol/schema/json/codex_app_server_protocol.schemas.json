@@ -7416,6 +7416,14 @@
           }
         ]
       },
+      "CodexResponseHandoffMode": {
+        "enum": [
+          "thinking",
+          "commentary",
+          "bemTags"
+        ],
+        "type": "string"
+      },
       "CollabAgentState": {
         "properties": {
           "message": {

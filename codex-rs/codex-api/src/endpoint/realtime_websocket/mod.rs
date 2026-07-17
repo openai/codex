@@ -14,6 +14,7 @@ pub use methods::RealtimeWebsocketConnection;
 pub use methods::RealtimeWebsocketEvents;
 pub use methods::RealtimeWebsocketWriter;
 pub use methods_common::session_update_session_json;
+pub use protocol::RealtimeContextAppendChannel;
 pub use protocol::RealtimeEventParser;
 pub use protocol::RealtimeOutputModality;
 pub use protocol::RealtimeSessionConfig;
