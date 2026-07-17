@@ -39,7 +39,8 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::raw_lines_from_source;
 use crate::history_cell::{self};
-use crate::markdown::render_markdown_agent_with_links_and_cwd;
+use crate::inline_visualization::InlineVisualizationContext;
+use crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations;
 use crate::style::proposed_plan_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
@@ -84,6 +85,7 @@ struct StreamCore {
     emitted_stable_len: usize,
     /// Session cwd used to keep local file-link display stable during stream re-renders.
     cwd: PathBuf,
+    inline_visualization_context: Option<InlineVisualizationContext>,
     render_mode: HistoryRenderMode,
     /// Cached rendered line count for prefix-before-table keyed by source start and width.
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
@@ -104,7 +106,12 @@ struct StablePrefixLenCache {
 }
 
 impl StreamCore {
-    fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
+    fn new(
+        width: Option<usize>,
+        cwd: &Path,
+        render_mode: HistoryRenderMode,
+        inline_visualization_context: Option<InlineVisualizationContext>,
+    ) -> Self {
         Self {
             state: StreamState::new(width, cwd),
             width,
@@ -113,6 +120,7 @@ impl StreamCore {
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
             cwd: cwd.to_path_buf(),
+            inline_visualization_context,
             render_mode,
             stable_prefix_len_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
@@ -277,10 +285,11 @@ impl StreamCore {
 
     fn render_source(&self, source: &str) -> Vec<HyperlinkLine> {
         match self.render_mode {
-            HistoryRenderMode::Rich => render_markdown_agent_with_links_and_cwd(
+            HistoryRenderMode::Rich => render_markdown_agent_with_links_cwd_and_visualizations(
                 source,
                 self.width,
                 Some(self.cwd.as_path()),
+                self.inline_visualization_context.as_ref(),
             ),
             HistoryRenderMode::Raw => plain_hyperlink_lines(raw_lines_from_source(source)),
         }
@@ -434,10 +443,11 @@ impl StreamCore {
         }
 
         let render_start = Instant::now();
-        let stable_prefix_render = render_markdown_agent_with_links_and_cwd(
+        let stable_prefix_render = render_markdown_agent_with_links_cwd_and_visualizations(
             &self.raw_source[..source_start.min(self.raw_source.len())],
             self.width,
             Some(self.cwd.as_path()),
+            self.inline_visualization_context.as_ref(),
         );
         let stable_prefix_len = stable_prefix_render.len();
         tracing::trace!(
@@ -470,9 +480,24 @@ impl StreamController {
     /// `width` is the content width available to markdown rendering, not necessarily the full
     /// terminal width. Passing a stale width after resize will keep queued live output wrapped for
     /// the old viewport until app-level reflow repairs the finalized transcript.
+    #[cfg(test)]
     pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
+        Self::new_with_inline_visualizations(
+            width,
+            cwd,
+            render_mode,
+            /*inline_visualization_context*/ None,
+        )
+    }
+
+    pub(crate) fn new_with_inline_visualizations(
+        width: Option<usize>,
+        cwd: &Path,
+        render_mode: HistoryRenderMode,
+        inline_visualization_context: Option<InlineVisualizationContext>,
+    ) -> Self {
         Self {
-            core: StreamCore::new(width, cwd, render_mode),
+            core: StreamCore::new(width, cwd, render_mode, inline_visualization_context),
             header_emitted: false,
         }
     }
@@ -585,7 +610,12 @@ impl PlanStreamController {
     /// callers must update it when the terminal width changes.
     pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
-            core: StreamCore::new(width, cwd, render_mode),
+            core: StreamCore::new(
+                width,
+                cwd,
+                render_mode,
+                /*inline_visualization_context*/ None,
+            ),
             header_emitted: false,
             top_padding_emitted: false,
         }
