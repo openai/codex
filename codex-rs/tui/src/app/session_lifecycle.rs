@@ -26,7 +26,7 @@ impl App {
             .into_iter()
             .map(|(thread_id, _)| thread_id)
             .collect();
-        for thread_id in path_backed_thread_ids {
+        for thread_id in path_backed_thread_ids.iter().copied() {
             if let Some(channel) = self.thread_event_channels.get(&thread_id)
                 && channel.attachment() == ThreadEventAttachment::Live
             {
@@ -80,7 +80,6 @@ impl App {
                 .add_to_history(super::agent_status_feed::AgentStatusHistoryCell::new(
                     entries,
                 ));
-            return;
         }
 
         let mut thread_ids = self.agent_navigation.tracked_thread_ids();
@@ -90,7 +89,9 @@ impl App {
             }
         }
         for thread_id in thread_ids {
-            if self.side_threads.contains_key(&thread_id) {
+            if path_backed_thread_ids.contains(&thread_id)
+                || self.side_threads.contains_key(&thread_id)
+            {
                 continue;
             }
             if !self
@@ -127,11 +128,19 @@ impl App {
                 }
                 let id = thread_id;
                 let is_primary = self.primary_thread_id == Some(thread_id);
-                let name = format_agent_picker_item_name(
-                    entry.agent_nickname.as_deref(),
-                    entry.agent_role.as_deref(),
-                    is_primary,
-                );
+                let name = entry
+                    .agent_path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|agent_path| !is_primary && !agent_path.is_empty())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| {
+                        format_agent_picker_item_name(
+                            entry.agent_nickname.as_deref(),
+                            entry.agent_role.as_deref(),
+                            is_primary,
+                        )
+                    });
                 let uuid = thread_id.to_string();
                 SelectionItem {
                     name: name.clone(),
