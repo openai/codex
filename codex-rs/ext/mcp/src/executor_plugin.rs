@@ -13,6 +13,7 @@ use std::sync::Mutex;
 
 use self::provider::ExecutorPluginMcpProvider;
 
+mod discovery;
 mod provider;
 
 /// Frozen MCP and connector declarations for one selected package.
@@ -153,37 +154,75 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
             let Some(selected_roots) = context.ready_selected_capability_roots() else {
                 return Vec::new();
             };
-            let state = thread_store.get_or_init(SelectedExecutorPluginMcpState::default);
             let mut contributions = Vec::new();
 
-            for (selection_order, selected_root) in selected_roots.iter().enumerate() {
-                let Some(plugin) = self.metadata_for_root(&state, selected_root).await else {
-                    continue;
-                };
-                let mut servers = plugin.servers.iter().cloned().collect::<HashMap<_, _>>();
-                context
-                    .config()
-                    .apply_plugin_mcp_server_requirements(&plugin.plugin_id, &mut servers);
-                let mut servers = servers.into_iter().collect::<Vec<_>>();
-                servers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-                contributions.extend(servers.into_iter().map(|(name, config)| {
-                    McpServerContribution::SelectedPlugin {
-                        name,
-                        plugin_id: plugin.plugin_id.clone(),
-                        plugin_display_name: plugin.plugin_display_name.clone(),
+            if let Some(snapshot) = context.executor_capability_discovery() {
+                for (selection_order, root) in snapshot.roots().iter().enumerate() {
+                    let discovery = match &root.result {
+                        Ok(discovery) => discovery.as_ref(),
+                        Err(error) => {
+                            tracing::warn!(
+                                selected_root = root.selected_root.id,
+                                error,
+                                "exec-server capability discovery request failed"
+                            );
+                            continue;
+                        }
+                    };
+                    let Some(plugin) =
+                        discovery::metadata_from_discovery(&root.selected_root, discovery)
+                    else {
+                        continue;
+                    };
+                    contributions.extend(project_metadata(
+                        context.config(),
                         selection_order,
-                        config: Box::new(config),
-                    }
-                }));
-                // Keep the package visible even when it contributes only skills.
-                contributions.push(McpServerContribution::SelectedPluginPackage {
-                    plugin_id: plugin.plugin_id,
-                    plugin_display_name: plugin.plugin_display_name,
-                    connector_ids: plugin.connector_ids,
-                });
+                        plugin,
+                    ));
+                }
+            } else {
+                let state = thread_store.get_or_init(SelectedExecutorPluginMcpState::default);
+                for (selection_order, selected_root) in selected_roots.iter().enumerate() {
+                    let Some(plugin) = self.metadata_for_root(&state, selected_root).await else {
+                        continue;
+                    };
+                    contributions.extend(project_metadata(
+                        context.config(),
+                        selection_order,
+                        plugin,
+                    ));
+                }
             }
 
             contributions
         })
     }
+}
+
+fn project_metadata(
+    config: &Config,
+    selection_order: usize,
+    plugin: SelectedPluginMetadata,
+) -> Vec<McpServerContribution> {
+    let mut servers = plugin.servers.iter().cloned().collect::<HashMap<_, _>>();
+    config.apply_plugin_mcp_server_requirements(&plugin.plugin_id, &mut servers);
+    let mut servers = servers.into_iter().collect::<Vec<_>>();
+    servers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let mut contributions = servers
+        .into_iter()
+        .map(|(name, config)| McpServerContribution::SelectedPlugin {
+            name,
+            plugin_id: plugin.plugin_id.clone(),
+            plugin_display_name: plugin.plugin_display_name.clone(),
+            selection_order,
+            config: Box::new(config),
+        })
+        .collect::<Vec<_>>();
+    // Keep the package visible even when it contributes only skills.
+    contributions.push(McpServerContribution::SelectedPluginPackage {
+        plugin_id: plugin.plugin_id,
+        plugin_display_name: plugin.plugin_display_name,
+        connector_ids: plugin.connector_ids,
+    });
+    contributions
 }

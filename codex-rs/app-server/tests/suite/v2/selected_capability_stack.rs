@@ -462,7 +462,7 @@ fn selected_capability_fixture(
     std::fs::write(
         config_path,
         format!(
-            "{config}\n[features]\napps = true\ndeferred_executor = true\n\n[skills]\ninclude_instructions = true\n"
+            "{config}\n[features]\napps = true\ndeferred_executor = true\nexecutor_capability_discovery = true\n\n[skills]\ninclude_instructions = true\n"
         ),
     )?;
     write_chatgpt_auth(

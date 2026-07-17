@@ -2,12 +2,14 @@ use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
+use codex_features::Feature;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
@@ -147,6 +149,35 @@ async fn selected_plugin_package_is_contributed_without_servers_or_connectors() 
     Ok(())
 }
 
+#[tokio::test]
+async fn high_level_discovery_matches_the_existing_plugin_provider() -> TestResult {
+    let codex_home = tempfile::tempdir()?;
+    let plugin_root = tempfile::tempdir()?;
+    std::fs::create_dir_all(plugin_root.path().join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"demo","interface":{"displayName":"Demo"},"mcpServers":"./servers.json"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.path().join("servers.json"),
+        r#"{"mcpServers":{"first":{"command":"first"},"second":{"command":"second"}}}"#,
+    )?;
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    let existing = selected_plugin_contributions(&config, plugin_root.path()).await?;
+    config
+        .features
+        .enable(Feature::ExecutorCapabilityDiscovery)
+        .expect("test config should allow feature update");
+    let high_level = selected_plugin_contributions(&config, plugin_root.path()).await?;
+
+    assert_eq!(high_level, existing);
+    Ok(())
+}
+
 async fn selected_plugin_contributions(
     config: &Config,
     plugin_root: &std::path::Path,
@@ -181,10 +212,8 @@ async fn raw_selected_plugin_contributions(
     plugin_root: &std::path::Path,
 ) -> Result<Vec<McpServerContribution>, Box<dyn std::error::Error>> {
     let mut builder = ExtensionRegistryBuilder::new();
-    codex_mcp_extension::install_executor_plugins(
-        &mut builder,
-        Arc::new(EnvironmentManager::default_for_tests()),
-    );
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    codex_mcp_extension::install_executor_plugins(&mut builder, Arc::clone(&environment_manager));
     let registry = builder.build();
     let thread_init = ExtensionDataInit::new();
     let selected_capability_roots = vec![SelectedCapabilityRoot {
@@ -195,6 +224,18 @@ async fn raw_selected_plugin_contributions(
         },
     }];
     let thread_store = ExtensionData::new_with_init("test-thread", thread_init.clone());
+    let executor_capability_discovery = if config
+        .features
+        .enabled(Feature::ExecutorCapabilityDiscovery)
+    {
+        Some(
+            ExecutorCapabilityDiscoveryCache::new(environment_manager)
+                .snapshot(&selected_capability_roots)
+                .await,
+        )
+    } else {
+        None
+    };
 
     Ok(registry.mcp_server_contributors()[0]
         .contribute(McpServerContributionContext::for_step(
@@ -203,6 +244,7 @@ async fn raw_selected_plugin_contributions(
             &thread_store,
             "test_originator",
             &selected_capability_roots,
+            executor_capability_discovery.as_ref(),
         ))
         .await)
 }

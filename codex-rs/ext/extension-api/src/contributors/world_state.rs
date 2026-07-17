@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_exec_server_protocol::ExecutorCapabilityDiscoverySnapshot;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -14,6 +15,8 @@ pub struct WorldStateContributionInput<'a> {
     pub environments: &'a [TurnEnvironmentSelection],
     /// Selected roots whose stable environments are ready in this sampling step.
     pub ready_selected_capability_roots: &'a [SelectedCapabilityRoot],
+    /// Executor-materialized capability files shared by all consumers in this exact step.
+    pub executor_capability_discovery: Option<&'a ExecutorCapabilityDiscoverySnapshot>,
     pub session_store: &'a ExtensionData,
     pub thread_store: &'a ExtensionData,
     pub turn_store: &'a ExtensionData,

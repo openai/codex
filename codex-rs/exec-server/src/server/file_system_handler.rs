@@ -4,6 +4,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_exec_server_protocol::JSONRPCErrorError;
 
+use crate::CapabilityRootsDiscoverParams;
+use crate::CapabilityRootsDiscoverResponse;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
@@ -63,6 +65,15 @@ impl FileSystemHandler {
 
     pub(crate) async fn shutdown(&self) {
         self.file_reads.close_all().await;
+    }
+
+    pub(crate) async fn discover_capability_roots(
+        &self,
+        params: CapabilityRootsDiscoverParams,
+    ) -> Result<CapabilityRootsDiscoverResponse, JSONRPCErrorError> {
+        crate::discover_capability_roots(&self.file_system, params)
+            .await
+            .map_err(|error| invalid_request(error.to_string()))
     }
 
     pub(crate) async fn open(

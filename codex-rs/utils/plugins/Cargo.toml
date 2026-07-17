@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 codex-exec-server = { workspace = true }
+codex-exec-server-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

@@ -2859,17 +2859,27 @@ impl Session {
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)
             .await;
+        let ready_selected_capability_roots =
+            Self::ready_selected_capability_roots(&selected_capability_roots);
+        let executor_capability_discovery = self
+            .executor_capability_discovery_for_step(
+                &turn_context.config,
+                &ready_selected_capability_roots,
+            )
+            .await;
         let mcp = self
             .mcp_runtime_for_step(
                 turn_context.as_ref(),
                 &environments,
                 &selected_capability_roots,
+                executor_capability_discovery.as_deref(),
             )
             .await;
         Arc::new(StepContext::new(
             turn_context,
             environments,
             selected_capability_roots,
+            executor_capability_discovery,
             mcp,
             loaded_agents_md,
         ))
