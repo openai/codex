@@ -392,15 +392,6 @@ impl ToolRegistry {
         Some(tool.waits_for_runtime_cancellation())
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn dispatch_any(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<AnyToolResult, FunctionCallError> {
-        self.dispatch_any_with_terminal_outcome(invocation, /*terminal_outcome_reached*/ None)
-            .await
-    }
-
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "tool dispatch must keep active-turn accounting atomic"
