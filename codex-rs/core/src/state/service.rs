@@ -34,6 +34,7 @@ use codex_hooks::Hooks;
 use codex_login::AuthManager;
 use codex_mcp::McpConfig;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
@@ -48,10 +49,10 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    /// Mirror of the latest manager for extension resource clients that predate runtime snapshots.
-    pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
-    /// The latest atomically published MCP config and manager pair.
-    pub(crate) mcp_runtime: ArcSwapOption<McpRuntimeSnapshot>,
+    /// The single owner of live MCP connections for this thread.
+    pub(crate) mcp_runtime: Arc<McpRuntime>,
+    /// The latest atomically published MCP config and connection snapshot.
+    pub(crate) mcp_runtime_snapshot: ArcSwapOption<McpRuntimeSnapshot>,
     /// Serializes environment-driven runtime rebuilds.
     pub(crate) mcp_projection_lock: Mutex<()>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
@@ -104,22 +105,22 @@ pub(crate) struct SessionServices {
 }
 
 impl SessionServices {
-    /// Installs the manager before validating required servers so startup-time elicitation can
-    /// resolve through the session's manager while validation waits.
-    pub(crate) async fn install_mcp_connection_manager(
+    /// Publishes the initial connections before validating required servers so startup-time
+    /// elicitation can resolve through the thread runtime while validation waits.
+    pub(crate) async fn install_mcp_runtime(
         &self,
         config: Arc<McpConfig>,
         plugins_available: bool,
         runtime_context: McpRuntimeContext,
         ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
-        manager: McpConnectionManager,
+        connections: McpConnectionManager,
     ) -> Result<()> {
         let runtime = self.publish_mcp_runtime(
             config,
             plugins_available,
             runtime_context,
             ready_selected_capability_roots,
-            manager,
+            connections,
         );
         runtime.manager().validate_required_servers().await
     }
@@ -130,25 +131,22 @@ impl SessionServices {
         plugins_available: bool,
         runtime_context: McpRuntimeContext,
         ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
-        manager: McpConnectionManager,
+        connections: McpConnectionManager,
     ) -> Arc<McpRuntimeSnapshot> {
-        let manager = Arc::new(manager);
-        // Publish the manager for legacy resource clients first. Once the paired snapshot is
-        // visible, every model-scoped consumer observes this exact manager.
-        self.mcp_connection_manager.store(Arc::clone(&manager));
+        let connections = self.mcp_runtime.replace(connections);
         let runtime = Arc::new(McpRuntimeSnapshot::new(
             config,
             plugins_available,
-            manager,
+            connections,
             runtime_context,
             ready_selected_capability_roots,
         ));
-        self.mcp_runtime.store(Some(Arc::clone(&runtime)));
+        self.mcp_runtime_snapshot.store(Some(Arc::clone(&runtime)));
         runtime
     }
 
     pub(crate) fn latest_mcp_runtime(&self) -> Arc<McpRuntimeSnapshot> {
-        let Some(runtime) = self.mcp_runtime.load_full() else {
+        let Some(runtime) = self.mcp_runtime_snapshot.load_full() else {
             unreachable!("MCP runtime must be installed before handling requests");
         };
         runtime

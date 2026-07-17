@@ -185,7 +185,9 @@ impl Session {
                 current.runtime_context().clone(),
                 ready_selected_capability_roots,
             ));
-            self.services.mcp_runtime.store(Some(Arc::clone(&runtime)));
+            self.services
+                .mcp_runtime_snapshot
+                .store(Some(Arc::clone(&runtime)));
             return runtime;
         }
         self.refresh_mcp_servers_inner(
