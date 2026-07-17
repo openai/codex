@@ -157,6 +157,7 @@ apps = true
   "scope": "GLOBAL",
   "installation_policy": "AVAILABLE",
   "installation_policy_source": "IMPLICIT_CANONICAL_APP",
+  "must_show_installation_interstitial": true,
   "authentication_policy": "ON_USE",
   "release": {
     "version": "1.2.1",
@@ -308,6 +309,10 @@ apps = true
     assert_eq!(
         response.plugin.summary.install_policy_source,
         Some(PluginInstallPolicySource::ImplicitCanonicalApp)
+    );
+    assert_eq!(
+        response.plugin.summary.must_show_installation_interstitial,
+        Some(true)
     );
     assert_eq!(
         response

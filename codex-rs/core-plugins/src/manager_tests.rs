@@ -782,6 +782,7 @@ fn remote_installed_plugin_in_marketplace(
         enabled: true,
         install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
         install_policy_source: None,
+        must_show_installation_interstitial: None,
         auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         interface: None,
