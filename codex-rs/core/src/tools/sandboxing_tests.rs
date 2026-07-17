@@ -246,7 +246,7 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
     };
     let request = attempt
-        .env_for_exec_server(command(), options(), /*network*/ None, Some("remote"))
+        .env_for_exec_server(command(), options())
         .expect("prepare remote exec request");
 
     assert_eq!(
@@ -278,7 +278,7 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
 
     attempt.sandbox_requested = false;
     let request = attempt
-        .env_for_exec_server(command(), options(), /*network*/ None, Some("remote"))
+        .env_for_exec_server(command(), options())
         .expect("prepare unsandboxed remote exec request");
 
     assert_eq!(request.exec_server_sandbox, None);

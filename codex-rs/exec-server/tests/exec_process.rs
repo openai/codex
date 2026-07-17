@@ -102,6 +102,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -152,7 +153,7 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
             process_id: ProcessId::from("proc-restricted-helper"),
             argv: vec!["/bin/cat".to_string(), file.to_string_lossy().into_owned()],
             cwd,
-            env_policy: None,
+            env_policy: /*env_policy*/ None,
             env: HashMap::from([("PATH".to_string(), std::env::var("PATH")?)]),
             tty: false,
             pipe_stdin: false,
@@ -160,6 +161,7 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
             sandbox: Some(sandbox),
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     let output = collect_process_output_from_events(session.process).await?;
@@ -218,7 +220,7 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
             process_id: ProcessId::from("proc-hostile-helper-path"),
             argv: vec!["/bin/cat".to_string(), file.to_string_lossy().into_owned()],
             cwd,
-            env_policy: None,
+            env_policy: /*env_policy*/ None,
             env: HashMap::from([(
                 "PATH".to_string(),
                 hostile_path.to_string_lossy().into_owned(),
@@ -229,6 +231,7 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
             sandbox: Some(sandbox),
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     let output = collect_process_output_from_events(session.process).await?;
@@ -279,6 +282,7 @@ async fn remote_process_preserves_empty_workspace_roots() -> Result<()> {
             sandbox: Some(sandbox),
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     let (stdout, _stderr, exit_code, closed) =
@@ -423,6 +427,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -457,6 +462,7 @@ async fn assert_exec_process_pushes_events(use_remote: bool) -> Result<()> {
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -507,6 +513,7 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -558,6 +565,7 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -634,6 +642,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -674,6 +683,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -710,6 +720,7 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -747,6 +758,7 @@ async fn assert_exec_process_signal_interrupts_process(use_remote: bool) -> Resu
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -803,6 +815,7 @@ async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: b
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
 
@@ -846,6 +859,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
 
@@ -907,6 +921,7 @@ async fn remote_exec_process_recovers_after_transport_disconnect() -> Result<()>
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
 

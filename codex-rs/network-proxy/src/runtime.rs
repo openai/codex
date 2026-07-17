@@ -23,6 +23,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
+use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -47,7 +48,8 @@ const MAX_BLOCKED_EVENTS: usize = 200;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const NETWORK_POLICY_VIOLATION_PREFIX: &str = "CODEX_NETWORK_POLICY_VIOLATION";
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkProxyAuditMetadata {
     pub conversation_id: Option<String>,
     pub app_version: Option<String>,
@@ -187,6 +189,22 @@ pub trait ConfigReloader: Send + Sync {
 
 pub type ConfigReloaderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+struct StaticConfigReloader;
+
+impl ConfigReloader for StaticConfigReloader {
+    fn source_label(&self) -> String {
+        "static config state".to_string()
+    }
+
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { anyhow::bail!("static config state cannot be reloaded") })
+    }
+}
+
 pub trait BlockedRequestObserver: Send + Sync + 'static {
     fn on_blocked_request(&self, request: BlockedRequest) -> BlockedRequestObserverFuture<'_>;
 }
@@ -257,6 +275,33 @@ impl Clone for NetworkProxyState {
 }
 
 impl NetworkProxyState {
+    /// Builds runtime state for one executor-local proxy launch.
+    pub fn from_remote_launch_config(
+        launch: crate::RemoteNetworkProxyLaunchConfig,
+    ) -> Result<Self> {
+        let crate::RemoteNetworkProxyLaunchConfig {
+            proxy,
+            audit_metadata,
+            environment_id,
+            execution_id,
+        } = launch;
+        anyhow::ensure!(
+            proxy.enabled,
+            "executor-local network proxy launch requires an enabled proxy"
+        );
+        let config = proxy.into_network_proxy_config();
+        let state = build_config_state(config, NetworkProxyConstraints::default())?;
+        Ok(Self {
+            environment_id: environment_id.map(Into::into),
+            execution_id: execution_id.map(Into::into),
+            ..Self::with_reloader_and_audit_metadata(
+                state,
+                Arc::new(StaticConfigReloader),
+                audit_metadata,
+            )
+        })
+    }
+
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
         Self::with_reloader_and_audit_metadata(
             state,

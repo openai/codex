@@ -27,7 +27,6 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
-use codex_sandboxing::SandboxType;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -859,7 +858,6 @@ pub(crate) async fn begin_network_approval(
     session: &Session,
     turn_id: &str,
     managed_network_active: bool,
-    selected_sandbox: SandboxType,
     spec: Option<NetworkApprovalSpec>,
 ) -> Result<Option<ActiveNetworkApproval>, ToolError> {
     let NetworkApprovalSpec {
@@ -880,18 +878,14 @@ pub(crate) async fn begin_network_approval(
     }
 
     let registration_id = Uuid::new_v4().to_string();
-    let execution_proxy = if selected_sandbox == SandboxType::LinuxSeccomp {
-        let attribution_token = Uuid::new_v4().to_string();
-        network
-            .for_execution(&environment_id, &registration_id, attribution_token)
-            .map_err(|err| {
-                ToolError::Codex(codex_protocol::error::CodexErr::Io(io::Error::other(
-                    format!("failed to create execution-scoped network proxy: {err}"),
-                )))
-            })?
-    } else {
-        network.clone()
-    };
+    let attribution_token = Uuid::new_v4().to_string();
+    let execution_proxy = network
+        .for_execution(&environment_id, &registration_id, attribution_token)
+        .map_err(|err| {
+            ToolError::Codex(codex_protocol::error::CodexErr::Io(io::Error::other(
+                format!("failed to create execution-scoped network proxy: {err}"),
+            )))
+        })?;
     let cancellation_token = CancellationToken::new();
     session
         .services

@@ -6,6 +6,7 @@ use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_shell_command::shell_detect::DetectedShell;
@@ -92,6 +93,18 @@ pub struct EnvironmentInfo {
     /// Working directory inherited by the exec-server process.
     #[serde(default)]
     pub cwd: Option<PathUri>,
+    /// Optional executor features that clients must gate before sending newer request fields.
+    #[serde(default)]
+    pub capabilities: EnvironmentCapabilities,
+}
+
+/// Features supported by the selected exec-server environment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentCapabilities {
+    /// Whether `exec` accepts instructions for launching an executor-local network proxy.
+    #[serde(default)]
+    pub network_proxy_launch: bool,
 }
 
 /// Status returned by an initialized exec-server connection.
@@ -121,6 +134,9 @@ impl EnvironmentInfo {
             cwd: std::env::current_dir()
                 .ok()
                 .and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
+            capabilities: EnvironmentCapabilities {
+                network_proxy_launch: true,
+            },
         }
     }
 }
@@ -176,6 +192,9 @@ pub struct ExecParams {
     /// continue to fail closed. This preserves compatibility with older clients.
     #[serde(default)]
     pub managed_network: Option<ManagedNetworkSandboxContext>,
+    /// Optional instructions for starting an executor-local managed-network proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -710,6 +729,7 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::EnvironmentCapabilities;
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
     use super::ExecParams;
@@ -719,6 +739,10 @@ mod tests {
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
     use codex_network_proxy::ManagedNetworkSandboxContext;
+    use codex_network_proxy::NetworkProxyAuditMetadata;
+    use codex_network_proxy::NetworkProxyConfig;
+    use codex_network_proxy::RemoteNetworkProxyConfig;
+    use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -730,7 +754,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {
+    fn exec_params_keeps_proxy_launch_separate_from_sandbox_facts() {
         let cwd =
             PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
                 .expect("cwd URI");
@@ -749,6 +773,17 @@ mod tests {
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
             }),
+            network_proxy: Some(
+                RemoteNetworkProxyLaunchConfig::new(
+                    RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
+                        .expect("supported remote config"),
+                )
+                .with_audit_metadata(NetworkProxyAuditMetadata {
+                    conversation_id: Some("conversation-1".to_string()),
+                    ..NetworkProxyAuditMetadata::default()
+                })
+                .for_execution("remote".to_string(), "execution-1".to_string()),
+            ),
         };
 
         let mut serialized = serde_json::to_value(&params).expect("serialize exec params");
@@ -759,6 +794,10 @@ mod tests {
                 "allowLocalBinding": false,
             })
         );
+        assert_eq!(
+            serialized["networkProxy"]["auditMetadata"]["conversationId"],
+            "conversation-1"
+        );
         let round_trip: ExecParams =
             serde_json::from_value(serialized.clone()).expect("deserialize exec params");
         assert_eq!(round_trip, params);
@@ -767,10 +806,18 @@ mod tests {
             .as_object_mut()
             .expect("exec params object")
             .remove("managedNetwork");
+        serialized
+            .as_object_mut()
+            .expect("exec params object")
+            .remove("networkProxy");
         let legacy: ExecParams =
             serde_json::from_value(serialized).expect("deserialize legacy exec params");
         assert!(legacy.enforce_managed_network);
         assert_eq!(legacy.managed_network, None);
+        assert_eq!(legacy.network_proxy, None);
+        let legacy_serialized =
+            serde_json::to_value(&legacy).expect("serialize exec params without proxy launch");
+        assert!(legacy_serialized.get("networkProxy").is_none());
     }
 
     #[test]
@@ -788,6 +835,7 @@ mod tests {
                     path: "/bin/zsh".to_string(),
                 },
                 cwd: None,
+                capabilities: EnvironmentCapabilities::default(),
             }
         );
     }
