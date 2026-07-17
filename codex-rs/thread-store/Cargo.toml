@@ -22,6 +22,8 @@ codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-path = { workspace = true }
+futures = { workspace = true }
+pulldown-cmark = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }

@@ -1249,6 +1249,58 @@ pub struct ThreadSearchResponse {
     pub backwards_cursor: Option<String>,
 }
 
+/// Parameters for searching visible message occurrences within one paginated thread.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchOccurrencesParams {
+    pub thread_id: String,
+    /// Case-insensitive literal substring to find in visible user messages and final assistant
+    /// messages.
+    pub search_term: String,
+    /// Opaque cursor returned by a previous call for the same thread and search term.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional occurrence page size.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+/// UTF-16 code-unit range within `snippet`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchTextRange {
+    /// Inclusive UTF-16 code-unit offset.
+    pub start: u32,
+    /// Exclusive UTF-16 code-unit offset.
+    pub end: u32,
+}
+
+/// One visible message occurrence returned by [`ThreadSearchOccurrencesResponse`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchOccurrence {
+    pub turn_id: String,
+    pub item_id: String,
+    pub snippet: String,
+    /// Match range within `snippet`, in UTF-16 code units.
+    pub snippet_match_range: ThreadSearchTextRange,
+    /// Opaque inclusive cursor accepted by `thread/turns/list` for this turn.
+    pub turn_cursor: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchOccurrencesResponse {
+    /// Occurrences in chronological message order.
+    pub data: Vec<ThreadSearchOccurrence>,
+    /// Opaque cursor to continue after the last returned occurrence.
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

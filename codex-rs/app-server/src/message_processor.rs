@@ -1147,6 +1147,11 @@ impl MessageProcessor {
             ClientRequest::ThreadSearch { params, .. } => {
                 self.thread_processor.thread_search(params).await
             }
+            ClientRequest::ThreadSearchOccurrences { params, .. } => {
+                self.thread_processor
+                    .thread_search_occurrences(params)
+                    .await
+            }
             ClientRequest::ThreadLoadedList { params, .. } => {
                 self.thread_processor.thread_loaded_list(params).await
             }

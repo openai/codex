@@ -31,6 +31,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSearchOccurrencesParams;
+use codex_app_server_protocol::ThreadSearchOccurrencesResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -56,6 +58,7 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -487,6 +490,191 @@ async fn thread_turns_list_supports_requested_items_view() -> Result<()> {
     assert_eq!(not_loaded.started_at, full.started_at);
     assert_eq!(not_loaded.completed_at, full.completed_at);
     assert_eq!(not_loaded.duration_ms, full.duration_ms);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let thread_id = codex_protocol::ThreadId::default();
+    let state_db = codex_state::StateRuntime::init(
+        codex_home.path().to_path_buf(),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    let store = LocalThreadStore::new(
+        LocalThreadStoreConfig {
+            codex_home: codex_home.path().to_path_buf(),
+            sqlite_home: codex_home.path().to_path_buf(),
+            default_model_provider_id: "mock_provider".to_string(),
+        },
+        Some(state_db),
+    );
+    store
+        .create_thread(CreateThreadParams {
+            session_id: thread_id.into(),
+            thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: ProtocolSessionSource::Cli,
+            thread_source: None,
+            originator: "test_originator".to_string(),
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
+            multi_agent_version: None,
+            history_mode: codex_protocol::protocol::ThreadHistoryMode::Paginated,
+            subagent_history_start_ordinal: None,
+            initial_window_id: Uuid::now_v7().to_string(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(codex_home.path().to_path_buf()),
+                model_provider: "mock_provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await?;
+    store.persist_thread(thread_id).await?;
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                paginated_turn_started("turn-1"),
+                paginated_completed_item(
+                    thread_id,
+                    "turn-1",
+                    CoreTurnItem::UserMessage(UserMessageItem {
+                        id: "user-1".to_string(),
+                        client_id: None,
+                        content: vec![
+                            codex_protocol::user_input::UserInput::Text {
+                                text: "Nee".to_string(),
+                                text_elements: Vec::new(),
+                            },
+                            codex_protocol::user_input::UserInput::Text {
+                                text: "dle needle needle needle".to_string(),
+                                text_elements: Vec::new(),
+                            },
+                        ],
+                    }),
+                ),
+                paginated_completed_item(
+                    thread_id,
+                    "turn-1",
+                    CoreTurnItem::UserMessage(UserMessageItem {
+                        id: "steer-1".to_string(),
+                        client_id: None,
+                        content: vec![codex_protocol::user_input::UserInput::Text {
+                            text: "steer toward needle".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                    }),
+                ),
+                paginated_completed_item(
+                    thread_id,
+                    "turn-1",
+                    CoreTurnItem::AgentMessage(AgentMessageItem {
+                        id: "commentary-1".to_string(),
+                        content: vec![AgentMessageContent::Text {
+                            text: "commentary needle".to_string(),
+                        }],
+                        phase: Some(MessagePhase::Commentary),
+                        memory_citation: None,
+                    }),
+                ),
+                paginated_completed_item(
+                    thread_id,
+                    "turn-1",
+                    CoreTurnItem::AgentMessage(AgentMessageItem {
+                        id: "final-1".to_string(),
+                        content: vec![AgentMessageContent::Text {
+                            text: "😀 **Final**  \nneedle".to_string(),
+                        }],
+                        phase: Some(MessagePhase::FinalAnswer),
+                        memory_citation: None,
+                    }),
+                ),
+                paginated_turn_completed("turn-1"),
+            ],
+        })
+        .await?;
+    store.shutdown_thread(thread_id).await?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: thread_id.to_string(),
+            search_term: "needle".to_string(),
+            cursor: None,
+            limit: Some(3),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchOccurrencesResponse { data, next_cursor } = to_response(response)?;
+
+    assert_eq!(
+        data.iter()
+            .map(|occurrence| occurrence.item_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["user-1", "user-1", "user-1"]
+    );
+    assert_eq!(
+        data.iter()
+            .map(|occurrence| occurrence.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["turn-1", "turn-1", "turn-1"]
+    );
+    assert_eq!(
+        data.iter()
+            .map(|occurrence| occurrence.snippet_match_range.start)
+            .collect::<Vec<_>>(),
+        vec![0, 7, 14]
+    );
+    let next_cursor = next_cursor.expect("first page should have another occurrence");
+
+    let request_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: thread_id.to_string(),
+            search_term: "needle".to_string(),
+            cursor: Some(next_cursor),
+            limit: Some(3),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchOccurrencesResponse { data, next_cursor } = to_response(response)?;
+
+    assert_eq!(
+        data.iter()
+            .map(|occurrence| occurrence.item_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["user-1", "steer-1", "final-1"]
+    );
+    assert_eq!(
+        data.iter()
+            .map(|occurrence| occurrence.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["turn-1", "turn-1", "turn-1"]
+    );
+    assert_eq!(data[2].snippet, "😀 Final needle");
+    assert_eq!(data[2].snippet_match_range.start, 9);
+    assert_eq!(data[2].snippet_match_range.end, 15);
+    assert_eq!(next_cursor, None);
 
     Ok(())
 }

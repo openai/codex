@@ -425,6 +425,44 @@ pub struct ItemPage {
     pub backwards_cursor: Option<String>,
 }
 
+/// Parameters for searching visible message occurrences within one paginated thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchThreadOccurrencesParams {
+    /// Thread id to search.
+    pub thread_id: ThreadId,
+    /// Case-insensitive literal substring to find.
+    pub search_term: String,
+    /// Opaque cursor returned by a previous search call.
+    pub cursor: Option<String>,
+    /// Maximum number of occurrences to return.
+    pub page_size: usize,
+}
+
+/// UTF-16 code-unit range within `snippet`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchTextRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// One visible message occurrence within a stored thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredThreadOccurrence {
+    pub turn_id: String,
+    pub item_id: String,
+    pub snippet: String,
+    pub snippet_match_range: SearchTextRange,
+    /// Inclusive cursor accepted by `thread/turns/list` for this turn.
+    pub turn_cursor: String,
+}
+
+/// A page of visible message occurrences within one stored thread.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThreadOccurrenceSearchPage {
+    pub items: Vec<StoredThreadOccurrence>,
+    pub next_cursor: Option<String>,
+}
+
 /// Store-owned thread metadata used by list/read/resume responses.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredThread {
