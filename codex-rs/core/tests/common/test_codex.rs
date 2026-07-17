@@ -1260,6 +1260,11 @@ pub fn test_codex() -> TestCodexBuilder {
                 .features
                 .disable(Feature::Apps)
                 .expect("test config should allow Apps override");
+            // Snapshot tests opt in explicitly; avoid spawning login shells for every test.
+            config
+                .features
+                .disable(Feature::ShellSnapshot)
+                .expect("test config should allow ShellSnapshot override");
         })],
         auth: CodexAuth::from_api_key("dummy"),
         pre_build_hooks: vec![],

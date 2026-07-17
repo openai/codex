@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
 use codex_core::config::Constrained;
+use codex_core::config::ThreadStoreConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -1846,8 +1847,13 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let model_override = scenario.model_override;
     let model = model_override.unwrap_or("gpt-5.4");
     let policy_src = scenario.action.policy_src();
+    let thread_store_id = format!("approval-scenario-{}", scenario.name);
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
+        // These scenarios assert tool behavior, not rollout persistence.
+        config.experimental_thread_store = ThreadStoreConfig::InMemory {
+            id: thread_store_id,
+        };
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config
             .set_legacy_sandbox_policy(sandbox_policy.clone())
