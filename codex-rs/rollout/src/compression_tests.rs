@@ -23,6 +23,7 @@ use crate::RolloutConfig;
 use crate::RolloutRecorder;
 use crate::RolloutRecorderParams;
 use crate::append_rollout_item_to_path;
+use crate::read_session_meta_line;
 use crate::search_rollout_matches;
 
 #[tokio::test]
@@ -42,6 +43,136 @@ async fn load_rollout_items_reads_compressed_rollout() -> anyhow::Result<()> {
     assert_eq!(items.len(), 2);
     assert!(!rollout_path.exists());
     assert!(compressed_rollout_path(&rollout_path).exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_session_meta_line_stops_before_invalid_utf8_tail() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(16);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "ignored tail")?;
+    let mut contents = fs::read(&rollout_path)?;
+    contents.resize(contents.len() + 64 * 1024, 0xff);
+    fs::write(&rollout_path, contents)?;
+
+    let session_meta = read_session_meta_line(&rollout_path).await?;
+
+    assert_eq!(session_meta.meta.id, thread_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_session_meta_line_stops_before_invalid_utf8_compressed_tail() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(17);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "ignored compressed tail")?;
+    let mut contents = fs::read(&rollout_path)?;
+    contents.resize(contents.len() + 64 * 1024, 0xff);
+    fs::write(&rollout_path, contents)?;
+    compress_now(&rollout_path)?;
+
+    let session_meta = read_session_meta_line(&rollout_path).await?;
+
+    assert_eq!(session_meta.meta.id, thread_id);
+    assert!(!rollout_path.exists());
+    assert!(compressed_rollout_path(&rollout_path).exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_session_meta_line_preserves_pre_header_and_error_semantics() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(18);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "after metadata")?;
+    let contents = fs::read_to_string(&rollout_path)?;
+    let (session_meta, tail) = contents.split_once('\n').expect("session metadata line");
+    let mut session_meta = serde_json::from_str::<serde_json::Value>(session_meta)?;
+    session_meta["payload"]
+        .as_object_mut()
+        .expect("session metadata payload")
+        .remove("session_id");
+    let contents = format!("{session_meta}\n{tail}");
+    let ignored_event = serde_json::json!({
+        "timestamp": "2025-01-03T12:00:00Z",
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "before metadata", "kind": "plain"}
+    });
+    fs::write(
+        &rollout_path,
+        format!("\nnot json\n{ignored_event}\n{contents}"),
+    )?;
+
+    let session_meta = read_session_meta_line(&rollout_path).await?;
+
+    assert_eq!(session_meta.meta.id, thread_id);
+
+    let response_item = serde_json::json!({
+        "timestamp": "2025-01-03T12:00:00Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "before metadata"}]
+        }
+    });
+    fs::write(&rollout_path, format!("{response_item}\n{contents}"))?;
+
+    let error = read_session_meta_line(&rollout_path)
+        .await
+        .expect_err("response item before metadata should fail");
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "rollout at {} does not start with session metadata",
+            rollout_path.display()
+        )
+    );
+
+    let unknown_history_mode = serde_json::json!({
+        "timestamp": "2025-01-03T12:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "session_id": uuid.to_string(),
+            "id": uuid.to_string(),
+            "timestamp": "2025-01-03T12:00:00Z",
+            "cwd": ".",
+            "originator": "test",
+            "cli_version": "test",
+            "source": "cli",
+            "model_provider": "test-provider",
+            "history_mode": "future",
+        },
+    });
+    fs::write(&rollout_path, format!("{unknown_history_mode}\n{contents}"))?;
+
+    let error = read_session_meta_line(&rollout_path)
+        .await
+        .expect_err("unknown history mode before valid metadata should fail");
+
+    assert!(
+        error
+            .to_string()
+            .starts_with("invalid session metadata history_mode:"),
+        "{error}"
+    );
+
+    fs::write(&rollout_path, "\nnot json\n")?;
+
+    let error = read_session_meta_line(&rollout_path)
+        .await
+        .expect_err("rollout without selected records should fail");
+
+    assert_eq!(
+        error.to_string(),
+        format!("rollout at {} is empty", rollout_path.display())
+    );
     Ok(())
 }
 
