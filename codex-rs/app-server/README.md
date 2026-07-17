@@ -757,13 +757,16 @@ If the thread does not already have an active turn, the server starts a standalo
 
 ### Example: Start a turn (send user input)
 
-Turns attach user input (text or images) to a thread and trigger Codex generation. The `input` field is a list of discriminated unions:
+Turns attach user input (text, images, or audio) to a thread and trigger Codex generation. The `input` field is a list of discriminated unions:
 
 - `{"type":"text","text":"Explain this diff"}`
 - `{"type":"image","url":"data:image/png;base64,…"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
+- `{"type":"audio","url":"data:audio/wav;base64,…"}`
+- `{"type":"localAudio","path":"/tmp/recording.mp3"}`
 
 The `image` variant accepts inline data URLs. Remote HTTP(S) image URLs are rejected; use a data URL or `localImage` instead.
+The `audio` variant accepts data URLs. Other URL schemes are rejected. `localAudio` reads local wav, mp3, m4a, webm, and ogg files and converts them to data URLs before the Responses API request.
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only.
 
@@ -1420,7 +1423,7 @@ Today both notifications carry an empty `items` array even when item events were
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
 
-- `userMessage` — `{id, clientId, content}` where `clientId` is the optional `clientUserMessageId` supplied to `turn/start` or `turn/steer`, and `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `userMessage` — `{id, clientId, content}` where `clientId` is the optional `clientUserMessageId` supplied to `turn/start` or `turn/steer`, and `content` is a list of user inputs (`text`, `image`, `localImage`, `audio`, or `localAudio`).
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).

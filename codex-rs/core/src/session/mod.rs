@@ -17,6 +17,7 @@ use crate::agent::status::is_final;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
+use crate::audio_preparation::prepare_response_items as prepare_audio_response_items;
 use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
@@ -35,7 +36,7 @@ use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
-use crate::image_preparation::prepare_response_items;
+use crate::image_preparation::prepare_response_items as prepare_image_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::step_context::StepContext;
@@ -1361,10 +1362,11 @@ impl Session {
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
-        // installing it, so legacy images are processed once for this resume or fork and
+        // installing it, so legacy media is processed once for this resume or fork and
         // will be processed again if the rollout is reconstructed in a future session.
-        // This meets image resizing requirements without modifying persisted rollouts.
-        prepare_response_items(&mut history);
+        // This meets media preparation requirements without modifying persisted rollouts.
+        prepare_image_response_items(&mut history);
+        prepare_audio_response_items(&mut history);
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
@@ -2766,7 +2768,8 @@ impl Session {
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
         let mut items = Cow::Borrowed(items);
-        prepare_response_items(items.to_mut());
+        prepare_image_response_items(items.to_mut());
+        prepare_audio_response_items(items.to_mut());
         // Most response items get their passthrough turn ID at the durable history boundary.
         for item in items.to_mut() {
             item.set_turn_id_if_missing(&turn_context.sub_id);

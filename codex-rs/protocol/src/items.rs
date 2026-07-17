@@ -516,6 +516,26 @@ impl UserMessageItem {
                 .collect(),
         )
     }
+
+    pub fn audio_urls(&self) -> Vec<String> {
+        self.content
+            .iter()
+            .filter_map(|c| match c {
+                UserInput::Audio { audio_url } => Some(audio_url.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn local_audio_paths(&self) -> Vec<std::path::PathBuf> {
+        self.content
+            .iter()
+            .filter_map(|c| match c {
+                UserInput::LocalAudio { path } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 fn trim_trailing_default_image_details(
@@ -668,6 +688,30 @@ mod tests {
                 "id": "sleep-1",
                 "durationMs": 1_000,
             })
+        );
+    }
+
+    #[test]
+    fn user_message_item_extracts_audio_attachments() {
+        let item = UserMessageItem::new(&[
+            UserInput::Text {
+                text: "transcribe these".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Audio {
+                audio_url: "https://example.com/remote.mp3".to_string(),
+            },
+            UserInput::LocalAudio {
+                path: std::path::PathBuf::from("local.wav"),
+            },
+        ]);
+
+        assert_eq!(
+            (item.audio_urls(), item.local_audio_paths()),
+            (
+                vec!["https://example.com/remote.mp3".to_string()],
+                vec![std::path::PathBuf::from("local.wav")],
+            )
         );
     }
 
