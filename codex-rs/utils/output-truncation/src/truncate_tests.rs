@@ -208,7 +208,7 @@ fn formatted_truncate_text_content_items_with_policy_preserves_empty_leading_tex
 }
 
 #[test]
-fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_images() {
+fn formatted_truncate_text_content_items_with_policy_merges_text_and_drops_audio() {
     let items = vec![
         FunctionCallOutputContentItem::InputText {
             text: "abcd".to_string(),
@@ -219,6 +219,9 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
         },
         FunctionCallOutputContentItem::InputText {
             text: "efgh".to_string(),
+        },
+        FunctionCallOutputContentItem::InputAudio {
+            audio_url: "audio:one".to_string(),
         },
         FunctionCallOutputContentItem::InputText {
             text: "ijkl".to_string(),
@@ -280,13 +283,16 @@ fn formatted_truncate_text_content_items_with_policy_preserves_encrypted_content
 }
 
 #[test]
-fn truncate_function_output_items_with_policy_preserves_encrypted_content() {
+fn truncate_function_output_items_with_policy_preserves_encrypted_content_and_drops_audio() {
     let items = vec![
         FunctionCallOutputContentItem::InputText {
             text: "abcdefgh".to_string(),
         },
         FunctionCallOutputContentItem::EncryptedContent {
             encrypted_content: "enc_opaque".to_string(),
+        },
+        FunctionCallOutputContentItem::InputAudio {
+            audio_url: "audio:one".to_string(),
         },
     ];
 

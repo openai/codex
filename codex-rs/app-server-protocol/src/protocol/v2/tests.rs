@@ -2545,6 +2545,12 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 path: PathBuf::from("local/image.png"),
                 detail: Some(ImageDetail::Original),
             },
+            CoreUserInput::Audio {
+                audio_url: "data:audio/wav;base64,AAA".to_string(),
+            },
+            CoreUserInput::LocalAudio {
+                path: PathBuf::from("local/audio.mp3"),
+            },
             CoreUserInput::Skill {
                 name: "skill-creator".to_string(),
                 path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
@@ -2573,6 +2579,12 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 UserInput::LocalImage {
                     path: PathBuf::from("local/image.png"),
                     detail: Some(ImageDetail::Original),
+                },
+                UserInput::Audio {
+                    url: "data:audio/wav;base64,AAA".to_string(),
+                },
+                UserInput::LocalAudio {
+                    path: PathBuf::from("local/audio.mp3"),
                 },
                 UserInput::Skill {
                     name: "skill-creator".to_string(),
@@ -3022,7 +3034,7 @@ fn mcp_tool_call_app_context_serializes_missing_mixed_version_fields_as_null() {
 }
 
 #[test]
-fn user_input_into_core_preserves_image_detail() {
+fn user_input_into_core_preserves_media_fields() {
     assert_eq!(
         UserInput::Image {
             url: "https://example.com/image.png".to_string(),
@@ -3044,6 +3056,26 @@ fn user_input_into_core_preserves_image_detail() {
         CoreUserInput::LocalImage {
             path: PathBuf::from("local/image.png"),
             detail: Some(ImageDetail::Original),
+        }
+    );
+
+    assert_eq!(
+        UserInput::Audio {
+            url: "data:audio/wav;base64,AAA".to_string(),
+        }
+        .into_core(),
+        CoreUserInput::Audio {
+            audio_url: "data:audio/wav;base64,AAA".to_string(),
+        }
+    );
+
+    assert_eq!(
+        UserInput::LocalAudio {
+            path: PathBuf::from("local/audio.mp3"),
+        }
+        .into_core(),
+        CoreUserInput::LocalAudio {
+            path: PathBuf::from("local/audio.mp3"),
         }
     );
 }

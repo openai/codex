@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: "lines_to_single_string(&inserted[0])"
+---
+
+› Please inspect the attachments.

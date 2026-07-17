@@ -13,6 +13,7 @@ use crate::history_cell::split_reasoning_summary_parts;
 use crate::multi_agents::sub_agent_activity_summary;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
 use codex_protocol::items::UserMessageItem;
 use ratatui::style::Stylize as _;
@@ -54,6 +55,17 @@ pub(crate) fn thread_to_transcript_cells(
                 client_id,
                 content,
             } => {
+                if content.iter().any(|input| {
+                    matches!(
+                        input,
+                        UserInput::Audio { .. } | UserInput::LocalAudio { .. }
+                    )
+                }) {
+                    tracing::warn!(
+                        user_message_id = id,
+                        "audio user inputs are not supported by the TUI and will be omitted"
+                    );
+                }
                 let item = UserMessageItem {
                     id: id.clone(),
                     client_id: client_id.clone(),

@@ -589,7 +589,11 @@ pub(crate) fn mention_bindings_from_user_inputs(
                     path: path.clone(),
                 })
             }
-            UserInput::Text { .. } | UserInput::Image { .. } | UserInput::LocalImage { .. } => None,
+            UserInput::Text { .. }
+            | UserInput::Image { .. }
+            | UserInput::LocalImage { .. }
+            | UserInput::Audio { .. }
+            | UserInput::LocalAudio { .. } => None,
         })
         .collect();
     mention_bindings.sort_by_key(|binding| {
@@ -655,7 +659,10 @@ impl ChatWidget {
             match item {
                 UserInput::Text { text, .. } => message.push_str(text),
                 UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Audio { .. }
+                | UserInput::LocalAudio { .. }
+                | UserInput::Skill { .. }
+                | UserInput::Mention { .. } => {}
             }
         }
 
@@ -666,6 +673,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn user_message_display_from_inputs(items: &[UserInput]) -> UserMessageDisplay {
+        if items
+            .iter()
+            .any(|item| matches!(item, UserInput::Audio { .. } | UserInput::LocalAudio { .. }))
+        {
+            tracing::warn!("audio user inputs are not supported by the TUI and will be omitted");
+        }
         let mut message = String::new();
         let mut remote_image_urls = Vec::new();
         let mut local_images = Vec::new();
@@ -694,7 +707,10 @@ impl ChatWidget {
                 ),
                 UserInput::Image { url, .. } => remote_image_urls.push(url.clone()),
                 UserInput::LocalImage { path, .. } => local_images.push(path.clone()),
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Audio { .. }
+                | UserInput::LocalAudio { .. }
+                | UserInput::Skill { .. }
+                | UserInput::Mention { .. } => {}
             }
         }
 

@@ -718,6 +718,9 @@ pub enum ContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    InputAudio {
+        audio_url: String,
+    },
     OutputText {
         text: String,
     },
@@ -1334,16 +1337,37 @@ fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>
     }
 }
 
-fn local_image_error_placeholder(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalMediaKind {
+    Audio,
+    Image,
+}
+
+impl LocalMediaKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::Image => "image",
+        }
+    }
+}
+
+fn local_media_error_placeholder(
     path: &std::path::Path,
     error: impl std::fmt::Display,
+    media_kind: LocalMediaKind,
 ) -> ContentItem {
+    let media_name = media_kind.name();
+    let path = path.display();
     ContentItem::InputText {
-        text: format!(
-            "Codex could not read the local image at `{}`: {}",
-            path.display(),
-            error
-        ),
+        text: format!("Codex could not read the local {media_name} at `{path}`: {error}"),
+    }
+}
+
+fn local_media_kind_unsupported(media_kind: LocalMediaKind) -> ContentItem {
+    let media_name = media_kind.name();
+    ContentItem::InputText {
+        text: format!("Codex does not support local {media_name} input yet."),
     }
 }
 
@@ -1431,13 +1455,21 @@ pub fn local_image_content_items_with_label_number(
             | ImageProcessingError::Encode { .. }
             | ImageProcessingError::InvalidDataUrl { .. }
             | ImageProcessingError::ImageTooLarge { .. } => {
-                vec![local_image_error_placeholder(path, &err)]
+                vec![local_media_error_placeholder(
+                    path,
+                    &err,
+                    LocalMediaKind::Image,
+                )]
             }
             ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
                 vec![invalid_image_error_placeholder(path, &err)]
             }
             ImageProcessingError::Decode { .. } => {
-                vec![local_image_error_placeholder(path, &err)]
+                vec![local_media_error_placeholder(
+                    path,
+                    &err,
+                    LocalMediaKind::Image,
+                )]
             }
             ImageProcessingError::UnsupportedImageFormat { mime } => {
                 vec![unsupported_image_error_placeholder(path, mime)]
@@ -1647,8 +1679,19 @@ impl ResponseInputItem {
                                     detail,
                                 ),
                             },
-                            Err(err) => vec![local_image_error_placeholder(&path, err)],
+                            Err(err) => vec![local_media_error_placeholder(
+                                &path,
+                                err,
+                                LocalMediaKind::Image,
+                            )],
                         }
+                    }
+                    UserInput::Audio { .. } => vec![ContentItem::InputText {
+                        text: "Codex does not support audio input yet.".to_string(),
+                    }],
+                    // TODO: Load local audio inputs once they are supported.
+                    UserInput::LocalAudio { .. } => {
+                        vec![local_media_kind_unsupported(LocalMediaKind::Audio)]
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
@@ -1707,6 +1750,10 @@ pub enum FunctionCallOutputContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    // Do not rename, these are serialized and used directly in the responses API.
+    InputAudio {
+        audio_url: String,
+    },
     EncryptedContent {
         encrypted_content: String,
     },
@@ -1734,6 +1781,7 @@ pub fn function_call_output_content_items_to_text(
             }
             FunctionCallOutputContentItem::InputText { .. }
             | FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::InputAudio { .. }
             | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
         .collect::<Vec<_>>();
@@ -3188,6 +3236,44 @@ mod tests {
             }
             other => panic!("expected message response but got {other:?}"),
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn replaces_unsupported_audio_user_input_with_placeholder() {
+        let item = ResponseInputItem::from(vec![UserInput::Audio {
+            audio_url: "data:audio/wav;base64,abc".to_string(),
+        }]);
+
+        assert_eq!(
+            item,
+            ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Codex does not support audio input yet.".to_string(),
+                }],
+                phase: None,
+            }
+        );
+    }
+
+    #[test]
+    fn replaces_unsupported_local_audio_user_input_with_placeholder() -> Result<()> {
+        let item = ResponseInputItem::from(vec![UserInput::LocalAudio {
+            path: "sample.mp3".into(),
+        }]);
+
+        assert_eq!(
+            item,
+            ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Codex does not support local audio input yet.".to_string(),
+                }],
+                phase: None,
+            }
+        );
 
         Ok(())
     }
