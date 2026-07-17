@@ -1370,7 +1370,7 @@ async fn assert_transport_close_tail_flush(
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(response_mock.single_request().message_input_texts("user").iter().any(|text| text
-            == "<realtime_delegation>\n  <input>The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.</input>\n  <transcript_delta>user: transport tail</transcript_delta>\n</realtime_delegation>"));
+            == "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.</input>\n  <transcript_delta>user: transport tail</transcript_delta>\n</realtime_delegation>"));
     } else {
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(response_mock.requests().is_empty());
@@ -3601,7 +3601,7 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
     assert!(requests[0].message_input_texts("user").iter().any(|text| text
         == "<realtime_delegation>\n  <input>already handed off</input>\n  <transcript_delta>user: already handed off</transcript_delta>\n</realtime_delegation>"));
     assert!(requests[1].message_input_texts("user").iter().any(|text| text
-        == "<realtime_delegation>\n  <input>The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.</input>\n  <transcript_delta>assistant: remaining answer\nuser: remaining question</transcript_delta>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.</input>\n  <transcript_delta>assistant: remaining answer\nuser: remaining question</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())

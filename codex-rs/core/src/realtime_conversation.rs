@@ -1,4 +1,7 @@
 use crate::client::ModelClient;
+use crate::context::ContextualUserFragment;
+use crate::context::RealtimeDelegation;
+use crate::context::RealtimeDelegationSource;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
@@ -1155,26 +1158,16 @@ fn realtime_delegation_from_handoff(handoff: &RealtimeHandoffRequested) -> Optio
     Some(wrap_realtime_delegation_input(
         &input,
         realtime_transcript_delta_from_handoff(handoff).as_deref(),
+        RealtimeDelegationSource::Handoff,
     ))
 }
 
-fn wrap_realtime_delegation_input(input: &str, transcript_delta: Option<&str>) -> String {
-    let input = escape_xml_text(input);
-    if let Some(transcript_delta) = transcript_delta.filter(|text| !text.is_empty()) {
-        let transcript_delta = escape_xml_text(transcript_delta);
-        return format!(
-            "<realtime_delegation>\n  <input>{input}</input>\n  <transcript_delta>{transcript_delta}</transcript_delta>\n</realtime_delegation>"
-        );
-    }
-
-    format!("<realtime_delegation>\n  <input>{input}</input>\n</realtime_delegation>")
-}
-
-fn escape_xml_text(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+fn wrap_realtime_delegation_input(
+    input: &str,
+    transcript_delta: Option<&str>,
+    source: RealtimeDelegationSource,
+) -> String {
+    RealtimeDelegation::new(input, transcript_delta, source).render()
 }
 
 fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
@@ -1438,6 +1431,7 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
             .send(wrap_realtime_delegation_input(
                 REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION,
                 Some(&transcript_delta),
+                RealtimeDelegationSource::TranscriptTailFlush,
             ))
             .await;
     }
