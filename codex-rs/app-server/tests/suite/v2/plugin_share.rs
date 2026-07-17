@@ -1079,6 +1079,82 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_share_update_targets_publishes_workspace_plugin() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    Mock::given(method("PUT"))
+        .and(path("/backend-api/ps/plugins/plugins_123/shares"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .and(body_json(json!({
+            "discoverability": "LISTED",
+            "targets": [],
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "principals": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "owner-1",
+                    "role": "owner",
+                    "name": "Owner",
+                },
+            ],
+            "discoverability": "LISTED",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/updateTargets",
+            Some(json!({
+                "remotePluginId": "plugins_123",
+                "discoverability": "LISTED",
+                "shareTargets": [],
+            })),
+        )
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginShareUpdateTargetsResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginShareUpdateTargetsResponse {
+            principals: vec![PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "owner-1".to_string(),
+                role: PluginSharePrincipalRole::Owner,
+                name: "Owner".to_string(),
+            }],
+            discoverability: codex_app_server_protocol::PluginShareDiscoverability::Listed,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_share_update_targets_rejects_when_plugin_sharing_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;

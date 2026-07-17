@@ -43,6 +43,7 @@ pub enum RemotePluginShareDiscoverability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RemotePluginShareUpdateDiscoverability {
+    Listed,
     Unlisted,
     Private,
 }
@@ -300,6 +301,7 @@ pub async fn update_remote_plugin_share_targets(
 ) -> Result<RemotePluginShareUpdateTargetsResult, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let target_discoverability = match discoverability {
+        RemotePluginShareUpdateDiscoverability::Listed => RemotePluginShareDiscoverability::Listed,
         RemotePluginShareUpdateDiscoverability::Unlisted => {
             RemotePluginShareDiscoverability::Unlisted
         }

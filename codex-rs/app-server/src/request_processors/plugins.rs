@@ -255,6 +255,9 @@ fn remote_plugin_share_update_discoverability(
     discoverability: PluginShareUpdateDiscoverability,
 ) -> codex_core_plugins::remote::RemotePluginShareUpdateDiscoverability {
     match discoverability {
+        PluginShareUpdateDiscoverability::Listed => {
+            codex_core_plugins::remote::RemotePluginShareUpdateDiscoverability::Listed
+        }
         PluginShareUpdateDiscoverability::Unlisted => {
             codex_core_plugins::remote::RemotePluginShareUpdateDiscoverability::Unlisted
         }
