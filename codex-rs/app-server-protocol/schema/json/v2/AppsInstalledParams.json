@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Read the committed installed connector runtime snapshot.",
+  "properties": {
+    "forceRefresh": {
+      "description": "When true and Apps are permitted, refresh and publish the hosted connector runtime tool snapshot first.",
+      "type": "boolean"
+    },
+    "threadId": {
+      "description": "Optional loaded thread id used to evaluate effective app configuration.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "AppsInstalledParams",
+  "type": "object"
+}

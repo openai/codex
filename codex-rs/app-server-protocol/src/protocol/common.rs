@@ -745,6 +745,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::AppsListResponse,
     },
+    AppsInstalled => "app/installed" {
+        params: v2::AppsInstalledParams,
+        serialization: None,
+        response: v2::AppsInstalledResponse,
+    },
     // File system requests are intentionally concurrent. Desktop already treats local
     // file system operations as concurrent, and app-server remote fs mirrors that model.
     FsReadFile => "fs/readFile" {
@@ -3105,6 +3110,69 @@ mod tests {
                 }
             }),
             serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_installed_apps() -> Result<()> {
+        let request = ClientRequest::AppsInstalled {
+            request_id: RequestId::Integer(9),
+            params: v2::AppsInstalledParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "app/installed",
+                "id": 9,
+                "params": {
+                    "threadId": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+
+        let force_refresh_request = ClientRequest::AppsInstalled {
+            request_id: RequestId::Integer(10),
+            params: v2::AppsInstalledParams {
+                thread_id: Some("thread-1".to_string()),
+                force_refresh: true,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "app/installed",
+                "id": 10,
+                "params": {
+                    "threadId": "thread-1",
+                    "forceRefresh": true
+                }
+            }),
+            serde_json::to_value(&force_refresh_request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_installed_apps_response() -> Result<()> {
+        let response = v2::AppsInstalledResponse {
+            apps: vec![v2::InstalledApp {
+                id: "demo-app".to_string(),
+                runtime_name: Some("Demo App".to_string()),
+                enabled: false,
+                callable: false,
+            }],
+        };
+
+        assert_eq!(
+            json!({
+                "apps": [{
+                    "id": "demo-app",
+                    "runtimeName": "Demo App",
+                    "enabled": false,
+                    "callable": false
+                }]
+            }),
+            serde_json::to_value(response)?,
         );
         Ok(())
     }

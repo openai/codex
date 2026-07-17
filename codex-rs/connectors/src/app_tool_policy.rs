@@ -55,6 +55,14 @@ impl<'a> AppToolPolicyEvaluator<'a> {
         app_tool_policy_from_apps_config(self.apps_config.as_ref(), input, managed_approval)
     }
 
+    /// Returns the effective local and managed enablement for one connector.
+    pub fn app_enabled(&self, connector_id: &str) -> bool {
+        self.apps_config
+            .as_ref()
+            .map(|apps_config| app_is_enabled(apps_config, Some(connector_id)))
+            .unwrap_or(true)
+    }
+
     fn from_parts(
         apps_config: Option<AppsConfigToml>,
         requirements_apps_config: Option<&'a AppsRequirementsToml>,
