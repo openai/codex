@@ -1,0 +1,304 @@
+use crate::SandboxType;
+use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::NetworkMode;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use tracing::warn;
+
+#[cfg(unix)]
+const EXIT_CODE_SIGNAL_BASE: i32 = 128;
+const OUTPUT_SNIPPET_MAX_CHARS: usize = 512;
+
+const SANDBOX_DENIED_KEYWORDS: [(FileSystemSandboxViolationReason, &str); 7] = [
+    (
+        FileSystemSandboxViolationReason::OperationNotPermitted,
+        "operation not permitted",
+    ),
+    (
+        FileSystemSandboxViolationReason::PermissionDenied,
+        "permission denied",
+    ),
+    (
+        FileSystemSandboxViolationReason::ReadOnlyFileSystem,
+        "read-only file system",
+    ),
+    (FileSystemSandboxViolationReason::PolicyDenied, "seccomp"),
+    (FileSystemSandboxViolationReason::PolicyDenied, "sandbox"),
+    (FileSystemSandboxViolationReason::PolicyDenied, "landlock"),
+    (
+        FileSystemSandboxViolationReason::FailedToWriteFile,
+        "failed to write file",
+    ),
+];
+
+// Quick rejects: well-known non-sandbox shell exit codes.
+// 2: misuse of shell builtins
+// 126: permission denied
+// 127: command not found
+const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
+
+/// A normalized sandbox violation observed by Codex sandbox enforcement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SandboxViolationEvent {
+    FileSystem(FileSystemSandboxViolation),
+    Network(NetworkSandboxViolation),
+}
+
+/// Enforcement backend that observed a sandbox violation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SandboxViolationBackend {
+    Bubblewrap,
+    ManagedNetworkProxy,
+    Seatbelt,
+    WindowsSandbox,
+}
+
+impl SandboxViolationBackend {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+            Self::ManagedNetworkProxy => "managed_network_proxy",
+            Self::Seatbelt => "seatbelt",
+            Self::WindowsSandbox => "windows_sandbox",
+        }
+    }
+}
+
+/// A filesystem sandbox denial inferred from a sandboxed process result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileSystemSandboxViolation {
+    pub backend: SandboxViolationBackend,
+    pub reason: FileSystemSandboxViolationReason,
+    pub path: Option<String>,
+    pub output_snippet: String,
+}
+
+/// Normalized reasons used when classifying filesystem sandbox denials.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileSystemSandboxViolationReason {
+    OperationNotPermitted,
+    PermissionDenied,
+    ReadOnlyFileSystem,
+    PolicyDenied,
+    FailedToWriteFile,
+    SignalSyscall,
+}
+
+impl FileSystemSandboxViolationReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OperationNotPermitted => "operation_not_permitted",
+            Self::PermissionDenied => "permission_denied",
+            Self::ReadOnlyFileSystem => "read_only_file_system",
+            Self::PolicyDenied => "policy_denied",
+            Self::FailedToWriteFile => "failed_to_write_file",
+            Self::SignalSyscall => "sigsys",
+        }
+    }
+}
+
+/// A network sandbox denial reported by the managed network proxy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkSandboxViolation {
+    pub backend: SandboxViolationBackend,
+    pub host: String,
+    pub reason: String,
+    pub client: Option<String>,
+    pub method: Option<String>,
+    pub mode: Option<NetworkMode>,
+    pub protocol: String,
+    pub decision: Option<String>,
+    pub source: Option<String>,
+    pub port: Option<u16>,
+    pub timestamp: i64,
+}
+
+impl NetworkSandboxViolation {
+    pub fn from_blocked_request(blocked: &BlockedRequest) -> Self {
+        Self {
+            backend: SandboxViolationBackend::ManagedNetworkProxy,
+            host: blocked.host.clone(),
+            reason: blocked.reason.clone(),
+            client: blocked.client.clone(),
+            method: blocked.method.clone(),
+            mode: blocked.mode,
+            protocol: blocked.protocol.clone(),
+            decision: blocked.decision.clone(),
+            source: blocked.source.clone(),
+            port: blocked.port,
+            timestamp: blocked.timestamp,
+        }
+    }
+}
+
+/// Classify a sandboxed process result as a filesystem sandbox violation.
+fn classify_filesystem_sandbox_violation(
+    sandbox_type: SandboxType,
+    exec_output: &ExecToolCallOutput,
+) -> Option<FileSystemSandboxViolation> {
+    if exec_output.exit_code == 0 {
+        return None;
+    }
+    let backend = match sandbox_type {
+        SandboxType::None => return None,
+        SandboxType::MacosSeatbelt => SandboxViolationBackend::Seatbelt,
+        SandboxType::LinuxSeccomp => SandboxViolationBackend::Bubblewrap,
+        SandboxType::WindowsRestrictedToken => SandboxViolationBackend::WindowsSandbox,
+    };
+
+    if let Some(reason) = filesystem_reason_from_output(exec_output) {
+        return Some(FileSystemSandboxViolation {
+            backend,
+            reason,
+            path: extract_denied_path(exec_output),
+            output_snippet: output_snippet(exec_output),
+        });
+    }
+
+    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
+        return None;
+    }
+
+    #[cfg(unix)]
+    {
+        if sandbox_type == SandboxType::LinuxSeccomp
+            && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + libc::SIGSYS
+        {
+            return Some(FileSystemSandboxViolation {
+                backend,
+                reason: FileSystemSandboxViolationReason::SignalSyscall,
+                path: None,
+                output_snippet: output_snippet(exec_output),
+            });
+        }
+    }
+
+    None
+}
+
+/// Record a filesystem sandbox violation, returning the classified event when one was found.
+pub fn record_filesystem_sandbox_violation(
+    sandbox_type: SandboxType,
+    exec_output: &ExecToolCallOutput,
+) -> Option<FileSystemSandboxViolation> {
+    let violation = classify_filesystem_sandbox_violation(sandbox_type, exec_output)?;
+    record_sandbox_violation(&SandboxViolationEvent::FileSystem(violation.clone()));
+    Some(violation)
+}
+
+/// Record a network sandbox violation from a managed-proxy blocked request.
+pub fn record_network_sandbox_violation(blocked: &BlockedRequest) -> NetworkSandboxViolation {
+    let violation = NetworkSandboxViolation::from_blocked_request(blocked);
+    record_sandbox_violation(&SandboxViolationEvent::Network(violation.clone()));
+    violation
+}
+
+/// Emit a sandbox violation to the tracing stack.
+pub fn record_sandbox_violation(event: &SandboxViolationEvent) {
+    match event {
+        SandboxViolationEvent::FileSystem(violation) => {
+            let path = violation.path.as_deref().unwrap_or("unknown");
+            warn!(
+                "recorded sandbox violation: resource=filesystem backend={} reason={} path={}",
+                violation.backend.as_str(),
+                violation.reason.as_str(),
+                path
+            );
+        }
+        SandboxViolationEvent::Network(violation) => {
+            warn!(
+                "recorded sandbox violation: resource=network backend={} protocol={} host={} port={:?} reason={} method={:?} mode={:?} client={:?} decision={:?} source={:?}",
+                violation.backend.as_str(),
+                violation.protocol,
+                violation.host,
+                violation.port,
+                violation.reason,
+                violation.method,
+                violation.mode,
+                violation.client,
+                violation.decision,
+                violation.source
+            );
+        }
+    }
+}
+
+fn filesystem_reason_from_output(
+    exec_output: &ExecToolCallOutput,
+) -> Option<FileSystemSandboxViolationReason> {
+    [
+        &exec_output.stderr.text,
+        &exec_output.stdout.text,
+        &exec_output.aggregated_output.text,
+    ]
+    .into_iter()
+    .find_map(|section| {
+        let lower = section.to_lowercase();
+        SANDBOX_DENIED_KEYWORDS
+            .iter()
+            .find_map(|(reason, needle)| lower.contains(needle).then_some(*reason))
+    })
+}
+
+fn extract_denied_path(exec_output: &ExecToolCallOutput) -> Option<String> {
+    [
+        &exec_output.stderr.text,
+        &exec_output.stdout.text,
+        &exec_output.aggregated_output.text,
+    ]
+    .into_iter()
+    .find_map(|section| extract_denied_path_from_text(section))
+}
+
+fn extract_denied_path_from_text(text: &str) -> Option<String> {
+    const PATH_MARKERS: [&str; 3] = [
+        ": operation not permitted",
+        ": permission denied",
+        ": read-only file system",
+    ];
+
+    for line in text.lines() {
+        for marker in PATH_MARKERS {
+            let Some(marker_start) = line.match_indices(':').find_map(|(marker_start, _)| {
+                line.get(marker_start..)
+                    .and_then(|suffix| suffix.get(..marker.len()))
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(marker))
+                    .then_some(marker_start)
+            }) else {
+                continue;
+            };
+            let candidate_prefix = &line[..marker_start];
+            let candidate = candidate_prefix
+                .rsplit_once(": ")
+                .map_or(candidate_prefix, |(_, path)| path)
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            if candidate.starts_with('/')
+                || candidate.starts_with("./")
+                || candidate.starts_with("../")
+            {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn output_snippet(exec_output: &ExecToolCallOutput) -> String {
+    [
+        &exec_output.stderr.text,
+        &exec_output.stdout.text,
+        &exec_output.aggregated_output.text,
+    ]
+    .into_iter()
+    .find_map(|section| {
+        let trimmed = section.trim();
+        (!trimmed.is_empty()).then(|| trimmed.chars().take(OUTPUT_SNIPPET_MAX_CHARS).collect())
+    })
+    .unwrap_or_default()
+}
+
+#[cfg(test)]
+#[path = "violation_tests.rs"]
+mod tests;
