@@ -1,0 +1,18 @@
+---
+source: tui/src/streaming/render_tests.rs
+expression: render.lines
+---
+[
+    HyperlinkLine {
+        line: Line::from("Before."),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::default(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from(Span::from("Visualization unavailable on this device.").italic()),
+        hyperlinks: [],
+    },
+]

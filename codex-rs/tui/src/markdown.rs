@@ -106,6 +106,34 @@ pub(crate) fn render_markdown_agent_with_links_cwd_and_visualizations(
     lines
 }
 
+/// Render an agent message and collect the block metadata needed for incremental rendering.
+///
+/// Block offsets are mapped back to `markdown_source` after Markdown table fences are unwrapped.
+/// If a normalized boundary cannot be expressed as a raw-source suffix, it is discarded so the
+/// transformed block remains mutable.
+pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
+    markdown_source: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+) -> crate::markdown_render::StreamingMarkdownRender {
+    let normalized = unwrap_markdown_fences(markdown_source);
+    let mut rendered = crate::markdown_render::render_streaming_markdown_lines_with_width_and_cwd(
+        &normalized,
+        width,
+        cwd,
+    );
+    if normalized != markdown_source {
+        // Fence unwrapping removes opening/closing lines. A normalized tail that is still a raw
+        // suffix necessarily begins after those removed lines, so its boundary can safely be
+        // mapped back to the raw source; otherwise leave the transformed block mutable.
+        rendered.last_top_level_block_start = rendered
+            .last_top_level_block_start
+            .and_then(|boundary| markdown_source.strip_suffix(&normalized[boundary..]))
+            .map(str::len);
+    }
+    rendered
+}
+
 /// Strip `` ```md ``/`` ```markdown `` fences that contain tables, emitting their content as bare
 /// markdown so `pulldown-cmark` parses the tables natively.
 ///

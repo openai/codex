@@ -19,6 +19,7 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 pub(crate) mod chunking;
 pub(crate) mod commit_tick;
 pub(crate) mod controller;
+mod render;
 mod table_holdback;
 
 struct QueuedLine {
