@@ -530,7 +530,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
     pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
-    pending: crate::thread_state::PendingThreadResumeRequest,
+    mut pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
     let active_turn = {
         let state = thread_state.lock().await;
@@ -554,11 +554,18 @@ pub(super) async fn handle_pending_thread_resume_request(
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
     if pending.include_turns {
-        populate_thread_turns_from_history(
-            &mut thread,
-            &pending.history_items,
-            active_turn.as_ref(),
-        );
+        if let Some(turns) = pending.paginated_turns.take() {
+            thread.turns = turns;
+        } else {
+            populate_thread_turns_from_history(
+                &mut thread,
+                &pending.history_items,
+                /*active_turn*/ None,
+            );
+        }
+        if let Some(active_turn) = active_turn.as_ref() {
+            merge_turn_history_with_active_turn(&mut thread.turns, active_turn.clone());
+        }
     }
 
     let thread_status = thread_watch_manager
@@ -567,11 +574,33 @@ pub(super) async fn handle_pending_thread_resume_request(
 
     set_thread_status_and_interrupt_stale_turns(
         &mut thread,
-        thread_status,
+        thread_status.clone(),
         has_live_in_progress_turn,
     );
     let token_usage_thread = pending.include_turns.then(|| thread.clone());
-    let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
+    let mut initial_turns_page = if let Some(mut page) = pending.paginated_initial_turns_page.take()
+    {
+        if let (Some(active_turn), Some(params)) =
+            (active_turn, pending.initial_turns_page.as_ref())
+        {
+            let sort_direction = params.sort_direction.unwrap_or(SortDirection::Desc);
+            let active_turn_is_in_page = page.data.iter().any(|turn| turn.id == active_turn.id);
+            if matches!(sort_direction, SortDirection::Desc)
+                && !active_turn_is_in_page
+                && let Some(page_with_active_slot) =
+                    pending.paginated_initial_turns_page_with_active_slot.take()
+            {
+                page = page_with_active_slot;
+            }
+            merge_active_turn_into_page(&mut page, active_turn, params);
+        }
+        super::thread_processor::normalize_thread_turns_status(
+            &mut page.data,
+            thread_status,
+            has_live_in_progress_turn,
+        );
+        Some(page)
+    } else if let Some(params) = pending.initial_turns_page.as_ref() {
         match super::thread_processor::build_thread_resume_initial_turns_page(
             &pending.history_items,
             thread.status.clone(),
@@ -797,6 +826,31 @@ pub(super) async fn resolve_pending_server_request(
 pub(super) fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
     turns.retain(|turn| turn.id != active_turn.id);
     turns.push(active_turn);
+}
+
+fn merge_active_turn_into_page(
+    page: &mut codex_app_server_protocol::TurnsPage,
+    mut active_turn: Turn,
+    params: &codex_app_server_protocol::ThreadResumeInitialTurnsPageParams,
+) {
+    super::thread_processor::apply_thread_turns_items_view(
+        std::slice::from_mut(&mut active_turn),
+        params.items_view.unwrap_or(TurnItemsView::Summary),
+    );
+    let sort_direction = params.sort_direction.unwrap_or(SortDirection::Desc);
+    let page_size = super::thread_processor::thread_turns_page_size(params.limit);
+    let active_turn_is_in_page = page.data.iter().any(|turn| turn.id == active_turn.id);
+    page.data.retain(|turn| turn.id != active_turn.id);
+    match sort_direction {
+        SortDirection::Asc
+            if active_turn_is_in_page
+                || (page.data.len() < page_size && page.next_cursor.is_none()) =>
+        {
+            page.data.push(active_turn);
+        }
+        SortDirection::Asc => {}
+        SortDirection::Desc => page.data.insert(0, active_turn),
+    }
 }
 
 pub(super) fn set_thread_status_and_interrupt_stale_turns(
