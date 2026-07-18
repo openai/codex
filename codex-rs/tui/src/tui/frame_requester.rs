@@ -133,6 +133,19 @@ mod tests {
     use tokio::time;
     use tokio_util::time::FutureExt;
 
+    impl FrameRequester {
+        /// Create a frame requester and expose its request channel for deterministic tests.
+        pub(crate) fn test_channel() -> (Self, mpsc::UnboundedReceiver<Instant>) {
+            let (tx, rx) = mpsc::unbounded_channel();
+            (
+                FrameRequester {
+                    frame_schedule_tx: tx,
+                },
+                rx,
+            )
+        }
+    }
+
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_schedule_frame_immediate_triggers_once() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
