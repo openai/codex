@@ -551,18 +551,14 @@ mod tests {
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
     use sqlx::migrate::Migrator;
-    use sqlx::sqlite::SqliteConnectOptions;
     use std::borrow::Cow;
     use std::path::Path;
 
     async fn open_db_pool(path: &Path) -> SqlitePool {
-        SqlitePool::connect_with(
-            SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(false),
-        )
-        .await
-        .expect("open sqlite pool")
+        crate::SqliteConfig::new_for_testing(path.parent().unwrap_or(path).to_path_buf())
+            .open_read_write_pool(path)
+            .await
+            .expect("open sqlite pool")
     }
 
     async fn log_row_count(path: &Path) -> i64 {
@@ -621,13 +617,10 @@ mod tests {
             table_name: LOGS_MIGRATOR.table_name.clone(),
             create_schemas: LOGS_MIGRATOR.create_schemas.clone(),
         };
-        let pool = SqlitePool::connect_with(
-            SqliteConnectOptions::new()
-                .filename(&logs_path)
-                .create_if_missing(true),
-        )
-        .await
-        .expect("open old logs db");
+        let pool = crate::SqliteConfig::new_for_testing(codex_home.clone())
+            .open_read_write_pool(&logs_path)
+            .await
+            .expect("open old logs db");
         old_logs_migrator
             .run(&pool)
             .await

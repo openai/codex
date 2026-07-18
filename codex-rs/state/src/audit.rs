@@ -1,11 +1,8 @@
 //! Read-only state database queries for diagnostics.
 
 use anyhow::Result;
-use log::LevelFilter;
-use sqlx::ConnectOptions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use sqlx::Row;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::sqlite::SqlitePoolOptions;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -21,15 +18,10 @@ pub struct ThreadStateAuditRow {
 
 /// Read persisted thread rows from a state DB without creating, migrating, or repairing it.
 pub async fn read_thread_state_audit_rows(path: &Path) -> Result<Vec<ThreadStateAuditRow>> {
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .read_only(true)
-        .log_statements(LevelFilter::Off);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await?;
+    let sqlite = crate::SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(
+        path.parent().unwrap_or(path),
+    )?);
+    let pool = sqlite.open_read_only_pool(path).await?;
     let rows = sqlx::query(
         r#"
 SELECT id, rollout_path, archived, source, model_provider
