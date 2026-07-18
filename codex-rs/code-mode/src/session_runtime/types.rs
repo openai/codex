@@ -61,6 +61,9 @@ pub(crate) enum OutputItem {
         image_url: String,
         detail: Option<ImageDetail>,
     },
+    Audio {
+        audio_url: String,
+    },
 }
 
 /// Requested image fidelity for an output image.

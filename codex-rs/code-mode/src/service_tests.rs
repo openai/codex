@@ -737,6 +737,7 @@ async fn output_helpers_return_undefined() {
 const returnsUndefined = [
   text("first"),
   image("data:image/png;base64,AAA"),
+  audio("data:audio/wav;base64,YXVkaW8="),
   notify("ping"),
 ].map((value) => value === undefined);
 text(JSON.stringify(returnsUndefined));
@@ -760,13 +761,89 @@ text(JSON.stringify(returnsUndefined));
                     image_url: "data:image/png;base64,AAA".to_string(),
                     detail: Some(crate::DEFAULT_IMAGE_DETAIL),
                 },
+                FunctionCallOutputContentItem::InputAudio {
+                    audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                },
                 FunctionCallOutputContentItem::InputText {
-                    text: "[true,true,true]".to_string(),
+                    text: "[true,true,true,true]".to_string(),
                 },
             ],
             error_text: None,
         }
     );
+}
+
+#[tokio::test]
+async fn audio_helper_accepts_audio_url_object_and_raw_mcp_audio_block() {
+    let service = InProcessCodeModeSession::new();
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            source: r#"
+audio({
+  audio_url: "data:audio/mpeg;base64,YXVkaW8=",
+});
+audio({
+  type: "audio",
+  data: "YXVkaW8=",
+  mimeType: "audio/wav",
+});
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![
+                FunctionCallOutputContentItem::InputAudio {
+                    audio_url: "data:audio/mpeg;base64,YXVkaW8=".to_string(),
+                },
+                FunctionCallOutputContentItem::InputAudio {
+                    audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                },
+            ],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn audio_helper_rejects_non_data_urls() {
+    for source in [
+        r#"audio("https://example.com/audio.wav");"#,
+        r#"audio({ audio_url: "file:///tmp/audio.wav" });"#,
+    ] {
+        let service = InProcessCodeModeSession::new();
+
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                source: source.to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items: Vec::new(),
+                error_text: Some(
+                    "Tool call failed: invalid audio output. Pass a base64 data URI instead"
+                        .to_string(),
+                ),
+            }
+        );
+    }
 }
 
 #[tokio::test]

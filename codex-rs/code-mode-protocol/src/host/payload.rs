@@ -245,6 +245,9 @@ pub enum WireContentItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<WireImageDetail>,
     },
+    InputAudio {
+        audio_url: String,
+    },
 }
 
 impl From<FunctionCallOutputContentItem> for WireContentItem {
@@ -255,6 +258,9 @@ impl From<FunctionCallOutputContentItem> for WireContentItem {
                 image_url,
                 detail: detail.map(Into::into),
             },
+            FunctionCallOutputContentItem::InputAudio { audio_url } => {
+                Self::InputAudio { audio_url }
+            }
         }
     }
 }
@@ -267,6 +273,7 @@ impl From<WireContentItem> for FunctionCallOutputContentItem {
                 image_url,
                 detail: detail.map(Into::into),
             },
+            WireContentItem::InputAudio { audio_url } => Self::InputAudio { audio_url },
         }
     }
 }

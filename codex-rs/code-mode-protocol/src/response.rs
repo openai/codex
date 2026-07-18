@@ -23,4 +23,7 @@ pub enum FunctionCallOutputContentItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<ImageDetail>,
     },
+    InputAudio {
+        audio_url: String,
+    },
 }

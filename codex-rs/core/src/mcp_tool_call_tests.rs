@@ -962,13 +962,18 @@ fn codex_apps_connectors_support_persistent_approval() {
 }
 
 #[test]
-fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
+fn sanitize_mcp_tool_result_for_model_rewrites_unsupported_media_content() {
     let result = Ok(CallToolResult {
         content: vec![
             serde_json::json!({
                 "type": "image",
                 "data": "Zm9v",
                 "mimeType": "image/png",
+            }),
+            serde_json::json!({
+                "type": "audio",
+                "data": "YmFy",
+                "mimeType": "audio/wav",
             }),
             serde_json::json!({
                 "type": "text",
@@ -980,39 +985,59 @@ fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
         meta: None,
     });
 
-    let got = sanitize_mcp_tool_result_for_model(/*supports_image_input*/ false, result)
+    let got = sanitize_mcp_tool_result_for_model(&[InputModality::Text], result)
         .expect("sanitized result");
 
     assert_eq!(
-        got.content,
-        vec![
-            serde_json::json!({
-                "type": "text",
-                "text": "<image content omitted because you do not support image input>",
-            }),
-            serde_json::json!({
-                "type": "text",
-                "text": "hello",
-            }),
-        ]
+        got,
+        CallToolResult {
+            content: vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": "<image content omitted because you do not support image input>",
+                }),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "<audio content omitted because you do not support audio input>",
+                }),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "hello",
+                }),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        }
     );
 }
 
 #[test]
-fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
+fn sanitize_mcp_tool_result_for_model_preserves_supported_media() {
     let original = CallToolResult {
-        content: vec![serde_json::json!({
-            "type": "image",
-            "data": "Zm9v",
-            "mimeType": "image/png",
-        })],
+        content: vec![
+            serde_json::json!({
+                "type": "image",
+                "data": "Zm9v",
+                "mimeType": "image/png",
+            }),
+            serde_json::json!({
+                "type": "audio",
+                "data": "YmFy",
+                "mimeType": "audio/wav",
+            }),
+        ],
         structured_content: Some(serde_json::json!({"x": 1})),
         is_error: Some(false),
         meta: Some(serde_json::json!({"k": "v"})),
     };
 
     let got = sanitize_mcp_tool_result_for_model(
-        /*supports_image_input*/ true,
+        &[
+            InputModality::Text,
+            InputModality::Image,
+            InputModality::Audio,
+        ],
         Ok(original.clone()),
     )
     .expect("unsanitized result");
