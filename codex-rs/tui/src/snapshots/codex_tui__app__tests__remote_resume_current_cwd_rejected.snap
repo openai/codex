@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+■ `tui.resume_cwd = "current"` requires `--cd` when using a remote workspace

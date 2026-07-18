@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+■ Failed to determine working directory for resume: failed to determine the working directory recorded for the selected session

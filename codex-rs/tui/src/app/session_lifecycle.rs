@@ -7,6 +7,7 @@
 use super::*;
 use crate::app_server_session::source_agent_path;
 use crate::app_server_session::thread_blocks_direct_input;
+use codex_config::types::ResumeCwdMode;
 
 #[derive(Clone, Copy)]
 pub(super) enum ThreadAttachPresentation {
@@ -814,31 +815,80 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
-        let current_cwd = self.config.cwd.to_path_buf();
+        self.refresh_in_memory_config_from_disk_best_effort("resuming a thread")
+            .await;
+        let cwd_override = self
+            .harness_overrides
+            .cwd
+            .as_deref()
+            .or_else(|| app_server.remote_cwd_override());
+        let resume_cwd_mode = crate::session_resume::effective_resume_cwd_mode(
+            self.config.tui_resume_cwd,
+            cwd_override,
+        );
+        let remembered_current_cwd = cwd_override.unwrap_or(self.launch_cwd.as_path());
+        let current_cwd = if matches!(resume_cwd_mode, Some(ResumeCwdMode::Current)) {
+            remembered_current_cwd.to_path_buf()
+        } else {
+            self.config.cwd.to_path_buf()
+        };
+        let uses_remote_workspace_or_environment = crate::uses_remote_workspace_or_environment(
+            &self.app_server_target,
+            &self.environment_manager,
+        );
+        if uses_remote_workspace_or_environment
+            && self.harness_overrides.cwd.is_none()
+            && app_server.remote_cwd_override().is_none()
+            && matches!(resume_cwd_mode, Some(ResumeCwdMode::Current))
+        {
+            self.chat_widget.add_error_message(
+                "`tui.resume_cwd = \"current\"` requires `--cd` when using a remote workspace"
+                    .to_string(),
+            );
+            return Ok(AppRunControl::Continue);
+        }
         let resume_cwd = if self.app_server_target.uses_remote_workspace() {
             current_cwd.clone()
         } else {
-            match crate::session_resume::resolve_cwd_for_resume_or_fork(
+            let outcome = crate::session_resume::resolve_cwd_for_resume_or_fork(
                 tui,
+                &self.config,
                 self.state_db.as_deref(),
-                &current_cwd,
-                target_session.thread_id,
-                target_session.path.as_deref(),
+                &target_session,
                 CwdPromptAction::Resume,
-                /*allow_prompt*/ true,
+                crate::session_resume::ResumeCwdContext {
+                    current_cwd: &current_cwd,
+                    remembered_current_cwd,
+                    allow_remember_current: !uses_remote_workspace_or_environment
+                        || cwd_override.is_some(),
+                    mode: resume_cwd_mode,
+                },
             )
-            .await?
-            {
-                crate::session_resume::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
-                crate::session_resume::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-                crate::session_resume::ResolveCwdOutcome::Exit => {
+            .await;
+            match outcome {
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to determine working directory for resume: {err}"
+                    ));
+                    return Ok(AppRunControl::Continue);
+                }
+                Ok(crate::session_resume::ResolveCwdOutcome::Continue(Some(cwd))) => cwd,
+                Ok(crate::session_resume::ResolveCwdOutcome::Continue(None)) => current_cwd.clone(),
+                Ok(crate::session_resume::ResolveCwdOutcome::Exit) => {
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                 }
             }
         };
 
+        let (config_current_cwd, config_resume_cwd) =
+            if self.app_server_target.uses_remote_workspace() {
+                let local_config_cwd = self.config.cwd.to_path_buf();
+                (local_config_cwd.clone(), local_config_cwd)
+            } else {
+                (current_cwd, resume_cwd)
+            };
         let mut resume_config = match self
-            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
+            .rebuild_config_for_resume_or_fallback(&config_current_cwd, config_resume_cwd)
             .await
         {
             Ok(cfg) => cfg,

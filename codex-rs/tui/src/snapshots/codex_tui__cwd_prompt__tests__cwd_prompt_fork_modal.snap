@@ -10,5 +10,7 @@ Choose working directory to fork this session
 
 › 1. Use session directory (/Users/example/session)                             
   2. Use current directory (/Users/example/current)
+  3. Always use session directory
+  4. Always use current directory
 
   Press enter to continue

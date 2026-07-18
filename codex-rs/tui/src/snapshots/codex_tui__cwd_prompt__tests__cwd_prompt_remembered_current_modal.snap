@@ -1,16 +1,16 @@
 ---
 source: tui/src/cwd_prompt.rs
-expression: terminal.backend()
+expression: rendered
 ---
 
 Choose working directory to resume this session
 
-  Session = latest cwd recorded in the resumed session                          
+  Session = latest cwd recorded in the resumed session
   Current = your current working directory
 
-› 1. Use session directory (/Users/example/session)                             
+› 1. Use session directory (/Users/example/session)
   2. Use current directory (/Users/example/current)
   3. Always use session directory
-  4. Always use current directory
+  4. Always use current directory (/Users/example/launched)
 
   Press enter to continue
