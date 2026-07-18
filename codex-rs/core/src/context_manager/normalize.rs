@@ -12,6 +12,8 @@ use tracing::info;
 
 const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
     "image content omitted because you do not support image input";
+const AUDIO_CONTENT_OMITTED_PLACEHOLDER: &str =
+    "audio content omitted because you do not support audio input";
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
@@ -363,6 +365,29 @@ pub(crate) fn strip_images_when_unsupported(
                 result.clear();
             }
             _ => {}
+        }
+    }
+}
+
+/// Strip audio content from messages when the model does not support audio.
+/// When `input_modalities` contains `InputModality::Audio`, no stripping is performed.
+pub(crate) fn strip_audio_when_unsupported(
+    input_modalities: &[InputModality],
+    items: &mut [ResponseItem],
+) {
+    if input_modalities.contains(&InputModality::Audio) {
+        return;
+    }
+
+    for item in items.iter_mut() {
+        if let ResponseItem::Message { content, .. } = item {
+            for content_item in content.iter_mut() {
+                if matches!(content_item, ContentItem::InputAudio { .. }) {
+                    *content_item = ContentItem::InputText {
+                        text: AUDIO_CONTENT_OMITTED_PLACEHOLDER.to_string(),
+                    };
+                }
+            }
         }
     }
 }
