@@ -17,6 +17,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::RealtimeWireAdapter;
+use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use serde_json::Result as JsonResult;
 use serde_json::Value;
@@ -113,6 +114,7 @@ pub(super) fn conversation_function_call_output_message(
 pub(super) fn session_update_message(
     wire_adapter: RealtimeWireAdapter,
     instructions: String,
+    initial_items: Vec<ConversationTextParams>,
     session_mode: RealtimeSessionMode,
     output_modality: RealtimeOutputModality,
     voice: RealtimeVoice,
@@ -122,7 +124,9 @@ pub(super) fn session_update_message(
         RealtimeWireAdapter::V1 => RealtimeOutboundMessage::SessionUpdate {
             session: v1_session_update_session(instructions, voice),
         },
-        RealtimeWireAdapter::FramelessBidi => frameless_session_update_message(instructions, voice),
+        RealtimeWireAdapter::FramelessBidi => {
+            frameless_session_update_message(instructions, initial_items, voice)
+        }
         RealtimeWireAdapter::RealtimeV2 => RealtimeOutboundMessage::SessionUpdate {
             session: v2_session_update_session(instructions, session_mode, output_modality, voice),
         },
@@ -151,6 +155,7 @@ pub fn session_update_session_json(config: RealtimeSessionConfig) -> JsonResult<
         RealtimeWireAdapter::FramelessBidi => Ok(frameless_session_json(
             config.model,
             config.instructions,
+            config.initial_items,
             config.voice,
         )),
     }

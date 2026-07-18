@@ -4375,3 +4375,14 @@ fn realtime_append_text_defaults_role_to_user() {
         }
     );
 }
+
+#[test]
+fn realtime_start_omitted_initial_items_remain_none() {
+    let params = serde_json::from_value::<ThreadRealtimeStartParams>(json!({
+        "threadId": "thread_123",
+        "outputModality": "audio",
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(params.initial_items, None);
+}

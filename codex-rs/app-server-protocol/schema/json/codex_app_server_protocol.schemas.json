@@ -19581,6 +19581,22 @@
         "title": "ThreadRealtimeErrorNotification",
         "type": "object"
       },
+      "ThreadRealtimeInitialItem": {
+        "description": "EXPERIMENTAL - role-bearing text item included when a realtime V3 session starts.",
+        "properties": {
+          "role": {
+            "$ref": "#/definitions/v2/ConversationTextRole"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "text"
+        ],
+        "type": "object"
+      },
       "ThreadRealtimeItemAddedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",

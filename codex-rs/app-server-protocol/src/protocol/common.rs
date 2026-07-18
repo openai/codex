@@ -1772,6 +1772,7 @@ mod tests {
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::CodexResponseHandoffMode;
+    use codex_protocol::protocol::ConversationTextRole;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
@@ -3403,6 +3404,16 @@ mod tests {
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: Some(false),
+                initial_items: Some(vec![
+                    v2::ThreadRealtimeInitialItem {
+                        role: ConversationTextRole::Developer,
+                        text: "Remember this.".to_string(),
+                    },
+                    v2::ThreadRealtimeInitialItem {
+                        role: ConversationTextRole::Assistant,
+                        text: "Understood.".to_string(),
+                    },
+                ]),
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
@@ -3424,6 +3435,16 @@ mod tests {
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
                     "includeStartupContext": false,
+                    "initialItems": [
+                        {
+                            "role": "developer",
+                            "text": "Remember this."
+                        },
+                        {
+                            "role": "assistant",
+                            "text": "Understood."
+                        }
+                    ],
                     "prompt": "You are on a call",
                     "realtimeSessionId": "sess_456",
                     "transport": null,
@@ -3450,6 +3471,7 @@ mod tests {
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
+                initial_items: None,
                 prompt: None,
                 realtime_session_id: None,
                 transport: None,
@@ -3471,6 +3493,7 @@ mod tests {
                     "model": null,
                     "outputModality": "audio",
                     "includeStartupContext": null,
+                    "initialItems": null,
                     "realtimeSessionId": null,
                     "transport": null,
                     "version": null,
@@ -3492,6 +3515,7 @@ mod tests {
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
+                initial_items: None,
                 prompt: Some(None),
                 realtime_session_id: None,
                 transport: None,
@@ -3513,6 +3537,7 @@ mod tests {
                     "model": null,
                     "outputModality": "audio",
                     "includeStartupContext": null,
+                    "initialItems": null,
                     "prompt": null,
                     "realtimeSessionId": null,
                     "transport": null,
@@ -3734,6 +3759,7 @@ mod tests {
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
+                initial_items: None,
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: None,
                 transport: None,

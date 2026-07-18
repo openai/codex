@@ -1081,6 +1081,15 @@ impl TurnRequestProcessor {
                 model: params.model,
                 output_modality: params.output_modality,
                 include_startup_context: params.include_startup_context.unwrap_or(true),
+                initial_items: params
+                    .initial_items
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|item| ConversationTextParams {
+                        text: item.text,
+                        role: item.role,
+                    })
+                    .collect(),
                 prompt: params.prompt,
                 realtime_session_id: params.realtime_session_id,
                 transport: params.transport.map(|transport| match transport {

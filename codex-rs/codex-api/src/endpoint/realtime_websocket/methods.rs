@@ -23,6 +23,7 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::backoff;
 use codex_http_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -378,6 +379,7 @@ impl RealtimeWebsocketWriter {
     pub async fn send_session_update(
         &self,
         instructions: String,
+        initial_items: Vec<ConversationTextParams>,
         session_mode: RealtimeSessionMode,
         output_modality: RealtimeOutputModality,
         voice: RealtimeVoice,
@@ -386,6 +388,7 @@ impl RealtimeWebsocketWriter {
         let message = session_update_message(
             self.event_parser,
             instructions,
+            initial_items,
             session_mode,
             output_modality,
             voice,
@@ -841,6 +844,7 @@ impl RealtimeWebsocketClient {
                 .writer
                 .send_session_update(
                     config.instructions,
+                    config.initial_items,
                     config.session_mode,
                     config.output_modality,
                     config.voice,
@@ -1965,6 +1969,7 @@ mod tests {
             .connect(
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
+                    initial_items: Vec::new(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
@@ -2289,6 +2294,7 @@ mod tests {
             .connect(
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
+                    initial_items: Vec::new(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
@@ -2414,6 +2420,7 @@ mod tests {
             .connect(
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
+                    initial_items: Vec::new(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
@@ -2518,6 +2525,7 @@ mod tests {
             .connect(
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
+                    initial_items: Vec::new(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
@@ -2608,6 +2616,7 @@ mod tests {
             .connect(
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
+                    initial_items: Vec::new(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
