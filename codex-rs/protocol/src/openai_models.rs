@@ -157,6 +157,8 @@ pub enum InputModality {
     Text,
     /// Image attachments included in user turns.
     Image,
+    /// Audio attachments included in user turns.
+    Audio,
 }
 
 /// Backward-compatible default when `input_modalities` is omitted on the wire.
@@ -1101,12 +1103,15 @@ mod tests {
             "context_window": null,
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
-            "experimental_supported_tools": [],
-            "input_modalities": ["text", "image"]
+            "experimental_supported_tools": []
         }))
         .expect("deserialize model info");
 
         assert_eq!(model.availability_nux, None);
+        assert_eq!(
+            model.input_modalities,
+            vec![InputModality::Text, InputModality::Image]
+        );
         assert!(!model.include_skills_usage_instructions);
         assert!(model.supports_reasoning_summary_parameter);
         assert!(!model.supports_image_detail_original);
