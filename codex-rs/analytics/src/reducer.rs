@@ -1968,6 +1968,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                         output_content_item_count: counts.map(|counts| counts.total),
                         output_text_item_count: counts.map(|counts| counts.text),
                         output_image_item_count: counts.map(|counts| counts.image),
+                        output_audio_item_count: counts.map(|counts| counts.audio),
                     },
                 },
             ))
@@ -2505,26 +2506,30 @@ fn file_change_counts(changes: &[codex_app_server_protocol::FileUpdateChange]) -
     counts
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DynamicContentCounts {
     total: u64,
     text: u64,
     image: u64,
+    audio: u64,
 }
 
 fn dynamic_content_counts(items: &[DynamicToolCallOutputContentItem]) -> DynamicContentCounts {
     let mut text = 0;
     let mut image = 0;
+    let mut audio = 0;
     for item in items {
         match item {
             DynamicToolCallOutputContentItem::InputText { .. } => text += 1,
             DynamicToolCallOutputContentItem::InputImage { .. } => image += 1,
+            DynamicToolCallOutputContentItem::InputAudio { .. } => audio += 1,
         }
     }
     DynamicContentCounts {
         total: usize_to_u64(items.len()),
         text,
         image,
+        audio,
     }
 }
 
@@ -2830,6 +2835,7 @@ mod tests {
     use codex_protocol::models::SandboxEnforcement;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn managed_full_disk_with_restricted_network_reports_external_sandbox() {
@@ -2852,5 +2858,30 @@ mod tests {
             guardian_review_result(GuardianApprovalReviewStatus::TimedOut),
             Some((ReviewStatus::TimedOut, ReviewResolution::None))
         ));
+    }
+
+    #[test]
+    fn dynamic_content_counts_include_audio() {
+        let items = vec![
+            DynamicToolCallOutputContentItem::InputText {
+                text: "ok".to_string(),
+            },
+            DynamicToolCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+            DynamicToolCallOutputContentItem::InputAudio {
+                audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            dynamic_content_counts(&items),
+            DynamicContentCounts {
+                total: 3,
+                text: 1,
+                image: 1,
+                audio: 1,
+            }
+        );
     }
 }

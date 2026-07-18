@@ -42,6 +42,9 @@ impl IntoProtocol<FunctionCallOutputContentItem>
                         .or(Some(DEFAULT_IMAGE_DETAIL)),
                 }
             }
+            codex_code_mode::FunctionCallOutputContentItem::InputAudio { audio_url } => {
+                FunctionCallOutputContentItem::InputAudio { audio_url }
+            }
         }
     }
 }

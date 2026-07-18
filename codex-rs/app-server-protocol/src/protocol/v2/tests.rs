@@ -2719,6 +2719,12 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem::InputText {
                 text: "ok".to_string(),
             },
+            codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+            codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem::InputAudio {
+                audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+            },
         ]),
         success: Some(true),
         error: None,
@@ -2733,9 +2739,17 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             tool: "lookup".to_string(),
             arguments: json!({"id": "123"}),
             status: DynamicToolCallStatus::Completed,
-            content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
-                text: "ok".to_string(),
-            }]),
+            content_items: Some(vec![
+                DynamicToolCallOutputContentItem::InputText {
+                    text: "ok".to_string(),
+                },
+                DynamicToolCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAA".to_string(),
+                },
+                DynamicToolCallOutputContentItem::InputAudio {
+                    audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                },
+            ]),
             success: Some(true),
             duration_ms: Some(5),
         }
@@ -3954,7 +3968,7 @@ fn dynamic_tool_response_serializes_content_items() {
 }
 
 #[test]
-fn dynamic_tool_response_serializes_text_and_image_content_items() {
+fn dynamic_tool_response_serializes_text_image_and_audio_content_items() {
     let value = serde_json::to_value(DynamicToolCallResponse {
         content_items: vec![
             DynamicToolCallOutputContentItem::InputText {
@@ -3962,6 +3976,9 @@ fn dynamic_tool_response_serializes_text_and_image_content_items() {
             },
             DynamicToolCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+            },
+            DynamicToolCallOutputContentItem::InputAudio {
+                audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
             },
         ],
         success: true,
@@ -3979,6 +3996,10 @@ fn dynamic_tool_response_serializes_text_and_image_content_items() {
                 {
                     "type": "inputImage",
                     "imageUrl": "data:image/png;base64,AAA"
+                },
+                {
+                    "type": "inputAudio",
+                    "audioUrl": "data:audio/wav;base64,YXVkaW8="
                 }
             ],
             "success": true,
