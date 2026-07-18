@@ -7,7 +7,7 @@ use super::*;
 /// The controller prepares the full styled plan lines because plan tails need the same header,
 /// padding, and background treatment as committed `ProposedPlanStreamCell`s while remaining
 /// preview-only during streaming.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct StreamingPlanTailCell {
     lines: Vec<HyperlinkLine>,
     is_stream_continuation: bool,

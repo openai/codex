@@ -1308,8 +1308,10 @@ async fn usage_command_runs_with_backend_auth_without_chatgpt_account_flag() {
 #[tokio::test]
 async fn usage_command_runs_with_backend_auth_from_widget_init() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual_with_auth(
-        /*model_override*/ None, /*has_chatgpt_account*/ false,
+        /*model_override*/ None,
+        /*has_chatgpt_account*/ false,
         /*has_codex_backend_auth*/ true,
+        FrameRequester::test_dummy(),
     )
     .await;
 

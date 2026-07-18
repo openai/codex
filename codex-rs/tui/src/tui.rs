@@ -105,6 +105,7 @@ mod tests {
     use codex_config::types::NotificationCondition;
     use ratatui::layout::Position;
     use ratatui::layout::Rect;
+    use ratatui::text::Line;
 
     #[test]
     fn unfocused_notification_condition_is_suppressed_when_focused() {
@@ -169,6 +170,20 @@ mod tests {
             !rows.iter().skip(1).any(|row| row.contains("stale")),
             "expected stale cells inside the new viewport to be cleared, rows: {rows:?}"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn inserting_history_lines_schedules_a_draw() {
+        let mut tui = crate::tui::test_support::make_test_tui().expect("test tui");
+        let mut draw_rx = tui.draw_tx.subscribe();
+
+        tui.insert_history_lines(vec![Line::from("committed stream line")]);
+        tokio::time::advance(std::time::Duration::from_millis(20)).await;
+
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), draw_rx.recv()).await,
+            Ok(Ok(()))
+        ));
     }
 }
 

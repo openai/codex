@@ -438,8 +438,8 @@ impl HistoryCell for AgentMarkdownCell {
 ///
 /// During streaming, lines that have not yet been committed to scrollback because they belong to
 /// an in-progress table are displayed via this cell in the `active_cell` slot. It is replaced on
-/// every delta and cleared when the stream finalizes.
-#[derive(Debug)]
+/// deltas that change the visible tail and cleared when the stream finalizes.
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct StreamingAgentTailCell {
     lines: Vec<HyperlinkLine>,
     is_first_line: bool,

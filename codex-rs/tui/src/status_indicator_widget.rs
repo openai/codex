@@ -139,7 +139,6 @@ impl StatusIndicatorWidget {
             .filter(|message| !message.is_empty());
     }
 
-    #[cfg(test)]
     pub(crate) fn header(&self) -> &str {
         &self.header
     }
