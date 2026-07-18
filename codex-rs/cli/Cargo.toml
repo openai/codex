@@ -104,6 +104,7 @@ predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 sqlx = { workspace = true }
 wiremock = { workspace = true }
+zstd = { workspace = true }
 
 [package.metadata.cargo-shear]
 # These Rust sources are intentionally Bazel-only macrobenchmarks rather than
