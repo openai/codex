@@ -5,7 +5,6 @@ use codex_state::StateRuntime;
 use codex_state::memories_db_path;
 use codex_state::state_db_path;
 use predicates::str::contains;
-use sqlx::SqlitePool;
 use tempfile::TempDir;
 
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
@@ -17,16 +16,16 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 #[tokio::test]
 async fn debug_clear_memories_resets_state_and_removes_memory_dir() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().to_path_buf());
     let runtime =
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
     drop(runtime);
 
     let thread_id = "00000000-0000-0000-0000-000000000123";
     let db_path = state_db_path(codex_home.path());
-    let pool = SqlitePool::connect(&format!("sqlite://{}", db_path.display())).await?;
+    let pool = sqlite.open_read_write_pool(&db_path).await?;
     let memories_db_path = memories_db_path(codex_home.path());
-    let memories_pool =
-        SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
+    let memories_pool = sqlite.open_read_write_pool(&memories_db_path).await?;
 
     sqlx::query(
         r#"
@@ -118,7 +117,7 @@ INSERT INTO jobs (
         .success()
         .stdout(contains("Cleared memory state"));
 
-    let pool = SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
+    let pool = sqlite.open_read_write_pool(&memories_db_path).await?;
     let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
         .fetch_one(&pool)
         .await?;
@@ -140,14 +139,14 @@ INSERT INTO jobs (
 #[tokio::test]
 async fn debug_clear_memories_resets_memories_db_without_state_db() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().to_path_buf());
     let runtime =
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
     runtime.close().await;
 
     let db_path = state_db_path(codex_home.path());
     let memories_db_path = memories_db_path(codex_home.path());
-    let memories_pool =
-        SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
+    let memories_pool = sqlite.open_read_write_pool(&memories_db_path).await?;
 
     sqlx::query(
         r#"
@@ -177,7 +176,7 @@ INSERT INTO stage1_outputs (
         .success()
         .stdout(contains("Cleared memory state"));
 
-    let pool = SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
+    let pool = sqlite.open_read_write_pool(&memories_db_path).await?;
     let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
         .fetch_one(&pool)
         .await?;

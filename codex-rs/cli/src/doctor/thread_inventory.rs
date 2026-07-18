@@ -727,8 +727,6 @@ mod tests {
     use super::*;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
-    use sqlx::sqlite::SqliteConnectOptions;
-    use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1152,14 +1150,11 @@ mod tests {
 
         async fn insert_thread_row(&self, id: &str, rollout_path: &Path, archived: bool) {
             let state_db_path = codex_state::state_db_path(self.sqlite_home.path());
-            let options = SqliteConnectOptions::new()
-                .filename(state_db_path)
-                .create_if_missing(false);
-            let pool = SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
-                .expect("sqlite pool");
+            let pool =
+                codex_state::SqliteConfig::new_for_testing(self.sqlite_home.path().to_path_buf())
+                    .open_read_write_pool(&state_db_path)
+                    .await
+                    .expect("sqlite pool");
             sqlx::query(
                 r#"
 INSERT INTO threads (
