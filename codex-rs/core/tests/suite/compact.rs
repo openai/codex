@@ -1233,18 +1233,20 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                     return None;
                 }
 
-                let text = value
+                let texts = value
                     .get("content")
                     .and_then(|content| content.as_array())
-                    .and_then(|content| content.first())
-                    .and_then(|item| item.get("text"))
-                    .and_then(|text| text.as_str());
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|item| item.get("text").and_then(|text| text.as_str()));
 
                 // Ignore cached prefix messages (project docs + permissions) since they are not
                 // relevant to compaction behavior and can change as bundled prompts evolve.
                 let role = value.get("role").and_then(|role| role.as_str());
                 if role == Some("developer")
-                    && text.is_some_and(|text| text.contains("`sandbox_mode`"))
+                    && texts
+                        .into_iter()
+                        .any(|text| text.contains("`sandbox_mode`"))
                 {
                     return None;
                 }

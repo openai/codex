@@ -6,8 +6,8 @@ Scenario: Remote mid-turn continuation compaction after realtime was closed befo
 
 ## Second Turn Initial Request
 00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
+    [01] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
+    [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:SETUP_USER
 03:message/assistant:REMOTE_SETUP_REPLY
@@ -16,8 +16,8 @@ Scenario: Remote mid-turn continuation compaction after realtime was closed befo
 
 ## Remote Compaction Request
 00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
+    [01] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
+    [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:SETUP_USER
 03:message/assistant:REMOTE_SETUP_REPLY

@@ -1807,12 +1807,18 @@ async fn includes_user_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "developer");
-    let permissions_text = request_body["input"][0]["content"][0]["text"]
-        .as_str()
-        .expect("invalid permissions message content");
+    let developer_texts = request_body["input"]
+        .as_array()
+        .expect("input array")
+        .iter()
+        .filter(|item| item.get("role").and_then(|role| role.as_str()) == Some("developer"))
+        .flat_map(message_input_texts)
+        .collect::<Vec<_>>();
     assert!(
-        permissions_text.contains("`sandbox_mode`"),
-        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+        developer_texts
+            .iter()
+            .any(|text| text.contains("`sandbox_mode`")),
+        "expected permissions message to mention sandbox_mode, got {developer_texts:?}"
     );
 
     assert_message_role(&request_body["input"][1], "user");
@@ -3095,10 +3101,6 @@ async fn includes_developer_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    let permissions_text = request_body["input"][0]["content"][0]["text"]
-        .as_str()
-        .expect("invalid permissions message content");
-
     assert!(
         !request_body["instructions"]
             .as_str()
@@ -3106,23 +3108,22 @@ async fn includes_developer_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "developer");
-    assert!(
-        permissions_text.contains("`sandbox_mode`"),
-        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
-    );
-
-    let developer_messages: Vec<&serde_json::Value> = request_body["input"]
+    let developer_texts = request_body["input"]
         .as_array()
         .expect("input array")
         .iter()
         .filter(|item| item.get("role").and_then(|role| role.as_str()) == Some("developer"))
-        .collect();
+        .flat_map(message_input_texts)
+        .collect::<Vec<_>>();
     assert!(
-        developer_messages
+        developer_texts
             .iter()
-            .any(|item| message_input_texts(item).contains(&"be useful")),
-        "expected developer instructions in a developer message, got {:?}",
-        request_body["input"]
+            .any(|text| text.contains("`sandbox_mode`")),
+        "expected permissions message to mention sandbox_mode, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts.contains(&"be useful"),
+        "expected developer instructions in a developer message, got {developer_texts:?}"
     );
 
     assert_message_role(&request_body["input"][1], "user");
