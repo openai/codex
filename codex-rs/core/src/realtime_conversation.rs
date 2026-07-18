@@ -57,6 +57,7 @@ use codex_protocol::protocol::RealtimeTranscriptEntry;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
+use codex_utils_string::approx_token_count;
 use codex_utils_string::take_bytes_at_char_boundary;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -87,6 +88,8 @@ const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
 const REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET: usize = 1_000;
+const REALTIME_INITIAL_ITEMS_MAX_COUNT: usize = 128;
+const REALTIME_INITIAL_ITEMS_MAX_TOKENS: usize = 8_192;
 const HANDOFF_STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
 const HANDOFF_STREAM_TRUNCATION_MARKER: &str = "\n…output truncated…\n";
 const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
@@ -1240,6 +1243,31 @@ pub(crate) async fn build_realtime_session_config(
         (false, true) => prompt,
         (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
+    if version != RealtimeWsVersion::V3 && !params.initial_items.is_empty() {
+        return Err(CodexErr::InvalidRequest(
+            "initial realtime items require realtime v3".to_string(),
+        ));
+    }
+    if params.initial_items.len() > REALTIME_INITIAL_ITEMS_MAX_COUNT {
+        return Err(CodexErr::InvalidRequest(format!(
+            "initial realtime items must contain no more than {REALTIME_INITIAL_ITEMS_MAX_COUNT} items"
+        )));
+    }
+    let mut total_initial_item_tokens: usize = 0;
+    for item in &params.initial_items {
+        let item_tokens = approx_token_count(&item.text);
+        if item_tokens > REALTIME_INITIAL_ITEMS_MAX_TOKENS {
+            return Err(CodexErr::InvalidRequest(format!(
+                "each initial realtime item must not exceed {REALTIME_INITIAL_ITEMS_MAX_TOKENS} estimated tokens"
+            )));
+        }
+        total_initial_item_tokens = total_initial_item_tokens.saturating_add(item_tokens);
+    }
+    if total_initial_item_tokens > REALTIME_INITIAL_ITEMS_MAX_TOKENS {
+        return Err(CodexErr::InvalidRequest(format!(
+            "initial realtime items must not exceed {REALTIME_INITIAL_ITEMS_MAX_TOKENS} estimated tokens in total"
+        )));
+    }
     let model = Some(
         params
             .model
@@ -1277,6 +1305,7 @@ pub(crate) async fn build_realtime_session_config(
     validate_realtime_voice(version, voice)?;
     Ok(RealtimeSessionConfig {
         instructions: prompt,
+        initial_items: params.initial_items.clone(),
         model,
         session_id: Some(
             params

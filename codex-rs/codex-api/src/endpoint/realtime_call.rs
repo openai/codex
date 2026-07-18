@@ -305,6 +305,8 @@ mod tests {
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use codex_protocol::protocol::ConversationTextParams;
+    use codex_protocol::protocol::ConversationTextRole;
     use codex_protocol::protocol::RealtimeVoice;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
@@ -386,6 +388,7 @@ mod tests {
     fn realtime_session_config(session_id: &str) -> RealtimeSessionConfig {
         RealtimeSessionConfig {
             instructions: "hi".to_string(),
+            initial_items: Vec::new(),
             model: Some("gpt-realtime".to_string()),
             session_id: Some(session_id.to_string()),
             event_parser: RealtimeEventParser::V1,
@@ -697,12 +700,20 @@ mod tests {
             provider("https://chatgpt.com/backend-api/codex"),
             Arc::new(DummyAuth),
         );
+        let mut session_config = frameless_bidi_session_config("sess-backend");
+        session_config.initial_items = vec![
+            ConversationTextParams {
+                text: "Remember this.".to_string(),
+                role: ConversationTextRole::Developer,
+            },
+            ConversationTextParams {
+                text: "Understood.".to_string(),
+                role: ConversationTextRole::Assistant,
+            },
+        ];
 
         let response = client
-            .create_with_session(
-                "v=offer\r\n".to_string(),
-                frameless_bidi_session_config("sess-backend"),
-            )
+            .create_with_session("v=offer\r\n".to_string(), session_config)
             .await
             .expect("request should succeed");
 
@@ -718,6 +729,21 @@ mod tests {
         };
         assert_eq!(body["session"]["delegation"]["type"], "client");
         assert!(body["session"].get("id").is_none());
+        assert_eq!(
+            body["session"]["initial_items"],
+            serde_json::json!([
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "Remember this."}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Understood."}],
+                },
+            ])
+        );
     }
 
     #[tokio::test]

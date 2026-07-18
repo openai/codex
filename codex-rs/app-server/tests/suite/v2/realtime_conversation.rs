@@ -22,6 +22,7 @@ use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
+use codex_app_server_protocol::ThreadRealtimeInitialItem;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
 use codex_app_server_protocol::ThreadRealtimeListVoicesResponse;
@@ -377,6 +378,7 @@ impl RealtimeE2eHarness {
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
+                initial_items: None,
                 prompt: Some(Some("backend prompt".to_string())),
                 realtime_session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -438,6 +440,7 @@ impl RealtimeE2eHarness {
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
+                initial_items: None,
                 prompt: Some(Some("backend prompt".to_string())),
                 realtime_session_id: None,
                 transport: None,
@@ -460,6 +463,7 @@ impl RealtimeE2eHarness {
     async fn start_frameless_bidi_realtime(
         &mut self,
         codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
+        initial_items: Option<Vec<ThreadRealtimeInitialItem>>,
     ) -> Result<ThreadRealtimeStartedNotification> {
         let start_request_id = self
             .mcp
@@ -473,6 +477,7 @@ impl RealtimeE2eHarness {
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
+                initial_items,
                 prompt: Some(Some("backend prompt".to_string())),
                 realtime_session_id: None,
                 transport: None,
@@ -745,6 +750,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: None,
+            initial_items: None,
             prompt: None,
             realtime_session_id: None,
             transport: None,
@@ -1040,6 +1046,7 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: Some(false),
+            initial_items: None,
             prompt: None,
             realtime_session_id: None,
             transport: None,
@@ -1142,6 +1149,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             model: None,
             output_modality: RealtimeOutputModality::Text,
             include_startup_context: None,
+            initial_items: None,
             prompt: None,
             realtime_session_id: None,
             transport: None,
@@ -1330,6 +1338,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: None,
+            initial_items: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
@@ -1438,6 +1447,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: None,
+            initial_items: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -2223,6 +2233,56 @@ async fn websocket_v2_assistant_output_without_handoff_reaches_realtime_context(
 }
 
 #[tokio::test]
+async fn websocket_v3_passes_initial_items_through_session_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V1,
+        main_loop_responses(Vec::new()),
+        realtime_sideband(vec![realtime_sideband_connection(vec![vec![
+            session_started("sess_initial_items"),
+        ]])]),
+    )
+    .await?;
+
+    let started = harness
+        .start_frameless_bidi_realtime(
+            /*codex_response_handoff_mode*/ None,
+            Some(vec![
+                ThreadRealtimeInitialItem {
+                    role: ConversationTextRole::Developer,
+                    text: "Remember this.".to_string(),
+                },
+                ThreadRealtimeInitialItem {
+                    role: ConversationTextRole::Assistant,
+                    text: "Understood.".to_string(),
+                },
+            ]),
+        )
+        .await?;
+
+    assert_eq!(started.version, RealtimeConversationVersion::V3);
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 0).await["session"]["initial_items"],
+        json!([
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Remember this."}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Understood."}],
+            },
+        ])
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn websocket_v3_routes_handoffs_by_session_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2292,7 +2352,9 @@ async fn websocket_v3_routes_handoffs_by_session_mode() -> Result<()> {
         )
         .await?;
 
-        let started = harness.start_frameless_bidi_realtime(mode).await?;
+        let started = harness
+            .start_frameless_bidi_realtime(mode, /*initial_items*/ None)
+            .await?;
         assert_eq!(started.version, RealtimeConversationVersion::V3);
         let _ = harness
             .read_notification::<TurnCompletedNotification>("turn/completed")
@@ -3012,6 +3074,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: None,
+            initial_items: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -3082,6 +3145,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: None,
+            initial_items: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,

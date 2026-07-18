@@ -1,6 +1,7 @@
 use crate::endpoint::realtime_websocket::protocol_frameless_bidi::parse_frameless_bidi_event;
 use crate::endpoint::realtime_websocket::protocol_v1::parse_realtime_event_v1;
 use crate::endpoint::realtime_websocket::protocol_v2::parse_realtime_event_v2;
+use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
@@ -36,6 +37,7 @@ pub enum RealtimeContextAppendChannel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeSessionConfig {
     pub instructions: String,
+    pub initial_items: Vec<ConversationTextParams>,
     pub model: Option<String>,
     pub session_id: Option<String>,
     pub event_parser: RealtimeEventParser,

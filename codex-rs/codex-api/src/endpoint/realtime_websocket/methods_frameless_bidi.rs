@@ -3,6 +3,8 @@ use crate::endpoint::realtime_websocket::protocol::FramelessInputTextContent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeContextAppendChannel;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
+use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::ConversationTextRole;
 use serde_json::Value;
 use serde_json::json;
 
@@ -32,16 +34,18 @@ pub(super) fn session_context_append_message(
 
 pub(super) fn session_update_message(
     instructions: String,
+    initial_items: Vec<ConversationTextParams>,
     voice: RealtimeVoice,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::FramelessSessionUpdate {
-        session: session_json(/*model*/ None, instructions, voice),
+        session: session_json(/*model*/ None, instructions, initial_items, voice),
     }
 }
 
 pub(super) fn session_json(
     model: Option<String>,
     instructions: String,
+    initial_items: Vec<ConversationTextParams>,
     voice: RealtimeVoice,
 ) -> Value {
     let mut session = json!({
@@ -57,6 +61,29 @@ pub(super) fn session_json(
     });
     if let Some(model) = model {
         session["model"] = Value::String(model);
+    }
+    if !initial_items.is_empty() {
+        session["initial_items"] = Value::Array(
+            initial_items
+                .into_iter()
+                .map(|item| {
+                    let content_type = match item.role {
+                        ConversationTextRole::User | ConversationTextRole::Developer => {
+                            "input_text"
+                        }
+                        ConversationTextRole::Assistant => "output_text",
+                    };
+                    json!({
+                        "type": "message",
+                        "role": item.role,
+                        "content": [{
+                            "type": content_type,
+                            "text": item.text,
+                        }],
+                    })
+                })
+                .collect(),
+        );
     }
     session
 }
