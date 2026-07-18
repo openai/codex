@@ -1,0 +1,127 @@
+---
+source: tui/src/streaming/render_tests.rs
+expression: render.lines
+---
+[
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from("# ").bold().underlined(),
+            Span::from("Heading").bold().underlined(),
+        ]),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::default(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from("First paragraph with a "),
+            Span::from("link"),
+        ]),
+        hyperlinks: [
+            TerminalHyperlink {
+                columns: 23..27,
+                destination: "https://example.com",
+                destination_kind: Web,
+            },
+        ],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from("("),
+            Span::from("https://example.com").cyan().underlined(),
+            Span::from(")"),
+            Span::from("."),
+        ]),
+        hyperlinks: [
+            TerminalHyperlink {
+                columns: 1..20,
+                destination: "https://example.com",
+                destination_kind: Web,
+            },
+        ],
+    },
+    HyperlinkLine {
+        line: Line::from("continued on the next line."),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::default(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from("1. ").light_blue(),
+            Span::from("First item"),
+        ]),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from("2. ").light_blue(),
+            Span::from("Second item"),
+        ]),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::default(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from("> "),
+            Span::from("Quoted paragraph"),
+        ]).green(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::default(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::default(),
+            Span::from("fn").fg(Color::Rgb(203, 166, 247)),
+            Span::from(" ").fg(Color::Rgb(205, 214, 244)),
+            Span::from("main").fg(Color::Rgb(137, 180, 250)),
+            Span::from("(").fg(Color::Rgb(147, 153, 178)),
+            Span::from(")").fg(Color::Rgb(147, 153, 178)),
+            Span::from(" ").fg(Color::Rgb(205, 214, 244)),
+            Span::from("{").fg(Color::Rgb(147, 153, 178)),
+            Span::from("}").fg(Color::Rgb(147, 153, 178)),
+        ]),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::default(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from(" "),
+            Span::from("Key"),
+            Span::from("  "),
+            Span::from(" "),
+            Span::from("  "),
+            Span::from(" "),
+            Span::from("Value"),
+        ]).fg(Color::Rgb(249, 226, 175)).bold(),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from(Span::from("━━━━━━━  ━━━━━━━").dim()),
+        hyperlinks: [],
+    },
+    HyperlinkLine {
+        line: Line::from_iter([
+            Span::from(" "),
+            Span::from("alpha"),
+            Span::from(" "),
+            Span::from("  "),
+            Span::from(" "),
+            Span::from("beta"),
+        ]),
+        hyperlinks: [],
+    },
+]

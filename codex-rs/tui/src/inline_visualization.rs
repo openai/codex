@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use self::viewer::materialize_document;
 
-const DIRECTIVE_PREFIX: &str = "::codex-inline-vis{";
+pub(crate) const DIRECTIVE_PREFIX: &str = "::codex-inline-vis{";
 const MAX_FRAGMENT_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
