@@ -84,6 +84,25 @@ impl fmt::Display for SessionPickerViewMode {
     }
 }
 
+/// Working directory to use when resuming or forking a session.
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResumeCwdMode {
+    /// Use the directory where Codex was launched.
+    Current,
+    /// Use the latest working directory recorded in the selected session.
+    Session,
+}
+
+impl ResumeCwdMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Session => "session",
+        }
+    }
+}
+
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -759,6 +778,11 @@ pub struct Tui {
     /// Preferred layout for resume/fork session picker results.
     #[serde(default)]
     pub session_picker_view: Option<SessionPickerViewMode>,
+
+    /// Working directory to use when resuming or forking a session.
+    /// When unset, prompt if the current and session directories differ.
+    #[serde(default)]
+    pub resume_cwd: Option<ResumeCwdMode>,
 
     /// Keybinding overrides for the TUI.
     ///

@@ -4452,6 +4452,7 @@ async fn make_test_app() -> App {
         app_event_tx,
         chat_widget,
         workspace_command_runner: None,
+        launch_cwd: config.cwd.to_path_buf(),
         config,
         state_db: None,
         cli_kv_overrides: Vec::new(),
@@ -4518,6 +4519,7 @@ async fn make_test_app_with_channels() -> (
             app_event_tx,
             chat_widget,
             workspace_command_runner: None,
+            launch_cwd: config.cwd.to_path_buf(),
             config,
             state_db: None,
             cli_kv_overrides: Vec::new(),
@@ -5682,6 +5684,436 @@ async fn backtrack_branch_failure_restores_selected_prompt_snapshot() {
         "backtrack_branch_failure_restores_selected_prompt",
         rendered
     );
+}
+
+#[tokio::test]
+async fn remote_resume_current_cwd_rejection_snapshot() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        "[tui]\nresume_cwd = \"current\"\n",
+    )?;
+    app.app_server_target = crate::AppServerTarget::Remote {
+        endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "ws://127.0.0.1:4500".to_string(),
+            auth_token: None,
+        },
+    };
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let control = app
+        .resume_target_session(
+            &mut tui,
+            &mut app_server,
+            crate::resume_picker::SessionTarget {
+                path: None,
+                thread_id: ThreadId::new(),
+            },
+        )
+        .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+    assert_app_snapshot!("remote_resume_current_cwd_rejected", rendered);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_exec_resume_current_cwd_is_rejected() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        "[tui]\nresume_cwd = \"current\"\n",
+    )?;
+    app.environment_manager = Arc::new(
+        EnvironmentManager::create_for_tests(
+            Some("ws://127.0.0.1:8765".to_string()),
+            Some(codex_exec_server::ExecServerRuntimePaths::new(
+                std::env::current_exe()?,
+                /*codex_linux_sandbox_exe*/ None,
+            )?),
+        )
+        .await,
+    );
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let control = app
+        .resume_target_session(
+            &mut tui,
+            &mut app_server,
+            crate::resume_picker::SessionTarget {
+                path: None,
+                thread_id: ThreadId::new(),
+            },
+        )
+        .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+    assert_eq!(
+        rendered,
+        "■ `tui.resume_cwd = \"current\"` requires `--cd` when using a remote workspace"
+    );
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_app_resume_session_cwd_without_metadata_is_non_fatal() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        "[tui]\nresume_cwd = \"session\"\n",
+    )?;
+    app.state_db = None;
+    let active_thread_id = app.chat_widget.thread_id();
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let control = app
+        .resume_target_session(
+            &mut tui,
+            &mut app_server,
+            crate::resume_picker::SessionTarget {
+                path: None,
+                thread_id: ThreadId::new(),
+            },
+        )
+        .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    assert_eq!(app.chat_widget.thread_id(), active_thread_id);
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+    assert_app_snapshot!("in_app_resume_session_cwd_without_metadata", rendered);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_resume_keeps_server_only_cwd_out_of_local_config() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let local_cwd = app.config.cwd.to_path_buf();
+    let local_workspace_roots = app
+        .rebuild_config_for_cwd(local_cwd.clone())
+        .await?
+        .workspace_roots;
+    let remote_cwd = if cfg!(windows) {
+        PathBuf::from("/srv/remote/project")
+    } else {
+        PathBuf::from(r"C:\remote\project")
+    };
+    let filename_timestamp = "2025-01-05T12-00-00";
+    let thread_id = app_test_support::create_fake_rollout(
+        app.config.codex_home.as_path(),
+        filename_timestamp,
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some(&app.config.model_provider_id),
+        /*git_info*/ None,
+    )
+    .expect("materialized rollout should be created");
+    let rollout_path = app_test_support::rollout_path(
+        app.config.codex_home.as_path(),
+        filename_timestamp,
+        &thread_id,
+    );
+    app.app_server_target = crate::AppServerTarget::Remote {
+        endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "ws://127.0.0.1:4500".to_string(),
+            auth_token: None,
+        },
+    };
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config))
+        .await?
+        .with_remote_cwd_override(Some(remote_cwd.clone()));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let control = app
+        .resume_target_session(
+            &mut tui,
+            &mut app_server,
+            crate::resume_picker::SessionTarget {
+                path: Some(rollout_path),
+                thread_id: ThreadId::from_string(&thread_id)?,
+            },
+        )
+        .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    assert_eq!(app_server.remote_cwd_override(), Some(remote_cwd.as_path()));
+    assert!(!crate::session_resume::cwds_differ(
+        app.config.cwd.as_path(),
+        &local_cwd,
+    ));
+    assert_eq!(app.config.workspace_roots, local_workspace_roots);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
+    for (configured_mode, has_explicit_cwd, has_remote_exec, expected_directory) in [
+        ("current", false, false, "launch"),
+        ("session", false, false, "session"),
+        ("session", true, false, "explicit"),
+        ("session", false, true, "session"),
+        ("session", true, true, "explicit"),
+    ] {
+        let temp_dir = tempdir()?;
+        let codex_home = temp_dir.path().join("codex-home");
+        let launch_cwd = temp_dir.path().join("launch");
+        let active_cwd = temp_dir.path().join("active");
+        let session_cwd = temp_dir.path().join("session");
+        let explicit_cwd = temp_dir.path().join("explicit");
+        std::fs::create_dir_all(&codex_home)?;
+        std::fs::create_dir_all(&launch_cwd)?;
+        std::fs::create_dir_all(&active_cwd)?;
+        std::fs::create_dir_all(&session_cwd)?;
+        std::fs::create_dir_all(&explicit_cwd)?;
+        std::fs::write(
+            codex_home.join("config.toml"),
+            format!("[tui]\nresume_cwd = \"{configured_mode}\"\n"),
+        )?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(active_cwd.clone()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+        let filename_timestamp = "2025-01-05T12-00-00";
+        let thread_id = app_test_support::create_fake_rollout(
+            &codex_home,
+            filename_timestamp,
+            "2025-01-05T12:00:00Z",
+            "Saved user message",
+            Some(&config.model_provider_id),
+            /*git_info*/ None,
+        )
+        .expect("materialized rollout should be created");
+        let rollout_path =
+            app_test_support::rollout_path(&codex_home, filename_timestamp, &thread_id);
+        let mut rollout_lines = std::fs::read_to_string(&rollout_path)?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rollout_lines[0]["payload"]["cwd"] = serde_json::to_value(&session_cwd)?;
+        std::fs::write(
+            &rollout_path,
+            format!(
+                "{}\n",
+                rollout_lines
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        )?;
+        let thread_id = ThreadId::from_string(&thread_id)?;
+        let state_db =
+            crate::init_state_db_for_app_server_target(&config, &crate::AppServerTarget::Embedded)
+                .await?;
+        let environment_manager = if has_remote_exec {
+            Arc::new(
+                EnvironmentManager::create_for_tests(
+                    Some("ws://127.0.0.1:8765".to_string()),
+                    Some(codex_exec_server::ExecServerRuntimePaths::new(
+                        std::env::current_exe()?,
+                        /*codex_linux_sandbox_exe*/ None,
+                    )?),
+                )
+                .await,
+            )
+        } else {
+            Arc::new(EnvironmentManager::default_for_tests())
+        };
+        let mut app_server = crate::start_app_server_for_picker(
+            &config,
+            &crate::AppServerTarget::Embedded,
+            state_db.clone(),
+            Arc::clone(&environment_manager),
+        )
+        .await?;
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.config = config;
+        app.launch_cwd = launch_cwd;
+        app.state_db = state_db;
+        app.environment_manager = environment_manager;
+        app.harness_overrides.cwd = has_explicit_cwd.then_some(explicit_cwd);
+        app.chat_widget
+            .handle_thread_session_quiet(test_thread_session(ThreadId::new(), active_cwd));
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+
+        let control = app
+            .resume_target_session(
+                &mut tui,
+                &mut app_server,
+                crate::resume_picker::SessionTarget {
+                    path: Some(rollout_path),
+                    thread_id,
+                },
+            )
+            .await?;
+
+        assert!(matches!(control, AppRunControl::Continue));
+        let expected_cwd = temp_dir.path().join(expected_directory);
+        assert!(!crate::session_resume::cwds_differ(
+            app.config.cwd.as_path(),
+            &expected_cwd,
+        ));
+        assert!(!crate::session_resume::cwds_differ(
+            app.chat_widget.config_ref().cwd.as_path(),
+            &expected_cwd,
+        ));
+        assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+
+        let control =
+            Box::pin(app.handle_event(&mut tui, &mut app_server, AppEvent::ForkCurrentSession))
+                .await?;
+
+        assert!(matches!(control, AppRunControl::Continue));
+        assert!(!crate::session_resume::cwds_differ(
+            app.chat_widget.config_ref().cwd.as_path(),
+            &expected_cwd,
+        ));
+        assert_ne!(app.chat_widget.thread_id(), Some(thread_id));
+        app_server.shutdown().await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let launch_cwd = temp_dir.path().join("launch");
+    let active_cwd = temp_dir.path().join("active");
+    let first_session_cwd = temp_dir.path().join("first-session");
+    let second_session_cwd = temp_dir.path().join("second-session");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&launch_cwd)?;
+    std::fs::create_dir_all(&active_cwd)?;
+    std::fs::create_dir_all(&first_session_cwd)?;
+    std::fs::create_dir_all(&second_session_cwd)?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(active_cwd.clone()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+    let immediately_selected_cwd = crate::cwd_prompt::CwdSelection::CurrentAndRemember
+        .selected_cwd(&active_cwd, &first_session_cwd, &launch_cwd);
+    assert!(!crate::session_resume::cwds_differ(
+        immediately_selected_cwd,
+        &launch_cwd,
+    ));
+    crate::legacy_core::config::edit::ConfigEditsBuilder::for_config(&config)
+        .set_resume_cwd(codex_config::types::ResumeCwdMode::Current)
+        .apply()
+        .await
+        .map_err(std::io::Error::other)?;
+
+    let mut targets = Vec::new();
+    for (filename_timestamp, metadata_timestamp, session_cwd) in [
+        (
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            first_session_cwd,
+        ),
+        (
+            "2025-01-05T12-01-00",
+            "2025-01-05T12:01:00Z",
+            second_session_cwd,
+        ),
+    ] {
+        let thread_id = app_test_support::create_fake_rollout(
+            &codex_home,
+            filename_timestamp,
+            metadata_timestamp,
+            "Saved user message",
+            Some(&config.model_provider_id),
+            /*git_info*/ None,
+        )
+        .expect("materialized rollout should be created");
+        let rollout_path =
+            app_test_support::rollout_path(&codex_home, filename_timestamp, &thread_id);
+        let mut rollout_lines = std::fs::read_to_string(&rollout_path)?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rollout_lines[0]["payload"]["cwd"] = serde_json::to_value(&session_cwd)?;
+        std::fs::write(
+            &rollout_path,
+            format!(
+                "{}\n",
+                rollout_lines
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        )?;
+        targets.push(crate::resume_picker::SessionTarget {
+            path: Some(rollout_path),
+            thread_id: ThreadId::from_string(&thread_id)?,
+        });
+    }
+    let state_db =
+        crate::init_state_db_for_app_server_target(&config, &crate::AppServerTarget::Embedded)
+            .await?;
+    let mut app_server = crate::start_app_server_for_picker(
+        &config,
+        &crate::AppServerTarget::Embedded,
+        state_db.clone(),
+        Arc::new(EnvironmentManager::default_for_tests()),
+    )
+    .await?;
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.config = config;
+    app.launch_cwd = launch_cwd.clone();
+    app.state_db = state_db;
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(ThreadId::new(), active_cwd));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    for target_session in targets {
+        let control = app
+            .resume_target_session(&mut tui, &mut app_server, target_session)
+            .await?;
+
+        assert!(matches!(control, AppRunControl::Continue));
+        assert!(!crate::session_resume::cwds_differ(
+            app.config.cwd.as_path(),
+            &launch_cwd,
+        ));
+        assert!(!crate::session_resume::cwds_differ(
+            app.chat_widget.config_ref().cwd.as_path(),
+            &launch_cwd,
+        ));
+    }
+    app_server.shutdown().await?;
+    Ok(())
 }
 
 #[tokio::test]

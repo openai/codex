@@ -55,6 +55,7 @@ use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::ResumeCwdMode;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
@@ -946,6 +947,7 @@ fn config_toml_deserializes_model_availability_nux() {
             pet: None,
             pet_anchor: TuiPetAnchor::Composer,
             session_picker_view: None,
+            resume_cwd: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -3685,6 +3687,19 @@ session_picker_view = "dense"
 }
 
 #[test]
+fn tui_resume_cwd_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+resume_cwd = "current"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.resume_cwd),
+        Some(ResumeCwdMode::Current),
+    );
+}
+
+#[test]
 fn tui_pet_deserializes_from_toml() {
     let cfg = r#"
 [tui]
@@ -3785,6 +3800,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             pet: None,
             pet_anchor: TuiPetAnchor::Composer,
             session_picker_view: None,
+            resume_cwd: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
@@ -3965,6 +3981,35 @@ async fn runtime_config_resolves_session_picker_view_default_and_override() {
         cfg.tui_session_picker_view,
         SessionPickerViewMode::Comfortable
     );
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_resume_cwd_default_and_override() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(cfg.tui_resume_cwd, None);
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                resume_cwd: Some(ResumeCwdMode::Session),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load root override config");
+
+    assert_eq!(cfg.tui_resume_cwd, Some(ResumeCwdMode::Session));
 }
 
 #[tokio::test]

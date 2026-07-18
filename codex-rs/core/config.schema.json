@@ -2754,6 +2754,25 @@
         }
       ]
     },
+    "ResumeCwdMode": {
+      "description": "Working directory to use when resuming or forking a session.",
+      "oneOf": [
+        {
+          "description": "Use the directory where Codex was launched.",
+          "enum": [
+            "current"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use the latest working directory recorded in the selected session.",
+          "enum": [
+            "session"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "RolloutBudgetConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -3284,6 +3303,15 @@
           "default": false,
           "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
           "type": "boolean"
+        },
+        "resume_cwd": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResumeCwdMode"
+            }
+          ],
+          "default": null,
+          "description": "Working directory to use when resuming or forking a session. When unset, prompt if the current and session directories differ."
         },
         "session_picker_view": {
           "allOf": [
