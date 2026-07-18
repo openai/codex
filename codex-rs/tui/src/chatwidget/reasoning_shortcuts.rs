@@ -154,7 +154,8 @@ impl ChatWidget {
                 )));
             }
         } else {
-            self.apply_model_and_effort_without_persist(current_model, Some(next_effort));
+            self.app_event_tx
+                .send(AppEvent::UpdateReasoningEffort(Some(next_effort)));
         }
 
         true
