@@ -32,6 +32,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
@@ -127,7 +128,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
-async fn thread_resume_paginated_uses_model_context_without_history() -> Result<()> {
+async fn thread_resume_paginated_metadata_only_uses_model_context() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -147,48 +148,6 @@ async fn thread_resume_paginated_uses_model_context_without_history() -> Result<
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
-    let full_resume_id = primary
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: conversation_id.clone(),
-            ..Default::default()
-        })
-        .await?;
-    let full_resume_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_error_message(RequestId::Integer(full_resume_id)),
-    )
-    .await??;
-    assert_eq!(full_resume_err.error.code, -32600);
-    assert_eq!(
-        full_resume_err.error.message,
-        "paginated threads do not support full-history thread/resume; pass excludeTurns=true"
-    );
-
-    let initial_page_resume_id = primary
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: conversation_id.clone(),
-            exclude_turns: true,
-            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                limit: None,
-                sort_direction: None,
-                items_view: None,
-            }),
-            ..Default::default()
-        })
-        .await?;
-    let initial_page_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_error_message(RequestId::Integer(initial_page_resume_id)),
-    )
-    .await??;
-    assert_eq!(initial_page_err.error.code, -32600);
-    assert_eq!(
-        initial_page_err.error.message,
-        "paginated threads do not support initialTurnsPage; use turnsBackwardsCursor and itemsBackwardsCursor"
-    );
-
-    // LocalThreadStore rejects paginated full-history reads, so this cold resume only succeeds
-    // when app-server asks for the bounded latest model context.
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id.clone(),
@@ -207,7 +166,6 @@ async fn thread_resume_paginated_uses_model_context_without_history() -> Result<
     assert_eq!(resumed.id, conversation_id);
     assert_eq!(resumed.history_mode, ThreadHistoryMode::Paginated);
     assert!(resumed.turns.is_empty());
-
     Ok(())
 }
 
@@ -3325,7 +3283,7 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
 }
 
 #[tokio::test]
-async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> Result<()> {
+async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> Result<()> {
     let server = responses::start_mock_server().await;
     let first_response = responses::sse_response(responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -3337,7 +3295,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         responses::ev_assistant_message("msg-2", "Done"),
         responses::ev_completed("resp-2"),
     ]))
-    .set_delay(std::time::Duration::from_millis(500));
+    .set_delay(std::time::Duration::from_secs(2));
     let _response_mock =
         responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
     let codex_home = TempDir::new()?;
@@ -3352,6 +3310,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     let start_id = primary
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
+            history_mode: Some(ThreadHistoryMode::Paginated),
             ..Default::default()
         })
         .await?;
@@ -3373,11 +3332,12 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             ..Default::default()
         })
         .await?;
-    timeout(
+    let seed_turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
     )
     .await??;
+    let TurnStartResponse { turn: seed_turn } = to_response::<TurnStartResponse>(seed_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/completed"),
@@ -3415,9 +3375,9 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             model: Some("not-the-running-model".to_string()),
             cwd: Some("/tmp".to_string()),
             initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                limit: None,
-                sort_direction: None,
-                items_view: None,
+                limit: Some(1),
+                sort_direction: Some(SortDirection::Desc),
+                items_view: Some(TurnItemsView::NotLoaded),
             }),
             ..Default::default()
         })
@@ -3435,15 +3395,41 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(model, "gpt-5.4");
     let initial_turns_page = initial_turns_page.expect("resume should include initial turns page");
+    assert_eq!(initial_turns_page.data.len(), 1);
     let resumed_running_turn = initial_turns_page
         .data
         .first()
         .expect("resume page should include the running turn");
     assert_eq!(resumed_running_turn.id, running_turn.id);
-    assert_eq!(resumed_running_turn.items_view, TurnItemsView::Summary);
+    assert_eq!(resumed_running_turn.items_view, TurnItemsView::NotLoaded);
+    assert!(resumed_running_turn.items.is_empty());
     assert_eq!(resumed_running_turn.status, TurnStatus::InProgress);
     assert!(initial_turns_page.backwards_cursor.is_some());
-    assert_eq!(initial_turns_page.next_cursor, None);
+    assert!(initial_turns_page.next_cursor.is_some());
+
+    let asc_resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            exclude_turns: true,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: Some(1),
+                sort_direction: Some(SortDirection::Asc),
+                items_view: Some(TurnItemsView::NotLoaded),
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let asc_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(asc_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        initial_turns_page, ..
+    } = to_response::<ThreadResumeResponse>(asc_resume_resp)?;
+    let initial_turns_page = initial_turns_page.expect("resume should include initial turns page");
+    assert_eq!(initial_turns_page.data.len(), 1);
+    assert_eq!(initial_turns_page.data[0].id, seed_turn.id);
     // The running-thread resume response is queued onto the thread listener task.
     // If the in-flight turn completes before that queued command runs, the response
     // can legitimately observe the thread as idle.
