@@ -36,6 +36,7 @@ struct RolloutAuditFile {
 #[derive(Default)]
 struct RolloutScan {
     files: Vec<RolloutAuditFile>,
+    existing_keys: HashSet<PathBuf>,
     scan_errors: Vec<String>,
     malformed_names: Vec<PathBuf>,
     reached_scan_cap: bool,
@@ -231,7 +232,7 @@ fn parity_check_from_scan_and_rows(
     let mut rows_by_key: HashMap<PathBuf, Vec<&ThreadStateAuditRow>> = HashMap::new();
     for row in &rows {
         rows_by_key
-            .entry(path_key(&row.rollout_path))
+            .entry(rollout_path_key(&row.rollout_path))
             .or_default()
             .push(row);
     }
@@ -241,7 +242,12 @@ fn parity_check_from_scan_and_rows(
     let scan_complete = !scan.reached_scan_cap;
     let stale_rows = if scan_complete {
         rows.iter()
-            .filter(|row| !row.rollout_path.is_file())
+            .filter(|row| {
+                !scan
+                    .existing_keys
+                    .contains(&rollout_path_key(&row.rollout_path))
+                    && !row.rollout_path.is_file()
+            })
             .collect::<Vec<_>>()
     } else {
         Vec::new()
@@ -250,13 +256,15 @@ fn parity_check_from_scan_and_rows(
         rows.iter()
             .filter_map(|row| {
                 let expected_archived = rollout_by_key
-                    .get(&path_key(&row.rollout_path))
+                    .get(&rollout_path_key(&row.rollout_path))
                     .map(|file| file.archived)
                     .or_else(|| {
-                        row.rollout_path
-                            .is_file()
-                            .then(|| archived_from_rollout_path(codex_home, &row.rollout_path))
-                            .flatten()
+                        (scan
+                            .existing_keys
+                            .contains(&rollout_path_key(&row.rollout_path))
+                            || row.rollout_path.is_file())
+                        .then(|| archived_from_rollout_path(codex_home, &row.rollout_path))
+                        .flatten()
                     })?;
                 (expected_archived != row.archived).then_some(row)
             })
@@ -482,13 +490,19 @@ async fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) 
                 dirs.push(path);
                 continue;
             }
-            if !file_type.is_file() || !is_rollout_file(&path) {
+            let logical_path = codex_rollout::plain_rollout_path(&path);
+            if !file_type.is_file()
+                || !is_rollout_file(&logical_path)
+                || (path != logical_path && logical_path.is_file())
+            {
                 continue;
             }
             if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
                 scan.reached_scan_cap = true;
                 return;
             }
+            let key = path_key(&logical_path);
+            scan.existing_keys.insert(key.clone());
             let thread_id = match thread_id_from_rollout(&path).await {
                 RolloutThreadId::Id(thread_id) => thread_id,
                 RolloutThreadId::MalformedName => {
@@ -501,7 +515,7 @@ async fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) 
                 }
             };
             scan.files.push(RolloutAuditFile {
-                key: path_key(&path),
+                key,
                 path,
                 archived,
                 thread_id,
@@ -558,7 +572,8 @@ async fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
     }
     // Legacy rollouts can omit session metadata, so use the validated filename fallback after
     // the bounded prefix without retaining the first item or loading the full history.
-    codex_rollout::builder_from_items(&[], path)
+    let logical_path = codex_rollout::plain_rollout_path(path);
+    codex_rollout::builder_from_items(&[], &logical_path)
         .map(|builder| RolloutThreadId::Id(builder.id.to_string()))
         .unwrap_or(RolloutThreadId::MalformedName)
 }
@@ -581,6 +596,10 @@ fn count_or_skipped(count: usize, complete: bool) -> String {
 
 fn path_key(path: &Path) -> PathBuf {
     normalize_for_path_comparison(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn rollout_path_key(path: &Path) -> PathBuf {
+    path_key(&codex_rollout::plain_rollout_path(path))
 }
 
 fn archived_from_rollout_path(codex_home: &Path, path: &Path) -> Option<bool> {
@@ -893,6 +912,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_inventory_check_matches_compressed_rollouts_to_canonical_db_paths() {
+        let fixture = Fixture::new().await;
+        let active_id = "00000000-0000-0000-0000-000000000001";
+        let archived_id = "00000000-0000-0000-0000-000000000002";
+        let active_path =
+            fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", active_id);
+        let archived_path =
+            fixture.write_rollout(/*archived*/ true, "2025-01-02T11-00-00", archived_id);
+        compress_rollout(&active_path);
+        compress_rollout(&archived_path);
+        fixture
+            .insert_thread_row(active_id, active_path.as_path(), /*archived*/ false)
+            .await;
+        fixture
+            .insert_thread_row(archived_id, archived_path.as_path(), /*archived*/ true)
+            .await;
+
+        let check = thread_inventory_check_for_roots(
+            fixture.codex_home.path(),
+            fixture.sqlite_home.path(),
+            "test-provider",
+        )
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_detail(&check, "rollout DB active files", "1");
+        assert_detail(&check, "rollout DB archived files", "1");
+        assert_detail(&check, "rollout DB scan errors", "0");
+        assert_detail(&check, "rollout DB missing active rows", "0");
+        assert_detail(&check, "rollout DB missing archived rows", "0");
+        assert_detail(&check, "rollout DB stale rows", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_prefers_plain_rollout_over_compressed_sibling() {
+        let fixture = Fixture::new().await;
+        let thread_id = "00000000-0000-0000-0000-000000000001";
+        let path = fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", thread_id);
+        compress_rollout(&path);
+        fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", thread_id);
+        fixture
+            .insert_thread_row(thread_id, path.as_path(), /*archived*/ false)
+            .await;
+
+        let check = thread_inventory_check_for_roots(
+            fixture.codex_home.path(),
+            fixture.sqlite_home.path(),
+            "test-provider",
+        )
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_detail(&check, "rollout DB active files", "1");
+        assert_detail(&check, "rollout DB duplicate rollout thread ids", "0");
+        assert_detail(&check, "rollout DB stale rows", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_uses_compressed_metadata_id_and_legacy_filename_fallback() {
+        let fixture = Fixture::new().await;
+        let filename_id = "00000000-0000-0000-0000-000000000001";
+        let metadata_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
+            .expect("metadata thread id");
+        let metadata_path =
+            fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", filename_id);
+        let contents = std::fs::read_to_string(&metadata_path).expect("rollout file");
+        let mut rollout_line =
+            serde_json::from_str::<RolloutLine>(contents.trim()).expect("rollout line");
+        let RolloutItem::SessionMeta(session_meta) = &mut rollout_line.item else {
+            panic!("expected session metadata");
+        };
+        session_meta.meta.session_id = metadata_id.into();
+        session_meta.meta.id = metadata_id;
+        let contents = serde_json::to_string(&rollout_line).expect("rollout line");
+        std::fs::write(&metadata_path, format!("{contents}\n")).expect("rollout file");
+        compress_rollout(&metadata_path);
+        fixture
+            .insert_thread_row(
+                filename_id,
+                metadata_path.as_path(),
+                /*archived*/ false,
+            )
+            .await;
+
+        let legacy_id = "00000000-0000-0000-0000-000000000003";
+        let legacy_path = fixture.codex_home.path().join(format!(
+            "sessions/2025/01/02/rollout-2025-01-02T11-00-00-{legacy_id}.jsonl"
+        ));
+        std::fs::write(
+            &legacy_path,
+            "{\"timestamp\":\"2025-01-02T11:00:00Z\",\"type\":\"compacted\",\"payload\":{\"message\":\"legacy history\"}}\n",
+        )
+        .expect("legacy rollout");
+        compress_rollout(&legacy_path);
+        fixture
+            .insert_thread_row(legacy_id, legacy_path.as_path(), /*archived*/ false)
+            .await;
+
+        let check = thread_inventory_check_for_roots(
+            fixture.codex_home.path(),
+            fixture.sqlite_home.path(),
+            "test-provider",
+        )
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_detail(&check, "rollout DB active files", "2");
+        assert_detail(&check, "rollout DB malformed file names", "0");
+        assert_detail(&check, "rollout DB scan errors", "0");
+        assert_detail(&check, "rollout DB missing active rows", "1");
+        assert_detail(&check, "rollout DB stale rows", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_reports_corrupt_compressed_rollout_without_stale_row() {
+        let fixture = Fixture::new().await;
+        let thread_id = "00000000-0000-0000-0000-000000000001";
+        let path = fixture.write_rollout(/*archived*/ false, "2025-01-02T10-00-00", thread_id);
+        let compressed_path = path.with_file_name(format!(
+            "{}.zst",
+            path.file_name()
+                .expect("rollout file name")
+                .to_string_lossy()
+        ));
+        std::fs::write(&compressed_path, "not zstd").expect("corrupt compressed rollout");
+        std::fs::remove_file(&path).expect("remove plain rollout");
+        fixture
+            .insert_thread_row(thread_id, path.as_path(), /*archived*/ false)
+            .await;
+
+        let check = thread_inventory_check_for_roots(
+            fixture.codex_home.path(),
+            fixture.sqlite_home.path(),
+            "test-provider",
+        )
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_detail(&check, "rollout DB scan errors", "1");
+        assert_detail(&check, "rollout DB stale rows", "0");
+    }
+
+    #[tokio::test]
+    async fn thread_inventory_check_ignores_compression_temp_files() {
+        let fixture = Fixture::new().await;
+        let temp_path = fixture.codex_home.path().join(
+            "sessions/2025/01/02/rollout-2025-01-02T10-00-00-00000000-0000-0000-0000-000000000001.jsonl.zst.compress.1.0.tmp",
+        );
+        std::fs::create_dir_all(temp_path.parent().expect("rollout temp parent"))
+            .expect("rollout temp dir");
+        std::fs::write(temp_path, "not a completed rollout").expect("rollout temp file");
+
+        let check = thread_inventory_check_for_roots(
+            fixture.codex_home.path(),
+            fixture.sqlite_home.path(),
+            "test-provider",
+        )
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_detail(&check, "rollout DB active files", "0");
+        assert_detail(&check, "rollout DB scan errors", "0");
+    }
+
+    #[tokio::test]
     async fn thread_id_from_rollout_falls_back_for_legacy_non_meta_record() {
         let home = TempDir::new().expect("temp dir");
         let thread_id = "00000000-0000-0000-0000-000000000001";
@@ -1098,6 +1282,20 @@ mod tests {
     struct Fixture {
         codex_home: TempDir,
         sqlite_home: TempDir,
+    }
+
+    fn compress_rollout(path: &Path) {
+        let compressed_path = path.with_file_name(format!(
+            "{}.zst",
+            path.file_name()
+                .expect("rollout file name")
+                .to_string_lossy()
+        ));
+        let contents = std::fs::read(path).expect("rollout file");
+        let compressed =
+            zstd::stream::encode_all(contents.as_slice(), /*level*/ 3).expect("compress rollout");
+        std::fs::write(compressed_path, compressed).expect("compressed rollout");
+        std::fs::remove_file(path).expect("remove plain rollout");
     }
 
     impl Fixture {
