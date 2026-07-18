@@ -6,20 +6,19 @@ Scenario: Second turn changes cwd, approval policy, and personality while keepin
 
 ## First Request (Baseline)
 00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first turn
 
 ## Second Request (Turn Overrides)
 00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first turn
 03:message/assistant:turn one complete
-04:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <personality_spec> The user has requested a new communication style. Future messages should adhe...
-05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-06:message/user:second turn with context updates
+04:message/developer:<personality_spec> The user has requested a new communication style. Future messages should adhe...
+05:message/developer:<PERMISSIONS_INSTRUCTIONS>
+06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+07:message/user:second turn with context updates

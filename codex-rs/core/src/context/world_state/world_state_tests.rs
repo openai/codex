@@ -53,6 +53,14 @@ impl ContextualUserFragment for TestFragment {
     }
 }
 
+#[test]
+fn world_state_hash_normalizes_crlf_line_endings() {
+    assert_eq!(
+        WorldStateHash::from_fragment(&TestFragment("line one\r\nline two".to_string())),
+        WorldStateHash::from_fragment(&TestFragment("line one\nline two".to_string())),
+    );
+}
+
 struct DuplicateTestSection;
 
 impl WorldStateSection for DuplicateTestSection {
