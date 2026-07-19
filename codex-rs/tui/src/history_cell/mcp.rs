@@ -3,10 +3,9 @@
 use super::*;
 
 #[derive(Debug)]
-struct CompletedMcpToolCallWithImageOutput {
-    _image: DynamicImage,
-}
-impl HistoryCell for CompletedMcpToolCallWithImageOutput {
+struct McpImageOutputCell;
+
+impl HistoryCell for McpImageOutputCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec!["tool result (image output)".into()]
     }
@@ -267,15 +266,15 @@ pub(crate) fn new_active_mcp_tool_call(
 ///   even when the first block is not a valid image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<codex_protocol::mcp::CallToolResult, String>,
-) -> Option<CompletedMcpToolCallWithImageOutput> {
-    let image = result
+) -> Option<McpImageOutputCell> {
+    result
         .as_ref()
         .ok()?
         .content
         .iter()
         .find_map(decode_mcp_image)?;
 
-    Some(CompletedMcpToolCallWithImageOutput { _image: image })
+    Some(McpImageOutputCell)
 }
 
 /// Decodes an MCP `ImageContent` block into an in-memory image.
