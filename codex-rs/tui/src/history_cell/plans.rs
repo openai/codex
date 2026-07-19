@@ -1,5 +1,6 @@
 //! Proposed-plan and plan-update history cells.
 
+use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
 
 /// Transient active-cell representation of the mutable tail of a proposed-plan stream.
@@ -58,6 +59,7 @@ pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPl
     ProposedPlanCell {
         plan_markdown,
         cwd: cwd.to_path_buf(),
+        rendered_lines: MarkdownRenderCache::default(),
     }
 }
 
@@ -84,6 +86,7 @@ pub(crate) struct ProposedPlanCell {
     plan_markdown: String,
     /// Session cwd used to keep local file-link display aligned with live streamed plan rendering.
     cwd: PathBuf,
+    rendered_lines: MarkdownRenderCache,
 }
 
 /// Transient proposed-plan history emitted while a plan is still streaming.
@@ -103,27 +106,29 @@ impl HistoryCell for ProposedPlanCell {
     }
 
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        let mut lines = vec![
-            HyperlinkLine::new(vec!["• ".dim(), "Proposed Plan".bold()].into()),
-            HyperlinkLine::new(Line::from(" ")),
-        ];
+        self.rendered_lines.render(width, || {
+            let mut lines = vec![
+                HyperlinkLine::new(vec!["• ".dim(), "Proposed Plan".bold()].into()),
+                HyperlinkLine::new(Line::from(" ")),
+            ];
 
-        let mut plan_lines = vec![HyperlinkLine::new(Line::from(" "))];
-        let plan_style = proposed_plan_style();
-        let wrap_width = width.saturating_sub(4).max(1) as usize;
-        let mut body = crate::markdown::render_markdown_agent_with_links_and_cwd(
-            &self.plan_markdown,
-            Some(wrap_width),
-            Some(self.cwd.as_path()),
-        );
-        if body.is_empty() {
-            body.push(HyperlinkLine::new(Line::from("(empty)".dim().italic())));
-        }
-        plan_lines.extend(prefix_hyperlink_lines(body, "  ".into(), "  ".into()));
-        plan_lines.push(HyperlinkLine::new(Line::from(" ")));
+            let mut plan_lines = vec![HyperlinkLine::new(Line::from(" "))];
+            let plan_style = proposed_plan_style();
+            let wrap_width = width.saturating_sub(4).max(1) as usize;
+            let mut body = crate::markdown::render_markdown_agent_with_links_and_cwd(
+                &self.plan_markdown,
+                Some(wrap_width),
+                Some(self.cwd.as_path()),
+            );
+            if body.is_empty() {
+                body.push(HyperlinkLine::new(Line::from("(empty)".dim().italic())));
+            }
+            plan_lines.extend(prefix_hyperlink_lines(body, "  ".into(), "  ".into()));
+            plan_lines.push(HyperlinkLine::new(Line::from(" ")));
 
-        lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
-        lines
+            lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
+            lines
+        })
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
@@ -134,6 +139,10 @@ impl HistoryCell for ProposedPlanCell {
         raw_lines_from_source(&self.plan_markdown)
     }
 }
+
+#[cfg(test)]
+#[path = "plans_tests.rs"]
+mod tests;
 
 impl HistoryCell for ProposedPlanStreamCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
