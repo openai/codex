@@ -449,6 +449,10 @@ impl HistoryCell for AgentMarkdownCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         raw_lines_from_source(&self.markdown_source)
     }
+
+    fn has_stable_transcript_height(&self) -> bool {
+        self.rendered_lines.is_some()
+    }
 }
 
 #[cfg(test)]

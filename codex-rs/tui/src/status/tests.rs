@@ -8,9 +8,12 @@ use super::rate_limits::SpendControlLimitSnapshotDisplay;
 use super::rate_limits::StatusRateLimitData;
 use super::rate_limits::compose_rate_limit_data_many;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::PlainHistoryCell;
+use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::PermissionProfileSnapshot;
+use crate::pager_overlay::TranscriptOverlay;
 use crate::status::StatusAccountDisplay;
 use crate::status::remote_connection::RemoteConnectionStatus;
 use crate::test_support::PathBufExt;
@@ -52,6 +55,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
+use std::sync::Arc;
 use tempfile::TempDir;
 use unicode_width::UnicodeWidthStr;
 
@@ -204,6 +208,28 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
             }
         })
         .collect()
+}
+
+fn buffer_to_text(buffer: &Buffer, width: u16) -> String {
+    let lines = buffer
+        .content
+        .chunks(usize::from(width))
+        .map(|row| {
+            row.iter()
+                .map(|cell| {
+                    let symbol = cell.symbol();
+                    symbol
+                        .strip_prefix("\x1b]8;;")
+                        .and_then(|symbol| symbol.split_once('\x07'))
+                        .and_then(|(_, symbol)| symbol.strip_suffix("\x1b]8;;\x07"))
+                        .unwrap_or(symbol)
+                })
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    sanitize_directory(lines).join("\n")
 }
 
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
@@ -1664,6 +1690,89 @@ async fn status_snapshot_shows_refreshing_limits_notice() {
     }
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn transcript_overlay_remeasures_status_after_rate_limit_refresh() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+    let usage = TokenUsage::default();
+    let now = Local
+        .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
+        .single()
+        .expect("timestamp");
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
+
+    let (status, handle) = new_status_output_with_rate_limits_handle(
+        &config,
+        /*runtime_model_provider_base_url*/ None,
+        /*remote_connection*/ None,
+        /*account_display*/ None,
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        None,
+        now,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ true,
+    );
+    let mut overlay =
+        TranscriptOverlay::new(vec![Arc::new(status)], RuntimeKeymap::defaults().pager);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 30,
+    );
+    let mut buffer = Buffer::empty(area);
+    overlay.render(area, &mut buffer);
+    let before = buffer_to_text(&buffer, area.width);
+
+    handle.finish_rate_limit_refresh(
+        &[RateLimitSnapshotDisplay {
+            limit_name: "spark".to_string(),
+            captured_at: now,
+            primary: Some(RateLimitWindowDisplay {
+                used_percent: 45.0,
+                resets_at: Some("soon".to_string()),
+                window_minutes: Some(300),
+            }),
+            secondary: Some(RateLimitWindowDisplay {
+                used_percent: 30.0,
+                resets_at: Some("later".to_string()),
+                window_minutes: Some(10_080),
+            }),
+            credits: None,
+            individual_limit: None,
+        }],
+        now,
+    );
+    overlay.insert_cell(Arc::new(PlainHistoryCell::new(vec!["next message".into()])));
+    buffer = Buffer::empty(area);
+    overlay.render(area, &mut buffer);
+    let after = buffer_to_text(&buffer, area.width);
+
+    assert!(
+        after.contains("spark limit"),
+        "status output was clipped: {after:?}"
+    );
+    assert!(
+        after.contains("5h limit"),
+        "status output was clipped: {after:?}"
+    );
+    assert!(
+        after.contains("Weekly limit"),
+        "status output was clipped: {after:?}"
+    );
+    insta::assert_snapshot!(
+        "transcript_overlay_status_rate_limit_refresh",
+        format!("before:\n{before}\n\nafter:\n{after}")
+    );
 }
 
 #[tokio::test]

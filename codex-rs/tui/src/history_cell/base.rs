@@ -162,4 +162,8 @@ impl HistoryCell for CompositeHistoryCell {
         }
         out
     }
+
+    fn has_stable_transcript_height(&self) -> bool {
+        false
+    }
 }
