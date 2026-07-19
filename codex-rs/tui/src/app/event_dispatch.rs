@@ -185,7 +185,6 @@ impl App {
                             match self
                                 .replace_chat_widget_with_app_server_thread(
                                     tui,
-                                    app_server,
                                     forked,
                                     ThreadAttachPresentation::SessionLineage,
                                     /*initial_user_message*/ None,
@@ -283,7 +282,6 @@ impl App {
                         match self
                             .replace_chat_widget_with_app_server_thread(
                                 tui,
-                                app_server,
                                 forked,
                                 ThreadAttachPresentation::PromptEdit,
                                 /*initial_user_message*/ None,
