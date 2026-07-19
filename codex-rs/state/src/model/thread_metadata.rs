@@ -73,7 +73,7 @@ pub struct ExtractionOutcome {
     pub parse_errors: usize,
 }
 
-/// Canonical thread metadata derived from rollout files.
+/// Canonical persisted thread metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadMetadata {
     /// The thread identifier.
@@ -110,6 +110,8 @@ pub struct ThreadMetadata {
     pub cli_version: String,
     /// A best-effort thread title.
     pub title: String,
+    /// Explicit user-facing thread name, if one was set.
+    pub name: Option<String>,
     /// Best available user-facing preview for discovery and list display.
     pub preview: Option<String>,
     /// The sandbox policy (stringified enum).
@@ -245,6 +247,7 @@ impl ThreadMetadataBuilder {
             cwd: self.cwd.clone(),
             cli_version: self.cli_version.clone().unwrap_or_default(),
             title: String::new(),
+            name: None,
             preview: None,
             sandbox_policy,
             approval_mode,
@@ -332,6 +335,9 @@ impl ThreadMetadata {
         if self.title != other.title {
             diffs.push("title");
         }
+        if self.name != other.name {
+            diffs.push("name");
+        }
         if self.preview != other.preview {
             diffs.push("preview");
         }
@@ -386,6 +392,7 @@ pub(crate) struct ThreadRow {
     cwd: String,
     cli_version: String,
     title: String,
+    name: Option<String>,
     preview: String,
     sandbox_policy: String,
     approval_mode: String,
@@ -417,6 +424,7 @@ impl ThreadRow {
             cwd: row.try_get("cwd")?,
             cli_version: row.try_get("cli_version")?,
             title: row.try_get("title")?,
+            name: row.try_get("name")?,
             preview: row.try_get("preview")?,
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
@@ -452,6 +460,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             cwd,
             cli_version,
             title,
+            name,
             preview,
             sandbox_policy,
             approval_mode,
@@ -486,6 +495,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             cwd: PathBuf::from(cwd),
             cli_version,
             title,
+            name,
             preview: (!preview.is_empty()).then_some(preview),
             sandbox_policy,
             approval_mode,
@@ -583,6 +593,7 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             cli_version: "0.0.0".to_string(),
             title: String::new(),
+            name: None,
             preview: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
@@ -615,6 +626,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/workspace"),
             cli_version: "0.0.0".to_string(),
             title: String::new(),
+            name: None,
             preview: None,
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),

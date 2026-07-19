@@ -1,15 +1,12 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 
-use codex_protocol::ThreadId;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
-use codex_rollout::find_thread_names_by_ids;
 use codex_rollout::parse_cursor;
 
 use super::LocalThreadStore;
-use super::helpers::distinct_thread_metadata_title;
-use super::helpers::set_thread_name_from_title;
+use super::helpers::resolve_thread_names;
+use super::helpers::set_thread_name;
 use super::helpers::stored_thread_from_rollout_item;
 use crate::ListThreadsParams;
 use crate::SortDirection;
@@ -77,32 +74,14 @@ pub(super) async fn list_threads(
         })
         .collect::<Vec<_>>();
 
-    let thread_ids = items
+    let thread_history_modes = items
         .iter()
-        .map(|thread| thread.thread_id)
-        .collect::<HashSet<_>>();
-    let mut names = HashMap::<ThreadId, String>::with_capacity(thread_ids.len());
-    if let Some(state_db_ctx) = store.state_db().await {
-        for &thread_id in &thread_ids {
-            let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
-                continue;
-            };
-            if let Some(title) = distinct_thread_metadata_title(&metadata) {
-                names.insert(thread_id, title);
-            }
-        }
-    }
-    if names.len() < thread_ids.len()
-        && let Ok(legacy_names) =
-            find_thread_names_by_ids(store.config.codex_home.as_path(), &thread_ids).await
-    {
-        for (thread_id, title) in legacy_names {
-            names.entry(thread_id).or_insert(title);
-        }
-    }
+        .map(|thread| (thread.thread_id, thread.history_mode))
+        .collect::<HashMap<_, _>>();
+    let names = resolve_thread_names(store, &thread_history_modes).await;
     for thread in &mut items {
-        if let Some(title) = names.get(&thread.thread_id).cloned() {
-            set_thread_name_from_title(thread, title);
+        if let Some(name) = names.get(&thread.thread_id).cloned() {
+            set_thread_name(thread, name);
         }
     }
 
@@ -334,6 +313,74 @@ mod tests {
         assert_eq!(
             page.items[0].first_user_message.as_deref(),
             Some("plain preview")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_paginated_threads_uses_sqlite_name_over_legacy_compatibility() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(104);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = home.path().join("rollout-paginated-name-search.jsonl");
+        fs::write(&rollout_path, "").expect("placeholder rollout file");
+
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        runtime
+            .mark_backfill_complete(/*last_watermark*/ None)
+            .await
+            .expect("backfill should be complete");
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path,
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.history_mode = ThreadHistoryMode::Paginated;
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.cwd = home.path().to_path_buf();
+        builder.cli_version = Some("test_version".to_string());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.name = Some("canonical paginated name".to_string());
+        metadata.title = "stale title name".to_string();
+        metadata.first_user_message = Some("plain preview".to_string());
+        metadata.preview = metadata.first_user_message.clone();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+        codex_rollout::append_thread_name(home.path(), thread_id, "stale index name")
+            .await
+            .expect("append legacy thread name");
+
+        let page = store
+            .list_threads(ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: None,
+                cwd_filters: None,
+                archived: false,
+                search_term: Some("canonical".to_string()),
+                relation_filter: None,
+                use_state_db_only: true,
+            })
+            .await
+            .expect("thread listing");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].thread_id, thread_id);
+        assert_eq!(
+            page.items[0].name.as_deref(),
+            Some("canonical paginated name")
         );
     }
 
