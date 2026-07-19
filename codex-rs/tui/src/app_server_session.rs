@@ -641,9 +641,12 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
             })?;
-        let fork_parent_title = self
-            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
-            .await;
+        let fork_parent_title = if presentation == ForkPresentation::SideConversation {
+            None
+        } else {
+            self.fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+                .await
+        };
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
         started.session.fork_parent_title = fork_parent_title;
@@ -2440,6 +2443,52 @@ mod tests {
             .await?;
 
         assert_eq!(resumed.session.service_tier, None);
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn side_fork_skips_parent_title_lookup_but_normal_ephemeral_fork_keeps_it() -> Result<()>
+    {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&codex_home).await;
+        let source_thread_id = ThreadId::from_string(
+            &create_fake_rollout(
+                codex_home.path(),
+                "2025-01-05T12-00-00",
+                "2025-01-05T12:00:00Z",
+                "Saved user message",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create source rollout"),
+        )?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        app_server
+            .resume_thread(
+                config.clone(),
+                source_thread_id,
+                ResumeModelSettings::RestoreFromThread,
+            )
+            .await?;
+        app_server
+            .thread_set_name(source_thread_id, "Source thread".to_string())
+            .await?;
+
+        let mut ephemeral_config = config;
+        ephemeral_config.ephemeral = true;
+        let normal_ephemeral_fork = app_server
+            .fork_thread(ephemeral_config.clone(), source_thread_id)
+            .await?;
+        let side_fork = app_server
+            .fork_side_thread(ephemeral_config, source_thread_id)
+            .await?;
+
+        assert_eq!(
+            normal_ephemeral_fork.session.fork_parent_title.as_deref(),
+            Some("Source thread")
+        );
+        assert_eq!(side_fork.session.fork_parent_title, None);
         app_server.shutdown().await?;
         Ok(())
     }
