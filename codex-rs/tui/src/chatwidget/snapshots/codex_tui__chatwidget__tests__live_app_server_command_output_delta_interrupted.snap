@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: completed
+---
+$ printf 'stdout\nstderr\n'
+stdout
+stderr
+✗ (1) • <duration>

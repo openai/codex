@@ -284,7 +284,7 @@ impl ChatWidget {
             .active_cell
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
-            && let Some(new_exec) = cell.with_added_call(
+            && cell.add_call(
                 id.clone(),
                 command.clone(),
                 parsed_cmd.clone(),
@@ -292,7 +292,6 @@ impl ChatWidget {
                 /*interaction_input*/ None,
             )
         {
-            *cell = new_exec;
             self.bump_active_cell_revision();
         } else {
             self.flush_active_cell();
@@ -383,13 +382,11 @@ impl ChatWidget {
         let output = if is_unified_exec_interaction {
             CommandOutput {
                 exit_code,
-                formatted_output: String::new(),
                 aggregated_output: String::new(),
             }
         } else {
             CommandOutput {
                 exit_code,
-                formatted_output: aggregated_output.clone(),
                 aggregated_output,
             }
         };

@@ -45,7 +45,6 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
         let output = output_lines(
             Some(&CommandOutput {
                 exit_code: 1,
-                formatted_output: String::new(),
                 aggregated_output: stderr,
             }),
             OutputLinesParams {
