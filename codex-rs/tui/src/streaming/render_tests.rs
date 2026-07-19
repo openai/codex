@@ -166,6 +166,40 @@ fn incremental_raw_render_preserves_blank_lines() {
 }
 
 #[test]
+fn inline_visualization_context_without_directives_keeps_stable_prefix() {
+    let cwd = test_cwd();
+    let context = InlineVisualizationContext::new(&cwd, ThreadId::new())
+        .expect("UUIDv7 thread id should provide a timestamp");
+    let width = Some(80);
+    let mut source = String::new();
+    let mut render = StreamingRender::new();
+
+    for chunk in ["First paragraph.\n\n", "Second paragraph.\n\n"] {
+        source.push_str(chunk);
+        render.append(
+            &source,
+            chunk,
+            width,
+            &cwd,
+            HistoryRenderMode::Rich,
+            Some(&context),
+        );
+        assert_eq!(
+            render.lines,
+            render_source(
+                &source,
+                width,
+                &cwd,
+                HistoryRenderMode::Rich,
+                Some(&context),
+            ),
+        );
+    }
+
+    assert!(render.stable_source_len > 0);
+}
+
+#[test]
 fn inline_visualizations_use_canonical_full_render() {
     let cwd = test_cwd();
     let context = InlineVisualizationContext::new(&cwd, ThreadId::new())
