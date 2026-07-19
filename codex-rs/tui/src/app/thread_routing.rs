@@ -926,11 +926,13 @@ impl App {
         let inferred_session = self
             .infer_session_for_thread_notification(thread_id, &notification)
             .await;
+        let is_turn_started = matches!(notification, ServerNotification::TurnStarted(_));
+        let notification_status_change = SideParentStatusChange::for_notification(&notification);
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
         };
-        let (should_send, pending_status, turn_stopped) = {
+        let (notification, pending_status, turn_stopped) = {
             let mut guard = store.lock().await;
             if guard.session.is_none()
                 && let Some(session) = inferred_session
@@ -944,21 +946,26 @@ impl App {
                 ServerNotification::ThreadClosed(_) => true,
                 _ => false,
             };
-            guard.push_notification(notification.clone());
+            let notification = if guard.active {
+                guard.push_notification_ref(&notification);
+                Some(notification)
+            } else {
+                guard.push_notification(notification);
+                None
+            };
             (
-                guard.active,
+                notification,
                 guard.side_parent_pending_status(),
                 turn_stopped,
             )
         };
-        if matches!(notification, ServerNotification::TurnStarted(_)) {
+        if is_turn_started {
             self.agent_navigation.mark_running(thread_id);
         } else if turn_stopped {
             self.agent_navigation.mark_stopped(thread_id);
         }
-        let notification_status_change = SideParentStatusChange::for_notification(&notification);
 
-        if should_send {
+        if let Some(notification) = notification {
             match sender.try_send(ThreadBufferedEvent::Notification(notification)) {
                 Ok(()) => {}
                 Err(TrySendError::Full(event)) => {
