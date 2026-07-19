@@ -3959,9 +3959,12 @@ impl ThreadRequestProcessor {
             .await
             && let Some(title) = stored_thread.name.as_deref().map(str::trim)
             && !title.is_empty()
-            && stored_thread.preview.trim() != title
         {
-            set_thread_name_from_title(thread, title.to_string());
+            if stored_thread.history_mode == ThreadHistoryMode::Paginated {
+                thread.name = Some(title.to_string());
+            } else {
+                set_thread_name_from_title(thread, title.to_string());
+            }
         }
     }
 

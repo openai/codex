@@ -666,6 +666,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             title: String::new(),
+            name: None,
             preview: None,
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),

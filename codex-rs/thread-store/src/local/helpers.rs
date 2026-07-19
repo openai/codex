@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
@@ -15,10 +17,13 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
+use codex_rollout::find_thread_names_by_ids;
 use codex_state::ThreadMetadata;
 
+use super::LocalThreadStore;
 use crate::StoredThread;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -177,6 +182,52 @@ pub(super) fn permission_profile_to_metadata_value(
     }
 }
 
+pub(super) fn sqlite_thread_name(metadata: &ThreadMetadata) -> Option<String> {
+    metadata
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) async fn resolve_thread_names(
+    store: &LocalThreadStore,
+    thread_history_modes: &HashMap<ThreadId, ThreadHistoryMode>,
+) -> HashMap<ThreadId, String> {
+    let mut names = HashMap::<ThreadId, String>::with_capacity(thread_history_modes.len());
+    let legacy_thread_ids = thread_history_modes
+        .iter()
+        .filter_map(|(&thread_id, &history_mode)| {
+            (history_mode == ThreadHistoryMode::Legacy).then_some(thread_id)
+        })
+        .collect::<HashSet<_>>();
+    if let Some(state_db_ctx) = store.state_db().await {
+        for (&thread_id, &history_mode) in thread_history_modes {
+            let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
+                continue;
+            };
+            let name = match history_mode {
+                ThreadHistoryMode::Legacy => distinct_thread_metadata_title(&metadata),
+                ThreadHistoryMode::Paginated => sqlite_thread_name(&metadata),
+            };
+            if let Some(name) = name {
+                names.insert(thread_id, name);
+            }
+        }
+    }
+    if let Ok(legacy_names) =
+        find_thread_names_by_ids(store.config.codex_home.as_path(), &legacy_thread_ids).await
+    {
+        // Legacy titles remain authoritative when present; the index only fills
+        // names for threads whose SQLite title is still derived from the preview.
+        for (thread_id, name) in legacy_names {
+            names.entry(thread_id).or_insert(name);
+        }
+    }
+    names
+}
+
 pub(super) fn distinct_thread_metadata_title(metadata: &ThreadMetadata) -> Option<String> {
     let title = metadata.title.trim();
     if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
@@ -186,11 +237,10 @@ pub(super) fn distinct_thread_metadata_title(metadata: &ThreadMetadata) -> Optio
     }
 }
 
-pub(super) fn set_thread_name_from_title(thread: &mut StoredThread, title: String) {
-    if title.trim().is_empty() || thread.preview.trim() == title.trim() {
-        return;
+pub(super) fn set_thread_name(thread: &mut StoredThread, name: String) {
+    if thread.history_mode == ThreadHistoryMode::Paginated || thread.preview.trim() != name.trim() {
+        thread.name = Some(name);
     }
-    thread.name = Some(title);
 }
 
 fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
