@@ -6,6 +6,7 @@ use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -301,7 +302,11 @@ async fn run_manual_session(
     }
     response_bodies.push(after_compact_response_body(scenario.name));
 
-    let harness = build_harness(mode, settings, /*hooks*/ false).await?;
+    let disable_permissions = scenario
+        .steps
+        .iter()
+        .any(|step| matches!(step, Step::ShellTool));
+    let harness = build_harness(mode, settings, /*hooks*/ false, disable_permissions).await?;
     let rollout_path = rollout_path(&harness);
     let codex = harness.test().codex.clone();
 
@@ -457,7 +462,13 @@ async fn run_manual_hook_session(mode: Mode) -> Result<Value> {
             compaction_v2_response_body(),
         ],
     };
-    let harness = build_harness(mode, RunSettings::default(), /*hooks*/ true).await?;
+    let harness = build_harness(
+        mode,
+        RunSettings::default(),
+        /*hooks*/ true,
+        /*disable_permissions*/ false,
+    )
+    .await?;
     let codex = harness.test().codex.clone();
     responses::mount_sse_sequence(harness.server(), response_bodies).await;
     let compact_mock = mount_legacy_compact_if_needed(&harness, mode).await;
@@ -492,12 +503,25 @@ async fn build_auto_harness(mode: Mode) -> Result<TestCodexHarness> {
         RunSettings::default(),
         /*hooks*/ false,
         Some(200),
+        /*disable_permissions*/ false,
     )
     .await
 }
 
-async fn build_harness(mode: Mode, settings: RunSettings, hooks: bool) -> Result<TestCodexHarness> {
-    build_harness_inner(mode, settings, hooks, /*auto_compact_limit*/ None).await
+async fn build_harness(
+    mode: Mode,
+    settings: RunSettings,
+    hooks: bool,
+    disable_permissions: bool,
+) -> Result<TestCodexHarness> {
+    build_harness_inner(
+        mode,
+        settings,
+        hooks,
+        /*auto_compact_limit*/ None,
+        disable_permissions,
+    )
+    .await
 }
 
 async fn build_harness_inner(
@@ -505,6 +529,7 @@ async fn build_harness_inner(
     settings: RunSettings,
     hooks: bool,
     auto_compact_limit: Option<i64>,
+    disable_permissions: bool,
 ) -> Result<TestCodexHarness> {
     fs::create_dir_all(FIXED_CWD)?;
     let mut builder = test_codex()
@@ -528,6 +553,12 @@ async fn build_harness_inner(
         config.model_auto_compact_token_limit = auto_compact_limit;
         if hooks {
             trust_discovered_hooks(config);
+        }
+        if disable_permissions {
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("set permission profile");
         }
         if mode == Mode::Legacy {
             let _ = config.features.disable(Feature::RemoteCompactionV2);

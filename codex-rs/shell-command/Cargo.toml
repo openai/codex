@@ -15,16 +15,23 @@ libc = { workspace = true }
 once_cell = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 shlex = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 url = { workspace = true }
 which = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 
 [lib]
 doctest = false

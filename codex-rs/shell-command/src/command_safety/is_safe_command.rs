@@ -614,19 +614,16 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_powershell_full_path_is_safe() {
-        if !cfg!(windows) {
-            // Windows only because on Linux path splitting doesn't handle `/` separators properly
-            return;
-        }
-
-        let Some(powershell) = crate::powershell::try_find_pwsh_executable_blocking()
-            .or_else(crate::powershell::try_find_powershell_executable_blocking)
+        let Some(powershell) = crate::command_safety::trusted_windows_powershell_invocation_path()
         else {
-            return;
+            panic!("Windows PowerShell must exist at the authoritative System known folder");
         };
-        let powershell = powershell.as_path().to_str().unwrap();
+        let Some(powershell) = powershell.to_str() else {
+            panic!("the Windows System known folder must be valid UTF-8");
+        };
 
         assert!(is_known_safe_command(&vec_str(&[
             powershell,

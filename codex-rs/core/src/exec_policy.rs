@@ -36,10 +36,15 @@ use tracing::instrument;
 use crate::config::Config;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
+
+#[cfg(windows)]
+#[path = "exec_policy_powershell.rs"]
+mod powershell_policy;
 
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
@@ -280,11 +285,35 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
+        #[cfg(windows)]
+        let (parsed_powershell, powershell_outer_authority) =
+            match powershell_policy::prepare(command) {
+                Some(powershell_policy::PreparedPowerShell::Terminal(requirement)) => {
+                    return requirement;
+                }
+                Some(powershell_policy::PreparedPowerShell::Parsed(parsed)) => (Some(parsed), true),
+                Some(powershell_policy::PreparedPowerShell::Unsupported) => (None, true),
+                None => (None, false),
+            };
+        #[cfg(windows)]
+        let exec_policy_commands = if let Some(parsed) = parsed_powershell.as_ref() {
+            ExecPolicyCommands {
+                commands: parsed.commands().to_vec(),
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::PowerShell,
+            }
+        } else {
+            commands_for_exec_policy(command)
+        };
+        #[cfg(not(windows))]
+        let exec_policy_commands = commands_for_exec_policy(command);
+        #[cfg(not(windows))]
+        let powershell_outer_authority = false;
         let ExecPolicyCommands {
             commands,
             used_complex_parsing,
             command_origin,
-        } = commands_for_exec_policy(command);
+        } = exec_policy_commands;
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
@@ -305,13 +334,82 @@ impl ExecPolicyManager {
         let match_options = MatchOptions {
             resolve_host_executables: true,
         };
-        let evaluation = exec_policy.check_multiple_with_options(
+        let parsed_powershell_outer = powershell_outer_authority.then_some(command);
+        let mut evaluation = exec_policy.check_multiple_with_options(
             commands.iter(),
             &exec_policy_fallback,
             &match_options,
         );
+        let outer_matches = parsed_powershell_outer
+            .map(|outer| {
+                exec_policy.matches_for_command_with_options(
+                    outer,
+                    /*heuristics_fallback*/ None,
+                    &match_options,
+                )
+            })
+            .unwrap_or_default();
+        let outer_allow = outer_matches.iter().any(|rule_match| {
+            matches!(
+                rule_match,
+                RuleMatch::PrefixRuleMatch {
+                    decision: Decision::Allow,
+                    ..
+                }
+            )
+        });
+        let exact_outer_allow = parsed_powershell_outer.is_some_and(|outer| {
+            outer_matches.iter().any(|rule_match| {
+                matches!(
+                    rule_match,
+                    RuleMatch::PrefixRuleMatch {
+                        matched_prefix,
+                        decision: Decision::Allow,
+                        ..
+                    } if matched_prefix.as_slice() == outer
+                )
+            })
+        });
+        evaluation.matched_rules.extend(outer_matches);
+        evaluation.decision = evaluation
+            .matched_rules
+            .iter()
+            .filter(|rule_match| !outer_allow || is_policy_match(rule_match))
+            .map(RuleMatch::decision)
+            .max()
+            .unwrap_or(Decision::Forbidden);
 
-        let requested_amendment = if auto_amendment_allowed {
+        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+        let managed_filesystem_restrictions =
+            profile_has_managed_filesystem_restrictions(&permission_profile);
+        let permission_delta_requires_outer = match (&permission_profile, sandbox_permissions) {
+            (PermissionProfile::Disabled, _) => false,
+            (_, SandboxPermissions::WithAdditionalPermissions) => true,
+            (PermissionProfile::External { .. }, SandboxPermissions::RequireEscalated) => true,
+            (PermissionProfile::Managed { .. }, SandboxPermissions::RequireEscalated) => {
+                unsandboxed_execution_allowed(&file_system_sandbox_policy)
+            }
+            (_, SandboxPermissions::UseDefault) => false,
+        };
+        let parsed_powershell_needs_outer_approval = parsed_powershell_outer.is_some()
+            && !exact_outer_allow
+            && (permission_delta_requires_outer
+                || (cfg!(windows)
+                    && windows_sandbox_level == WindowsSandboxLevel::Disabled
+                    && managed_filesystem_restrictions));
+        if evaluation.decision == Decision::Allow && parsed_powershell_needs_outer_approval {
+            evaluation.decision = Decision::Prompt;
+            evaluation
+                .matched_rules
+                .push(RuleMatch::HeuristicsRuleMatch {
+                    command: command.to_vec(),
+                    decision: Decision::Prompt,
+                });
+        }
+
+        let requested_amendment = if parsed_powershell_outer.is_some() {
+            None
+        } else if auto_amendment_allowed {
             derive_requested_execpolicy_amendment_from_prefix_rule(
                 prefix_rule.as_ref(),
                 &evaluation.matched_rules,
@@ -357,33 +455,48 @@ impl ExecPolicyManager {
                     None => ExecApprovalRequirement::NeedsApproval {
                         reason: derive_prompt_reason(command, &evaluation),
                         proposed_execpolicy_amendment: requested_amendment.or_else(|| {
-                            if auto_amendment_allowed {
-                                try_derive_execpolicy_amendment_for_prompt_rules(
-                                    &evaluation.matched_rules,
-                                )
-                            } else {
-                                None
+                            match (
+                                parsed_powershell_outer,
+                                prompt_is_rule,
+                                auto_amendment_allowed,
+                            ) {
+                                (Some(outer), false, _) => {
+                                    Some(ExecPolicyAmendment::new(outer.to_vec()))
+                                }
+                                (None, _, true) => {
+                                    try_derive_execpolicy_amendment_for_prompt_rules(
+                                        &evaluation.matched_rules,
+                                    )
+                                }
+                                _ => None,
                             }
                         }),
                     },
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox only when every parsed command segment is
-                // explicitly allowed by execpolicy.
-                bypass_sandbox: commands.iter().all(|command| {
-                    exec_policy
-                        .matches_for_command_with_options(
-                            command,
-                            /*heuristics_fallback*/ None,
-                            &match_options,
-                        )
-                        .iter()
-                        .any(|rule_match| {
-                            is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-                        })
-                }),
-                proposed_execpolicy_amendment: if auto_amendment_allowed {
+                // Lowered PowerShell command names do not bind runtime module, profile, or PATH
+                // resolution. Only an exact full-wrapper Allow may authorize sandbox bypass.
+                bypass_sandbox: if parsed_powershell_outer.is_some() {
+                    exact_outer_allow
+                } else {
+                    commands.iter().all(|command| {
+                        exec_policy
+                            .matches_for_command_with_options(
+                                command,
+                                /*heuristics_fallback*/ None,
+                                &match_options,
+                            )
+                            .iter()
+                            .any(|rule_match| {
+                                is_policy_match(rule_match)
+                                    && rule_match.decision() == Decision::Allow
+                            })
+                    })
+                },
+                proposed_execpolicy_amendment: if let Some(outer) = parsed_powershell_outer {
+                    (!exact_outer_allow).then(|| ExecPolicyAmendment::new(outer.to_vec()))
+                } else if auto_amendment_allowed {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
                 } else {
                     None
@@ -809,20 +922,6 @@ fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
             used_complex_parsing: false,
             command_origin: ExecPolicyCommandOrigin::Generic,
         };
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(commands) =
-            codex_shell_command::powershell::parse_powershell_command_into_plain_commands(command)
-            && !commands.is_empty()
-        {
-            return ExecPolicyCommands {
-                commands,
-                used_complex_parsing: false,
-                command_origin: ExecPolicyCommandOrigin::PowerShell,
-            };
-        }
     }
 
     if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
