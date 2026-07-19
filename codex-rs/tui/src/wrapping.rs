@@ -506,14 +506,28 @@ pub(crate) fn url_preserving_wrap_options<'a>(opts: RtOptions<'a>) -> RtOptions<
 /// while a genuinely overlong non-URL token can still split if needed.
 #[must_use]
 pub(crate) fn adaptive_wrap_line<'a>(line: &'a Line<'a>, base: RtOptions<'a>) -> Vec<Line<'a>> {
-    if !line_contains_url_like(line) {
-        return word_wrap_line(line, base);
+    let (flat, span_bounds) = flatten_line(line);
+    let mut saw_url = false;
+    let mut saw_non_url = false;
+
+    for token in flat.split_ascii_whitespace() {
+        if is_url_like_token(token) {
+            saw_url = true;
+        } else if is_substantive_non_url_token(token) {
+            saw_non_url = true;
+        }
+
+        if saw_url && saw_non_url {
+            break;
+        }
     }
 
-    if line_has_mixed_url_and_non_url_tokens(line) {
-        mixed_url_wrap_line(line, base)
+    if !saw_url {
+        word_wrap_flattened_line(line, &flat, &span_bounds, base)
+    } else if saw_non_url {
+        mixed_url_wrap_line(line, &flat, &span_bounds, base)
     } else {
-        word_wrap_line(line, url_preserving_wrap_options(base))
+        word_wrap_flattened_line(line, &flat, &span_bounds, url_preserving_wrap_options(base))
     }
 }
 
@@ -661,8 +675,15 @@ where
     O: Into<RtOptions<'a>>,
 {
     let (flat, span_bounds) = flatten_line(line);
+    word_wrap_flattened_line(line, &flat, &span_bounds, width_or_options.into())
+}
 
-    let rt_opts: RtOptions<'a> = width_or_options.into();
+fn word_wrap_flattened_line<'a>(
+    line: &'a Line<'a>,
+    flat: &str,
+    span_bounds: &[(Range<usize>, ratatui::style::Style)],
+    rt_opts: RtOptions<'a>,
+) -> Vec<Line<'a>> {
     let opts = Options::new(rt_opts.width)
         .line_ending(rt_opts.line_ending)
         .break_words(rt_opts.break_words)
@@ -677,7 +698,7 @@ where
         .width
         .saturating_sub(rt_opts.initial_indent.width())
         .max(1);
-    let initial_wrapped = wrap_ranges_trim(&flat, opts.clone().width(initial_width_available));
+    let initial_wrapped = wrap_ranges_trim(flat, opts.clone().width(initial_width_available));
     let Some(first_line_range) = initial_wrapped.first() else {
         return vec![rt_opts.initial_indent.clone()];
     };
@@ -685,7 +706,7 @@ where
     // Build first wrapped line with initial indent.
     let mut first_line = rt_opts.initial_indent.clone().style(line.style);
     {
-        let sliced = slice_line_spans(line, &span_bounds, first_line_range);
+        let sliced = slice_line_spans(line, span_bounds, first_line_range);
         let mut spans = first_line.spans;
         spans.append(
             &mut sliced
@@ -713,7 +734,7 @@ where
         }
         let mut subsequent_line = rt_opts.subsequent_indent.clone().style(line.style);
         let offset_range = (r.start + base)..(r.end + base);
-        let sliced = slice_line_spans(line, &span_bounds, &offset_range);
+        let sliced = slice_line_spans(line, span_bounds, &offset_range);
         let mut spans = subsequent_line.spans;
         spans.append(
             &mut sliced
@@ -741,8 +762,12 @@ impl MixedUrlWord {
     }
 }
 
-fn mixed_url_wrap_line<'a>(line: &'a Line<'a>, rt_opts: RtOptions<'a>) -> Vec<Line<'a>> {
-    let (flat, span_bounds) = flatten_line(line);
+fn mixed_url_wrap_line<'a>(
+    line: &'a Line<'a>,
+    flat: &str,
+    span_bounds: &[(Range<usize>, ratatui::style::Style)],
+    rt_opts: RtOptions<'a>,
+) -> Vec<Line<'a>> {
     let initial_width_available = rt_opts
         .width
         .saturating_sub(rt_opts.initial_indent.width())
@@ -751,7 +776,7 @@ fn mixed_url_wrap_line<'a>(line: &'a Line<'a>, rt_opts: RtOptions<'a>) -> Vec<Li
         .width
         .saturating_sub(rt_opts.subsequent_indent.width())
         .max(1);
-    let ranges = mixed_url_wrap_ranges(&flat, initial_width_available, subsequent_width_available);
+    let ranges = mixed_url_wrap_ranges(flat, initial_width_available, subsequent_width_available);
 
     let mut out = Vec::new();
     for (idx, range) in ranges.iter().enumerate() {
@@ -761,7 +786,7 @@ fn mixed_url_wrap_line<'a>(line: &'a Line<'a>, rt_opts: RtOptions<'a>) -> Vec<Li
             rt_opts.subsequent_indent.clone()
         }
         .style(line.style);
-        let sliced = slice_line_spans(line, &span_bounds, range);
+        let sliced = slice_line_spans(line, span_bounds, range);
         let mut spans = wrapped_line.spans;
         spans.extend(
             sliced
@@ -1402,6 +1427,26 @@ them."#
         assert_eq!(
             joined,
             "see https://example.com/path and\nkeep strikethrough intact while\nwrapping prose"
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_keeps_url_split_across_styled_spans_intact() {
+        let line = Line::from(vec![
+            "see ".red(),
+            "https://exa".cyan(),
+            "mple.com/path".magenta(),
+            " now".green(),
+        ]);
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 10));
+
+        assert_eq!(
+            out,
+            vec![
+                Line::from("see".red()),
+                Line::from(vec!["https://exa".cyan(), "mple.com/path".magenta()]),
+                Line::from("now".green()),
+            ]
         );
     }
 
