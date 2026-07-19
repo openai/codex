@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: lines_to_single_string(&transcript)
+---
+$ printf 'stdout\nstderr\n'
+stdout
+stderr
