@@ -883,7 +883,7 @@ impl Tui {
             };
             crate::insert_history::insert_history_hyperlink_lines_with_mode_and_wrap_policy(
                 terminal,
-                batch.lines.clone(),
+                &batch.lines,
                 mode,
                 batch.wrap_policy,
             )?;
