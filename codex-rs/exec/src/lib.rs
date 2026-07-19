@@ -1014,19 +1014,19 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     error_seen = true;
                 }
 
-                maybe_backfill_turn_completed_items(
-                    config.ephemeral,
-                    &client,
-                    &mut request_ids,
-                    &mut notification,
-                )
-                .await;
-
                 if should_process_notification(
                     &notification,
                     &primary_thread_id_for_requests,
                     &task_id,
                 ) {
+                    maybe_backfill_turn_completed_items(
+                        config.ephemeral,
+                        &client,
+                        &mut request_ids,
+                        &mut notification,
+                    )
+                    .await;
+
                     match event_processor.process_server_notification(notification) {
                         CodexStatus::Running => {}
                         CodexStatus::InitiateShutdown => {
