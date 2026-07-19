@@ -1990,6 +1990,104 @@ async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_thread
 }
 
 #[tokio::test]
+async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let config = app.chat_widget.config_ref().clone();
+    let parent_thread_id = ThreadId::from_string(
+        &app_test_support::create_fake_rollout(
+            config.codex_home.as_path(),
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            "Saved user message",
+            Some(config.model_provider_id.as_str()),
+            /*git_info*/ None,
+        )
+        .expect("create source rollout"),
+    )?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
+    let started = app_server
+        .resume_thread(
+            config,
+            parent_thread_id,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    while app_event_rx.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let control = Box::pin(app.handle_start_side(
+        &mut tui,
+        &mut app_server,
+        parent_thread_id,
+        /*user_message*/ None,
+    ))
+    .await?;
+
+    let side_thread_id = app
+        .active_thread_id
+        .expect("side conversation should become active");
+    assert!(matches!(control, AppRunControl::Continue));
+    assert_ne!(side_thread_id, parent_thread_id);
+    assert!(app.side_threads.contains_key(&side_thread_id));
+    assert!(app.thread_event_channels.contains_key(&side_thread_id));
+    assert!(
+        !app.agent_navigation
+            .get(&side_thread_id)
+            .expect("side start should seed navigation before thread/started")
+            .is_closed
+    );
+
+    let mut saw_thread_started = false;
+    for _ in 0..20 {
+        let event = time::timeout(
+            std::time::Duration::from_secs(/*secs*/ 2),
+            app_server.next_event(),
+        )
+        .await
+        .expect("app-server should emit an event")
+        .expect("app-server event stream should remain open");
+        if let codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::ThreadStarted(notification),
+        ) = event
+            && notification.thread.id == side_thread_id.to_string()
+        {
+            saw_thread_started = true;
+            break;
+        }
+    }
+
+    assert!(saw_thread_started);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_uncached_agent_thread_still_refreshes_liveness() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await?;
+    let thread_id = ThreadId::new();
+    app.agent_navigation.upsert(
+        thread_id,
+        Some("Ghost".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    Box::pin(app.select_agent_thread(&mut tui, &mut app_server, thread_id)).await?;
+
+    assert_eq!(app.active_thread_id, None);
+    assert_eq!(app.agent_navigation.get(&thread_id), None);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
