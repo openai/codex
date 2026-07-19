@@ -5844,7 +5844,7 @@ session_picker_view = "dense"
         };
 
         let rendered = thread_to_transcript_cells(
-            &thread,
+            thread,
             RawReasoningVisibility::Visible,
             /*codex_home*/ None,
         )
@@ -5906,7 +5906,7 @@ session_picker_view = "dense"
         };
 
         let hidden = thread_to_transcript_cells(
-            &thread,
+            thread.clone(),
             RawReasoningVisibility::Hidden,
             /*codex_home*/ None,
         )
@@ -5916,7 +5916,7 @@ session_picker_view = "dense"
         .collect::<Vec<_>>()
         .join("\n");
         let visible = thread_to_transcript_cells(
-            &thread,
+            thread,
             RawReasoningVisibility::Visible,
             /*codex_home*/ None,
         )
@@ -5976,7 +5976,7 @@ session_picker_view = "dense"
         };
 
         let rendered = thread_to_transcript_cells(
-            &thread,
+            thread,
             RawReasoningVisibility::Visible,
             /*codex_home*/ None,
         )
