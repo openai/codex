@@ -102,7 +102,7 @@ impl StreamingRender {
             return;
         }
 
-        if inline_visualization_context.is_some() || raw_source.contains(DIRECTIVE_PREFIX) {
+        if raw_source.contains(DIRECTIVE_PREFIX) {
             self.recompute(
                 raw_source,
                 width,
