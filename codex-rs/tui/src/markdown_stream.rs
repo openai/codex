@@ -5,8 +5,8 @@
 //! after each newline-bearing delta to obtain the completed prefix for re-rendering, leaving the
 //! trailing incomplete line in the buffer for the next delta.
 //!
-//! On finalization, `finalize_and_drain_source()` flushes whatever remains (the last line, which
-//! may lack a trailing newline).
+//! On finalization, `finalize_and_take_source()` transfers the complete source buffer to the
+//! controller (including a final line that may lack a trailing newline).
 
 #[cfg(test)]
 use ratatui::text::Line;
@@ -20,7 +20,7 @@ use crate::markdown;
 /// Newline-gated accumulator that buffers raw markdown source and commits only completed lines.
 ///
 /// The buffer tracks how many source bytes have already been committed via
-/// `committed_source_len`, so each `commit_complete_source()` call returns only the newly
+/// `committed_source_len`, so each `commit_complete_source()` call returns the range of the newly
 /// completed portion. This design lets the stream controller re-render the entire accumulated
 /// source while only appending new content.
 ///
@@ -81,34 +81,34 @@ impl MarkdownStreamCollector {
 
     /// Commit newly completed raw markdown source up to the last newline.
     ///
-    /// This returns only source that has not been returned by a previous commit. Calling it after a
-    /// delta without a newline returns `None`, which prevents the live stream from rendering
+    /// This returns the range of source that has not been returned by a previous commit. Calling it
+    /// after a delta without a newline returns `None`, which prevents the live stream from rendering
     /// incomplete markdown blocks that may change meaning when the rest of the line arrives.
-    pub fn commit_complete_source(&mut self) -> Option<String> {
+    pub fn commit_complete_source(&mut self) -> Option<std::ops::Range<usize>> {
         let commit_end = self.buffer.rfind('\n').map(|idx| idx + 1)?;
-        if commit_end <= self.committed_source_len {
+        let commit_start = self.committed_source_len;
+        if commit_end <= commit_start {
             return None;
         }
 
-        let out = self.buffer[self.committed_source_len..commit_end].to_string();
         self.committed_source_len = commit_end;
-        Some(out)
+        Some(commit_start..commit_end)
     }
 
-    /// Finalize the stream and return any remaining raw source.
+    /// Return the newline-terminated source that is safe to render.
+    pub fn committed_source(&self) -> &str {
+        &self.buffer[..self.committed_source_len]
+    }
+
+    /// Finalize the stream and transfer its complete raw source.
     ///
     /// Ensures the returned source chunk is newline-terminated when non-empty so callers can
     /// safely run markdown block parsing on the final chunk. This method clears the collector;
     /// callers should not invoke it until the stream is truly complete or interrupted output is
     /// being intentionally consolidated.
-    pub fn finalize_and_drain_source(&mut self) -> String {
-        if self.committed_source_len >= self.buffer.len() {
-            self.clear();
-            return String::new();
-        }
-
-        let mut out = self.buffer[self.committed_source_len..].to_string();
-        if !out.ends_with('\n') {
+    pub fn finalize_and_take_source(&mut self) -> String {
+        let mut out = std::mem::take(&mut self.buffer);
+        if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
         self.clear();
@@ -861,17 +861,18 @@ mod tests {
         ];
         let mut collector =
             super::MarkdownStreamCollector::new(/*width*/ None, &super::test_cwd());
-        let mut raw_source = String::new();
+        let mut committed_source = String::new();
 
         for delta in deltas {
             collector.push_delta(delta);
             if delta.contains('\n')
-                && let Some(chunk) = collector.commit_complete_source()
+                && let Some(range) = collector.commit_complete_source()
             {
-                raw_source.push_str(&chunk);
+                committed_source.push_str(&collector.committed_source()[range]);
             }
         }
-        raw_source.push_str(&collector.finalize_and_drain_source());
+        assert_eq!(collector.committed_source(), committed_source);
+        let raw_source = collector.finalize_and_take_source();
 
         let mut rendered = Vec::new();
         crate::markdown::append_markdown_agent(&raw_source, /*width*/ None, &mut rendered);
@@ -885,5 +886,13 @@ mod tests {
             !rendered_strs.iter().any(|line| line.trim() == "| A | B |"),
             "did not expect raw table header after markdown-fence unwrapping: {rendered_strs:?}"
         );
+    }
+
+    #[test]
+    fn finalizing_empty_collector_returns_empty_source() {
+        let mut collector =
+            super::MarkdownStreamCollector::new(/*width*/ None, &super::test_cwd());
+
+        assert_eq!(collector.finalize_and_take_source(), String::new());
     }
 }

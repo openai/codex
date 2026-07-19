@@ -30,7 +30,7 @@
 //! ## Invariants
 //!
 //! - `emitted_stable_len <= enqueued_stable_len <= render.lines.len()`.
-//! - `raw_source` is append-only until `reset()`; never modified mid-stream.
+//! - committed source is append-only until `reset()`; never modified mid-stream.
 //! - Tail starts exactly at `enqueued_stable_len`.
 //! - During confirmed table streaming, only lines from the table header onward
 //!   are forced into tail; pre-table lines may remain stable.
@@ -75,9 +75,7 @@ struct StreamCore {
     state: StreamState,
     /// Current rendering width (columns available for markdown content).
     width: Option<usize>,
-    /// Accumulated raw markdown source for the current stream.
-    raw_source: String,
-    /// Incremental render of `raw_source` at `width`.
+    /// Incremental render of committed source at `width`.
     render: StreamingRender,
     /// Lines enqueued into the commit-animation queue.
     enqueued_stable_len: usize,
@@ -94,11 +92,11 @@ struct StreamCore {
 }
 
 struct StablePrefixLenCache {
-    /// Byte offset of the candidate table/header start in `raw_source`.
+    /// Byte offset of the candidate table/header start in committed source.
     source_start: usize,
     /// Width that produced `stable_prefix_len`.
     width: Option<usize>,
-    /// Rendered line count for `raw_source[..source_start]` at `width`.
+    /// Rendered line count for the committed prefix before `source_start` at `width`.
     ///
     /// The streaming controller uses this to avoid repeatedly re-rendering the
     /// same stable prefix while a live table tail is still mutating.
@@ -115,7 +113,6 @@ impl StreamCore {
         Self {
             state: StreamState::new(width, cwd),
             width,
-            raw_source: String::with_capacity(1024),
             render: StreamingRender::new(),
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
@@ -129,7 +126,7 @@ impl StreamCore {
 
     /// Push a streaming delta and enqueue any newly-stable rendered lines.
     ///
-    /// Only newline-terminated source is committed into `raw_source`. This is
+    /// Only newline-terminated source is committed for rendering. This is
     /// important for tables because an unterminated partial row must stay out
     /// of both the stable queue and the live tail until its structure is
     /// unambiguous; otherwise the user can briefly see malformed columns that
@@ -142,13 +139,14 @@ impl StreamCore {
 
         let mut enqueued = false;
         if delta.contains('\n')
-            && let Some(committed_source) = self.state.collector.commit_complete_source()
+            && let Some(range) = self.state.collector.commit_complete_source()
         {
-            self.raw_source.push_str(&committed_source);
-            self.holdback_scanner.push_source_chunk(&committed_source);
+            let source = self.state.collector.committed_source();
+            let committed_source = &source[range];
+            self.holdback_scanner.push_source_chunk(committed_source);
             self.render.append(
-                &self.raw_source,
-                &committed_source,
+                source,
+                committed_source,
                 self.width,
                 self.cwd.as_path(),
                 self.render_mode,
@@ -166,24 +164,17 @@ impl StreamCore {
     /// final render is the canonical transcript representation used for
     /// consolidation, so callers that skip `reset()` can accidentally replay a
     /// finished stream into the next answer.
-    fn finalize_remaining(&mut self) -> Vec<HyperlinkLine> {
-        let remainder_source = self.state.collector.finalize_and_drain_source();
-        if !remainder_source.is_empty() {
-            self.raw_source.push_str(&remainder_source);
-            self.holdback_scanner.push_source_chunk(&remainder_source);
-        }
-        let rendered = render_source(
-            &self.raw_source,
+    fn finalize_remaining(&mut self) -> (Vec<HyperlinkLine>, String) {
+        let source = self.state.collector.finalize_and_take_source();
+        let mut rendered = render_source(
+            &source,
             self.width,
             self.cwd.as_path(),
             self.render_mode,
             self.inline_visualization_context.as_ref(),
         );
-        if self.emitted_stable_len >= rendered.len() {
-            Vec::new()
-        } else {
-            rendered[self.emitted_stable_len..].to_vec()
-        }
+        let remaining = rendered.split_off(self.emitted_stable_len.min(rendered.len()));
+        (remaining, source)
     }
 
     /// Step animation: dequeue one line, update the emitted count.
@@ -259,12 +250,13 @@ impl StreamCore {
         let had_live_tail = self.has_tail();
         self.width = width;
         self.state.collector.set_width(width);
-        if self.raw_source.is_empty() {
+        let source = self.state.collector.committed_source();
+        if source.is_empty() {
             return;
         }
 
         self.render.recompute(
-            &self.raw_source,
+            source,
             self.width,
             self.cwd.as_path(),
             self.render_mode,
@@ -294,7 +286,6 @@ impl StreamCore {
     /// Clear all accumulated state for current stream.
     fn reset(&mut self) {
         self.state.clear();
-        self.raw_source.clear();
         self.render.clear();
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
@@ -310,12 +301,13 @@ impl StreamCore {
         let had_pending_queue = self.state.queued_len() > 0;
         let had_live_tail = self.has_tail();
         self.render_mode = render_mode;
-        if self.raw_source.is_empty() {
+        let source = self.state.collector.committed_source();
+        if source.is_empty() {
             return;
         }
 
         self.render.recompute(
-            &self.raw_source,
+            source,
             self.width,
             self.cwd.as_path(),
             self.render_mode,
@@ -428,7 +420,7 @@ impl StreamCore {
         if source_start == 0 {
             return self.render.lines.len();
         }
-        let source_start = source_start.min(self.raw_source.len());
+        let source_start = source_start.min(self.state.collector.committed_source().len());
         let stable_prefix_len = self.stable_prefix_len_for_source_start(source_start);
         self.render.lines.len().saturating_sub(stable_prefix_len)
     }
@@ -453,8 +445,9 @@ impl StreamCore {
         }
 
         let render_start = Instant::now();
+        let source = self.state.collector.committed_source();
         let stable_prefix_render = render_markdown_agent_with_links_cwd_and_visualizations(
-            &self.raw_source[..source_start.min(self.raw_source.len())],
+            &source[..source_start.min(source.len())],
             self.width,
             Some(self.cwd.as_path()),
             self.inline_visualization_context.as_ref(),
@@ -519,14 +512,12 @@ impl StreamController {
     /// Finalize the active stream. Returns the final cell (if any remaining lines) and the raw
     /// markdown source for consolidation.
     pub(crate) fn finalize(&mut self) -> (Option<Box<dyn HistoryCell>>, Option<String>) {
-        let remaining = self.core.finalize_remaining();
-        if self.core.raw_source.is_empty() {
+        let (remaining, source) = self.core.finalize_remaining();
+        if source.is_empty() {
             self.core.reset();
             return (None, None);
         }
 
-        // Move ownership — source is consumed before reset() clears it.
-        let source = std::mem::take(&mut self.core.raw_source);
         let out = self.emit(remaining);
         self.core.reset();
         (out, Some(source))
@@ -638,14 +629,12 @@ impl PlanStreamController {
     /// Finalize the active stream. Returns the final cell (if any remaining
     /// lines) plus raw markdown source for consolidation.
     pub(crate) fn finalize(&mut self) -> (Option<Box<dyn HistoryCell>>, Option<String>) {
-        let remaining = self.core.finalize_remaining();
-        if self.core.raw_source.is_empty() {
+        let (remaining, source) = self.core.finalize_remaining();
+        if source.is_empty() {
             self.core.reset();
             return (None, None);
         }
 
-        // Move ownership — source is consumed before reset() clears it.
-        let source = std::mem::take(&mut self.core.raw_source);
         let out = self.emit(remaining, /*include_bottom_padding*/ true);
         self.core.reset();
         (out, Some(source))
@@ -993,7 +982,7 @@ mod tests {
 
             let mut expected = Vec::new();
             crate::markdown::append_markdown_agent(
-                &ctrl.core.raw_source,
+                ctrl.core.state.collector.committed_source(),
                 Some(width),
                 &mut expected,
             );
@@ -1659,7 +1648,7 @@ mod tests {
 
             let mut expected = Vec::new();
             crate::markdown::append_markdown_agent(
-                &ctrl.core.raw_source,
+                ctrl.core.state.collector.committed_source(),
                 /*width*/ width,
                 &mut expected,
             );
