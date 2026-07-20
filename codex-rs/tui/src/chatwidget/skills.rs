@@ -10,14 +10,10 @@ use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
-use codex_app_server_protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillsListEntry;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_connectors::AppInfo;
-use codex_core_skills::model::SkillDependencies;
-use codex_core_skills::model::SkillInterface;
-use codex_core_skills::model::SkillMetadata;
-use codex_core_skills::model::SkillToolDependency;
 use codex_features::Feature;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -85,19 +81,16 @@ impl ChatWidget {
         let items: Vec<SkillsToggleItem> = self
             .skills_all
             .iter()
-            .filter_map(|skill| {
-                let core_skill = protocol_skill_to_core(skill)?;
-                let display_name = skill_display_name(&core_skill);
-                let description = skill_description(&core_skill).to_string();
-                let name = core_skill.name.clone();
-                let path = core_skill.path_to_skills_md;
-                Some(SkillsToggleItem {
+            .map(|skill| {
+                let display_name = skill_display_name(skill);
+                let description = skill_description(skill).to_string();
+                SkillsToggleItem {
                     name: display_name,
-                    skill_name: name,
+                    skill_name: skill.name.clone(),
                     description,
                     enabled: skill.enabled,
-                    path,
-                })
+                    path: skill.path.clone(),
+                }
             })
             .collect();
 
@@ -187,10 +180,7 @@ impl ChatWidget {
     }
 }
 
-fn skills_for_cwd(
-    cwd: &AbsolutePathBuf,
-    skills_entries: &[SkillsListEntry],
-) -> Vec<ProtocolSkillMetadata> {
+fn skills_for_cwd(cwd: &AbsolutePathBuf, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
     skills_entries
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd.as_path())
@@ -198,60 +188,12 @@ fn skills_for_cwd(
         .unwrap_or_default()
 }
 
-fn enabled_skills_for_mentions(skills: &[ProtocolSkillMetadata]) -> Vec<SkillMetadata> {
+fn enabled_skills_for_mentions(skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
     skills
         .iter()
         .filter(|skill| skill.enabled)
-        .filter_map(protocol_skill_to_core)
+        .cloned()
         .collect()
-}
-
-fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata> {
-    let scope = serde_json::to_value(skill.scope)
-        .and_then(serde_json::from_value)
-        .inspect_err(|err| {
-            tracing::warn!(
-                skill_name = %skill.name,
-                %err,
-                "Failed to map app-server skill scope"
-            );
-        })
-        .ok()?;
-
-    Some(SkillMetadata {
-        name: skill.name.clone(),
-        description: skill.description.clone(),
-        short_description: skill.short_description.clone(),
-        interface: skill.interface.clone().map(|interface| SkillInterface {
-            display_name: interface.display_name,
-            short_description: interface.short_description,
-            icon_small: interface.icon_small,
-            icon_large: interface.icon_large,
-            brand_color: interface.brand_color,
-            default_prompt: interface.default_prompt,
-        }),
-        dependencies: skill
-            .dependencies
-            .clone()
-            .map(|dependencies| SkillDependencies {
-                tools: dependencies
-                    .tools
-                    .into_iter()
-                    .map(|tool| SkillToolDependency {
-                        r#type: tool.r#type,
-                        value: tool.value,
-                        description: tool.description,
-                        transport: tool.transport,
-                        command: tool.command,
-                        url: tool.url,
-                    })
-                    .collect(),
-            }),
-        policy: None,
-        path_to_skills_md: skill.path.clone(),
-        scope,
-        plugin_id: None,
-    })
 }
 
 pub(crate) fn collect_tool_mentions(
@@ -283,23 +225,23 @@ pub(crate) fn find_skill_mentions_with_tool_mentions(
     let mut matches: Vec<SkillMetadata> = Vec::new();
 
     for skill in skills {
-        if seen_paths.contains(&skill.path_to_skills_md) {
+        if seen_paths.contains(&skill.path) {
             continue;
         }
-        let path_str = skill.path_to_skills_md.to_string_lossy();
+        let path_str = skill.path.to_string_lossy();
         if mention_skill_paths.contains(path_str.as_ref()) {
-            seen_paths.insert(skill.path_to_skills_md.clone());
+            seen_paths.insert(skill.path.clone());
             seen_names.insert(skill.name.clone());
             matches.push(skill.clone());
         }
     }
 
     for skill in skills {
-        if seen_paths.contains(&skill.path_to_skills_md) {
+        if seen_paths.contains(&skill.path) {
             continue;
         }
         if mentions.names.contains(&skill.name) && seen_names.insert(skill.name.clone()) {
-            seen_paths.insert(skill.path_to_skills_md.clone());
+            seen_paths.insert(skill.path.clone());
             matches.push(skill.clone());
         }
     }
