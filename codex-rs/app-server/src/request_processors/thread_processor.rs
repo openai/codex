@@ -1317,7 +1317,7 @@ impl ThreadRequestProcessor {
 
         listener_task_context
             .thread_watch_manager
-            .upsert_thread_silently(thread.clone())
+            .upsert_thread_silently(&thread.id)
             .instrument(tracing::info_span!(
                 "app_server.thread_start.upsert_thread",
                 otel.name = "app_server.thread_start.upsert_thread",
@@ -2986,14 +2986,9 @@ impl ThreadRequestProcessor {
         let mut raw_events_enabled = false;
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
-            let loaded_thread = build_thread_from_snapshot(
-                thread_id,
-                thread.session_configured().session_id.to_string(),
-                thread.multi_agent_version(),
-                &config_snapshot,
-                thread.rollout_path(),
-            );
-            self.thread_watch_manager.upsert_thread(loaded_thread).await;
+            self.thread_watch_manager
+                .upsert_thread(&thread_id.to_string())
+                .await;
             if let Some(parent_thread_id) = config_snapshot.parent_thread_id {
                 raw_events_enabled = self
                     .thread_state_manager
@@ -3287,9 +3282,7 @@ impl ThreadRequestProcessor {
                     thread.turns = materialized_turns;
                 }
 
-                self.thread_watch_manager
-                    .upsert_thread(thread.clone())
-                    .await;
+                self.thread_watch_manager.upsert_thread(&thread.id).await;
 
                 let thread_status = self
                     .thread_watch_manager
@@ -4238,7 +4231,7 @@ impl ThreadRequestProcessor {
         thread.thread_source = config_snapshot.thread_source.clone().map(Into::into);
 
         self.thread_watch_manager
-            .upsert_thread_silently(thread.clone())
+            .upsert_thread_silently(&thread.id)
             .await;
 
         thread.status = resolve_thread_status(
