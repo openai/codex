@@ -445,6 +445,31 @@ fn for_prompt_preserves_inter_agent_assistant_messages() {
 }
 
 #[test]
+fn cloned_history_shares_items_until_mutated() {
+    let first = assistant_msg(&"first ".repeat(1_024));
+    let second = assistant_msg("second");
+    let history = create_history_with_items(vec![first.clone()]);
+    let mut snapshot = history.clone();
+
+    assert!(std::ptr::eq(
+        history.raw_items().as_ptr(),
+        snapshot.raw_items().as_ptr()
+    ));
+
+    snapshot.record_items(
+        std::slice::from_ref(&second),
+        TruncationPolicy::Tokens(10_000),
+    );
+
+    assert!(!std::ptr::eq(
+        history.raw_items().as_ptr(),
+        snapshot.raw_items().as_ptr()
+    ));
+    assert_eq!(history.raw_items(), std::slice::from_ref(&first));
+    assert_eq!(snapshot.raw_items(), &[first, second]);
+}
+
+#[test]
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");

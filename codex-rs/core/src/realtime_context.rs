@@ -62,8 +62,10 @@ pub(crate) async fn build_realtime_startup_context(
 ) -> Option<String> {
     let config = sess.get_config().await;
     let cwd = config.cwd.clone();
-    let history = sess.clone_history().await;
-    let current_thread_section = build_current_thread_section(history.raw_items());
+    let current_thread_section = {
+        let history = sess.clone_history().await;
+        build_current_thread_section(history.raw_items())
+    };
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads).await;
     let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir()).await;
