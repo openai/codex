@@ -22,6 +22,7 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::path_mask_has_explicit_allow_ace;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -169,12 +170,7 @@ fn write_root_needs_refresh(root: &Path, psid: *mut c_void) -> Result<bool> {
     )? {
         return Ok(true);
     }
-    path_mask_allows(
-        root,
-        &[psid],
-        FILE_DELETE_CHILD,
-        /*require_all_bits*/ false,
-    )
+    path_mask_has_explicit_allow_ace(root, &[psid], FILE_DELETE_CHILD)
 }
 
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
@@ -1060,6 +1056,7 @@ mod tests {
     use codex_windows_sandbox::ensure_allow_mask_aces;
     use codex_windows_sandbox::ensure_allow_write_aces;
     use codex_windows_sandbox::load_or_create_cap_sids;
+    use codex_windows_sandbox::path_mask_allows;
     use codex_windows_sandbox::workspace_write_cap_sid_for_root;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1141,6 +1138,55 @@ mod tests {
         assert_eq!(
             (seeded, needs_refresh_before, replaced, needs_refresh_after),
             (true, true, true, false)
+        );
+    }
+
+    #[test]
+    fn write_root_refresh_ignores_inherited_delete_child_grant() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("workspace");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&workspace).expect("create workspace");
+
+        let sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
+            .expect("workspace sid");
+        let psid = unsafe { convert_string_sid_to_sid(&sid).expect("convert workspace sid") };
+        let seeded_explicit =
+            unsafe { ensure_allow_mask_aces(&workspace, &[psid], WRITE_ROOT_ALLOW_MASK) }
+                .expect("seed explicit write ACE");
+        let seeded_parent = unsafe {
+            ensure_allow_mask_aces(&parent, &[psid], WRITE_ROOT_ALLOW_MASK | FILE_DELETE_CHILD)
+        }
+        .expect("seed inherited stale write ACE");
+        let has_inherited_delete_child = path_mask_allows(
+            &workspace,
+            &[psid],
+            FILE_DELETE_CHILD,
+            /*require_all_bits*/ false,
+        )
+        .expect("check inherited stale write ACE");
+        let needs_refresh =
+            write_root_needs_refresh(&workspace, psid).expect("check inherited stale write ACE");
+        let first_refresh = unsafe { ensure_allow_write_aces(&workspace, &[psid]) }
+            .expect("first inherited write ACE refresh");
+        let second_refresh = unsafe { ensure_allow_write_aces(&workspace, &[psid]) }
+            .expect("second inherited write ACE refresh");
+        unsafe {
+            LocalFree(psid as HLOCAL);
+        }
+
+        assert_eq!(
+            (
+                seeded_explicit,
+                seeded_parent,
+                has_inherited_delete_child,
+                needs_refresh,
+                first_refresh,
+                second_refresh,
+            ),
+            (true, true, true, false, false, false)
         );
     }
 
