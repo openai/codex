@@ -103,6 +103,9 @@ impl ChatWidget {
                 self.refresh_plan_mode_nudge();
             }
         }
+        let effort = self.effective_reasoning_effort();
+        self.bottom_pane
+            .set_active_reasoning_effort_baseline(effort.as_ref());
         self.refresh_model_display();
         self.refresh_status_surfaces();
         self.sync_service_tier_commands();

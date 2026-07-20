@@ -452,6 +452,9 @@ impl ChatWidget {
             self.input_queue.clear();
             self.restore_composer_state(Default::default());
         }
+        let effort = self.effective_reasoning_effort();
+        self.bottom_pane
+            .set_active_reasoning_effort_baseline(effort.as_ref());
         self.turn_lifecycle
             .restore_running(self.turn_lifecycle.agent_turn_running, Instant::now());
         self.update_task_running_state();
