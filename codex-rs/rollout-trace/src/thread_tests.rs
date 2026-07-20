@@ -142,6 +142,7 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
         "gpt-test",
         "test-provider",
     );
+    assert!(!compaction_trace.is_enabled());
     let compaction_attempt =
         compaction_trace.start_attempt(&serde_json::json!({ "kind": "compaction" }));
     compaction_attempt.record_completed(&[]);
@@ -175,6 +176,7 @@ fn compaction_contexts_share_identity_across_models() -> anyhow::Result<()> {
     for model in ["gpt-previous", "gpt-selected"] {
         let compaction_trace =
             thread_trace.compaction_trace_context("turn-1", "compaction-1", model, "test-provider");
+        assert!(compaction_trace.is_enabled());
         compaction_trace
             .start_attempt(&serde_json::json!({ "model": model }))
             .record_failed("test failure");

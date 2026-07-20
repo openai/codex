@@ -36,7 +36,7 @@ async fn agent_job_tables_are_dropped_when_upgrading() {
     let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
-    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.clone());
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
     let pool = sqlite
         .open_read_write_pool(&state_db_path(&sqlite_home))
         .await
