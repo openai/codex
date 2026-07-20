@@ -1332,7 +1332,7 @@ impl TurnRequestProcessor {
         if let Some(mut thread) = stored_thread {
             thread.session_id = review_thread.session_configured().session_id.to_string();
             self.thread_watch_manager
-                .upsert_thread_silently(thread.clone())
+                .upsert_thread_silently(&thread.id)
                 .await;
             thread.status = resolve_thread_status(
                 self.thread_watch_manager
