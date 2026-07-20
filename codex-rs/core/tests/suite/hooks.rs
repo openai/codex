@@ -914,6 +914,70 @@ print(json.dumps({{
     Ok(())
 }
 
+enum DynamicCompactSessionStartHook {
+    IndexedContexts,
+    Stop,
+}
+
+fn write_dynamic_compact_session_start_hook(
+    home: &Path,
+    behavior: DynamicCompactSessionStartHook,
+) -> Result<()> {
+    let script_path = home.join("dynamic_compact_session_start_hook.py");
+    let log_path = home.join("session_start_hook_log.jsonl");
+    let output = match behavior {
+        DynamicCompactSessionStartHook::IndexedContexts => {
+            r#"invocation_index = len(existing) + 1
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": f"compact hook context {invocation_index}",
+    }
+}))"#
+        }
+        DynamicCompactSessionStartHook::Stop => {
+            r#"print(json.dumps({
+    "continue": False,
+    "stopReason": "compact hook stopped continuation",
+}))"#
+        }
+    };
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+log_path = Path(r"{log_path}")
+existing = []
+if log_path.exists():
+    existing = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+{output}
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "matcher": "compact",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running compact session start hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write dynamic compact session start hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_resume_and_compact_session_start_hook_with_context(
     home: &Path,
     resume_context: &str,
@@ -1650,6 +1714,213 @@ async fn compact_session_start_hook_records_additional_context_for_next_turn() -
     assert_eq!(
         hook_inputs[0].get("source").and_then(Value::as_str),
         Some("compact")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mid_turn_auto_compact_session_start_hooks_run_before_each_continuation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let limit = 200_000;
+    let over_limit_tokens = 250_000;
+    let compacted_tokens = 50;
+    let _first_turn = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call("call-1", "test_tool", "{}"),
+            ev_completed_with_tokens("resp-1", over_limit_tokens),
+        ]),
+    )
+    .await;
+    let _first_compact = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("summary-1", "first compact summary"),
+            ev_completed_with_tokens("resp-2", compacted_tokens),
+        ]),
+    )
+    .await;
+    let first_continuation = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call("call-2", "test_tool", "{}"),
+            ev_completed_with_tokens("resp-3", over_limit_tokens),
+        ]),
+    )
+    .await;
+    let _second_compact = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_assistant_message("summary-2", "second compact summary"),
+            ev_completed_with_tokens("resp-4", compacted_tokens),
+        ]),
+    )
+    .await;
+    let second_continuation = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-5"),
+            ev_assistant_message("final", "finished after compaction"),
+            ev_completed_with_tokens("resp-5", compacted_tokens),
+        ]),
+    )
+    .await;
+    let next_turn = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-6"),
+            ev_assistant_message("next", "finished next turn"),
+            ev_completed_with_tokens("resp-6", compacted_tokens),
+        ]),
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_dynamic_compact_session_start_hook(
+                home,
+                DynamicCompactSessionStartHook::IndexedContexts,
+            )
+            .expect("failed to write indexed compact session start hook fixture");
+        })
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.model_auto_compact_token_limit = Some(limit);
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("start auto compact turn").await?;
+
+    let first_continuation_context = first_continuation
+        .single_request()
+        .message_input_texts("developer");
+    assert!(
+        first_continuation_context
+            .iter()
+            .any(|message| message == "compact hook context 1"),
+        "the first compact hook context should reach the immediate continuation request",
+    );
+    assert!(
+        !first_continuation_context
+            .iter()
+            .any(|message| message == "compact hook context 2"),
+        "the second compact hook should not run before its compaction",
+    );
+    assert!(
+        second_continuation
+            .single_request()
+            .message_input_texts("developer")
+            .iter()
+            .any(|message| message == "compact hook context 2"),
+        "the second compact hook context should reach the immediate continuation request",
+    );
+
+    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .filter_map(|input| input.get("source").and_then(Value::as_str))
+            .collect::<Vec<_>>(),
+        vec!["compact", "compact"],
+        "each successful mid-turn compaction should drain exactly one compact hook",
+    );
+
+    test.submit_turn("next user turn").await?;
+
+    assert!(
+        !next_turn
+            .single_request()
+            .message_input_texts("developer")
+            .iter()
+            .any(|message| message == "compact hook context 3"),
+        "the next user turn should not receive a stale compact hook",
+    );
+    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .filter_map(|input| input.get("source").and_then(Value::as_str))
+            .collect::<Vec<_>>(),
+        vec!["compact", "compact"],
+        "the next user turn should not invoke stale compact hooks",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mid_turn_auto_compact_session_start_hook_stop_blocks_continuation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let limit = 200_000;
+    let over_limit_tokens = 250_000;
+    let compacted_tokens = 50;
+    let first_turn = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call("call-1", "test_tool", "{}"),
+            ev_completed_with_tokens("resp-1", over_limit_tokens),
+        ]),
+    )
+    .await;
+    let compact = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("summary-1", "compact summary"),
+            ev_completed_with_tokens("resp-2", compacted_tokens),
+        ]),
+    )
+    .await;
+    let unexpected_continuation = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("unexpected", "continued after hook stop"),
+            ev_completed_with_tokens("resp-3", compacted_tokens),
+        ]),
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_dynamic_compact_session_start_hook(home, DynamicCompactSessionStartHook::Stop)
+                .expect("failed to write stopping compact session start hook fixture");
+        })
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.model_auto_compact_token_limit = Some(limit);
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("stop after auto compact").await?;
+
+    first_turn.single_request();
+    compact.single_request();
+    assert!(
+        unexpected_continuation.requests().is_empty(),
+        "a compact SessionStart stop should prevent the next sampling request",
+    );
+    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .filter_map(|input| input.get("source").and_then(Value::as_str))
+            .collect::<Vec<_>>(),
+        vec!["compact"],
     );
 
     Ok(())

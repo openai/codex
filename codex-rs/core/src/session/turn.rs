@@ -371,6 +371,9 @@ pub(crate) async fn run_turn(
                             .await;
                         return Ok(None);
                     }
+                    if run_pending_session_start_hooks(&sess, &turn_context).await {
+                        return Ok(None);
+                    }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
                 }
