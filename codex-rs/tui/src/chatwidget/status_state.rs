@@ -63,6 +63,10 @@ impl PendingGuardianReviewStatus {
         self.entries.len() != original_len
     }
 
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
