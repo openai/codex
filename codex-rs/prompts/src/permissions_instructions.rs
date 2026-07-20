@@ -229,12 +229,15 @@ fn approval_text(
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
-    if approval_policy == AskForApproval::OnRequest
-        && let Some(approval_messages) = approval_messages
-    {
-        let selected = match approvals_reviewer {
-            ApprovalsReviewer::User => approval_messages.on_request.as_ref(),
-            ApprovalsReviewer::AutoReview => approval_messages.on_request_auto_review.as_ref(),
+    if let Some(approval_messages) = approval_messages {
+        let selected = match &approval_policy {
+            AskForApproval::OnRequest => match approvals_reviewer {
+                ApprovalsReviewer::User => approval_messages.on_request.as_ref(),
+                ApprovalsReviewer::AutoReview => approval_messages.on_request_auto_review.as_ref(),
+            },
+            AskForApproval::Never => approval_messages.never.as_ref(),
+            AskForApproval::UnlessTrusted => approval_messages.unless_trusted.as_ref(),
+            AskForApproval::Granular(_) => None,
         };
         if let Some(selected) = selected {
             return selected.clone();
