@@ -1005,11 +1005,11 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.2"),
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("blocked by distinctive approval policy"),
                 expected_reason: None,
             },
             expectation: Expectation::CommandFailure {
-                output_contains: "rejected by user",
+                output_contains: "blocked by distinctive approval policy",
             },
         },
         ScenarioSpec {
@@ -1023,7 +1023,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.2"),
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::CommandFailure {
@@ -1041,7 +1041,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.2"),
             outcome: Outcome::ExecApprovalWithAmendment {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
                 expected_execpolicy_amendment: Some(&["echo", "known-safe-escalation"]),
             },
@@ -1084,7 +1084,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.2"),
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::CommandFailure {
@@ -1105,7 +1105,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.2"),
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::CommandFailure {
@@ -1126,7 +1126,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.2"),
             outcome: Outcome::ExecApprovalWithAmendment {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
                 expected_execpolicy_amendment: None,
             },
@@ -1304,7 +1304,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::FileNotCreated {
@@ -1436,7 +1436,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::PatchApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::FileNotCreated {
@@ -1742,7 +1742,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![Feature::UnifiedExec],
             model_override: None,
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::CommandFailure {
@@ -1761,7 +1761,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![Feature::UnifiedExec],
             model_override: None,
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::CommandFailure {
@@ -1780,7 +1780,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             features: vec![Feature::UnifiedExec],
             model_override: None,
             outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
             },
             expectation: Expectation::CommandFailure {
@@ -3865,7 +3865,7 @@ allow_local_binding = true
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("rejected by user"),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -3937,7 +3937,7 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("rejected by user"),
         })
         .await?;
     wait_for_completion(&test).await;

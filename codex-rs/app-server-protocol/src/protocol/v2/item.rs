@@ -94,7 +94,7 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
                 network_policy_amendment: network_policy_amendment.into(),
             },
             CoreReviewDecision::Abort => Self::Cancel,
-            CoreReviewDecision::Denied => Self::Decline,
+            CoreReviewDecision::Denied { .. } => Self::Decline,
             CoreReviewDecision::TimedOut => Self::Decline,
         }
     }

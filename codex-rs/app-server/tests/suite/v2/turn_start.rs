@@ -2388,6 +2388,31 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_exec_approval_decline_v2() -> Result<()> {
+    run_turn_start_exec_approval_rejection_v2(
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Decline,
+        })?,
+        CommandExecutionStatus::Declined,
+        "rejected by user",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn turn_start_exec_approval_invalid_response_v2() -> Result<()> {
+    run_turn_start_exec_approval_rejection_v2(
+        json!({ "unexpected": "response" }),
+        CommandExecutionStatus::Failed,
+        "approval request failed",
+    )
+    .await
+}
+
+async fn run_turn_start_exec_approval_rejection_v2(
+    approval_response: Value,
+    expected_status: CommandExecutionStatus,
+    expected_rejection: &str,
+) -> Result<()> {
     // TODO(anp): Remove after command approval routing accepts target-native Windows cwd.
     skip_if_wine_exec!(
         Ok(()),
@@ -2487,13 +2512,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
 
-    mcp.send_response(
-        request_id,
-        serde_json::to_value(CommandExecutionRequestApprovalResponse {
-            decision: CommandExecutionApprovalDecision::Decline,
-        })?,
-    )
-    .await?;
+    mcp.send_response(request_id, approval_response).await?;
 
     let completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -2523,7 +2542,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(id, "call-decline");
-    assert_eq!(status, CommandExecutionStatus::Declined);
+    assert_eq!(status, expected_status);
     assert!(exit_code.is_none());
     assert!(aggregated_output.is_none());
 
@@ -2532,6 +2551,17 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    assert!(
+        requests.iter().any(|request| {
+            request.url.path().ends_with("/responses") && body_contains(request, expected_rejection)
+        }),
+        "model request should include approval rejection: {expected_rejection}"
+    );
 
     Ok(())
 }
@@ -4255,6 +4285,28 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
 
 #[tokio::test]
 async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
+    run_turn_start_file_change_approval_rejection_v2(
+        serde_json::to_value(FileChangeRequestApprovalResponse {
+            decision: FileChangeApprovalDecision::Decline,
+        })?,
+        "rejected by user",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn turn_start_file_change_approval_invalid_response_v2() -> Result<()> {
+    run_turn_start_file_change_approval_rejection_v2(
+        json!({ "unexpected": "response" }),
+        "approval request failed",
+    )
+    .await
+}
+
+async fn run_turn_start_file_change_approval_rejection_v2(
+    approval_response: Value,
+    expected_rejection: &str,
+) -> Result<()> {
     // TODO(anp): Materialize apply-patch workspaces in the selected remote environment.
     skip_if_remote!(
         Ok(()),
@@ -4371,13 +4423,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         }]
     );
 
-    mcp.send_response(
-        request_id,
-        serde_json::to_value(FileChangeRequestApprovalResponse {
-            decision: FileChangeApprovalDecision::Decline,
-        })?,
-    )
-    .await?;
+    mcp.send_response(request_id, approval_response).await?;
 
     let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -4407,6 +4453,17 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    assert!(
+        requests.iter().any(|request| {
+            request.url.path().ends_with("/responses") && body_contains(request, expected_rejection)
+        }),
+        "model request should include approval rejection: {expected_rejection}"
+    );
 
     assert!(
         !expected_readme_path.exists(),

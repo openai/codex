@@ -1,13 +1,12 @@
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
-use crate::guardian::guardian_rejection_message;
-use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
+use crate::tools::events::truncate_rejection_message;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use codex_hooks::PermissionRequestDecision;
@@ -169,7 +168,7 @@ enum PendingApprovalDecision {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum NetworkApprovalOutcome {
-    DeniedByUser,
+    DeniedByApproval(String),
     DeniedByPolicy(String),
 }
 
@@ -177,10 +176,12 @@ fn network_approval_outcome_to_result(
     outcome: Option<NetworkApprovalOutcome>,
 ) -> Result<(), ToolError> {
     match outcome {
-        Some(NetworkApprovalOutcome::DeniedByUser) => {
-            Err(ToolError::Rejected("rejected by user".to_string()))
+        Some(NetworkApprovalOutcome::DeniedByApproval(rejection)) => {
+            Err(ToolError::Rejected(truncate_rejection_message(&rejection)))
         }
-        Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => {
+            Err(ToolError::Rejected(truncate_rejection_message(&message)))
+        }
         None => Ok(()),
     }
 }
@@ -427,7 +428,7 @@ impl NetworkApprovalService {
         };
         if matches!(
             calls.call_outcomes.get(registration_id),
-            Some(NetworkApprovalOutcome::DeniedByUser)
+            Some(NetworkApprovalOutcome::DeniedByApproval(_))
         ) {
             return;
         }
@@ -760,7 +761,9 @@ impl NetworkApprovalService {
                     if let Some(owner_call) = owner_call.as_ref() {
                         self.record_call_outcome(
                             &owner_call.registration_id,
-                            NetworkApprovalOutcome::DeniedByUser,
+                            NetworkApprovalOutcome::DeniedByApproval(
+                                "rejected by user".to_string(),
+                            ),
                         )
                         .await;
                     }
@@ -768,22 +771,15 @@ impl NetworkApprovalService {
                     PendingApprovalDecision::Deny
                 }
             },
-            ReviewDecision::Denied | ReviewDecision::Abort => {
-                if let Some(review_id) = guardian_review_id.as_deref() {
-                    if let Some(owner_call) = owner_call.as_ref() {
-                        let message = guardian_rejection_message(session.as_ref(), review_id).await;
-                        self.record_call_outcome(
-                            &owner_call.registration_id,
-                            NetworkApprovalOutcome::DeniedByPolicy(message),
-                        )
+            ReviewDecision::Denied { rejection } => {
+                if let Some(owner_call) = owner_call.as_ref() {
+                    let outcome = if use_guardian {
+                        NetworkApprovalOutcome::DeniedByPolicy(rejection)
+                    } else {
+                        NetworkApprovalOutcome::DeniedByApproval(rejection)
+                    };
+                    self.record_call_outcome(&owner_call.registration_id, outcome)
                         .await;
-                    }
-                } else if let Some(owner_call) = owner_call.as_ref() {
-                    self.record_call_outcome(
-                        &owner_call.registration_id,
-                        NetworkApprovalOutcome::DeniedByUser,
-                    )
-                    .await;
                 }
                 PendingApprovalDecision::Deny
             }
@@ -791,7 +787,29 @@ impl NetworkApprovalService {
                 if let Some(owner_call) = owner_call.as_ref() {
                     self.record_call_outcome(
                         &owner_call.registration_id,
-                        NetworkApprovalOutcome::DeniedByPolicy(guardian_timeout_message()),
+                        NetworkApprovalOutcome::DeniedByPolicy(
+                            crate::guardian::guardian_timeout_message(),
+                        ),
+                    )
+                    .await;
+                }
+                PendingApprovalDecision::Deny
+            }
+            ReviewDecision::Abort => {
+                if use_guardian {
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.record_call_outcome(
+                            &owner_call.registration_id,
+                            NetworkApprovalOutcome::DeniedByPolicy(
+                                "automatic approval review was cancelled".to_string(),
+                            ),
+                        )
+                        .await;
+                    }
+                } else if let Some(owner_call) = owner_call.as_ref() {
+                    self.record_call_outcome(
+                        &owner_call.registration_id,
+                        NetworkApprovalOutcome::DeniedByApproval("rejected by user".to_string()),
                     )
                     .await;
                 }

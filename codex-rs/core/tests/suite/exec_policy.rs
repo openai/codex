@@ -272,7 +272,7 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("rejected by user"),
         })
         .await?;
     wait_for_event(&test.codex, |event| {

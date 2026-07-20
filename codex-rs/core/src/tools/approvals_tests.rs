@@ -1,5 +1,23 @@
 use super::*;
+use codex_protocol::approvals::NetworkPolicyAmendment;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn approval_resolution_rejects_denied_network_policy_amendment() {
+    let resolution = ApprovalResolution {
+        decision: ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: NetworkPolicyAmendment {
+                host: "denied.example.com".to_string(),
+                action: NetworkPolicyRuleAction::Deny,
+            },
+        },
+        source: ApprovalResolutionSource::User,
+    };
+    assert!(matches!(
+        resolution.into_tool_result(),
+        Err(ToolError::Rejected(rejection)) if rejection == "rejected by user"
+    ));
+}
 
 #[test]
 fn guardian_cwd_preserves_drive_shaped_local_posix_path() {

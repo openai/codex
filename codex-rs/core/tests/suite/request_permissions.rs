@@ -1017,7 +1017,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("rejected by user"),
         })
         .await?;
     wait_for_completion(&test).await;

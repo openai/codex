@@ -34,8 +34,20 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::time::timeout;
+
+#[tokio::test]
+async fn dropped_approval_review_fails_closed() {
+    let (tx, rx) = oneshot::channel();
+    drop(tx);
+
+    assert_eq!(
+        receive_approval_review(rx).await,
+        ReviewDecision::denied("automatic approval review could not complete")
+    );
+}
 
 #[tokio::test]
 async fn forward_events_filters_private_events_before_blocked_send_is_cancelled() {

@@ -113,7 +113,7 @@ pub(crate) async fn on_patch_approval_response(
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
                     id: approval_id.clone(),
-                    decision: ReviewDecision::Denied,
+                    decision: ReviewDecision::denied("approval request failed"),
                 })
                 .await
             {
@@ -126,7 +126,7 @@ pub(crate) async fn on_patch_approval_response(
     let response = serde_json::from_value::<PatchApprovalResponse>(value).unwrap_or_else(|err| {
         error!("failed to deserialize PatchApprovalResponse: {err}");
         PatchApprovalResponse {
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("approval request failed"),
         }
     });
 

@@ -28,6 +28,7 @@ use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -534,7 +535,7 @@ async fn handle_exec_approval(
             review_cancel.clone(),
         );
         await_approval_with_cancel(
-            async move { review_rx.await.unwrap_or_default() },
+            receive_approval_review(review_rx),
             parent_session,
             &approval_id_for_op,
             cancel_token,
@@ -643,7 +644,7 @@ async fn handle_patch_approval(
         );
         Some(
             await_approval_with_cancel(
-                async move { review_rx.await.unwrap_or_default() },
+                receive_approval_review(review_rx),
                 parent_session,
                 &approval_id,
                 cancel_token,
@@ -758,7 +759,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(
-        async move { review_rx.await.unwrap_or_default() },
+        receive_approval_review(review_rx),
         parent_session,
         &event.call_id,
         cancel_token,
@@ -779,7 +780,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-        ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+        ReviewDecision::Denied { .. } | ReviewDecision::TimedOut | ReviewDecision::Abort => {
             MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string()
         }
     };
@@ -884,6 +885,12 @@ where
     }
 }
 
+async fn receive_approval_review(review_rx: oneshot::Receiver<ReviewDecision>) -> ReviewDecision {
+    review_rx
+        .await
+        .unwrap_or_else(|_| ReviewDecision::denied("automatic approval review could not complete"))
+}
+
 /// Await an approval decision, aborting on cancellation.
 async fn await_approval_with_cancel<F>(
     fut: F,
@@ -902,7 +909,10 @@ where
                 review_cancel_token.cancel();
             }
             parent_session
-                .notify_approval(approval_id, codex_protocol::protocol::ReviewDecision::Abort)
+                .notify_approval(
+                    approval_id,
+                    codex_protocol::protocol::ReviewDecision::Abort,
+                )
                 .await;
             codex_protocol::protocol::ReviewDecision::Abort
         }
