@@ -90,23 +90,21 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
         turn_environment: &TurnEnvironment,
         cwd: AbsolutePathBuf,
+        allow_login_shell: bool,
     ) -> Result<ExecParams, FunctionCallError> {
         let session_shell = session.user_shell();
         let shell = turn_environment
             .shell
             .as_ref()
             .unwrap_or(session_shell.as_ref());
-        let use_login_shell = Self::resolve_use_login_shell(
-            params.login,
-            turn_environment.settings.allow_login_shell,
-        )?;
+        let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell, &params.command, use_login_shell);
 
         let mut env = create_env(
-            &turn_environment.settings.shell_environment_policy,
+            &turn_context.config.permissions.shell_environment_policy,
             Some(session.thread_id),
         );
-        let active_permission_profile = turn_environment.active_permission_profile();
+        let active_permission_profile = turn_context.config.permissions.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
 
         Ok(ExecParams {
@@ -121,10 +119,10 @@ impl ShellCommandHandler {
                 .flatten(),
             network_environment_id: Some(turn_environment.environment_id.clone()),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
-            windows_sandbox_level: turn_environment.settings.sandbox.windows_sandbox_level,
-            windows_sandbox_private_desktop: turn_environment
-                .settings
-                .sandbox
+            windows_sandbox_level: turn_context.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_context
+                .config
+                .permissions
                 .windows_sandbox_private_desktop,
             justification: params.justification.clone(),
             arg0: None,
@@ -214,6 +212,7 @@ impl ShellCommandHandler {
             turn.as_ref(),
             &turn_environment,
             cwd,
+            turn.config.permissions.allow_login_shell,
         )?;
         let shell_type = Some(
             turn_environment

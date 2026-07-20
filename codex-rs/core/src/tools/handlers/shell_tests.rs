@@ -99,9 +99,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
     let expected_command = selected_shell.derive_exec_args(&command, /*use_login_shell*/ true);
     let selected_cwd = turn_context.config.cwd.join("selected-environment");
     let expected_cwd = selected_cwd.join("subdir");
-    let mut selected_environment_settings = turn_context.primary_environment_settings().clone();
-    selected_environment_settings.allow_login_shell = true;
-    let selected_environment = TurnEnvironment::new_with_settings(
+    let selected_environment = TurnEnvironment::new(
         "selected-environment".to_string(),
         Arc::clone(
             &turn_context
@@ -112,15 +110,13 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         ),
         PathUri::from_abs_path(&selected_cwd),
         Vec::new(),
-        /*sandbox_override*/ None,
-        selected_environment_settings,
         Some(selected_shell),
     );
     let mut expected_env = create_env(
-        &selected_environment.settings.shell_environment_policy,
+        &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
-    let active_permission_profile = selected_environment.active_permission_profile();
+    let active_permission_profile = turn_context.config.permissions.active_permission_profile();
     inject_permission_profile_env(&mut expected_env, active_permission_profile.as_ref());
 
     let params = ShellCommandToolCallParams {
@@ -140,6 +136,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         &turn_context,
         &selected_environment,
         expected_cwd.clone(),
+        /*allow_login_shell*/ true,
     )
     .expect("login shells should be allowed");
 
@@ -220,6 +217,7 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         &turn_context,
         turn_environment,
         cwd,
+        /*allow_login_shell*/ false,
     )
     .expect("non-login shells should still be allowed");
 

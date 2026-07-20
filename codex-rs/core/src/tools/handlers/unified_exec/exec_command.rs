@@ -158,8 +158,8 @@ impl ExecCommandHandler {
             &turn_environment.file_system_sandbox_policy(),
             turn_environment.network_sandbox_policy(),
             SandboxablePreference::Auto,
-            turn_environment.settings.sandbox.windows_sandbox_level,
-            turn.network.is_some(),
+            turn.windows_sandbox_level,
+            turn.network.is_some() && turn_environment.uses_managed_network_proxy(),
         );
         // `to_abs_path()` alone cannot identify foreign drive paths: `file:///C:/repo` is
         // representable as `/C:/repo` on POSIX. Require the inferred convention to match too.
@@ -233,7 +233,7 @@ impl ExecCommandHandler {
             &args,
             shell,
             &shell_mode,
-            turn_environment.settings.allow_login_shell,
+            turn.config.permissions.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;

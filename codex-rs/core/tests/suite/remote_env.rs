@@ -319,7 +319,7 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&test.config.cwd),
             workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
-            sandbox: None,
+            permission_profile: None,
         }]),
     )
     .await?;
@@ -709,7 +709,7 @@ async fn deferred_executor_starts_noise_connection_after_registration() -> Resul
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
-                        sandbox: None,
+                        permission_profile: None,
                     }],
                 )),
                 ..Default::default()
@@ -904,7 +904,7 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
-                        sandbox: None,
+                        permission_profile: None,
                     }],
                 )),
                 ..Default::default()
@@ -1254,7 +1254,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
         workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
-        sandbox: None,
+        permission_profile: None,
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -1394,13 +1394,13 @@ async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Res
                             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                             cwd: PathUri::from_abs_path(&local_cwd.path().abs()),
                             workspace_roots: Vec::new(),
-                            sandbox: None,
+                            permission_profile: None,
                         },
                         TurnEnvironmentSelection {
                             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                             cwd: remote_cwd_uri.clone(),
                             workspace_roots: vec![remote_cwd_uri.clone()],
-                            sandbox: None,
+                            permission_profile: None,
                         },
                     ],
                 )),
@@ -1569,7 +1569,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
-                sandbox: None,
+                permission_profile: None,
             },
         ],
         AskForApproval::OnRequest,
@@ -1712,7 +1712,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
-                sandbox: None,
+                permission_profile: None,
             },
         ]),
     )
@@ -1797,7 +1797,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
             workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
-            sandbox: None,
+            permission_profile: None,
         },
     ];
     let local_patch = format!(
@@ -2000,7 +2000,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
-                sandbox: None,
+                permission_profile: None,
             },
         ]),
     )

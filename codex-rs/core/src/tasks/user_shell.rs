@@ -157,7 +157,7 @@ pub(crate) async fn execute_user_shell_command(
     };
     let shell_snapshot_location = turn_environment.shell_snapshot(&cwd);
     let mut exec_env_map = create_env(
-        &turn_environment.settings.shell_environment_policy,
+        &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
@@ -167,7 +167,11 @@ pub(crate) async fn execute_user_shell_command(
         &display_command,
         environment_shell,
         shell_snapshot_location.as_ref(),
-        &turn_environment.settings.shell_environment_policy.r#set,
+        &turn_context
+            .config
+            .permissions
+            .shell_environment_policy
+            .r#set,
         &mut exec_env_map,
     );
 
@@ -197,11 +201,6 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
-    let windows_sandbox_workspace_roots = turn_environment
-        .workspace_roots()
-        .iter()
-        .filter_map(|root| root.to_abs_path().ok())
-        .collect();
     let permission_profile = PermissionProfile::Disabled;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
@@ -218,11 +217,11 @@ pub(crate) async fn execute_user_shell_command(
         capture_policy: ExecCapturePolicy::ShellTool,
         sandbox: SandboxType::None,
         windows_sandbox_policy_cwd: cwd.clone().into(),
-        windows_sandbox_workspace_roots,
-        windows_sandbox_level: turn_environment.settings.sandbox.windows_sandbox_level,
-        windows_sandbox_private_desktop: turn_environment
-            .settings
-            .sandbox
+        windows_sandbox_workspace_roots: turn_context.config.effective_workspace_roots(),
+        windows_sandbox_level: turn_context.windows_sandbox_level,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
             .windows_sandbox_private_desktop,
         permission_profile: permission_profile.clone(),
         file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),

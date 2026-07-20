@@ -111,6 +111,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: cwd.clone(),
                         workspace_roots: vec![cwd],
+                        permission_profile: None,
                     }
                 }],
             );

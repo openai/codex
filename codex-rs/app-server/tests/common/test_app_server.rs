@@ -198,15 +198,7 @@ impl TestAppServer {
             environment_id: selection.environment_id.clone(),
             cwd: selection.cwd.clone().into(),
             runtime_workspace_roots: None,
-            sandbox: selection.sandbox.clone().map(|sandbox| {
-                codex_app_server_protocol::TurnEnvironmentSandboxParams {
-                    permission_profile: sandbox.permission_profile.into(),
-                    active_permission_profile: sandbox.active_permission_profile.map(Into::into),
-                    windows_sandbox_level: sandbox.windows_sandbox_level,
-                    windows_sandbox_private_desktop: sandbox.windows_sandbox_private_desktop,
-                    use_legacy_landlock: sandbox.use_legacy_landlock,
-                }
-            }),
+            sandbox: None,
         })
     }
 

@@ -1037,8 +1037,8 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
 #[tokio::test]
 async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> anyhow::Result<()> {
     struct ProbeToolRuntime {
-        turn_environment: TurnEnvironment,
         enforce_managed_network: Vec<bool>,
+        turn_environment: TurnEnvironment,
     }
 
     impl crate::tools::sandboxing::Approvable<()> for ProbeToolRuntime {
@@ -1145,12 +1145,13 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
 
     let mut orchestrator = crate::tools::orchestrator::ToolOrchestrator::new();
     let mut tool = ProbeToolRuntime {
+        enforce_managed_network: Vec::new(),
         turn_environment: turn
             .environments
-            .primary()
-            .expect("primary environment")
+            .turn_environments()
+            .next()
+            .expect("default environment")
             .clone(),
-        enforce_managed_network: Vec::new(),
     };
     let tool_ctx = crate::tools::sandboxing::ToolCtx {
         session: Arc::clone(&session),
@@ -3078,7 +3079,6 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
-        environment_sandboxes: None,
         model: previous_model.to_string(),
         comp_hash: None,
         personality: turn_context.personality,
@@ -3748,7 +3748,6 @@ async fn set_rate_limits_retains_previous_credits() {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -3858,7 +3857,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -4399,7 +4397,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -5132,7 +5129,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), Vec::new()),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -5264,7 +5260,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -5521,7 +5516,6 @@ async fn make_session_with_config_and_rx(
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -5629,7 +5623,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -7426,7 +7419,6 @@ where
         approvals_reviewer: config.approvals_reviewer,
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-        environment_runtime_defaults: Default::default(),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -8840,12 +8832,10 @@ async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() 
 async fn turn_context_item_stores_split_file_system_sandbox_policy_when_different() {
     let (_session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
-    turn_context.set_permission_profile_for_tests(
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            turn_context.permission_profile().enforcement(),
-            &file_system_sandbox_policy,
-            turn_context.network_sandbox_policy(),
-        ),
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &file_system_sandbox_policy,
+        turn_context.network_sandbox_policy(),
     );
 
     let item = turn_context.to_turn_context_item();
@@ -9000,12 +8990,10 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
  {
     let (mut session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
-    turn_context.set_permission_profile_for_tests(
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            turn_context.permission_profile().enforcement(),
-            &file_system_sandbox_policy,
-            turn_context.network_sandbox_policy(),
-        ),
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &file_system_sandbox_policy,
+        turn_context.network_sandbox_policy(),
     );
     let rollout_path = attach_thread_persistence(&mut session).await;
 
@@ -10766,7 +10754,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     // command. Force DangerFullAccess so this check stays focused on approval
     // policy rather than platform-specific sandbox behavior.
     let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique thread settings Arc");
-    turn_context_mut.set_permission_profile_for_tests(PermissionProfile::Disabled);
+    turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
     let command = session.user_shell().derive_exec_args(
         command_script,
@@ -10779,7 +10767,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             command: &command,
             approval_policy: turn_context.approval_policy.value(),
             permission_profile: turn_context.permission_profile(),
-            windows_sandbox_level: turn_context.windows_sandbox_level(),
+            windows_sandbox_level: turn_context.windows_sandbox_level,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         })

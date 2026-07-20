@@ -11,7 +11,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::TurnEnvironmentSandbox;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
@@ -186,37 +185,28 @@ async fn two_exec_servers_isolate_workspace_write_roots() -> Result<()> {
 
     let first_workspace_uri = PathUri::from_host_native_path(first_workspace.path())?;
     let second_workspace_uri = PathUri::from_host_native_path(second_workspace.path())?;
-    let environment_sandbox = TurnEnvironmentSandbox {
-        permission_profile: PermissionProfile::workspace_write_with(
-            &[],
-            NetworkSandboxPolicy::Restricted,
-            /*exclude_tmpdir_env_var*/ true,
-            /*exclude_slash_tmp*/ true,
-        ),
-        active_permission_profile: None,
-        windows_sandbox_level: Default::default(),
-        windows_sandbox_private_desktop: false,
-        use_legacy_landlock: false,
-    };
+    let environment_permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
     let environments = vec![
         TurnEnvironmentSelection {
             environment_id: FIRST_ENVIRONMENT_ID.to_string(),
             cwd: first_workspace_uri.clone(),
             workspace_roots: vec![first_workspace_uri],
-            sandbox: Some(environment_sandbox.clone()),
+            permission_profile: Some(environment_permission_profile.clone()),
         },
         TurnEnvironmentSelection {
             environment_id: SECOND_ENVIRONMENT_ID.to_string(),
             cwd: second_workspace_uri.clone(),
             workspace_roots: vec![second_workspace_uri],
-            sandbox: Some(environment_sandbox),
+            permission_profile: Some(environment_permission_profile),
         },
     ];
-    // Keep the thread default unrestricted. This makes the cross-write
-    // assertions prove that execution used each environment's sandbox.
-    let permission_profile = PermissionProfile::Disabled;
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {

@@ -383,8 +383,8 @@ impl ApplyPatchHandler {
             ));
         };
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox =
-            turn_environment.file_system_sandbox_context(/*additional_permissions*/ None);
+        let sandbox = turn
+            .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment);
         match codex_apply_patch::verify_apply_patch_args(
             args,
             turn_environment.cwd(),
@@ -558,7 +558,7 @@ pub(crate) async fn intercept_apply_patch(
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox =
-        turn_environment.file_system_sandbox_context(/*additional_permissions*/ None);
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, &turn_environment);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {

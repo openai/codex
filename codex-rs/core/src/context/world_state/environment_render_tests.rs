@@ -35,7 +35,6 @@ fn environment(id: &str, cwd: PathUri, shell: impl Into<String>) -> (String, Env
             cwd,
             status: EnvironmentStatus::Available,
             shell: Some(shell.into()),
-            filesystem: None,
         },
     )
 }
@@ -52,6 +51,7 @@ fn environment_state(
         current_date,
         timezone,
         network,
+        filesystem: None,
         subagents,
     }
 }
@@ -97,11 +97,7 @@ fn serialize_environment_context_with_foreign_windows_cwd() {
         /*network*/ None,
         /*subagents*/ None,
     );
-    context
-        .environments
-        .get_mut("remote")
-        .expect("remote environment")
-        .filesystem = Some(FileSystemContext::from_permission_profile(
+    context.filesystem = Some(FileSystemContext::from_permission_profile(
         &PermissionProfile::Disabled,
         &[PathUri::parse("file:///D:/workspace").expect("Windows workspace root URI")],
     ));
@@ -195,11 +191,7 @@ fn serialize_environment_context_with_full_filesystem_profile() {
         /*network*/ None,
         /*subagents*/ None,
     );
-    context
-        .environments
-        .get_mut("local")
-        .expect("local environment")
-        .filesystem = Some(FileSystemContext::from_permission_profile(
+    context.filesystem = Some(FileSystemContext::from_permission_profile(
         &workspace_write_permission_profile_with_private_denials(),
         &[
             PathUri::from_abs_path(&repo),

@@ -1510,7 +1510,6 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             permission_profile: None,
             network: None,
             file_system_sandbox_policy: None,
-            environment_sandboxes: None,
             model: "test-model".to_string(),
             comp_hash: None,
             personality: None,

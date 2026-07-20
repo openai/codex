@@ -56,59 +56,47 @@ fn snapshots() -> Result<()> {
         .collect(),
         ..Default::default()
     };
-    let mut before_turn_context_changes = EnvironmentsState {
+    let before_turn_context_changes = EnvironmentsState {
         current_date: Some("2026-06-19".to_string()),
         timezone: Some("UTC".to_string()),
         network: Some(NetworkContext::new(
             vec!["old.example.com".to_string()],
             vec![],
         )),
+        filesystem: Some(FileSystemContext::from_permission_profile(
+            &PermissionProfile::Disabled,
+            &[],
+        )),
         ..environments.clone()
     };
-    before_turn_context_changes
-        .environments
-        .get_mut(LOCAL_ENVIRONMENT_ID)
-        .expect("local environment")
-        .filesystem = Some(FileSystemContext::from_permission_profile(
-        &PermissionProfile::Disabled,
-        &[],
-    ));
-    let mut after_turn_context_changes = EnvironmentsState {
+    let after_turn_context_changes = EnvironmentsState {
         current_date: Some("2026-06-20".to_string()),
         timezone: Some("America/Los_Angeles".to_string()),
         network: Some(NetworkContext::new(
             vec!["new.example.com".to_string()],
             vec!["blocked.example.com".to_string()],
         )),
+        filesystem: Some(FileSystemContext::from_permission_profile(
+            &PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            },
+            &[],
+        )),
         ..environments
     };
-    after_turn_context_changes
-        .environments
-        .get_mut(LOCAL_ENVIRONMENT_ID)
-        .expect("local environment")
-        .filesystem = Some(FileSystemContext::from_permission_profile(
-        &PermissionProfile::External {
-            network: NetworkSandboxPolicy::Restricted,
-        },
-        &[],
-    ));
-    let mut foreign_windows = EnvironmentsState {
+    let foreign_windows = EnvironmentsState {
         environments: [(
             "remote".to_string(),
             available("file:///C:/windows", "powershell")?,
         )]
         .into_iter()
         .collect(),
+        filesystem: Some(FileSystemContext::from_permission_profile(
+            &PermissionProfile::Disabled,
+            &[],
+        )),
         ..Default::default()
     };
-    foreign_windows
-        .environments
-        .get_mut("remote")
-        .expect("remote environment")
-        .filesystem = Some(FileSystemContext::from_permission_profile(
-        &PermissionProfile::Disabled,
-        &[],
-    ));
     let unknown_shell = EnvironmentsState {
         environments: [(
             LOCAL_ENVIRONMENT_ID.to_string(),
@@ -116,7 +104,6 @@ fn snapshots() -> Result<()> {
                 cwd: PathUri::parse("file:///repo")?,
                 status: EnvironmentStatus::Available,
                 shell: None,
-                filesystem: None,
             },
         )]
         .into_iter()
@@ -167,7 +154,6 @@ fn available(cwd: &str, shell: &str) -> Result<EnvironmentState> {
         cwd: PathUri::parse(cwd)?,
         status: EnvironmentStatus::Available,
         shell: Some(shell.to_string()),
-        filesystem: None,
     })
 }
 
@@ -176,6 +162,5 @@ fn starting(cwd: &str) -> Result<EnvironmentState> {
         cwd: PathUri::parse(cwd)?,
         status: EnvironmentStatus::Starting,
         shell: None,
-        filesystem: None,
     })
 }

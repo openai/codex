@@ -243,7 +243,6 @@ use self::turn::agent_message_text;
 use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
-use self::turn_context::TurnEnvironmentRuntimeDefaults;
 use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -668,12 +667,6 @@ impl Session {
             approvals_reviewer: config.approvals_reviewer,
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            environment_runtime_defaults: TurnEnvironmentRuntimeDefaults {
-                windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
-                use_legacy_landlock: config.features.use_legacy_landlock(),
-                allow_login_shell: config.permissions.allow_login_shell,
-                shell_environment_policy: config.permissions.shell_environment_policy.clone(),
-            },
             environments: TurnEnvironmentSelections::new(
                 config.cwd.clone(),
                 environment_selections,
@@ -1480,16 +1473,10 @@ impl Session {
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            let environment_settings = updated.environment_settings();
-            if updates.environments.is_some()
-                || state.session_configuration.environment_settings() != environment_settings
-            {
+            if updates.environments.is_some() || permission_profile_changed {
                 self.services
                     .turn_environments
-                    .update_selections_with_settings(
-                        updated.environment_selections(),
-                        &environment_settings,
-                    );
+                    .update_selections(&updated.resolved_environment_selections());
             }
             state.session_configuration = updated;
             (previous_config, new_config, permission_profile_changed)

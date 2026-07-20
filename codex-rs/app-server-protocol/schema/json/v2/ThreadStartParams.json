@@ -5,26 +5,6 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "ActivePermissionProfile": {
-      "properties": {
-        "extends": {
-          "default": null,
-          "description": "Parent profile identifier from the selected permissions profile's `extends` setting, when present.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "id": {
-          "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "type": "object"
-    },
     "ApprovalsReviewer": {
       "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
       "enum": [
@@ -211,210 +191,6 @@
         }
       ]
     },
-    "FileSystemAccessMode": {
-      "enum": [
-        "read",
-        "write",
-        "deny"
-      ],
-      "type": "string"
-    },
-    "FileSystemPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/LegacyAppPathString"
-            },
-            "type": {
-              "enum": [
-                "path"
-              ],
-              "title": "PathFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "PathFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pattern": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "glob_pattern"
-              ],
-              "title": "GlobPatternFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "pattern",
-            "type"
-          ],
-          "title": "GlobPatternFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "special"
-              ],
-              "title": "SpecialFileSystemPathType",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "title": "SpecialFileSystemPath",
-          "type": "object"
-        }
-      ]
-    },
-    "FileSystemSandboxEntry": {
-      "properties": {
-        "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
-        },
-        "path": {
-          "$ref": "#/definitions/FileSystemPath"
-        }
-      },
-      "required": [
-        "access",
-        "path"
-      ],
-      "type": "object"
-    },
-    "FileSystemSpecialPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "root"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "RootFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "minimal"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "MinimalFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "project_roots"
-              ],
-              "type": "string"
-            },
-            "subpath": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/LegacyAppPathString"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "KindFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "tmpdir"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "TmpdirFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "slash_tmp"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "SlashTmpFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "unknown"
-              ],
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "subpath": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/LegacyAppPathString"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "LegacyAppPathString": {
       "type": "string"
     },
@@ -466,6 +242,105 @@
       ],
       "type": "string"
     },
+    "SandboxPolicy": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "dangerFullAccess"
+              ],
+              "title": "DangerFullAccessSandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DangerFullAccessSandboxPolicy",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "readOnly"
+              ],
+              "title": "ReadOnlySandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ReadOnlySandboxPolicy",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "networkAccess": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NetworkAccess"
+                }
+              ],
+              "default": "restricted"
+            },
+            "type": {
+              "enum": [
+                "externalSandbox"
+              ],
+              "title": "ExternalSandboxSandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ExternalSandboxSandboxPolicy",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "excludeSlashTmp": {
+              "default": false,
+              "type": "boolean"
+            },
+            "excludeTmpdirEnvVar": {
+              "default": false,
+              "type": "boolean"
+            },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "workspaceWrite"
+              ],
+              "title": "WorkspaceWriteSandboxPolicyType",
+              "type": "string"
+            },
+            "writableRoots": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "WorkspaceWriteSandboxPolicy",
+          "type": "object"
+        }
+      ]
+    },
     "SelectedCapabilityRoot": {
       "description": "A user-selected root that can expose one or more runtime capabilities.",
       "properties": {
@@ -505,57 +380,6 @@
       ],
       "type": "string"
     },
-    "TurnEnvironmentManagedFileSystemPermissionsParams": {
-      "oneOf": [
-        {
-          "properties": {
-            "entries": {
-              "items": {
-                "$ref": "#/definitions/FileSystemSandboxEntry"
-              },
-              "type": "array"
-            },
-            "glob_scan_max_depth": {
-              "format": "uint",
-              "minimum": 1.0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "restricted"
-              ],
-              "title": "RestrictedTurnEnvironmentManagedFileSystemPermissionsParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "entries",
-            "type"
-          ],
-          "title": "RestrictedTurnEnvironmentManagedFileSystemPermissionsParams",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "unrestricted"
-              ],
-              "title": "UnrestrictedTurnEnvironmentManagedFileSystemPermissionsParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "UnrestrictedTurnEnvironmentManagedFileSystemPermissionsParams",
-          "type": "object"
-        }
-      ]
-    },
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
@@ -577,13 +401,13 @@
         "sandbox": {
           "anyOf": [
             {
-              "$ref": "#/definitions/TurnEnvironmentSandboxParams"
+              "$ref": "#/definitions/SandboxPolicy"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Sandbox settings for this environment. Omitted inherits the thread sandbox settings."
+          "description": "Sandbox permissions for this environment. Omitted inherits the thread sandbox."
         }
       },
       "required": [
@@ -591,111 +415,6 @@
         "environmentId"
       ],
       "type": "object"
-    },
-    "TurnEnvironmentPermissionProfileParams": {
-      "oneOf": [
-        {
-          "properties": {
-            "file_system": {
-              "$ref": "#/definitions/TurnEnvironmentManagedFileSystemPermissionsParams"
-            },
-            "network": {
-              "$ref": "#/definitions/NetworkAccess"
-            },
-            "type": {
-              "enum": [
-                "managed"
-              ],
-              "title": "ManagedTurnEnvironmentPermissionProfileParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "file_system",
-            "network",
-            "type"
-          ],
-          "title": "ManagedTurnEnvironmentPermissionProfileParams",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "disabled"
-              ],
-              "title": "DisabledTurnEnvironmentPermissionProfileParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "DisabledTurnEnvironmentPermissionProfileParams",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "network": {
-              "$ref": "#/definitions/NetworkAccess"
-            },
-            "type": {
-              "enum": [
-                "external"
-              ],
-              "title": "ExternalTurnEnvironmentPermissionProfileParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "network",
-            "type"
-          ],
-          "title": "ExternalTurnEnvironmentPermissionProfileParams",
-          "type": "object"
-        }
-      ]
-    },
-    "TurnEnvironmentSandboxParams": {
-      "properties": {
-        "activePermissionProfile": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ActivePermissionProfile"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "permissionProfile": {
-          "$ref": "#/definitions/TurnEnvironmentPermissionProfileParams"
-        },
-        "useLegacyLandlock": {
-          "default": false,
-          "type": "boolean"
-        },
-        "windowsSandboxLevel": {
-          "$ref": "#/definitions/WindowsSandboxLevel"
-        },
-        "windowsSandboxPrivateDesktop": {
-          "default": false,
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "permissionProfile",
-        "windowsSandboxLevel"
-      ],
-      "type": "object"
-    },
-    "WindowsSandboxLevel": {
-      "enum": [
-        "disabled",
-        "restricted-token",
-        "elevated"
-      ],
-      "type": "string"
     }
   },
   "properties": {

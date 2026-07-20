@@ -201,6 +201,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         environment_id: "turn-env".to_string(),
         cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
         workspace_roots: Vec::new(),
+        permission_profile: None,
     };
     let available_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
@@ -601,6 +602,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
                 environment_id: "env-1".to_string(),
                 cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
                 workspace_roots: Vec::new(),
+                permission_profile: None,
             }],
             ready_selected_capability_roots: &selected_roots,
             executor_capability_discovery: None,

@@ -7,13 +7,11 @@ use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
-use codex_protocol::protocol::TurnEnvironmentSandbox;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -43,60 +41,13 @@ impl TurnSkillsContext {
 
 pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSnapshotFile>>>>;
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TurnEnvironmentSettings {
-    pub(crate) sandbox: TurnEnvironmentSandbox,
-    pub(crate) allow_login_shell: bool,
-    pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TurnEnvironmentRuntimeDefaults {
-    pub(crate) windows_sandbox_private_desktop: bool,
-    pub(crate) use_legacy_landlock: bool,
-    pub(crate) allow_login_shell: bool,
-    pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
-}
-
-impl Default for TurnEnvironmentRuntimeDefaults {
-    fn default() -> Self {
-        Self {
-            windows_sandbox_private_desktop: false,
-            use_legacy_landlock: false,
-            allow_login_shell: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-        }
-    }
-}
-
-impl TurnEnvironmentRuntimeDefaults {
-    pub(crate) fn settings(&self, sandbox: TurnEnvironmentSandbox) -> TurnEnvironmentSettings {
-        TurnEnvironmentSettings {
-            sandbox,
-            allow_login_shell: self.allow_login_shell,
-            shell_environment_policy: self.shell_environment_policy.clone(),
-        }
-    }
-}
-
-impl Default for TurnEnvironmentSettings {
-    fn default() -> Self {
-        Self {
-            sandbox: TurnEnvironmentSandbox::default(),
-            allow_login_shell: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
     cwd: PathUri,
     workspace_roots: Vec<PathUri>,
-    sandbox_override: Option<TurnEnvironmentSandbox>,
-    pub(crate) settings: TurnEnvironmentSettings,
+    permission_profile: PermissionProfile,
     pub(crate) shell: Option<shell::Shell>,
     pub(crate) shell_snapshot: ShellSnapshotTask,
 }
@@ -110,24 +61,22 @@ impl TurnEnvironment {
         workspace_roots: Vec<PathUri>,
         shell: Option<shell::Shell>,
     ) -> Self {
-        Self::new_with_settings(
+        Self::new_with_permission_profile(
             environment_id,
             environment,
             cwd,
             workspace_roots,
-            /*sandbox_override*/ None,
-            TurnEnvironmentSettings::default(),
+            PermissionProfile::default(),
             shell,
         )
     }
 
-    pub(crate) fn new_with_settings(
+    pub(crate) fn new_with_permission_profile(
         environment_id: String,
         environment: Arc<Environment>,
         cwd: PathUri,
         workspace_roots: Vec<PathUri>,
-        sandbox_override: Option<TurnEnvironmentSandbox>,
-        settings: TurnEnvironmentSettings,
+        permission_profile: PermissionProfile,
         shell: Option<shell::Shell>,
     ) -> Self {
         Self {
@@ -135,8 +84,7 @@ impl TurnEnvironment {
             environment,
             cwd,
             workspace_roots,
-            sandbox_override,
-            settings,
+            permission_profile,
             shell,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
         }
@@ -161,53 +109,19 @@ impl TurnEnvironment {
     }
 
     pub(crate) fn permission_profile(&self) -> &PermissionProfile {
-        &self.settings.sandbox.permission_profile
-    }
-
-    pub(crate) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
-        self.settings.sandbox.active_permission_profile.clone()
+        &self.permission_profile
     }
 
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile().file_system_sandbox_policy()
+        self.permission_profile.file_system_sandbox_policy()
     }
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.permission_profile().network_sandbox_policy()
+        self.permission_profile.network_sandbox_policy()
     }
 
     pub(crate) fn uses_managed_network_proxy(&self) -> bool {
-        !matches!(self.permission_profile(), PermissionProfile::Disabled)
-    }
-
-    pub(crate) fn file_system_sandbox_context(
-        &self,
-        additional_permissions: Option<AdditionalPermissionProfile>,
-    ) -> FileSystemSandboxContext {
-        let permission_profile = self.permission_profile();
-        let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
-            permission_profile.to_runtime_permissions();
-        let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-            &base_file_system_sandbox_policy,
-            additional_permissions.as_ref(),
-        );
-        let network_sandbox_policy = effective_network_sandbox_policy(
-            base_network_sandbox_policy,
-            additional_permissions.as_ref(),
-        );
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            permission_profile.enforcement(),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
-        FileSystemSandboxContext {
-            permissions: permissions.into(),
-            cwd: Some(self.cwd().clone()),
-            workspace_roots: self.workspace_roots().to_vec(),
-            windows_sandbox_level: self.settings.sandbox.windows_sandbox_level,
-            windows_sandbox_private_desktop: self.settings.sandbox.windows_sandbox_private_desktop,
-            use_legacy_landlock: self.settings.sandbox.use_legacy_landlock,
-        }
+        !matches!(self.permission_profile, PermissionProfile::Disabled)
     }
 
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
@@ -215,7 +129,7 @@ impl TurnEnvironment {
             environment_id: self.environment_id.clone(),
             cwd: self.cwd.clone(),
             workspace_roots: self.workspace_roots.clone(),
-            sandbox: self.sandbox_override.clone(),
+            permission_profile: Some(self.permission_profile.clone()),
         }
     }
 }
@@ -227,8 +141,7 @@ impl std::fmt::Debug for TurnEnvironment {
             .field("environment", &self.environment)
             .field("cwd", &self.cwd)
             .field("workspace_roots", &self.workspace_roots)
-            .field("sandbox_override", &self.sandbox_override)
-            .field("settings", &self.settings)
+            .field("permission_profile", &self.permission_profile)
             .field("shell", &self.shell)
             .finish_non_exhaustive()
     }
@@ -266,8 +179,9 @@ pub struct TurnContext {
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
-    pub(crate) default_environment_settings: TurnEnvironmentSettings,
+    pub(crate) permission_profile: PermissionProfile,
     pub(crate) network: Option<NetworkProxy>,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
     pub(crate) final_output_json_schema: Option<Value>,
@@ -303,55 +217,21 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn primary_environment_settings(&self) -> &TurnEnvironmentSettings {
-        self.environments
-            .primary()
-            .map(|environment| &environment.settings)
-            .unwrap_or(&self.default_environment_settings)
-    }
-
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
-        self.primary_environment_settings()
-            .sandbox
-            .permission_profile
-            .clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_permission_profile_for_tests(
-        &mut self,
-        permission_profile: PermissionProfile,
-    ) {
-        self.default_environment_settings.sandbox.permission_profile = permission_profile.clone();
-        for environment in &mut self.environments.environments {
-            match environment {
-                crate::environment_selection::TurnEnvironmentState::Ready(environment) => {
-                    environment.settings.sandbox.permission_profile = permission_profile.clone();
-                }
-                crate::environment_selection::TurnEnvironmentState::Starting(environment) => {
-                    environment.settings.sandbox.permission_profile = permission_profile.clone();
-                }
-            }
-        }
-    }
-
-    pub(crate) fn windows_sandbox_level(&self) -> WindowsSandboxLevel {
-        self.primary_environment_settings()
-            .sandbox
-            .windows_sandbox_level
+        self.permission_profile.clone()
     }
 
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile().file_system_sandbox_policy()
+        self.permission_profile.file_system_sandbox_policy()
     }
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.permission_profile().network_sandbox_policy()
+        self.permission_profile.network_sandbox_policy()
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
         compatibility_sandbox_policy_for_permission_profile(
-            &self.permission_profile(),
+            &self.permission_profile,
             #[allow(deprecated)]
             &self.cwd,
         )
@@ -461,8 +341,9 @@ impl TurnContext {
             multi_agent_version: self.multi_agent_version,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
-            default_environment_settings: self.default_environment_settings.clone(),
+            permission_profile: self.permission_profile.clone(),
             network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
             available_models,
             unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
@@ -478,6 +359,40 @@ impl TurnContext {
             model_verification_emitted: AtomicBool::new(
                 self.model_verification_emitted.load(Ordering::Relaxed),
             ),
+        }
+    }
+
+    pub(crate) fn file_system_sandbox_context(
+        &self,
+        additional_permissions: Option<AdditionalPermissionProfile>,
+        environment: &TurnEnvironment,
+    ) -> FileSystemSandboxContext {
+        let permission_profile = environment.permission_profile();
+        let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+        let file_system_sandbox_policy = effective_file_system_sandbox_policy(
+            &base_file_system_sandbox_policy,
+            additional_permissions.as_ref(),
+        );
+        let network_sandbox_policy = effective_network_sandbox_policy(
+            base_network_sandbox_policy,
+            additional_permissions.as_ref(),
+        );
+        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
+            permission_profile.enforcement(),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        );
+        FileSystemSandboxContext {
+            permissions: permissions.into(),
+            cwd: Some(environment.cwd().clone()),
+            workspace_roots: environment.workspace_roots().to_vec(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
+            use_legacy_landlock: self.config.features.use_legacy_landlock(),
         }
     }
 
@@ -499,7 +414,6 @@ impl TurnContext {
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let workspace_roots = self.config.effective_workspace_roots();
-        let environment_sandboxes = self.environments.environment_sandboxes();
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
         TurnContextItem {
@@ -514,8 +428,6 @@ impl TurnContext {
             permission_profile: Some(self.permission_profile()),
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
-            environment_sandboxes: (!environment_sandboxes.is_empty())
-                .then_some(environment_sandboxes),
             model: self.model_info.slug.clone(),
             comp_hash: self.model_info.comp_hash.clone(),
             personality: self.personality,
@@ -660,28 +572,7 @@ impl Session {
             per_turn_config.features.enabled(Feature::FastMode),
             &model_info,
         );
-        let default_environment_settings = session_configuration
-            .environment_runtime_defaults
-            .settings(TurnEnvironmentSandbox {
-                permission_profile: session_configuration.permission_profile(),
-                active_permission_profile: session_configuration.active_permission_profile(),
-                windows_sandbox_level: session_configuration.windows_sandbox_level,
-                windows_sandbox_private_desktop: session_configuration
-                    .environment_runtime_defaults
-                    .windows_sandbox_private_desktop,
-                use_legacy_landlock: session_configuration
-                    .environment_runtime_defaults
-                    .use_legacy_landlock,
-            });
-        let primary_environment_settings = environments
-            .primary()
-            .map(|environment| &environment.settings)
-            .unwrap_or(&default_environment_settings);
-        let permission_profile = primary_environment_settings
-            .sandbox
-            .permission_profile
-            .clone();
-        let windows_sandbox_level = primary_environment_settings.sandbox.windows_sandbox_level;
+        let permission_profile = per_turn_config.permissions.effective_permission_profile();
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
@@ -693,7 +584,7 @@ impl Session {
             sub_id.clone(),
             cwd.clone(),
             &permission_profile,
-            windows_sandbox_level,
+            session_configuration.windows_sandbox_level,
             network.is_some(),
         ));
         let (current_date, timezone) = local_time_context();
@@ -729,8 +620,9 @@ impl Session {
             multi_agent_version,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
-            default_environment_settings,
+            permission_profile,
             network,
+            windows_sandbox_level: session_configuration.windows_sandbox_level,
             available_models,
             unified_exec_shell_mode,
             final_output_json_schema: None,
@@ -765,17 +657,10 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
-                    let environment_settings = next.environment_settings();
-                    if updates.environments.is_some()
-                        || state.session_configuration.environment_settings()
-                            != environment_settings
-                    {
+                    if updates.environments.is_some() || permission_profile_changed {
                         self.services
                             .turn_environments
-                            .update_selections_with_settings(
-                                next.environment_selections(),
-                                &environment_settings,
-                            );
+                            .update_selections(&next.resolved_environment_selections());
                     }
                     state.session_configuration = next.clone();
                     Ok((
@@ -934,7 +819,11 @@ impl Session {
                 .network_proxy
                 .load_full()
                 .as_ref()
-                .map(|started_proxy| started_proxy.proxy()),
+                .and_then(|started_proxy| {
+                    session_configuration
+                        .uses_managed_network_proxy()
+                        .then(|| started_proxy.proxy())
+                }),
             turn_environments,
             cwd,
             sub_id,

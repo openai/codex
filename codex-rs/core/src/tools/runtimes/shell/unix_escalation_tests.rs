@@ -429,7 +429,6 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         permission_profile: permission_profile.clone(),
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
@@ -548,10 +547,10 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         })));
 
     turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-    turn_context.set_permission_profile_for_tests(PermissionProfile::from_runtime_permissions(
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions(
         &read_only_file_system_sandbox_policy(),
         NetworkSandboxPolicy::Restricted,
-    ));
+    );
     let workdir = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
     let target = std::env::temp_dir().join("execve-hook-short-circuit.txt");
     let target_str = target.display().to_string();
@@ -566,7 +565,6 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         permission_profile: PermissionProfile::read_only(),
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -778,7 +776,6 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         permission_profile,
         file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -822,7 +819,6 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
             request_permissions: true,
             mcp_elicitations: true,
         }),
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         permission_profile,
         file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::RequireEscalated,

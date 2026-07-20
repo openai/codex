@@ -427,6 +427,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 #[cfg(test)]
@@ -591,15 +592,9 @@ fn resolve_turn_environment_selections(
     let mut selections = Vec::with_capacity(environments.len());
     for environment in environments {
         let environment_id = environment.environment_id;
-        let sandbox = environment
+        let permission_profile = environment
             .sandbox
-            .map(TryInto::try_into)
-            .transpose()
-            .map_err(|err| {
-                invalid_request(format!(
-                    "invalid sandbox for environment `{environment_id}`: {err}"
-                ))
-            })?;
+            .map(|sandbox| PermissionProfile::from_legacy_sandbox_policy(&sandbox.to_core()));
         let cwd = environment
             .cwd
             .to_inferred_path_uri()
@@ -631,7 +626,7 @@ fn resolve_turn_environment_selections(
             environment_id,
             cwd,
             workspace_roots,
-            sandbox,
+            permission_profile,
         });
     }
     thread_manager

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
@@ -15,7 +14,6 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::EnvironmentConnectionEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::TurnEnvironmentSandbox;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -25,7 +23,6 @@ use futures::future::Shared;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::session::turn_context::TurnEnvironment;
-use crate::session::turn_context::TurnEnvironmentSettings;
 use crate::shell::Shell;
 use crate::shell_snapshot::ShellSnapshot;
 
@@ -41,7 +38,7 @@ pub(crate) fn default_thread_environment_selections(
             environment_id,
             cwd: PathUri::from_abs_path(cwd),
             workspace_roots: workspace_roots.iter().map(PathUri::from_abs_path).collect(),
-            sandbox: None,
+            permission_profile: None,
         })
         .collect()
 }
@@ -52,7 +49,6 @@ type TurnEnvironmentResolution = Shared<BoxFuture<'static, TurnEnvironmentResult
 #[derive(Clone)]
 struct SelectedTurnEnvironment {
     selection: TurnEnvironmentSelection,
-    settings: TurnEnvironmentSettings,
     environment: Arc<Environment>,
     // Selection clones share one listener; the final handle drop aborts it.
     connection_events_task: Option<Arc<AbortOnDropHandle<()>>>,
@@ -62,7 +58,6 @@ struct SelectedTurnEnvironment {
 #[derive(Clone)]
 pub(crate) struct StartingTurnEnvironment {
     pub(crate) selection: TurnEnvironmentSelection,
-    pub(crate) settings: TurnEnvironmentSettings,
     resolution: TurnEnvironmentResolution,
 }
 
@@ -108,13 +103,11 @@ impl ThreadEnvironments {
                     return None;
                 };
                 let selection = environment.selection();
-                let settings = environment.settings.clone();
                 let selected_environment = Arc::clone(&environment.environment);
                 let resolution: TurnEnvironmentResolution =
                     futures::future::ready(Ok(environment)).boxed().shared();
                 Some(SelectedTurnEnvironment {
                     selection,
-                    settings,
                     environment: selected_environment,
                     connection_events_task: None,
                     resolution,
@@ -131,16 +124,7 @@ impl ThreadEnvironments {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
-        self.update_selections_with_settings(environments, &BTreeMap::new());
-    }
-
-    pub(crate) fn update_selections_with_settings(
-        &self,
-        environments: &[TurnEnvironmentSelection],
-        settings: &BTreeMap<String, TurnEnvironmentSettings>,
-    ) {
         let previous = self.environments.load();
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
         let mut next = Vec::with_capacity(environments.len());
@@ -148,14 +132,10 @@ impl ThreadEnvironments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
             }
-            let environment_settings = settings
-                .get(&selected_environment.environment_id)
-                .cloned()
-                .unwrap_or_default();
-            if let Some(environment) = previous.iter().find(|environment| {
-                environment.selection == *selected_environment
-                    && environment.settings == environment_settings
-            }) && !matches!(environment.resolution.clone().now_or_never(), Some(Err(_)))
+            if let Some(environment) = previous
+                .iter()
+                .find(|environment| environment.selection == *selected_environment)
+                && !matches!(environment.resolution.clone().now_or_never(), Some(Err(_)))
             {
                 next.push(environment.clone());
                 continue;
@@ -185,7 +165,6 @@ impl ThreadEnvironments {
                 });
             let (resolution_task, resolution) = Self::resolve_environment(
                 selected_environment.clone(),
-                environment_settings.clone(),
                 Arc::clone(&environment),
                 self.local_shell.clone(),
                 self.shell_snapshot.clone(),
@@ -195,7 +174,6 @@ impl ThreadEnvironments {
             let resolution = resolution.boxed().shared();
             next.push(SelectedTurnEnvironment {
                 selection: selected_environment.clone(),
-                settings: environment_settings,
                 environment,
                 connection_events_task,
                 resolution,
@@ -286,7 +264,6 @@ impl ThreadEnvironments {
 
     fn resolve_environment(
         selection: TurnEnvironmentSelection,
-        settings: TurnEnvironmentSettings,
         environment: Arc<Environment>,
         local_shell: Shell,
         shell_snapshot: ShellSnapshot,
@@ -318,13 +295,12 @@ impl ThreadEnvironments {
             } else {
                 Some(local_shell)
             };
-            let mut turn_environment = TurnEnvironment::new_with_settings(
+            let mut turn_environment = TurnEnvironment::new_with_permission_profile(
                 selection.environment_id,
                 environment,
                 selection.cwd,
                 selection.workspace_roots,
-                selection.sandbox,
-                settings,
+                selection.permission_profile.unwrap_or_default(),
                 shell,
             );
             let task = shell_snapshot
@@ -351,7 +327,6 @@ impl ThreadEnvironments {
             if let Some(environment) = TurnEnvironmentState::from_resolution(
                 StartingTurnEnvironment {
                     selection: environment.selection.clone(),
-                    settings: environment.settings.clone(),
                     resolution: environment.resolution.clone(),
                 },
                 resolved,
@@ -426,24 +401,6 @@ impl TurnEnvironmentSnapshot {
             };
             Some(environment)
         })
-    }
-
-    pub(crate) fn environment_sandboxes(&self) -> BTreeMap<String, TurnEnvironmentSandbox> {
-        self.turn_environments()
-            .filter_map(|environment| {
-                environment
-                    .selection()
-                    .sandbox
-                    .map(|sandbox| (environment.environment_id.clone(), sandbox))
-            })
-            .chain(self.starting().filter_map(|environment| {
-                environment
-                    .selection
-                    .sandbox
-                    .clone()
-                    .map(|sandbox| (environment.selection.environment_id.clone(), sandbox))
-            }))
-            .collect()
     }
 
     pub(crate) fn starting(&self) -> impl Iterator<Item = &StartingTurnEnvironment> {
@@ -636,7 +593,7 @@ mod tests {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: cwd_uri.clone(),
                 workspace_roots: vec![cwd_uri],
-                sandbox: None,
+                permission_profile: None,
             }]
         );
     }
@@ -667,13 +624,13 @@ url = "ws://127.0.0.1:8765"
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: cwd_uri.clone(),
                     workspace_roots: vec![cwd_uri.clone()],
-                    sandbox: None,
+                    permission_profile: None,
                 },
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     cwd: cwd_uri.clone(),
                     workspace_roots: vec![cwd_uri],
-                    sandbox: None,
+                    permission_profile: None,
                 },
             ]
         );
@@ -708,7 +665,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         }]);
 
         let snapshot = turn_environments.snapshot().await;
@@ -730,7 +687,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: cwd_uri.clone(),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
 
         let resolved = resolve_turn_environments(
@@ -741,7 +698,7 @@ url = "ws://127.0.0.1:8765"
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: cwd_uri.join("other").expect("other cwd URI"),
                     workspace_roots: Vec::new(),
-                    sandbox: None,
+                    permission_profile: None,
                 },
             ],
         )
@@ -763,7 +720,7 @@ url = "ws://127.0.0.1:8765"
                 environment_id: "local".to_string(),
                 cwd: selected_cwd_uri,
                 workspace_roots: Vec::new(),
-                sandbox: None,
+                permission_profile: None,
             }],
         )
         .await;
@@ -802,7 +759,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: cwd_uri.clone(),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
 
         let resolved = resolve_turn_environments(
@@ -812,7 +769,7 @@ url = "ws://127.0.0.1:8765"
                     environment_id: "missing".to_string(),
                     cwd: cwd_uri,
                     workspace_roots: Vec::new(),
-                    sandbox: None,
+                    permission_profile: None,
                 },
                 local.clone(),
             ],
@@ -841,7 +798,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("cwd")),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
         let environments = Arc::new(ThreadEnvironments::new(
             manager,
@@ -890,13 +847,13 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: cwd.clone(),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
         let local = TurnEnvironmentSelection {
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd,
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
         let turn_environments = ThreadEnvironments::new(
             manager,
@@ -971,7 +928,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("cwd")),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
         let environments = ThreadEnvironments::new(
             Arc::clone(&manager),
@@ -1025,7 +982,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
         let (tx_event, rx_event) = async_channel::unbounded();
         let environments = Arc::new(ThreadEnvironments::new(
@@ -1109,7 +1066,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),
-            sandbox: None,
+            permission_profile: None,
         };
         let inherited_environment = Arc::new(
             Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
@@ -1163,7 +1120,7 @@ url = "ws://127.0.0.1:8765"
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: cwd_uri.clone(),
                 workspace_roots: Vec::new(),
-                sandbox: None,
+                permission_profile: None,
             }],
         )
         .await;

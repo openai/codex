@@ -4304,8 +4304,7 @@ fn turn_start_params_round_trip_environments() {
                 "cwd": cwd,
                 "runtimeWorkspaceRoots": [workspace_root],
                 "sandbox": {
-                    "permissionProfile": {"type": "disabled"},
-                    "windowsSandboxLevel": "restricted-token"
+                    "type": "readOnly"
                 }
             }
         ],
@@ -4318,13 +4317,8 @@ fn turn_start_params_round_trip_environments() {
             environment_id: "local".to_string(),
             cwd: cwd.clone(),
             runtime_workspace_roots: Some(vec![workspace_root.clone()]),
-            sandbox: Some(TurnEnvironmentSandboxParams {
-                permission_profile: TurnEnvironmentPermissionProfileParams::Disabled,
-                active_permission_profile: None,
-                windows_sandbox_level:
-                    codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken,
-                windows_sandbox_private_desktop: false,
-                use_legacy_landlock: false,
+            sandbox: Some(SandboxPolicy::ReadOnly {
+                network_access: false,
             }),
         }])
     );
@@ -4342,10 +4336,8 @@ fn turn_start_params_round_trip_environments() {
                 "cwd": cwd,
                 "runtimeWorkspaceRoots": [workspace_root],
                 "sandbox": {
-                    "permissionProfile": {"type": "disabled"},
-                    "windowsSandboxLevel": "restricted-token",
-                    "windowsSandboxPrivateDesktop": false,
-                    "useLegacyLandlock": false
+                    "type": "readOnly",
+                    "networkAccess": false
                 }
             }
         ]))

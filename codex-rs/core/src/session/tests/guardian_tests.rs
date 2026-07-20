@@ -301,8 +301,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
         .features
         .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
-    turn_context_raw
-        .set_permission_profile_for_tests(codex_protocol::models::PermissionProfile::Disabled);
+    turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let mut config = (*turn_context_raw.config).clone();
     config
         .permissions
@@ -417,8 +416,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         .approval_policy
         .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
-    turn_context_raw
-        .set_permission_profile_for_tests(codex_protocol::models::PermissionProfile::Disabled);
+    turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let mut config = (*turn_context_raw.config).clone();
     config
         .permissions

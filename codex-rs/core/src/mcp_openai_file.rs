@@ -220,8 +220,7 @@ mod tests {
 
     fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
         let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");
-        turn_context
-            .set_permission_profile_for_tests(codex_protocol::models::PermissionProfile::Disabled);
+        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
         let TurnEnvironmentState::Ready(primary) = &mut turn_context.environments.environments[0]
         else {
             panic!("expected ready primary environment");
