@@ -134,44 +134,45 @@ impl ChatWidget {
             self.finish_mcp_startup(failed, cancelled);
             return;
         }
-        if let Some(current) = &self.mcp_startup_status {
-            // Otherwise keep the status header focused on the remaining
-            // in-progress servers for the active round.
-            let total = current.len();
-            let mut starting: Vec<_> = current
-                .iter()
-                .filter_map(|(name, state)| {
-                    if matches!(state, McpStartupStatus::Starting) {
-                        Some(name)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            starting.sort();
-            if let Some(first) = starting.first() {
-                let completed = total.saturating_sub(starting.len());
-                let max_to_show = 3;
-                let mut to_show: Vec<String> = starting
-                    .iter()
-                    .take(max_to_show)
-                    .map(ToString::to_string)
-                    .collect();
-                if starting.len() > max_to_show {
-                    to_show.push("…".to_string());
-                }
-                let header = if total > 1 {
-                    format!(
-                        "{MCP_STARTUP_MULTI_HEADER_PREFIX} ({completed}/{total}): {}",
-                        to_show.join(", ")
-                    )
-                } else {
-                    format!("{MCP_STARTUP_SINGLE_HEADER_PREFIX} {first}")
-                };
-                self.set_status_header(header);
-            }
+        if let Some(header) = self.mcp_startup_status_header() {
+            self.set_status_header(header);
         }
         self.request_redraw();
+    }
+
+    pub(super) fn mcp_startup_status_header(&self) -> Option<String> {
+        let current = self.mcp_startup_status.as_ref()?;
+        let total = current.len();
+        let mut starting: Vec<_> = current
+            .iter()
+            .filter_map(|(name, state)| {
+                if matches!(state, McpStartupStatus::Starting) {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        starting.sort();
+        let first = starting.first()?;
+        let completed = total.saturating_sub(starting.len());
+        let max_to_show = 3;
+        let mut to_show: Vec<String> = starting
+            .iter()
+            .take(max_to_show)
+            .map(ToString::to_string)
+            .collect();
+        if starting.len() > max_to_show {
+            to_show.push("…".to_string());
+        }
+        Some(if total > 1 {
+            format!(
+                "{MCP_STARTUP_MULTI_HEADER_PREFIX} ({completed}/{total}): {}",
+                to_show.join(", ")
+            )
+        } else {
+            format!("{MCP_STARTUP_SINGLE_HEADER_PREFIX} {first}")
+        })
     }
 
     pub(crate) fn set_mcp_startup_expected_servers<I>(&mut self, server_names: I)
