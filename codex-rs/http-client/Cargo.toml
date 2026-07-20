@@ -16,14 +16,12 @@ rustls-native-certs = { workspace = true }
 rustls-pki-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 zstd = { workspace = true }
-
-[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-sha2 = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 system-configuration = { workspace = true }
