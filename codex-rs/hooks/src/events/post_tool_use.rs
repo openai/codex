@@ -16,6 +16,8 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::output_spill::AdditionalContext;
+use crate::output_spill::HookOutputSpiller;
 use crate::schema::PostToolUseCommandInput;
 use crate::schema::SubagentCommandInputFields;
 
@@ -46,7 +48,7 @@ pub struct PostToolUseOutcome {
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PostToolUseHandlerData {
     should_block: bool,
-    additional_contexts_for_model: Vec<String>,
+    additional_contexts_for_model: Vec<AdditionalContext>,
     feedback_messages_for_model: Vec<String>,
 }
 
@@ -70,8 +72,10 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    output_spiller: &HookOutputSpiller,
     request: PostToolUseRequest,
 ) -> PostToolUseOutcome {
+    let session_id = request.session_id;
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
     let matched = dispatcher::select_handlers_for_matcher_inputs(
         handlers,
@@ -115,6 +119,9 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
+    let additional_contexts = output_spiller
+        .maybe_spill_additional_contexts(session_id, additional_contexts)
+        .await;
     let should_block = results.iter().any(|result| result.data.should_block);
     let feedback_message = common::join_text_chunks(
         results
@@ -199,6 +206,7 @@ fn parse_completed(
                         common::append_additional_context(
                             &mut entries,
                             &mut additional_contexts_for_model,
+                            handler,
                             additional_context,
                         );
                     }
@@ -327,6 +335,8 @@ mod tests {
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
     use crate::events::common;
+    use crate::output_spill::AdditionalContext;
+    use crate::output_spill::AdditionalContextLimit;
 
     #[test]
     fn command_input_uses_request_tool_name() {
@@ -365,8 +375,10 @@ mod tests {
 
     #[test]
     fn additional_context_is_recorded() {
+        let mut handler = handler();
+        handler.additional_context_limit = AdditionalContextLimit::from_config(Some(17));
         let parsed = parse_completed(
-            &handler(),
+            &handler,
             run_result(
                 Some(0),
                 r#"{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Remember the bash cleanup note."}}"#,
@@ -379,7 +391,10 @@ mod tests {
             parsed.data,
             PostToolUseHandlerData {
                 should_block: false,
-                additional_contexts_for_model: vec!["Remember the bash cleanup note.".to_string()],
+                additional_contexts_for_model: vec![AdditionalContext {
+                    text: "Remember the bash cleanup note.".to_string(),
+                    limit: AdditionalContextLimit::from_config(Some(17)),
+                }],
                 feedback_messages_for_model: Vec::new(),
             }
         );
@@ -564,6 +579,7 @@ mod tests {
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
             status_message: Some("running post tool use hook".to_string()),
+            additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,

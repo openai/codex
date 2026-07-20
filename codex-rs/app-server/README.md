@@ -248,7 +248,7 @@ Example with notification opt-out:
 - `externalAgentConfig/import/readHistories` — read completed import histories and connector candidates detected from successfully imported session histories. Connector candidates include a normalized display `name`, the number of imported sessions that used the connector, and the source metadata field used for detection.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk; dotted paths such as `desktop.someKey` use the same generic write surface.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads, including multiple `desktop.*` edits.
-- `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), the layered permission-profile allow map (`allowedPermissionProfiles`), the managed permission-profile default (`defaultPermissions`), lifecycle hook lockdown (`allowManagedHooksOnly`), remote-control policy (`allowRemoteControl`; `false` force-disables remote control while `true` or `null` preserves existing behavior), computer use policy (`computerUse`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`), `enforceResidency`, managed new-thread defaults (`models.newThread.model`, `models.newThread.modelReasoningEffort`, and `models.newThread.serviceTier`), and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
+- `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), the layered permission-profile allow map (`allowedPermissionProfiles`), the managed permission-profile default (`defaultPermissions`), lifecycle hook lockdown (`allowManagedHooksOnly`), remote-control policy (`allowRemoteControl`; `false` force-disables remote control while `true` or `null` preserves existing behavior), computer use policy (`computerUse`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`, including each command handler's optional `additionalContextLimit`), `enforceResidency`, managed new-thread defaults (`models.newThread.model`, `models.newThread.modelReasoningEffort`, and `models.newThread.serviceTier`), and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
 
 ### Example: Start or resume a thread
 
@@ -1832,6 +1832,7 @@ For unmanaged hooks, `currentHash` and `trustStatus` describe whether the curren
         "command": "python3 /Users/me/hook.py",
         "timeoutSec": 5,
         "statusMessage": "running hook",
+        "additionalContextLimit": null,
         "sourcePath": "/Users/me/.codex/config.toml",
         "source": "user",
         "pluginId": null,

@@ -484,6 +484,13 @@ pub enum ConfiguredHookHandler {
         #[serde(rename = "statusMessage")]
         #[ts(rename = "statusMessage")]
         status_message: Option<String>,
+        /// Approximate token threshold for spilling this hook's `additionalContext` to disk.
+        /// `null` uses 2,500 tokens; `0` disables spilling for this hook. The threshold is
+        /// evaluated against the original context; a spilled preview also includes recovery
+        /// metadata.
+        #[serde(rename = "additionalContextLimit")]
+        #[ts(rename = "additionalContextLimit")]
+        additional_context_limit: Option<usize>,
     },
     #[serde(rename = "prompt")]
     #[ts(rename = "prompt")]

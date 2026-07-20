@@ -7,4 +7,9 @@ import type { HookHandlerType } from "./HookHandlerType";
 import type { HookSource } from "./HookSource";
 import type { HookTrustStatus } from "./HookTrustStatus";
 
-export type HookMetadata = { key: string, eventName: HookEventName, handlerType: HookHandlerType, matcher: string | null, command: string | null, timeoutSec: bigint, statusMessage: string | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null, displayOrder: bigint, enabled: boolean, isManaged: boolean, currentHash: string, trustStatus: HookTrustStatus, };
+export type HookMetadata = { key: string, eventName: HookEventName, handlerType: HookHandlerType, matcher: string | null, command: string | null, timeoutSec: bigint, statusMessage: string | null,
+/**
+ * Configured `additionalContext` spill threshold.
+ * `null` uses 2,500 tokens; `0` disables spilling.
+ */
+additionalContextLimit: number | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null, displayOrder: bigint, enabled: boolean, isManaged: boolean, currentHash: string, trustStatus: HookTrustStatus, };

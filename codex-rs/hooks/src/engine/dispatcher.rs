@@ -236,6 +236,7 @@ mod tests {
             command: command.to_string(),
             timeout_sec: 5,
             status_message: None,
+            additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
             display_order,

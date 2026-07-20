@@ -17,6 +17,7 @@ use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -49,11 +50,21 @@ fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_requirements_read_includes_allow_remote_control() -> Result<()> {
+async fn config_requirements_read_includes_remote_control_and_managed_hooks() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),
-        "allow_remote_control = false\n",
+        r#"allow_remote_control = false
+
+[hooks]
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "echo managed"
+additionalContextLimit = 4096
+"#,
     )?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -69,12 +80,24 @@ async fn config_requirements_read_includes_allow_remote_control() -> Result<()> 
     )
     .await??;
     let response: ConfigRequirementsReadResponse = to_response(response)?;
+    let requirements = response
+        .requirements
+        .expect("managed requirements should be returned");
+    assert_eq!(requirements.allow_remote_control, Some(false));
     assert_eq!(
-        response
-            .requirements
-            .expect("managed requirements should be returned")
-            .allow_remote_control,
-        Some(false)
+        requirements
+            .hooks
+            .expect("managed hooks should be returned")
+            .session_start[0]
+            .hooks,
+        vec![ConfiguredHookHandler::Command {
+            command: "echo managed".to_string(),
+            command_windows: None,
+            timeout_sec: None,
+            r#async: false,
+            status_message: None,
+            additional_context_limit: Some(4_096),
+        }]
     );
     Ok(())
 }
