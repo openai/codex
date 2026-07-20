@@ -30,6 +30,7 @@ async fn cmd_shell_runs_quoted_hook_command_path() {
         command: format!(r#""{}" notify"#, hook_path.display()),
         timeout_sec: 10,
         status_message: None,
+        additional_context_limit: Default::default(),
         source_path,
         source: HookSource::User,
         display_order: 0,
