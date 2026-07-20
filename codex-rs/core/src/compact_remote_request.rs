@@ -19,7 +19,7 @@ use tracing::info;
 
 pub(super) struct RemoteCompactAttempt {
     pub(super) new_history: Vec<ResponseItem>,
-    pub(super) trace_input_history: Vec<ResponseItem>,
+    pub(super) trace_input_history: Option<Vec<ResponseItem>>,
 }
 
 pub(super) async fn run_remote_compact_attempt(
@@ -57,7 +57,9 @@ pub(super) async fn run_remote_compact_attempt(
                     .saturating_sub(estimated_deleted_tokens.min(max_local_deleted_tokens))
             });
     }
-    let trace_input_history = history.raw_items().to_vec();
+    let trace_input_history = compaction_trace
+        .is_enabled()
+        .then(|| history.raw_items().to_vec());
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = built_tools(
         sess.as_ref(),

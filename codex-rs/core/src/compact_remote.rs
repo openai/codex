@@ -11,6 +11,7 @@ use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
+use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -35,6 +36,7 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
+use codex_utils_output_truncation::approx_token_count;
 
 #[path = "compact_remote_request.rs"]
 mod request;
@@ -283,10 +285,12 @@ async fn run_remote_compact_task_inner_impl(
     // Install is the semantic boundary where the compact endpoint's output becomes live
     // thread history. Keep it distinct from the later inference request so the reducer can
     // still represent repeated developer/context prefix items exactly as the model saw them.
-    compaction_trace.record_installed(&CompactionCheckpointTracePayload {
-        input_history: &trace_input_history,
-        replacement_history: &new_history,
-    });
+    if let Some(trace_input_history) = trace_input_history.as_deref() {
+        compaction_trace.record_installed(&CompactionCheckpointTracePayload {
+            input_history: trace_input_history,
+            replacement_history: &new_history,
+        });
+    }
     sess.replace_compacted_history(
         compaction_turn_context.as_ref(),
         new_history,
@@ -374,37 +378,46 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     let Some(context_window) = turn_context.model_context_window() else {
         return (0, 0);
     };
-    let mut rewritten_outputs = 0usize;
-    let mut estimated_deleted_tokens = 0i64;
-    let item_count = history.raw_items().len();
+    // Keep the unclamped total so replacing an item cannot lose an overflow hidden by i64
+    // saturation in the normal history estimator.
+    let base_tokens =
+        i128::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i128::MAX);
+    let original_items = history.raw_items();
+    let item_token_estimates = original_items
+        .iter()
+        .map(estimate_item_token_count)
+        .collect::<Vec<_>>();
+    let mut estimated_tokens = item_token_estimates
+        .iter()
+        .copied()
+        .map(i128::from)
+        .fold(base_tokens, i128::saturating_add);
+    let initial_estimated_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);
+    let mut rewritten_items = Vec::new();
 
-    for index in (0..item_count).rev() {
-        let Some(estimated_tokens_before) =
-            history.estimate_token_count_with_base_instructions(base_instructions)
-        else {
-            break;
-        };
-        if estimated_tokens_before <= context_window {
+    for (item, item_tokens) in original_items.iter().zip(item_token_estimates).rev() {
+        if i64::try_from(estimated_tokens).unwrap_or(i64::MAX) <= context_window {
             break;
         }
-        let Some(rewritten_item) = history
-            .raw_items()
-            .get(index)
-            .and_then(rewritten_output_for_context_window)
-        else {
+        let Some(rewritten_item) = rewritten_output_for_context_window(item) else {
             break;
         };
-        let mut items = history.raw_items().to_vec();
-        items[index] = rewritten_item;
-        history.replace(items);
-        let estimated_tokens_after = history
-            .estimate_token_count_with_base_instructions(base_instructions)
-            .unwrap_or_default();
-        rewritten_outputs += 1;
-        estimated_deleted_tokens = estimated_deleted_tokens
-            .saturating_add(estimated_tokens_before.saturating_sub(estimated_tokens_after));
+        estimated_tokens = estimated_tokens
+            .saturating_sub(i128::from(item_tokens))
+            .saturating_add(i128::from(estimate_item_token_count(&rewritten_item)));
+        rewritten_items.push(rewritten_item);
     }
 
+    let rewritten_outputs = rewritten_items.len();
+    if rewritten_outputs > 0 {
+        let retained_len = original_items.len() - rewritten_outputs;
+        let mut items = original_items[..retained_len].to_vec();
+        items.extend(rewritten_items.into_iter().rev());
+        history.replace(items);
+    }
+
+    let final_estimated_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);
+    let estimated_deleted_tokens = initial_estimated_tokens.saturating_sub(final_estimated_tokens);
     (rewritten_outputs, estimated_deleted_tokens)
 }
 

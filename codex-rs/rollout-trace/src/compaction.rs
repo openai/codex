@@ -115,6 +115,11 @@ impl CompactionTraceContext {
         }
     }
 
+    /// Returns whether this context records compaction traces.
+    pub fn is_enabled(&self) -> bool {
+        matches!(self.state, CompactionTraceContextState::Enabled(_))
+    }
+
     /// Starts a new upstream attempt and records the exact compact endpoint request.
     pub fn start_attempt(&self, request: &impl Serialize) -> CompactionTraceAttempt {
         let CompactionTraceContextState::Enabled(context) = &self.state else {
