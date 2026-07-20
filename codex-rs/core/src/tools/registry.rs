@@ -409,15 +409,15 @@ impl ToolRegistry {
             (
                 "sandbox",
                 permission_profile_sandbox_tag(
-                    &invocation.turn.permission_profile,
-                    invocation.turn.windows_sandbox_level,
+                    &invocation.turn.permission_profile(),
+                    invocation.turn.windows_sandbox_level(),
                     invocation.turn.network.is_some(),
                 ),
             ),
             (
                 "sandbox_policy",
                 permission_profile_policy_tag(
-                    &invocation.turn.permission_profile,
+                    &invocation.turn.permission_profile(),
                     #[allow(deprecated)]
                     invocation.turn.cwd.as_path(),
                 ),

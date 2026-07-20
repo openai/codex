@@ -138,6 +138,36 @@ pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: PathUri,
     pub workspace_roots: Vec<PathUri>,
+    pub sandbox: Option<TurnEnvironmentSandbox>,
+}
+
+/// Sandbox settings captured for one selected environment.
+///
+/// These settings travel with [`TurnEnvironmentSelection`] so environment
+/// forwarding cannot silently drop its sandbox.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct TurnEnvironmentSandbox {
+    pub permission_profile: PermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    #[serde(default)]
+    pub windows_sandbox_private_desktop: bool,
+    #[serde(default)]
+    pub use_legacy_landlock: bool,
+}
+
+impl Default for TurnEnvironmentSandbox {
+    fn default() -> Self {
+        Self {
+            permission_profile: PermissionProfile::default(),
+            active_permission_profile: None,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            use_legacy_landlock: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3307,6 +3337,10 @@ pub struct TurnContextItem {
     pub network: Option<TurnContextNetworkItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
+    /// Explicit sandbox overrides captured for selected environments. Older
+    /// rollout items omit this and inherit the top-level permission fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_sandboxes: Option<BTreeMap<String, TurnEnvironmentSandbox>>,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp_hash: Option<String>,

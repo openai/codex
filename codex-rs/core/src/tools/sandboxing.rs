@@ -387,7 +387,10 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
-    fn workspace_roots<'a>(&self, req: &'a Req) -> &'a [PathUri];
+    fn turn_environment<'a>(
+        &'a self,
+        req: &'a Req,
+    ) -> &'a crate::session::turn_context::TurnEnvironment;
 
     fn network_approval_spec(&self, _req: &Req, _ctx: &ToolCtx) -> Option<NetworkApprovalSpec> {
         None

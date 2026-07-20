@@ -101,6 +101,7 @@ async fn selected_environment_emits_connection_lifecycle_notifications() -> Resu
         cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(codex_home.path().to_path_buf())?
             .into(),
         runtime_workspace_roots: None,
+        sandbox: None,
     };
     let request_id = app_server
         .send_thread_start_request(ThreadStartParams {

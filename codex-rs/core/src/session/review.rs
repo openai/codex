@@ -49,8 +49,7 @@ pub(super) async fn spawn_review_thread(
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
     per_turn_config.permissions.shell_environment_policy = parent_turn_context
-        .config
-        .permissions
+        .primary_environment_settings()
         .shell_environment_policy
         .clone();
     per_turn_config.codex_linux_sandbox_exe =
@@ -98,8 +97,8 @@ pub(super) async fn spawn_review_thread(
         review_turn_id.clone(),
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
-        &parent_turn_context.permission_profile,
-        parent_turn_context.windows_sandbox_level,
+        &parent_turn_context.permission_profile(),
+        parent_turn_context.windows_sandbox_level(),
         parent_turn_context.network.is_some(),
     ));
 
@@ -137,9 +136,8 @@ pub(super) async fn spawn_review_thread(
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
-        permission_profile: parent_turn_context.permission_profile(),
+        default_environment_settings: parent_turn_context.default_environment_settings.clone(),
         network: parent_turn_context.network.clone(),
-        windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,

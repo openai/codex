@@ -588,7 +588,7 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
         if environment_mode.has_environment() {
             let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
             planned_tools.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
-                allow_login_shell: turn_context.config.permissions.allow_login_shell,
+                allow_login_shell: environments_allow_login_shell(context.step_context),
                 exec_permission_approvals_enabled: false,
                 include_environment_id,
                 include_shell_parameter: unified_exec_should_include_shell_parameter(
@@ -635,6 +635,13 @@ fn tool_environment_mode(step_context: &StepContext) -> ToolEnvironmentMode {
     ToolEnvironmentMode::from_count(step_context.environments.turn_environments().count())
 }
 
+fn environments_allow_login_shell(step_context: &StepContext) -> bool {
+    step_context
+        .environments
+        .turn_environments()
+        .any(|environment| environment.settings.allow_login_shell)
+}
+
 #[instrument(level = "trace", skip_all)]
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.step_context.turn.as_ref();
@@ -644,7 +651,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
         return;
     }
 
-    let allow_login_shell = turn_context.config.permissions.allow_login_shell;
+    let allow_login_shell = environments_allow_login_shell(context.step_context);
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
     let shell_command_options = ShellCommandHandlerOptions {

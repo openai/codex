@@ -1478,6 +1478,7 @@ async fn turn_start_rejects_unknown_environment_before_starting_turn() -> Result
                 )?
                 .into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             ..Default::default()
         })
@@ -2649,6 +2650,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: second_cwd.abs().into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             thread_id: thread.id.clone(),
             client_user_message_id: None,
@@ -3033,6 +3035,7 @@ fn environment_params(ids: Option<&[&str]>, cwd: &Path) -> Option<Vec<TurnEnviro
                 environment_id: (*id).to_string(),
                 cwd: cwd.abs().into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             })
             .collect()
     })

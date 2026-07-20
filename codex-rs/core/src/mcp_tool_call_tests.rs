@@ -2996,7 +2996,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
-    turn_context.permission_profile = PermissionProfile::Disabled;
+    turn_context.set_permission_profile_for_tests(PermissionProfile::Disabled);
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);

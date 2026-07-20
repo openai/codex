@@ -115,6 +115,7 @@ async fn model_visible_environment_context_preserves_foreign_workspace_roots() -
                         environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![foreign_root],
+                        sandbox: None,
                     }],
                 )),
                 ..Default::default()

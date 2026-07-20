@@ -18607,6 +18607,57 @@
       "title": "TurnDiffUpdatedNotification",
       "type": "object"
     },
+    "TurnEnvironmentManagedFileSystemPermissionsParams": {
+      "oneOf": [
+        {
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/definitions/FileSystemSandboxEntry"
+              },
+              "type": "array"
+            },
+            "glob_scan_max_depth": {
+              "format": "uint",
+              "minimum": 1.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedTurnEnvironmentManagedFileSystemPermissionsParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "entries",
+            "type"
+          ],
+          "title": "RestrictedTurnEnvironmentManagedFileSystemPermissionsParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "unrestricted"
+              ],
+              "title": "UnrestrictedTurnEnvironmentManagedFileSystemPermissionsParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UnrestrictedTurnEnvironmentManagedFileSystemPermissionsParams",
+          "type": "object"
+        }
+      ]
+    },
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
@@ -18624,11 +18675,119 @@
             "array",
             "null"
           ]
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnEnvironmentSandboxParams"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Sandbox settings for this environment. Omitted inherits the thread sandbox settings."
         }
       },
       "required": [
         "cwd",
         "environmentId"
+      ],
+      "type": "object"
+    },
+    "TurnEnvironmentPermissionProfileParams": {
+      "oneOf": [
+        {
+          "properties": {
+            "file_system": {
+              "$ref": "#/definitions/TurnEnvironmentManagedFileSystemPermissionsParams"
+            },
+            "network": {
+              "$ref": "#/definitions/NetworkAccess"
+            },
+            "type": {
+              "enum": [
+                "managed"
+              ],
+              "title": "ManagedTurnEnvironmentPermissionProfileParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_system",
+            "network",
+            "type"
+          ],
+          "title": "ManagedTurnEnvironmentPermissionProfileParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "disabled"
+              ],
+              "title": "DisabledTurnEnvironmentPermissionProfileParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DisabledTurnEnvironmentPermissionProfileParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "network": {
+              "$ref": "#/definitions/NetworkAccess"
+            },
+            "type": {
+              "enum": [
+                "external"
+              ],
+              "title": "ExternalTurnEnvironmentPermissionProfileParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "network",
+            "type"
+          ],
+          "title": "ExternalTurnEnvironmentPermissionProfileParams",
+          "type": "object"
+        }
+      ]
+    },
+    "TurnEnvironmentSandboxParams": {
+      "properties": {
+        "activePermissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ActivePermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permissionProfile": {
+          "$ref": "#/definitions/TurnEnvironmentPermissionProfileParams"
+        },
+        "useLegacyLandlock": {
+          "default": false,
+          "type": "boolean"
+        },
+        "windowsSandboxLevel": {
+          "$ref": "#/definitions/WindowsSandboxLevel"
+        },
+        "windowsSandboxPrivateDesktop": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "permissionProfile",
+        "windowsSandboxLevel"
       ],
       "type": "object"
     },
@@ -19398,6 +19557,14 @@
         }
       },
       "type": "object"
+    },
+    "WindowsSandboxLevel": {
+      "enum": [
+        "disabled",
+        "restricted-token",
+        "elevated"
+      ],
+      "type": "string"
     },
     "WindowsSandboxReadiness": {
       "enum": [

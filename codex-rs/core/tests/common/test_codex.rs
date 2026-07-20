@@ -111,6 +111,7 @@ pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&cwd),
         workspace_roots: vec![PathUri::from_abs_path(&cwd)],
+        sandbox: None,
     }
 }
 
@@ -143,6 +144,7 @@ impl TestEnv {
                 environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&cwd)],
+                sandbox: None,
             },
             None => local(cwd.clone()),
         };
@@ -211,6 +213,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: cwd_uri.clone(),
                 workspace_roots: vec![cwd_uri.clone()],
+                sandbox: None,
             };
             let cwd = if remote_env == TestEnvironment::WineExec {
                 // TODO(anp): Convert `Config::cwd` to `LegacyAppPathString` and remove this

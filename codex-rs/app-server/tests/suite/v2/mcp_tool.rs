@@ -382,6 +382,7 @@ url = "{mcp_server_url}/mcp"
                 )?
                 .into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             selected_capability_roots: Some(vec![SelectedCapabilityRoot {
                 id: "late-plugin@1".to_string(),

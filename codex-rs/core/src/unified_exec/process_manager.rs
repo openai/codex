@@ -1152,8 +1152,9 @@ impl UnifiedExecProcessManager {
         cwd: PathUri,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
+        let turn_environment = &request.turn_environment;
         let local_policy_env = create_env(
-            &context.turn.config.permissions.shell_environment_policy,
+            &turn_environment.settings.shell_environment_policy,
             /*thread_id*/ None,
         );
         let mut env = local_policy_env.clone();
@@ -1161,12 +1162,12 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
-        let active_permission_profile = context.turn.config.permissions.active_permission_profile();
+        let active_permission_profile = turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
             policy: exec_env_policy_from_shell_policy(
-                &context.turn.config.permissions.shell_environment_policy,
+                &turn_environment.settings.shell_environment_policy,
             ),
             local_policy_env,
         };
@@ -1179,8 +1180,8 @@ impl UnifiedExecProcessManager {
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
                 approval_policy: context.turn.approval_policy.value(),
-                permission_profile: context.turn.permission_profile(),
-                windows_sandbox_level: context.turn.windows_sandbox_level,
+                permission_profile: turn_environment.permission_profile().clone(),
+                windows_sandbox_level: turn_environment.settings.sandbox.windows_sandbox_level,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
@@ -1199,10 +1200,8 @@ impl UnifiedExecProcessManager {
             turn_environment: request.turn_environment.clone(),
             env,
             exec_server_env_config: Some(exec_server_env_config),
-            explicit_env_overrides: context
-                .turn
-                .config
-                .permissions
+            explicit_env_overrides: turn_environment
+                .settings
                 .shell_environment_policy
                 .r#set
                 .clone(),

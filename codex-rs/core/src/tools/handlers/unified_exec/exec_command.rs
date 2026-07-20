@@ -155,10 +155,10 @@ impl ExecCommandHandler {
         // permissions config below. Consult the configured platform-sandbox requirement before
         // deciding whether parsing may continue without that base path.
         let sandbox = SandboxManager::new().select_initial(
-            &turn.file_system_sandbox_policy(),
-            turn.network_sandbox_policy(),
+            &turn_environment.file_system_sandbox_policy(),
+            turn_environment.network_sandbox_policy(),
             SandboxablePreference::Auto,
-            turn.windows_sandbox_level,
+            turn_environment.settings.sandbox.windows_sandbox_level,
             turn.network.is_some(),
         );
         // `to_abs_path()` alone cannot identify foreign drive paths: `file:///C:/repo` is
@@ -233,7 +233,7 @@ impl ExecCommandHandler {
             &args,
             shell,
             &shell_mode,
-            turn.config.permissions.allow_login_shell,
+            turn_environment.settings.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
@@ -354,7 +354,10 @@ impl ExecCommandHandler {
                     sandbox_cwd: native_environment_cwd,
                     turn_environment: turn_environment.clone(),
                     shell_mode,
-                    network: context.turn.network.clone(),
+                    network: turn_environment
+                        .uses_managed_network_proxy()
+                        .then(|| context.turn.network.clone())
+                        .flatten(),
                     tty,
                     sandbox_permissions: effective_additional_permissions.sandbox_permissions,
                     additional_permissions: normalized_additional_permissions,

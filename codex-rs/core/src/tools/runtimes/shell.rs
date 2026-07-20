@@ -210,8 +210,8 @@ impl Approvable<ShellRequest> for ShellRuntime {
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
-    fn workspace_roots<'a>(&self, req: &'a ShellRequest) -> &'a [PathUri] {
-        req.turn_environment.workspace_roots()
+    fn turn_environment<'a>(&'a self, req: &'a ShellRequest) -> &'a TurnEnvironment {
+        &req.turn_environment
     }
 
     fn network_approval_spec(
@@ -219,7 +219,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         req: &ShellRequest,
         ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
-        let file_system_sandbox_policy = ctx.turn.file_system_sandbox_policy();
+        let file_system_sandbox_policy = req.turn_environment.file_system_sandbox_policy();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
             &file_system_sandbox_policy,

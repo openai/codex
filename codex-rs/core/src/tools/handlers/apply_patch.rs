@@ -260,7 +260,7 @@ fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
 
 async fn effective_patch_permissions(
     session: &Session,
-    turn: &TurnContext,
+    turn_environment: &TurnEnvironment,
     environment_id: &str,
     action: &ApplyPatchAction,
     cwd: &PathUri,
@@ -281,7 +281,7 @@ async fn effective_patch_permissions(
             .await
             .as_ref(),
     );
-    let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
+    let base_file_system_sandbox_policy = turn_environment.file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
         &base_file_system_sandbox_policy,
         granted_permissions.as_ref(),
@@ -383,8 +383,8 @@ impl ApplyPatchHandler {
             ));
         };
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn
-            .file_system_sandbox_context(/*additional_permissions*/ None, turn_environment);
+        let sandbox =
+            turn_environment.file_system_sandbox_context(/*additional_permissions*/ None);
         match codex_apply_patch::verify_apply_patch_args(
             args,
             turn_environment.cwd(),
@@ -397,15 +397,20 @@ impl ApplyPatchHandler {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
                     effective_patch_permissions(
                         session.as_ref(),
-                        turn.as_ref(),
+                        turn_environment,
                         &turn_environment.environment_id,
                         &changes,
                         turn_environment.cwd(),
                     )
                     .await
                     .unwrap_or_else(|_| patch_permissions_without_path_matching(&changes));
-                match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
-                    .await
+                match apply_patch::apply_patch(
+                    turn.as_ref(),
+                    turn_environment,
+                    &file_system_sandbox_policy,
+                    changes,
+                )
+                .await
                 {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
@@ -553,7 +558,7 @@ pub(crate) async fn intercept_apply_patch(
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox =
-        turn.file_system_sandbox_context(/*additional_permissions*/ None, &turn_environment);
+        turn_environment.file_system_sandbox_context(/*additional_permissions*/ None);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {
@@ -561,15 +566,20 @@ pub(crate) async fn intercept_apply_patch(
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
                 effective_patch_permissions(
                     session.as_ref(),
-                    turn.as_ref(),
+                    &turn_environment,
                     &turn_environment.environment_id,
                     &changes,
                     cwd,
                 )
                 .await
                 .unwrap_or_else(|_| patch_permissions_without_path_matching(&changes));
-            match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
-                .await
+            match apply_patch::apply_patch(
+                turn.as_ref(),
+                &turn_environment,
+                &file_system_sandbox_policy,
+                changes,
+            )
+            .await
             {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;

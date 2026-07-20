@@ -674,6 +674,7 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
                 environment_id: "missing".to_string(),
                 cwd: workspace.into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             ..Default::default()
         })
@@ -712,6 +713,7 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
                 environment_id: environment_id.clone(),
                 cwd: serde_json::from_value(json!("relative"))?,
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             ..Default::default()
         })

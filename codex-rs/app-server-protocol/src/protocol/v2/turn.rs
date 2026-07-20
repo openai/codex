@@ -1,5 +1,8 @@
+use super::ActivePermissionProfile;
 use super::ApprovalsReviewer;
 use super::AskForApproval;
+use super::FileSystemSandboxEntry;
+use super::NetworkAccess;
 use super::SandboxPolicy;
 use super::Turn;
 use codex_experimental_api_macros::ExperimentalApi;
@@ -7,8 +10,12 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -21,6 +28,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::io;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -44,6 +53,168 @@ pub struct TurnEnvironmentParams {
     /// Environment-native runtime workspace roots. Omitted defaults to `cwd`.
     #[ts(optional = nullable)]
     pub runtime_workspace_roots: Option<Vec<LegacyAppPathString>>,
+    /// Sandbox settings for this environment. Omitted inherits the thread
+    /// sandbox settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub sandbox: Option<TurnEnvironmentSandboxParams>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnEnvironmentSandboxParams {
+    pub permission_profile: TurnEnvironmentPermissionProfileParams,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    #[serde(default)]
+    pub windows_sandbox_private_desktop: bool,
+    #[serde(default)]
+    pub use_legacy_landlock: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum TurnEnvironmentPermissionProfileParams {
+    #[serde(rename_all = "snake_case")]
+    #[ts(rename_all = "snake_case")]
+    Managed {
+        file_system: TurnEnvironmentManagedFileSystemPermissionsParams,
+        network: NetworkAccess,
+    },
+    Disabled,
+    #[serde(rename_all = "snake_case")]
+    #[ts(rename_all = "snake_case")]
+    External {
+        network: NetworkAccess,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum TurnEnvironmentManagedFileSystemPermissionsParams {
+    #[serde(rename_all = "snake_case")]
+    #[ts(rename_all = "snake_case")]
+    Restricted {
+        entries: Vec<FileSystemSandboxEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        glob_scan_max_depth: Option<NonZeroUsize>,
+    },
+    Unrestricted,
+}
+
+impl TryFrom<TurnEnvironmentSandboxParams> for codex_protocol::protocol::TurnEnvironmentSandbox {
+    type Error = io::Error;
+
+    fn try_from(value: TurnEnvironmentSandboxParams) -> Result<Self, Self::Error> {
+        Ok(Self {
+            permission_profile: value.permission_profile.try_into()?,
+            active_permission_profile: value.active_permission_profile.map(Into::into),
+            windows_sandbox_level: value.windows_sandbox_level,
+            windows_sandbox_private_desktop: value.windows_sandbox_private_desktop,
+            use_legacy_landlock: value.use_legacy_landlock,
+        })
+    }
+}
+
+impl TryFrom<TurnEnvironmentPermissionProfileParams> for CorePermissionProfile {
+    type Error = io::Error;
+
+    fn try_from(value: TurnEnvironmentPermissionProfileParams) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TurnEnvironmentPermissionProfileParams::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                file_system: file_system.try_into()?,
+                network: network.into(),
+            },
+            TurnEnvironmentPermissionProfileParams::Disabled => Self::Disabled,
+            TurnEnvironmentPermissionProfileParams::External { network } => Self::External {
+                network: network.into(),
+            },
+        })
+    }
+}
+
+impl From<CorePermissionProfile> for TurnEnvironmentPermissionProfileParams {
+    fn from(value: CorePermissionProfile) -> Self {
+        match value {
+            CorePermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                file_system: file_system.into(),
+                network: network.into(),
+            },
+            CorePermissionProfile::Disabled => Self::Disabled,
+            CorePermissionProfile::External { network } => Self::External {
+                network: network.into(),
+            },
+        }
+    }
+}
+
+impl TryFrom<TurnEnvironmentManagedFileSystemPermissionsParams>
+    for CoreManagedFileSystemPermissions
+{
+    type Error = io::Error;
+
+    fn try_from(
+        value: TurnEnvironmentManagedFileSystemPermissionsParams,
+    ) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TurnEnvironmentManagedFileSystemPermissionsParams::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<io::Result<Vec<_>>>()?,
+                glob_scan_max_depth,
+            },
+            TurnEnvironmentManagedFileSystemPermissionsParams::Unrestricted => Self::Unrestricted,
+        })
+    }
+}
+
+impl From<CoreManagedFileSystemPermissions> for TurnEnvironmentManagedFileSystemPermissionsParams {
+    fn from(value: CoreManagedFileSystemPermissions) -> Self {
+        match value {
+            CoreManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries.into_iter().map(Into::into).collect(),
+                glob_scan_max_depth,
+            },
+            CoreManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
+        }
+    }
+}
+
+impl From<NetworkAccess> for NetworkSandboxPolicy {
+    fn from(value: NetworkAccess) -> Self {
+        match value {
+            NetworkAccess::Restricted => Self::Restricted,
+            NetworkAccess::Enabled => Self::Enabled,
+        }
+    }
+}
+
+impl From<NetworkSandboxPolicy> for NetworkAccess {
+    fn from(value: NetworkSandboxPolicy) -> Self {
+        match value {
+            NetworkSandboxPolicy::Restricted => Self::Restricted,
+            NetworkSandboxPolicy::Enabled => Self::Enabled,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

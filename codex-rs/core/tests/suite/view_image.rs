@@ -587,6 +587,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: remote_cwd_uri.clone(),
         workspace_roots: vec![remote_cwd_uri],
+        sandbox: None,
     };
     let relative_call_id = "call-view-image-relative-multi-env";
     let absolute_call_id = "call-view-image-absolute-multi-env";

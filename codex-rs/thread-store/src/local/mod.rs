@@ -584,6 +584,7 @@ mod tests {
                 permission_profile: None,
                 network: None,
                 file_system_sandbox_policy: None,
+                environment_sandboxes: None,
                 model: model.to_string(),
                 comp_hash: None,
                 personality: None,

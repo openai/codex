@@ -591,6 +591,15 @@ fn resolve_turn_environment_selections(
     let mut selections = Vec::with_capacity(environments.len());
     for environment in environments {
         let environment_id = environment.environment_id;
+        let sandbox = environment
+            .sandbox
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|err| {
+                invalid_request(format!(
+                    "invalid sandbox for environment `{environment_id}`: {err}"
+                ))
+            })?;
         let cwd = environment
             .cwd
             .to_inferred_path_uri()
@@ -622,6 +631,7 @@ fn resolve_turn_environment_selections(
             environment_id,
             cwd,
             workspace_roots,
+            sandbox,
         });
     }
     thread_manager

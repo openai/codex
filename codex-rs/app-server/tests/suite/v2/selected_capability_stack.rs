@@ -367,6 +367,7 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: fixture.environment_cwd.into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Plan,
@@ -646,6 +647,7 @@ async fn start_thread(
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: environment_cwd.into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             selected_capability_roots: Some(vec![selected_root]),
             ..Default::default()
@@ -677,6 +679,7 @@ async fn run_turn(
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: environment_cwd.into(),
                 runtime_workspace_roots: None,
+                sandbox: None,
             }]),
             ..Default::default()
         })

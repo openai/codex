@@ -243,6 +243,7 @@ use self::turn::agent_message_text;
 use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
+use self::turn_context::TurnEnvironmentRuntimeDefaults;
 use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -667,6 +668,12 @@ impl Session {
             approvals_reviewer: config.approvals_reviewer,
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            environment_runtime_defaults: TurnEnvironmentRuntimeDefaults {
+                windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+                use_legacy_landlock: config.features.use_legacy_landlock(),
+                allow_login_shell: config.permissions.allow_login_shell,
+                shell_environment_policy: config.permissions.shell_environment_policy.clone(),
+            },
             environments: TurnEnvironmentSelections::new(
                 config.cwd.clone(),
                 environment_selections,
@@ -948,12 +955,6 @@ impl Session {
                 .app_server_client_version
                 .clone(),
         }
-    }
-
-    fn managed_network_proxy_active_for_permission_profile(
-        permission_profile: &PermissionProfile,
-    ) -> bool {
-        !matches!(permission_profile, PermissionProfile::Disabled)
     }
 
     /// Builds the `x-codex-beta-features` header value for this session.
@@ -1479,10 +1480,16 @@ impl Session {
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            if updates.environments.is_some() {
+            let environment_settings = updated.environment_settings();
+            if updates.environments.is_some()
+                || state.session_configuration.environment_settings() != environment_settings
+            {
                 self.services
                     .turn_environments
-                    .update_selections(updated.environment_selections());
+                    .update_selections_with_settings(
+                        updated.environment_selections(),
+                        &environment_settings,
+                    );
             }
             state.session_configuration = updated;
             (previous_config, new_config, permission_profile_changed)

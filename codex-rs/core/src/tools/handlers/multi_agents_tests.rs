@@ -2296,7 +2296,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     let mut config = (*turn.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     set_turn_config(&mut turn, config);
-    turn.permission_profile = expected_permission_profile.clone();
+    turn.set_permission_profile_for_tests(expected_permission_profile.clone());
     assert_ne!(
         expected_permission_profile,
         turn.config.permissions.effective_permission_profile(),
@@ -4456,7 +4456,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
     );
-    turn.permission_profile = permission_profile.clone();
+    turn.set_permission_profile_for_tests(permission_profile.clone());
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");

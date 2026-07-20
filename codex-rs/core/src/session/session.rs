@@ -4,6 +4,8 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::turn_context::TurnEnvironmentRuntimeDefaults;
+use crate::session::turn_context::TurnEnvironmentSettings;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
@@ -18,7 +20,9 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnEnvironmentSandbox;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
@@ -76,6 +80,7 @@ pub(crate) struct SessionConfiguration {
     /// the methods below instead of mutating the fields independently.
     pub(super) permission_profile_state: PermissionProfileState,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
+    pub(super) environment_runtime_defaults: TurnEnvironmentRuntimeDefaults,
 
     /// Sticky thread-level environment selections plus the legacy cwd used
     /// when a turn does not select an environment.
@@ -116,6 +121,41 @@ impl SessionConfiguration {
         &self.environments.environments
     }
 
+    pub(super) fn environment_settings(&self) -> BTreeMap<String, TurnEnvironmentSettings> {
+        let default_sandbox = TurnEnvironmentSandbox {
+            permission_profile: self.permission_profile(),
+            active_permission_profile: self.active_permission_profile(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self
+                .environment_runtime_defaults
+                .windows_sandbox_private_desktop,
+            use_legacy_landlock: self.environment_runtime_defaults.use_legacy_landlock,
+        };
+        let mut settings = BTreeMap::new();
+        for environment in self.environment_selections() {
+            settings
+                .entry(environment.environment_id.clone())
+                .or_insert_with(|| {
+                    let sandbox = environment
+                        .sandbox
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| default_sandbox.clone());
+                    self.environment_runtime_defaults.settings(sandbox)
+                });
+        }
+        settings
+    }
+
+    pub(super) fn uses_managed_network_proxy(&self) -> bool {
+        !matches!(self.permission_profile(), PermissionProfile::Disabled)
+            || self.environment_selections().iter().any(|environment| {
+                environment.sandbox.as_ref().is_some_and(|sandbox| {
+                    !matches!(sandbox.permission_profile, PermissionProfile::Disabled)
+                })
+            })
+    }
+
     pub(super) fn primary_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
         self.environments
             .environments
@@ -132,10 +172,6 @@ impl SessionConfiguration {
 
     pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
         &self.codex_home
-    }
-
-    pub(super) fn permission_profile_state(&self) -> &PermissionProfileState {
-        &self.permission_profile_state
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
@@ -917,7 +953,10 @@ impl Session {
                 inherited_environments.unwrap_or_default(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
-            turn_environments.update_selections(session_configuration.environment_selections());
+            turn_environments.update_selections_with_settings(
+                session_configuration.environment_selections(),
+                &session_configuration.environment_settings(),
+            );
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
             let plugin_skill_warmup = warm_plugins_and_skills_for_session_init(
@@ -1187,13 +1226,8 @@ impl Session {
                     cwd: session_configuration.cwd().clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     initial_messages,
-                    network_proxy: session_network_proxy.filter(|_| {
-                        Self::managed_network_proxy_active_for_permission_profile(
-                            session_configuration
-                                .permission_profile_state()
-                                .permission_profile(),
-                        )
-                    }),
+                    network_proxy: session_network_proxy
+                        .filter(|_| session_configuration.uses_managed_network_proxy()),
                     rollout_path,
                 }),
             })

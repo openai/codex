@@ -255,6 +255,7 @@ fn reference_context_item() -> TurnContextItem {
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
+        environment_sandboxes: None,
         model: "gpt-test".to_string(),
         comp_hash: None,
         personality: None,

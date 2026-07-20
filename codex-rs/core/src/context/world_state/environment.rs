@@ -6,7 +6,6 @@ use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnEnvironment;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -19,7 +18,6 @@ pub(crate) struct EnvironmentsState {
     current_date: Option<String>,
     timezone: Option<String>,
     network: Option<NetworkContext>,
-    filesystem: Option<FileSystemContext>,
     subagents: Option<String>,
 }
 
@@ -28,19 +26,11 @@ impl EnvironmentsState {
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
     ) -> Self {
-        let workspace_roots = environments
-            .primary()
-            .map(TurnEnvironment::workspace_roots)
-            .unwrap_or_default();
         Self {
             environments: environment_states(environments),
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
             network: network_from_turn_context(turn_context),
-            filesystem: Some(FileSystemContext::from_permission_profile(
-                turn_context.config.permissions.permission_profile(),
-                workspace_roots,
-            )),
             subagents: None,
         }
     }
@@ -53,6 +43,7 @@ impl EnvironmentsState {
     }
 
     fn rendered_full(&self) -> RenderedEnvironments {
+        let legacy_single = is_legacy_single(&self.environments);
         RenderedEnvironments {
             updates: self
                 .environments
@@ -61,11 +52,18 @@ impl EnvironmentsState {
                     (id.clone(), EnvironmentUpdate::Current(environment.clone()))
                 })
                 .collect(),
-            legacy_single: is_legacy_single(&self.environments),
+            legacy_single,
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             network: self.network.clone(),
-            filesystem: self.filesystem.clone(),
+            filesystem: legacy_single
+                .then(|| {
+                    self.environments
+                        .values()
+                        .next()
+                        .and_then(|environment| environment.filesystem.clone())
+                })
+                .flatten(),
             subagents: self.subagents.clone(),
         }
     }
@@ -76,6 +74,7 @@ impl WorldStateSection for EnvironmentsState {
     type Snapshot = EnvironmentsSnapshot;
 
     fn snapshot(&self) -> Self::Snapshot {
+        let legacy_single = is_legacy_single(&self.environments);
         EnvironmentsSnapshot {
             environments: self
                 .environments
@@ -87,6 +86,14 @@ impl WorldStateSection for EnvironmentsState {
                             cwd: environment.cwd.inferred_native_path_string(),
                             status: environment.status,
                             shell: environment.shell.clone(),
+                            filesystem: (!legacy_single)
+                                .then(|| {
+                                    environment
+                                        .filesystem
+                                        .as_ref()
+                                        .map(FileSystemContext::render)
+                                })
+                                .flatten(),
                         },
                     )
                 })
@@ -94,7 +101,16 @@ impl WorldStateSection for EnvironmentsState {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             network: self.network.as_ref().map(NetworkContext::render),
-            filesystem: self.filesystem.as_ref().map(FileSystemContext::render),
+            filesystem: legacy_single
+                .then(|| {
+                    self.environments.values().next().and_then(|environment| {
+                        environment
+                            .filesystem
+                            .as_ref()
+                            .map(FileSystemContext::render)
+                    })
+                })
+                .flatten(),
             subagents: self.subagents.clone(),
         }
     }
@@ -143,7 +159,14 @@ impl WorldStateSection for EnvironmentsState {
                 current_date: self.current_date.clone(),
                 timezone: self.timezone.clone(),
                 network: self.network.clone(),
-                filesystem: self.filesystem.clone(),
+                filesystem: legacy_single
+                    .then(|| {
+                        self.environments
+                            .values()
+                            .next()
+                            .and_then(|environment| environment.filesystem.clone())
+                    })
+                    .flatten(),
                 subagents: self.subagents.clone(),
             }) as Box<dyn ContextualUserFragment>
         })
@@ -200,7 +223,12 @@ impl ContextualUserFragment for RenderedEnvironments {
         let mut rendered = "\n".to_string();
         if self.legacy_single {
             if let Some(EnvironmentUpdate::Current(environment)) = self.updates.values().next() {
-                push_environment_values(&mut rendered, environment, "  ");
+                push_environment_values(
+                    &mut rendered,
+                    environment,
+                    "  ",
+                    /*include_filesystem*/ false,
+                );
             }
         } else if !self.updates.is_empty() {
             rendered.push_str("  <environments>\n");
@@ -211,7 +239,12 @@ impl ContextualUserFragment for RenderedEnvironments {
                         push_xml_escaped_text(&mut rendered, id);
                         rendered.push('"');
                         rendered.push_str(">\n");
-                        push_environment_values(&mut rendered, environment, "      ");
+                        push_environment_values(
+                            &mut rendered,
+                            environment,
+                            "      ",
+                            /*include_filesystem*/ true,
+                        );
                         rendered.push_str("    </environment>\n");
                     }
                     EnvironmentUpdate::Unavailable => {
@@ -248,7 +281,12 @@ impl ContextualUserFragment for RenderedEnvironments {
     }
 }
 
-fn push_environment_values(rendered: &mut String, environment: &EnvironmentState, indent: &str) {
+fn push_environment_values(
+    rendered: &mut String,
+    environment: &EnvironmentState,
+    indent: &str,
+    include_filesystem: bool,
+) {
     rendered.push_str(indent);
     rendered.push_str("<cwd>");
     push_xml_escaped_text(rendered, &environment.cwd.inferred_native_path_string());
@@ -262,6 +300,11 @@ fn push_environment_values(rendered: &mut String, environment: &EnvironmentState
         rendered.push_str("<shell>");
         push_xml_escaped_text(rendered, shell);
         rendered.push_str("</shell>\n");
+    }
+    if include_filesystem && let Some(filesystem) = &environment.filesystem {
+        rendered.push_str(indent);
+        rendered.push_str(&filesystem.render());
+        rendered.push('\n');
     }
 }
 
@@ -283,6 +326,7 @@ struct EnvironmentState {
     cwd: PathUri,
     status: EnvironmentStatus,
     shell: Option<String>,
+    filesystem: Option<FileSystemContext>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -300,6 +344,8 @@ struct EnvironmentSnapshot {
     cwd: String,
     status: EnvironmentStatus,
     shell: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filesystem: Option<String>,
 }
 
 impl EnvironmentSnapshot {
@@ -311,6 +357,7 @@ impl EnvironmentSnapshot {
                 .as_ref()
                 .zip(other.shell.as_ref())
                 .is_none_or(|(current, previous)| current == previous)
+            && self.filesystem == other.filesystem
     }
 }
 
@@ -334,6 +381,10 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
                         .shell
                         .as_ref()
                         .map(|shell| shell.name().to_string()),
+                    filesystem: Some(FileSystemContext::from_permission_profile(
+                        environment.permission_profile(),
+                        environment.workspace_roots(),
+                    )),
                 },
             )
         })
@@ -345,6 +396,10 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
                 cwd: environment.selection.cwd.clone(),
                 status: EnvironmentStatus::Starting,
                 shell: None,
+                filesystem: Some(FileSystemContext::from_permission_profile(
+                    &environment.settings.sandbox.permission_profile,
+                    &environment.selection.workspace_roots,
+                )),
             });
     }
     environments

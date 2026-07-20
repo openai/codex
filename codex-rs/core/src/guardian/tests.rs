@@ -465,7 +465,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     session.thread_id = fixed_guardian_parent_session_id();
     let denied_root = test_path_buf("/repo/private").abs();
     let denied_glob = test_path_buf("/repo/private/**").display().to_string();
-    turn.permission_profile = PermissionProfile::from_runtime_permissions(
+    turn.set_permission_profile_for_tests(PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -487,7 +487,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
             },
         ]),
         NetworkSandboxPolicy::Restricted,
-    );
+    ));
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;

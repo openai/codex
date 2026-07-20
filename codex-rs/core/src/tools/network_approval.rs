@@ -571,7 +571,13 @@ impl NetworkApprovalService {
             }
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
-        if !permission_profile_allows_network_approval_flow(&turn_context.permission_profile()) {
+        let permission_profile = turn_context
+            .environments
+            .turn_environments()
+            .find(|environment| environment.environment_id == environment_id)
+            .map(|environment| environment.permission_profile().clone())
+            .unwrap_or_else(|| turn_context.permission_profile());
+        if !permission_profile_allows_network_approval_flow(&permission_profile) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
             if let Some(owner_call) = owner_call.as_ref() {
