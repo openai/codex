@@ -5,27 +5,13 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::SkillConfig;
 use codex_config::SkillsConfig;
+pub use codex_skills::SkillConfigRule;
+pub use codex_skills::SkillConfigRuleSelector;
+pub use codex_skills::SkillConfigRules;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::warn;
 
 use crate::SkillMetadata;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum SkillConfigRuleSelector {
-    Name(String),
-    Path(AbsolutePathBuf),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SkillConfigRule {
-    pub selector: SkillConfigRuleSelector,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-pub struct SkillConfigRules {
-    pub entries: Vec<SkillConfigRule>,
-}
 
 pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> SkillConfigRules {
     let mut entries = Vec::new();

@@ -1,5 +1,5 @@
 use codex_core_skills::SkillLoadOutcome;
-use codex_core_skills::SkillMetadata;
+use codex_skills::SkillMetadata;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;

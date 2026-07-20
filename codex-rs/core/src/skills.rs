@@ -12,8 +12,6 @@ use codex_utils_plugins::PluginSkillRoot;
 
 pub use codex_core_skills::SkillError;
 pub use codex_core_skills::SkillLoadOutcome;
-pub use codex_core_skills::SkillMetadata;
-pub use codex_core_skills::SkillPolicy;
 pub use codex_core_skills::SkillRenderReport;
 pub use codex_core_skills::SkillsLoadInput;
 pub use codex_core_skills::SkillsService;
@@ -34,6 +32,8 @@ pub use codex_core_skills::render;
 pub use codex_core_skills::render::SkillRenderSideEffects;
 pub use codex_core_skills::service;
 pub use codex_core_skills::system;
+pub use codex_skills::SkillMetadata;
+pub use codex_skills::SkillPolicy;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
