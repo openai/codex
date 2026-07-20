@@ -10,6 +10,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -103,6 +104,7 @@ impl AppsTestServer {
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
             AppsTestToolsListBehavior::AlwaysAvailable,
+            /*tool_call_delay*/ None,
         )
         .await;
         Ok(Self {
@@ -121,6 +123,7 @@ impl AppsTestServer {
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
             AppsTestToolsListBehavior::AlwaysAvailable,
+            /*tool_call_delay*/ None,
         )
         .await;
         Ok(Self {
@@ -141,6 +144,28 @@ impl AppsTestServer {
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
             AppsTestToolsListBehavior::AlwaysAvailable,
+            /*tool_call_delay*/ None,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
+    }
+
+    pub async fn mount_with_tool_call_delay(
+        server: &MockServer,
+        tool_call_delay: Duration,
+    ) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ false,
+            /*include_app_only_tool*/ false,
+            AppsTestToolsListBehavior::AlwaysAvailable,
+            Some(tool_call_delay),
         )
         .await;
         Ok(Self {
@@ -161,6 +186,7 @@ impl AppsTestServer {
             matches!(tool_loading, AppsTestToolLoading::Searchable),
             /*include_app_only_tool*/ true,
             AppsTestToolsListBehavior::AlwaysAvailable,
+            /*tool_call_delay*/ None,
         )
         .await;
         Ok(Self {
@@ -185,6 +211,7 @@ impl AppsTestServer {
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
             AppsTestToolsListBehavior::AlwaysAvailable,
+            /*tool_call_delay*/ None,
             Some(Arc::clone(&control.initialize_attempts)),
             Some(Arc::clone(&control.remaining_initialize_failures)),
         )
@@ -225,6 +252,7 @@ impl AppsTestServer {
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
             tools_list_behavior,
+            /*tool_call_delay*/ None,
         )
         .await;
         Ok(Self {
@@ -379,6 +407,7 @@ async fn mount_streamable_http_json_rpc(
     searchable: bool,
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
+    tool_call_delay: Option<Duration>,
 ) {
     mount_streamable_http_json_rpc_at_path(
         server,
@@ -388,10 +417,12 @@ async fn mount_streamable_http_json_rpc(
         searchable,
         include_app_only_tool,
         tools_list_behavior,
+        tool_call_delay,
     )
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mount_streamable_http_json_rpc_at_path(
     server: &MockServer,
     mcp_path_regex: &str,
@@ -400,6 +431,7 @@ async fn mount_streamable_http_json_rpc_at_path(
     searchable: bool,
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
+    tool_call_delay: Option<Duration>,
 ) {
     mount_streamable_http_json_rpc_with_startup_control(
         server,
@@ -409,6 +441,7 @@ async fn mount_streamable_http_json_rpc_at_path(
         searchable,
         include_app_only_tool,
         tools_list_behavior,
+        tool_call_delay,
         /*initialize_attempts*/ None,
         /*remaining_initialize_failures*/ None,
     )
@@ -424,6 +457,7 @@ async fn mount_streamable_http_json_rpc_with_startup_control(
     searchable: bool,
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
+    tool_call_delay: Option<Duration>,
     initialize_attempts: Option<Arc<AtomicUsize>>,
     remaining_initialize_failures: Option<Arc<AtomicUsize>>,
 ) {
@@ -435,6 +469,7 @@ async fn mount_streamable_http_json_rpc_with_startup_control(
             searchable,
             include_app_only_tool,
             tools_list_behavior,
+            tool_call_delay,
             tools_list_calls: AtomicUsize::new(0),
             initialize_attempts,
             remaining_initialize_failures,
@@ -449,6 +484,7 @@ struct CodexAppsJsonRpcResponder {
     searchable: bool,
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
+    tool_call_delay: Option<Duration>,
     tools_list_calls: AtomicUsize,
     initialize_attempts: Option<Arc<AtomicUsize>>,
     remaining_initialize_failures: Option<Arc<AtomicUsize>>,
@@ -705,7 +741,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                     .unwrap_or_default();
                 let codex_apps_meta = body.pointer("/params/_meta/_codex_apps").cloned();
 
-                ResponseTemplate::new(200).set_body_json(json!({
+                let response = ResponseTemplate::new(200).set_body_json(json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
@@ -718,7 +754,11 @@ impl Respond for CodexAppsJsonRpcResponder {
                         },
                         "isError": false
                     }
-                }))
+                }));
+                match self.tool_call_delay {
+                    Some(delay) => response.set_delay(delay),
+                    None => response,
+                }
             }
             method if method.starts_with("notifications/") => ResponseTemplate::new(202),
             _ => {
