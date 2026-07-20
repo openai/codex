@@ -1,6 +1,5 @@
 use super::*;
 
-use async_channel::unbounded;
 use codex_connectors::ConnectorRuntimeTool;
 use codex_connectors::connector_runtime_context_key;
 use codex_connectors::connector_tool_is_synthetic;
@@ -75,8 +74,6 @@ impl AppsRequestProcessor {
                         self.thread_manager.environment_manager(),
                         config.cwd.to_path_buf(),
                     );
-                    let (tx_event, rx_event) = unbounded();
-                    drop(rx_event);
                     let cancellation_token = CancellationToken::new();
                     let codex_apps_auth_manager =
                         host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
@@ -87,7 +84,7 @@ impl AppsRequestProcessor {
                         config.auth_keyring_backend_kind(),
                         &config.permissions.approval_policy,
                         APPS_INSTALLED_SUBMIT_ID.to_string(),
-                        tx_event,
+                        /*tx_event*/ None,
                         cancellation_token.clone(),
                         PermissionProfile::default(),
                         runtime_context,

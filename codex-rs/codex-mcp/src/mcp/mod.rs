@@ -19,7 +19,6 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use async_channel::unbounded;
 use codex_config::Constrained;
 use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
@@ -311,8 +310,6 @@ pub async fn read_mcp_resource(
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
     mcp_servers.retain(|name, _| name == server);
-    let (tx_event, rx_event) = unbounded();
-    drop(rx_event);
     let cancel_token = CancellationToken::new();
     let manager = McpConnectionManager::new(
         &mcp_servers,
@@ -320,7 +317,7 @@ pub async fn read_mcp_resource(
         config.auth_keyring_backend_kind,
         &config.approval_policy,
         String::new(),
-        tx_event,
+        /*tx_event*/ None,
         cancel_token.clone(),
         PermissionProfile::default(),
         runtime_context,
@@ -390,9 +387,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
 
     let server_names = mcp_servers.keys().cloned().collect();
 
-    let (tx_event, rx_event) = unbounded();
-    drop(rx_event);
-
     let cancel_token = CancellationToken::new();
     let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
@@ -400,7 +394,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.auth_keyring_backend_kind,
         &config.approval_policy,
         submit_id,
-        tx_event,
+        /*tx_event*/ None,
         cancel_token.clone(),
         PermissionProfile::default(),
         runtime_context,

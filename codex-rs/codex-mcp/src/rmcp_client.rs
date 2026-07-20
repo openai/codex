@@ -181,9 +181,9 @@ impl CodexAppsStartupReconnect {
         mut self,
         submit_id: String,
         server_name: String,
-        tx_event: Sender<Event>,
+        tx_event: Option<Sender<Event>>,
     ) -> Self {
-        self.startup_status_context = Some(CodexAppsStartupStatusContext {
+        self.startup_status_context = tx_event.map(|tx_event| CodexAppsStartupStatusContext {
             submit_id,
             server_name,
             tx_event,
@@ -277,7 +277,7 @@ struct ManagedClientStartup {
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-    tx_event: Sender<Event>,
+    tx_event: Option<Sender<Event>>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<ConnectorRuntimeContext<ToolInfo>>,
     tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,
@@ -423,7 +423,7 @@ impl AsyncManagedClient {
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         cancel_token: CancellationToken,
-        tx_event: Sender<Event>,
+        tx_event: Option<Sender<Event>>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<ConnectorRuntimeContext<ToolInfo>>,
         tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,
@@ -1003,7 +1003,7 @@ struct StartServerTaskParams {
     startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
     tool_timeout: Duration,
     tool_filter: ToolFilter,
-    tx_event: Sender<Event>,
+    tx_event: Option<Sender<Event>>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<ConnectorRuntimeContext<ToolInfo>>,
     tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,

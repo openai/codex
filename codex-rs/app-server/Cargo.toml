@@ -26,7 +26,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-channel = { workspace = true }
 base64 = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
     "http1",

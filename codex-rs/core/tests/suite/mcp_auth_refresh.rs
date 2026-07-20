@@ -83,8 +83,6 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         EffectiveMcpServer::configured(hosted_plugin_runtime_config),
     )]);
-    let (tx_event, rx_event) = async_channel::unbounded();
-    drop(rx_event);
     let approval_policy = Constrained::allow_any(AskForApproval::Never);
     let manager = McpConnectionManager::new(
         &mcp_servers,
@@ -92,7 +90,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         AuthKeyringBackendKind::default(),
         &approval_policy,
         "test".to_string(),
-        tx_event,
+        /*tx_event*/ None,
         CancellationToken::new(),
         PermissionProfile::default(),
         McpRuntimeContext::new(

@@ -1952,7 +1952,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "app_test_support",
- "async-channel",
  "axum",
  "base64 0.22.1",
  "chrono",

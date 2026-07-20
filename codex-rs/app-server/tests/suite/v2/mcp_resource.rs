@@ -34,9 +34,15 @@ use codex_protocol::protocol::SessionSource;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
+use rmcp::model::BooleanSchema;
+use rmcp::model::CreateElicitationRequestParams;
+use rmcp::model::CreateElicitationResult;
+use rmcp::model::ElicitationAction;
+use rmcp::model::ElicitationSchema;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::Meta;
 use rmcp::model::PaginatedRequestParams;
+use rmcp::model::PrimitiveSchema;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::RawResource;
 use rmcp::model::ReadResourceRequestParams;
@@ -61,6 +67,8 @@ const TEST_RESOURCE_URI: &str = "test://codex/resource";
 const TEST_BLOB_RESOURCE_URI: &str = "test://codex/resource.bin";
 const TEST_RESOURCE_BLOB: &str = "YmluYXJ5LXJlc291cmNl";
 const TEST_RESOURCE_TEXT: &str = "Resource body from the MCP server.";
+const TEST_ELICITATION_RESOURCE_URI: &str = "test://codex/elicitation";
+const TEST_ELICITATION_RESOURCE_TEXT: &str = "Threadless elicitation was declined.";
 const SKILL_NAME: &str = "demo-plugin:deploy";
 const RAW_SKILL_DESCRIPTION: &str = "Deploy\nthrough the <hosted> orchestrator.";
 const SKILL_DESCRIPTION: &str = "Deploy through the &lt;hosted&gt; orchestrator.";
@@ -539,7 +547,8 @@ enabled = false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_resource_read_returns_resource_contents_without_thread() -> Result<()> {
+async fn mcp_resource_read_returns_contents_and_declines_elicitation_without_thread() -> Result<()>
+{
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
 
@@ -550,6 +559,7 @@ async fn mcp_resource_read_returns_resource_contents_without_thread() -> Result<
             r#"
 chatgpt_base_url = "{apps_server_url}"
 mcp_oauth_credentials_store = "file"
+approval_policy = "on-request"
 
 [features]
 apps = true
@@ -588,6 +598,30 @@ apps = true
     assert_eq!(
         to_response::<McpResourceReadResponse>(read_response)?,
         expected_resource_read_response()
+    );
+
+    let read_request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: None,
+            server: "codex_apps".to_string(),
+            uri: TEST_ELICITATION_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<McpResourceReadResponse>(read_response)?,
+        McpResourceReadResponse {
+            contents: vec![McpResourceContent::Text {
+                uri: TEST_ELICITATION_RESOURCE_URI.to_string(),
+                mime_type: Some("text/plain".to_string()),
+                text: TEST_ELICITATION_RESOURCE_TEXT.to_string(),
+                meta: None,
+            }],
+        }
     );
 
     apps_server_handle.abort();
@@ -862,9 +896,37 @@ impl ServerHandler for ResourceAppsMcpServer {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         let uri = request.uri;
+        if uri == TEST_ELICITATION_RESOURCE_URI {
+            let requested_schema = ElicitationSchema::builder()
+                .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+                .build()
+                .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+            let result = context
+                .peer
+                .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: "Confirm the resource read.".to_string(),
+                    requested_schema,
+                })
+                .await
+                .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+            assert_eq!(
+                result,
+                CreateElicitationResult::new(ElicitationAction::Decline)
+            );
+
+            return Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
+                    uri: TEST_ELICITATION_RESOURCE_URI.to_string(),
+                    mime_type: Some("text/plain".to_string()),
+                    text: TEST_ELICITATION_RESOURCE_TEXT.to_string(),
+                    meta: None,
+                },
+            ]));
+        }
         if uri == SKILL_MAIN_PROMPT_URI {
             self.calls.main_prompt_reads.fetch_add(1, Ordering::Relaxed);
             return Ok(ReadResourceResult::new(vec![

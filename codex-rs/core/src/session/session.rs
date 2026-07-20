@@ -1218,7 +1218,7 @@ impl Session {
                 config.auth_keyring_backend_kind(),
                 &session_configuration.approval_policy,
                 INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
+                Some(tx_event.clone()),
                 mcp_startup_cancellation_token,
                 session_configuration.permission_profile(),
                 mcp_runtime_context.clone(),
