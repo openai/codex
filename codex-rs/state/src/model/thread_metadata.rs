@@ -262,8 +262,20 @@ impl ThreadMetadataBuilder {
 }
 
 impl ThreadMetadata {
-    /// Preserve existing non-null Git fields when rollout-derived metadata is reconciled.
+    /// Preserve SQLite-owned Git fields when rollout-derived metadata is reconciled.
     pub fn prefer_existing_git_info(&mut self, existing: &Self) {
+        if matches!(self.history_mode, ThreadHistoryMode::Paginated)
+            && matches!(existing.history_mode, ThreadHistoryMode::Paginated)
+        {
+            // `self` was rebuilt from the rollout's initial SessionMeta. `existing` is the
+            // current SQLite row. Once that row says paginated, metadata updates are SQLite-only,
+            // so a NULL is an explicit clear, not missing data. Copy the whole tuple or the stale
+            // rollout value would be written back during reconciliation.
+            self.git_sha = existing.git_sha.clone();
+            self.git_branch = existing.git_branch.clone();
+            self.git_origin_url = existing.git_origin_url.clone();
+            return;
+        }
         if existing.git_sha.is_some() {
             self.git_sha = existing.git_sha.clone();
         }
@@ -667,5 +679,20 @@ mod tests {
         row.history_mode = "future".to_string();
 
         assert!(ThreadMetadata::try_from(row).is_err());
+    }
+
+    #[test]
+    fn paginated_rollout_git_info_keeps_rollout_values_until_sqlite_mode_is_paginated() {
+        let mut reconciled = expected_thread_metadata(/*reasoning_effort*/ None);
+        reconciled.history_mode = ThreadHistoryMode::Paginated;
+        reconciled.git_sha = Some("rollout-sha".to_string());
+        reconciled.git_branch = Some("rollout-branch".to_string());
+        reconciled.git_origin_url = Some("rollout-origin".to_string());
+        let existing = expected_thread_metadata(/*reasoning_effort*/ None);
+        let expected = reconciled.clone();
+
+        reconciled.prefer_existing_git_info(&existing);
+
+        assert_eq!(reconciled, expected);
     }
 }

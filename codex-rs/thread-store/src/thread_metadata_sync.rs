@@ -11,6 +11,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::strip_user_message_prefix;
@@ -20,6 +21,7 @@ use crate::CreateThreadParams;
 use crate::GitInfoPatch;
 use crate::ResumeThreadParams;
 use crate::ThreadMetadataPatch;
+use crate::types::canonical_history_mode_from_rollout_items;
 
 const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -193,7 +195,16 @@ impl ThreadMetadataSync {
     }
 
     fn observe_resume_history(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
-        self.observe_items_with_update(items, ThreadMetadataPatch::default())
+        let mut update = self.observe_items_with_update(items, ThreadMetadataPatch::default())?;
+        if matches!(
+            canonical_history_mode_from_rollout_items(items),
+            ThreadHistoryMode::Paginated
+        ) {
+            // Paginated rollouts never append metadata-only SessionMeta updates. Do not reapply
+            // the initial Git tuple when resume history is flushed after the first append.
+            update.git_info = None;
+        }
+        Some(update)
     }
 
     fn observe_items_with_update(
@@ -661,6 +672,29 @@ mod tests {
             .is_some(),
             "the first append should flush resume metadata together with append metadata"
         );
+    }
+
+    #[test]
+    fn paginated_resume_history_does_not_reapply_initial_git_info() {
+        let thread_id = ThreadId::new();
+        let mut meta = session_meta(thread_id);
+        meta.meta.history_mode = ThreadHistoryMode::Paginated;
+        meta.git = Some(GitInfo {
+            commit_hash: None,
+            branch: Some("stale-branch".to_string()),
+            repository_url: None,
+        });
+        let sync = ThreadMetadataSync::for_resume(&resume_params(
+            thread_id,
+            vec![
+                RolloutItem::SessionMeta(meta),
+                RolloutItem::EventMsg(EventMsg::UserMessage(user_message("hello metadata"))),
+            ],
+        ));
+
+        let update = sync.take_pending_update().expect("pending metadata update");
+        assert_eq!(update.patch.git_info, None);
+        assert_eq!(update.patch.preview.as_deref(), Some("hello metadata"));
     }
 
     fn resume_params(thread_id: ThreadId, history: Vec<RolloutItem>) -> ResumeThreadParams {
