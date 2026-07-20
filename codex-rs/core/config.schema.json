@@ -56,12 +56,6 @@
           "description": "Whether to record a model-visible message when an agent turn is interrupted. Defaults to true.",
           "type": "boolean"
         },
-        "job_max_runtime_seconds": {
-          "description": "Default maximum runtime in seconds for agent job workers.",
-          "format": "uint64",
-          "minimum": 1.0,
-          "type": "integer"
-        },
         "max_concurrent_threads_per_session": {
           "description": "Maximum number of spawned agent threads that can be open concurrently per session. When unset, the selected multi-agent backend uses its default.",
           "format": "uint",

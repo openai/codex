@@ -341,10 +341,6 @@ fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_with
     let sources = [
         (SubAgentSource::Review, "review"),
         (SubAgentSource::Other("guardian".to_string()), "guardian"),
-        (
-            SubAgentSource::Other("agent_job:job-1".to_string()),
-            "agent_job:job-1",
-        ),
     ];
 
     for (subagent_source, subagent_kind) in sources {

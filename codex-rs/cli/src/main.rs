@@ -4040,6 +4040,16 @@ mod tests {
     }
 
     #[test]
+    fn feature_toggles_accept_removed_enable_fanout_flag() {
+        let toggles = FeatureToggles {
+            enable: vec!["enable_fanout".to_string()],
+            disable: Vec::new(),
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(overrides, vec!["features.enable_fanout=true".to_string(),]);
+    }
+
+    #[test]
     fn feature_toggles_unknown_feature_errors() {
         let toggles = FeatureToggles {
             enable: vec!["does_not_exist".to_string()],

@@ -183,7 +183,6 @@ fn save_config_resolved_fields(
     agents.default_subagent_model = config.agent_default_subagent_model.clone();
     agents.default_subagent_reasoning_effort =
         config.agent_default_subagent_reasoning_effort.clone();
-    agents.job_max_runtime_seconds = config.agent_job_max_runtime_seconds;
     agents.interrupt_message = Some(config.agent_interrupt_message_enabled);
 
     lock_config

@@ -1017,7 +1017,7 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
         (
             older_child_id,
             "2025-02-01T10:00:00Z",
-            CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-1".to_string())),
+            CoreSessionSource::SubAgent(SubAgentSource::Other("custom:worker-1".to_string())),
             "other_provider",
         ),
         (
@@ -1029,7 +1029,7 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
         (
             grandchild_id,
             "2025-02-01T12:00:00Z",
-            CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-2".to_string())),
+            CoreSessionSource::SubAgent(SubAgentSource::Other("custom:worker-2".to_string())),
             "mock_provider",
         ),
     ] {

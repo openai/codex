@@ -1,10 +1,3 @@
-use crate::AgentJob;
-use crate::AgentJobCreateParams;
-use crate::AgentJobItem;
-use crate::AgentJobItemCreateParams;
-use crate::AgentJobItemStatus;
-use crate::AgentJobProgress;
-use crate::AgentJobStatus;
 use crate::GOALS_DB_FILENAME;
 use crate::LOGS_DB_FILENAME;
 use crate::LogEntry;
@@ -25,7 +18,6 @@ use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
 use crate::migrations::runtime_state_migrator;
 use crate::migrations::runtime_thread_history_migrator;
-use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_millis;
@@ -54,7 +46,6 @@ use std::sync::atomic::AtomicI64;
 use std::time::Instant;
 use tracing::warn;
 
-mod agent_jobs;
 mod backfill;
 mod external_agent_config_imports;
 mod goals;

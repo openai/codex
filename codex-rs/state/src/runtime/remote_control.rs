@@ -330,7 +330,14 @@ mod tests {
             .await
             .expect("create codex home");
         let old_state_migrator = Migrator {
-            migrations: Cow::Owned(STATE_MIGRATOR.migrations[..36].to_vec()),
+            migrations: Cow::Owned(
+                STATE_MIGRATOR
+                    .migrations
+                    .iter()
+                    .filter(|migration| migration.version <= 36)
+                    .cloned()
+                    .collect(),
+            ),
             ignore_missing: false,
             locking: true,
             no_tx: false,

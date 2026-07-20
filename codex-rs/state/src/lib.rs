@@ -34,13 +34,6 @@ pub use audit::read_thread_state_audit_rows;
 /// Most consumers should prefer [`StateRuntime`].
 pub use extract::apply_rollout_item;
 pub use extract::rollout_item_affects_thread_metadata;
-pub use model::AgentJob;
-pub use model::AgentJobCreateParams;
-pub use model::AgentJobItem;
-pub use model::AgentJobItemCreateParams;
-pub use model::AgentJobItemStatus;
-pub use model::AgentJobProgress;
-pub use model::AgentJobStatus;
 pub use model::Anchor;
 pub use model::BackfillState;
 pub use model::BackfillStats;

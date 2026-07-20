@@ -30,8 +30,6 @@ use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::WriteStdinHandler;
-use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
-use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
 use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
@@ -67,8 +65,6 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -344,24 +340,6 @@ fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
         ),
         MultiAgentVersion::V2 => true,
     }
-}
-
-fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context
-        .config
-        .features
-        .get()
-        .enabled(Feature::SpawnCsv)
-        && collab_tools_enabled(turn_context)
-}
-
-fn agent_jobs_worker_tools_enabled(turn_context: &TurnContext) -> bool {
-    agent_jobs_tools_enabled(turn_context)
-        && matches!(
-            &turn_context.session_source,
-            SessionSource::SubAgent(SubAgentSource::Other(label))
-                if label.starts_with("agent_job:")
-        )
 }
 
 fn image_generation_available(turn_context: &TurnContext) -> bool {
@@ -868,13 +846,6 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
             planned_tools
                 .add_with_exposure(WaitAgentHandler::new(context.wait_agent_timeouts), exposure);
             planned_tools.add_with_exposure(CloseAgentHandler, exposure);
-        }
-    }
-
-    if agent_jobs_tools_enabled(turn_context) {
-        planned_tools.add(SpawnAgentsOnCsvHandler);
-        if agent_jobs_worker_tools_enabled(turn_context) {
-            planned_tools.add(ReportAgentJobResultHandler);
         }
     }
 }

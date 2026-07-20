@@ -152,7 +152,7 @@ pub enum Feature {
     MultiAgentV2,
     /// Removed compatibility flag retained as a no-op.
     MultiAgentMode,
-    /// Enable CSV-backed agent job tools.
+    /// Removed compatibility flag for the deleted agent-job tools.
     SpawnCsv,
     /// Enable apps.
     Apps,
@@ -555,9 +555,6 @@ impl Features {
     }
 
     pub fn normalize_dependencies(&mut self) {
-        if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
-            self.enable(Feature::Collab);
-        }
         if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
             self.enable(Feature::CodeMode);
         }
@@ -1061,7 +1058,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SpawnCsv,
         key: "enable_fanout",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
