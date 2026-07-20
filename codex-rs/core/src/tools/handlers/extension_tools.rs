@@ -429,11 +429,6 @@ mod tests {
     async fn image_generation_publication_preserves_extension_saved_path() {
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
         let expected_path = test_path_buf("/tmp/extension-claimed.png").abs();
-        let default_path = crate::stream_events_utils::image_generation_artifact_path(
-            &turn.config.codex_home,
-            &session.thread_id.to_string(),
-            "call-image",
-        );
         let emitter = CoreTurnItemEmitter {
             session: Arc::downgrade(&session),
             turn: Arc::downgrade(&turn),
@@ -498,6 +493,5 @@ mod tests {
 
         assert_eq!(started_item, expected_started_item);
         assert_eq!(completed_item, expected_completed_item);
-        assert!(!default_path.exists());
     }
 }

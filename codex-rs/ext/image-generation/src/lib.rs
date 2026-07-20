@@ -1,3 +1,4 @@
+mod artifact;
 mod backend;
 mod extension;
 mod tool;

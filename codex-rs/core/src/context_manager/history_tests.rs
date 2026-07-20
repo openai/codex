@@ -1047,7 +1047,6 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
         assistant_msg("session prefix item"),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
-        developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
         developer_msg(&format!(
             "{APPS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_APPS_INSTRUCTIONS"
         )),
@@ -1078,7 +1077,6 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
             assistant_msg("session prefix item"),
             user_input_text_msg("turn 1 user"),
             assistant_msg("turn 1 assistant"),
-            developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
         ]
     );
     assert_eq!(

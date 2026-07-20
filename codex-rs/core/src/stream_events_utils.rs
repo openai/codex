@@ -25,43 +25,11 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::state_db;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
 use tracing::warn;
-
-const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
-
-/// Returns the host-owned default artifact path for a generated image.
-pub fn image_generation_artifact_path(
-    codex_home: &AbsolutePathBuf,
-    session_id: &str,
-    call_id: &str,
-) -> AbsolutePathBuf {
-    let sanitize = |value: &str| {
-        let mut sanitized: String = value
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            sanitized = "generated_image".to_string();
-        }
-        sanitized
-    };
-
-    codex_home
-        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
-        .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
-}
 
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     let (without_citations, _) = strip_citations(text);
