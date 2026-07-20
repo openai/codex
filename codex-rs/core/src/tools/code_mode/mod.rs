@@ -21,6 +21,7 @@ use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
+use crate::audio_preparation::estimate_audio_token_count;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
@@ -269,7 +270,7 @@ fn truncate_code_mode_result(
         return truncated_items;
     }
 
-    truncate_function_output_items_with_policy(&items, policy)
+    truncate_function_output_items_with_policy(&items, policy, estimate_audio_token_count)
 }
 
 async fn call_nested_tool(
@@ -423,6 +424,20 @@ mod tests {
                     "0123456789…5 tokens truncated…0123456789"
                 )
                 .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn over_budget_audio_output_is_omitted() {
+        let items = vec![FunctionCallOutputContentItem::InputAudio {
+            audio_url: format!("data:audio/wav;base64,{}", "A".repeat(100)),
+        }];
+
+        assert_eq!(
+            truncate_code_mode_result(items, Some(5)),
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "[omitted 1 audio items ...]".to_string(),
             }]
         );
     }

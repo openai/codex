@@ -1,3 +1,4 @@
+use crate::audio_preparation::estimate_audio_token_count;
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
@@ -437,7 +438,7 @@ pub(crate) fn truncate_function_output_payload(
             FunctionCallOutputBody::Text(truncate_text(content, policy))
         }
         FunctionCallOutputBody::ContentItems(items) => FunctionCallOutputBody::ContentItems(
-            truncate_function_output_items_with_policy(items, policy),
+            truncate_function_output_items_with_policy(items, policy, estimate_audio_token_count),
         ),
     };
 
@@ -531,14 +532,18 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
                 .unwrap_or_default();
             let (image_payload_bytes, image_replacement_bytes) =
                 image_data_url_estimate_adjustment(item);
+            let (audio_payload_bytes, audio_replacement_bytes) =
+                audio_data_url_estimate_adjustment(item);
             let (encrypted_payload_bytes, encrypted_replacement_bytes) =
                 encrypted_function_output_estimate_adjustment(item);
-            // Replace raw base64 payload bytes with a per-image estimate.
+            // Replace raw base64 payload bytes with per-modality estimates.
             // We intentionally preserve the data URL prefix and JSON
             // wrapper bytes already included in `raw`.
             let raw = raw
                 .saturating_sub(image_payload_bytes)
-                .saturating_add(image_replacement_bytes);
+                .saturating_add(image_replacement_bytes)
+                .saturating_sub(audio_payload_bytes)
+                .saturating_add(audio_replacement_bytes);
             raw.saturating_sub(encrypted_payload_bytes)
                 .saturating_add(encrypted_replacement_bytes)
         }
@@ -551,6 +556,16 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
 /// We only discount payloads for `data:image/...;base64,...` URLs (case
 /// insensitive markers) and leave everything else at raw serialized size.
 fn parse_base64_image_data_url(url: &str) -> Option<&str> {
+    parse_base64_data_url(url, "image/")
+}
+
+/// Returns the base64 payload for inline audio data URLs that are eligible for
+/// token-estimation discounting.
+fn parse_base64_audio_data_url(url: &str) -> Option<&str> {
+    parse_base64_data_url(url, "audio/")
+}
+
+fn parse_base64_data_url<'a>(url: &'a str, media_type_prefix: &str) -> Option<&'a str> {
     if !url
         .get(.."data:".len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
@@ -561,15 +576,15 @@ fn parse_base64_image_data_url(url: &str) -> Option<&str> {
     let metadata = &url[..comma_index];
     let payload = &url[comma_index + 1..];
     // Parse the media type and parameters without decoding. This keeps the
-    // estimator cheap while ensuring we only apply the fixed-cost image
-    // heuristic to image-typed base64 data URLs.
+    // estimator cheap while ensuring we only apply modality heuristics to
+    // appropriately typed base64 data URLs.
     let metadata_without_scheme = &metadata["data:".len()..];
     let mut metadata_parts = metadata_without_scheme.split(';');
     let mime_type = metadata_parts.next().unwrap_or_default();
     let has_base64_marker = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
     if !mime_type
-        .get(.."image/".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+        .get(..media_type_prefix.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(media_type_prefix))
     {
         return None;
     }
@@ -652,6 +667,50 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
                         content_item
                     {
                         accumulate(image_url, *detail);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (payload_bytes, replacement_bytes)
+}
+
+/// Scans one response item for inline base64 audio data URLs and returns:
+/// - total base64 payload bytes to subtract from raw serialized size
+/// - total replacement byte estimate for those audio inputs
+fn audio_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
+    let mut payload_bytes = 0i64;
+    let mut replacement_bytes = 0i64;
+
+    let mut accumulate = |audio_url: &str| {
+        if let Some(payload_len) = parse_base64_audio_data_url(audio_url).map(str::len) {
+            payload_bytes =
+                payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
+            replacement_bytes = replacement_bytes.saturating_add(
+                i64::try_from(approx_bytes_for_tokens(estimate_audio_token_count(
+                    audio_url,
+                )))
+                .unwrap_or(i64::MAX),
+            );
+        }
+    };
+
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for content_item in content {
+                if let ContentItem::InputAudio { audio_url } = content_item {
+                    accumulate(audio_url);
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
+            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
+                for content_item in items {
+                    if let FunctionCallOutputContentItem::InputAudio { audio_url } = content_item {
+                        accumulate(audio_url);
                     }
                 }
             }

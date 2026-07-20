@@ -826,6 +826,24 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
     let ThreadReadResponse { thread, .. } = serde_json::from_value(result)?;
 
     assert_eq!(turn_user_texts(&thread.turns), vec!["history from store"]);
+    let [ThreadItem::UserMessage { content, .. }] = thread.turns[0].items.as_slice() else {
+        panic!("expected one user message item");
+    };
+    assert_eq!(
+        content,
+        &vec![
+            UserInput::Text {
+                text: "history from store".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Audio {
+                url: "https://example.com/recording.mp3".to_string(),
+            },
+            UserInput::LocalAudio {
+                path: "recording.wav".into(),
+            },
+        ]
+    );
 
     client.shutdown().await?;
     Ok(())
@@ -2276,6 +2294,8 @@ fn store_history_items() -> Vec<RolloutItem> {
             message: "history from store".to_string(),
             images: None,
             local_images: Vec::new(),
+            audio: Some(vec!["https://example.com/recording.mp3".to_string()]),
+            local_audio: vec!["recording.wav".into()],
             text_elements: Vec::new(),
             ..Default::default()
         },
