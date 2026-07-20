@@ -32,13 +32,15 @@ use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use codex_utils_output_truncation::truncate_text;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {
-    /// The oldest items are at the beginning of the vector.
-    items: Vec<ResponseItem>,
+    /// The oldest items are at the beginning of the vector. Snapshots share the vector until a
+    /// caller needs to mutate it, avoiding deep copies for read-only history consumers.
+    items: Arc<Vec<ResponseItem>>,
     /// Bumped whenever history is rewritten, such as compaction or rollback.
     history_version: u64,
     token_info: Option<TokenUsageInfo>,
@@ -60,7 +62,7 @@ pub(crate) struct ContextManager {
 impl ContextManager {
     pub(crate) fn new() -> Self {
         Self {
-            items: Vec::new(),
+            items: Arc::new(Vec::new()),
             history_version: 0,
             token_info: TokenUsageInfo::new_or_append(
                 &None, &None, /*model_context_window*/ None,
@@ -130,8 +132,8 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
-            self.items.push(processed);
+            let processed = Self::process_item(item_ref, policy);
+            Arc::make_mut(&mut self.items).push(processed);
         }
     }
 
@@ -140,7 +142,7 @@ impl ContextManager {
     /// is stripped from messages and tool outputs according to `input_modalities`.
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.normalize_history(input_modalities);
-        self.items
+        Arc::unwrap_or_clone(self.items)
     }
 
     /// Returns raw items in the history.
@@ -150,7 +152,7 @@ impl ContextManager {
 
     /// Returns raw items in the history and consumes the snapshot.
     pub(crate) fn into_raw_items(self) -> Vec<ResponseItem> {
-        self.items
+        Arc::unwrap_or_clone(self.items)
     }
 
     pub(crate) fn history_version(&self) -> u64 {
@@ -188,17 +190,18 @@ impl ContextManager {
         if !self.items.is_empty() {
             // Remove the oldest item (front of the list). Items are ordered from
             // oldest → newest, so index 0 is the first entry recorded.
-            let removed = self.items.remove(0);
+            let items = Arc::make_mut(&mut self.items);
+            let removed = items.remove(0);
             // If the removed item participates in a call/output pair, also remove
             // its corresponding counterpart to keep the invariants intact without
             // running a full normalization pass.
-            normalize::remove_corresponding_for(&mut self.items, &removed);
+            normalize::remove_corresponding_for(items, &removed);
             self.world_state_baseline = None;
         }
     }
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
-        self.items = items;
+        self.items = Arc::new(items);
         self.history_version = self.history_version.saturating_add(1);
         self.world_state_baseline = None;
     }
@@ -227,7 +230,7 @@ impl ContextManager {
         let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
         let Some(&first_instruction_turn_idx) = user_positions.first() else {
-            self.replace(snapshot);
+            self.replace(Arc::unwrap_or_clone(snapshot));
             return;
         };
 
@@ -323,20 +326,22 @@ impl ContextManager {
     /// 2. every output has a corresponding call entry
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
+        let items = Arc::make_mut(&mut self.items);
+
         // all function/tool calls must have a corresponding output
-        normalize::ensure_call_outputs_present(&mut self.items);
+        normalize::ensure_call_outputs_present(items);
 
         // all outputs must have a corresponding function/tool call
-        normalize::remove_orphan_outputs(&mut self.items);
+        normalize::remove_orphan_outputs(items);
 
         // strip images when model does not support them
-        normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
+        normalize::strip_images_when_unsupported(input_modalities, items);
 
         // strip audio when model does not support it
-        normalize::strip_audio_when_unsupported(input_modalities, &mut self.items);
+        normalize::strip_audio_when_unsupported(input_modalities, items);
     }
 
-    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
+    fn process_item(item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput {
