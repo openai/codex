@@ -1,3 +1,4 @@
+mod live_output;
 mod model;
 mod render;
 

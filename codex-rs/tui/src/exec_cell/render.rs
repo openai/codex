@@ -938,6 +938,33 @@ mod tests {
     }
 
     #[test]
+    fn truncated_live_output_preview_and_transcript_snapshot() {
+        let mut cell = new_active_exec_command(
+            "call-id".to_string(),
+            vec!["bash".into(), "-lc".into(), "echo output".into()],
+            Vec::new(),
+            ExecCommandSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        );
+        let hidden = "\x1b[2m".repeat(300_000);
+        let output = format!(
+            "\x1b[31mhead error that wraps onto the next row\x1b[0m{hidden}\x1b[32mtail output that also wraps\x1b[0m"
+        );
+        assert!(cell.append_output("call-id", &output));
+
+        let preview = cell.display_lines(/*width*/ 60);
+        cell.calls[0].start_time = None;
+        cell.mark_failed();
+        let transcript = cell.transcript_lines(/*width*/ 60);
+
+        insta::assert_debug_snapshot!(
+            "truncated_live_output_preview_and_transcript",
+            (preview, transcript)
+        );
+    }
+
+    #[test]
     fn command_truncation_ellipsis_does_not_include_transcript_hint() {
         let truncated = ExecCell::limit_lines_from_start(
             &[

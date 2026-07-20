@@ -1,0 +1,46 @@
+---
+source: tui/src/exec_cell/render.rs
+expression: "(preview, transcript)"
+---
+(
+    [
+        Line::from_iter([
+            Span::from("•").dim(),
+            Span::from(" "),
+            Span::from("Running").bold(),
+            Span::from(" "),
+            Span::from("echo").fg(Color::Rgb(137, 180, 250)),
+            Span::from(" output").fg(Color::Rgb(205, 214, 244)),
+        ]),
+        Line::from_iter([
+            Span::from("  └ ").dim(),
+            Span::from("head error that wraps onto the next row").red().dim(),
+            Span::from("... 1189804 bytes").fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim().not_bold().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out(),
+        ]),
+        Line::from_iter([
+            Span::from("    "),
+            Span::from("omitted ...").fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim().not_bold().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out(),
+            Span::from("tail output that also wraps").green().bg(Color::Reset).underline_color(Color::Reset).dim().not_bold().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out(),
+        ]),
+    ],
+    [
+        Line::from_iter([
+            Span::from("$ ").magenta(),
+            Span::from("echo").fg(Color::Rgb(137, 180, 250)),
+            Span::from(" output").fg(Color::Rgb(205, 214, 244)),
+        ]),
+        Line::from_iter([
+            Span::from("head error that wraps onto the next row").red(),
+            Span::from("... 1189804 bytes").fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).not_bold().not_dim().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out(),
+        ]),
+        Line::from_iter([
+            Span::from("omitted ...").fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).not_bold().not_dim().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out(),
+            Span::from("tail output that also wraps").green().bg(Color::Reset).underline_color(Color::Reset).dim().not_bold().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out(),
+        ]),
+        Line::from_iter([
+            Span::from("✗").red().bold(),
+            Span::from(" (1)"),
+            Span::from(" • 0ms").dim(),
+        ]),
+    ],
+)
