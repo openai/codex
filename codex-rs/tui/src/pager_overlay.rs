@@ -31,7 +31,7 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
-use crate::terminal_hyperlinks::visible_lines;
+use crate::terminal_hyperlinks::visible_lines_ref;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
@@ -408,7 +408,7 @@ impl Renderable for CellRenderable {
         } else {
             Style::default()
         };
-        let p = Paragraph::new(Text::from(visible_lines(hyperlink_lines.clone())))
+        let p = Paragraph::new(Text::from(visible_lines_ref(&hyperlink_lines)))
             .style(style)
             .wrap(Wrap { trim: false });
         p.render(area, buf);
@@ -426,14 +426,14 @@ struct HyperlinkLinesRenderable {
 
 impl Renderable for HyperlinkLinesRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from(visible_lines(self.lines.clone())))
+        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
             .wrap(Wrap { trim: false })
             .render(area, buf);
         mark_buffer_hyperlinks(buf, area, &self.lines, /*scroll_rows*/ 0);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(visible_lines(self.lines.clone())))
+        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
             .wrap(Wrap { trim: false })
             .line_count(width)
             .try_into()
