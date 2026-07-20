@@ -31,7 +31,6 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
-use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsGetMetadataParams;
@@ -71,9 +70,7 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::ProcessKillParams;
-use codex_app_server_protocol::ProcessResizePtyParams;
 use codex_app_server_protocol::ProcessSpawnParams;
-use codex_app_server_protocol::ProcessWriteStdinParams;
 use codex_app_server_protocol::RemoteControlClientsListParams;
 use codex_app_server_protocol::RemoteControlClientsRevokeParams;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
@@ -147,7 +144,6 @@ pub struct TestAppServer {
     pending_messages: VecDeque<JSONRPCMessage>,
     auto_env: Option<TestEnv>,
     json_logs: JsonLogCapture,
-    codex_home: PathBuf,
     // Fields drop in declaration order. Tear down the delayed child before
     // removing an owned CODEX_HOME that may still be its cwd on Windows.
     _delayed_exec_server: Option<(LocalWebsocketExecServer, WebsocketDelayInterposer)>,
@@ -205,31 +201,12 @@ impl TestAppServer {
         })
     }
 
-    /// Returns the effective CODEX_HOME used by the child app-server.
-    pub fn codex_home(&self) -> &Path {
-        &self.codex_home
-    }
-
     /// Waits for a JSON stderr event whose structured `event.name` field matches.
     pub async fn wait_for_json_log_event(
         &self,
         event_name: &str,
     ) -> anyhow::Result<serde_json::Value> {
         self.json_logs.wait_for_event(event_name).await
-    }
-
-    /// Waits for the requested number of JSON stderr events with the same `event.name` field.
-    pub async fn wait_for_json_log_events(
-        &self,
-        event_name: &str,
-        count: usize,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
-        self.json_logs.wait_for_events(event_name, count).await
-    }
-
-    /// Returns every stderr line parsed and validated as a JSON log event.
-    pub fn json_log_events(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-        self.json_logs.events()
     }
 
     async fn new_with_program_env_and_args(
@@ -300,7 +277,6 @@ impl TestAppServer {
             pending_messages: VecDeque::new(),
             auto_env: None,
             json_logs,
-            codex_home: codex_home.to_path_buf(),
             _delayed_exec_server: None,
             _owned_codex_home: None,
         })
@@ -459,15 +435,6 @@ impl TestAppServer {
         };
         self.send_login_account_request(serde_json::to_value(params)?)
             .await
-    }
-
-    /// Send a `feedback/upload` JSON-RPC request.
-    pub async fn send_feedback_upload_request(
-        &mut self,
-        params: FeedbackUploadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("feedback/upload", params).await
     }
 
     /// Send a `thread/start` JSON-RPC request.
@@ -1045,24 +1012,6 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("process/spawn", params).await
-    }
-
-    /// Send a `process/writeStdin` JSON-RPC request (v2).
-    pub async fn send_process_write_stdin_request(
-        &mut self,
-        params: ProcessWriteStdinParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("process/writeStdin", params).await
-    }
-
-    /// Send a `process/resizePty` JSON-RPC request (v2).
-    pub async fn send_process_resize_pty_request(
-        &mut self,
-        params: ProcessResizePtyParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("process/resizePty", params).await
     }
 
     /// Send a `process/kill` JSON-RPC request (v2).

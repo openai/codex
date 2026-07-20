@@ -4405,8 +4405,6 @@ dependencies = [
 name = "codex-utils-sandbox-summary"
 version = "0.0.0"
 dependencies = [
- "codex-core",
- "codex-model-provider-info",
  "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
@@ -8911,7 +8909,6 @@ dependencies = [
  "os_info",
  "pretty_assertions",
  "rmcp",
- "serde",
  "serde_json",
  "shlex",
  "tokio",

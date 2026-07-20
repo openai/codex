@@ -16,12 +16,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// Kill switch for the elevated sandbox NUX on Windows.
-///
-/// When false, revert to the previous sandbox NUX, which only
-/// prompts users to enable the legacy sandbox feature.
-pub const ELEVATED_SANDBOX_NUX_ENABLED: bool = true;
-
 pub trait WindowsSandboxLevelExt {
     fn from_config(config: &Config) -> WindowsSandboxLevel;
     fn from_features(features: &Features) -> WindowsSandboxLevel;
@@ -46,14 +40,6 @@ impl WindowsSandboxLevelExt for WindowsSandboxLevel {
             WindowsSandboxLevel::Disabled
         }
     }
-}
-
-pub fn windows_sandbox_level_from_config(config: &Config) -> WindowsSandboxLevel {
-    WindowsSandboxLevel::from_config(config)
-}
-
-pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandboxLevel {
-    WindowsSandboxLevel::from_features(features)
 }
 
 pub fn resolve_windows_sandbox_mode(cfg: &ConfigToml) -> Option<WindowsSandboxModeToml> {
@@ -110,38 +96,6 @@ pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
 #[cfg(not(target_os = "windows"))]
 pub fn sandbox_setup_is_complete(_codex_home: &Path) -> bool {
     false
-}
-
-#[cfg(target_os = "windows")]
-pub fn elevated_setup_failure_details(err: &anyhow::Error) -> Option<(String, String)> {
-    let failure = codex_windows_sandbox::extract_setup_failure(err)?;
-    let code = failure.code.as_str().to_string();
-    let message = codex_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message);
-    Some((code, message))
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn elevated_setup_failure_details(_err: &anyhow::Error) -> Option<(String, String)> {
-    None
-}
-
-#[cfg(target_os = "windows")]
-pub fn elevated_setup_failure_metric_name(err: &anyhow::Error) -> &'static str {
-    if codex_windows_sandbox::extract_setup_failure(err).is_some_and(|failure| {
-        matches!(
-            failure.code,
-            codex_windows_sandbox::SetupErrorCode::OrchestratorHelperLaunchCanceled
-        )
-    }) {
-        "codex.windows_sandbox.elevated_setup_canceled"
-    } else {
-        "codex.windows_sandbox.elevated_setup_failure"
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn elevated_setup_failure_metric_name(_err: &anyhow::Error) -> &'static str {
-    panic!("elevated_setup_failure_metric_name is only supported on Windows")
 }
 
 #[cfg(target_os = "windows")]
@@ -398,9 +352,11 @@ fn emit_windows_sandbox_setup_failure_metrics(
             let mut failure_tags: Vec<(&str, &str)> = vec![("originator", originator_tag)];
             let mut code_tag: Option<String> = None;
             let mut message_tag: Option<String> = None;
-            if let Some((code, message)) = elevated_setup_failure_details(_err) {
-                code_tag = Some(code);
-                message_tag = Some(message);
+            if let Some(failure) = codex_windows_sandbox::extract_setup_failure(_err) {
+                code_tag = Some(failure.code.as_str().to_string());
+                message_tag = Some(codex_windows_sandbox::sanitize_setup_metric_tag_value(
+                    &failure.message,
+                ));
             }
             if let Some(code) = code_tag.as_deref() {
                 failure_tags.push(("code", code));
@@ -408,11 +364,18 @@ fn emit_windows_sandbox_setup_failure_metrics(
             if let Some(message) = message_tag.as_deref() {
                 failure_tags.push(("message", message));
             }
-            let _ = metrics.counter(
-                elevated_setup_failure_metric_name(_err),
-                /*inc*/ 1,
-                &failure_tags,
-            );
+            let metric_name =
+                if codex_windows_sandbox::extract_setup_failure(_err).is_some_and(|failure| {
+                    matches!(
+                        failure.code,
+                        codex_windows_sandbox::SetupErrorCode::OrchestratorHelperLaunchCanceled
+                    )
+                }) {
+                    "codex.windows_sandbox.elevated_setup_canceled"
+                } else {
+                    "codex.windows_sandbox.elevated_setup_failure"
+                };
+            let _ = metrics.counter(metric_name, /*inc*/ 1, &failure_tags);
         }
     } else {
         let _ = metrics.counter(

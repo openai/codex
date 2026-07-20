@@ -1,5 +1,3 @@
-use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use rand::Rng;
@@ -20,6 +18,9 @@ const BACKOFF_FACTOR: f64 = 2.0;
 /// Example:
 ///
 /// ```rust
+/// let provider_id = "openai";
+/// let request_id = "req-123";
+///
 /// codex_core::feedback_tags!(model = "gpt-5", cached = true);
 /// codex_core::feedback_tags!(provider = provider_id, request_id = request_id);
 /// ```
@@ -94,14 +95,6 @@ pub(crate) fn error_or_panic(message: impl std::string::ToString) {
         panic!("{}", message.to_string());
     } else {
         error!("{}", message.to_string());
-    }
-}
-
-pub fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        path.clone()
-    } else {
-        base.join(path)
     }
 }
 

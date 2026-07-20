@@ -94,12 +94,6 @@ pub fn build_provider(
     })
 }
 
-/// Filter predicate for exporting only Codex-owned events via OTEL.
-/// Keeps events that originated from codex_otel module
-pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-    meta.target().starts_with("codex_otel")
-}
-
 pub fn record_process_start(otel: Option<&OtelProvider>, originator: &str) {
     let Some(metrics) = otel.and_then(OtelProvider::metrics) else {
         return;

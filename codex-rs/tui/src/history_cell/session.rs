@@ -71,13 +71,6 @@ fn with_border_internal(
     out
 }
 
-/// Return the emoji followed by a hair space (U+200A).
-/// Using only the hair space avoids excessive padding after the emoji while
-/// still providing a small visual gap across terminals.
-pub(crate) fn padded_emoji(emoji: &str) -> String {
-    format!("{emoji}\u{200A}")
-}
-
 #[derive(Debug)]
 struct TooltipHistoryCell {
     tip: String,
