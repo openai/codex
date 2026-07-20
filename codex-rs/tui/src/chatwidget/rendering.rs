@@ -3,7 +3,7 @@
 use super::*;
 
 impl ChatWidget {
-    pub(super) fn as_renderable(&self) -> RenderableItem<'_> {
+    pub(crate) fn as_renderable(&self) -> RenderableItem<'_> {
         let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
         let active_cell_renderable = match &self.transcript.active_cell {
             Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
@@ -48,42 +48,17 @@ impl ChatWidget {
         }
         flex.push(
             /*flex*/ 0,
-            RenderableItem::Owned(Box::new(BottomPaneComposerReserveRenderable {
-                bottom_pane: &self.bottom_pane,
-                right_reserve: active_cell_right_reserve,
-            }))
-            .inset(Insets::tlbr(
-                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-            )),
+            self.bottom_pane
+                .as_renderable_with_composer_right_reserve(active_cell_right_reserve)
+                .inset(Insets::tlbr(
+                    /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+                )),
         );
         RenderableItem::Owned(Box::new(flex))
     }
-}
 
-struct BottomPaneComposerReserveRenderable<'a> {
-    bottom_pane: &'a BottomPane,
-    right_reserve: u16,
-}
-
-impl Renderable for BottomPaneComposerReserveRenderable<'_> {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.bottom_pane
-            .render_with_composer_right_reserve(area, buf, self.right_reserve);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.bottom_pane
-            .desired_height_with_composer_right_reserve(width, self.right_reserve)
-    }
-
-    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.bottom_pane
-            .cursor_pos_with_composer_right_reserve(area, self.right_reserve)
-    }
-
-    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
-        self.bottom_pane
-            .cursor_style_with_composer_right_reserve(area, self.right_reserve)
+    pub(crate) fn note_rendered_width(&self, width: u16) {
+        self.last_rendered_width.set(Some(width as usize));
     }
 }
 
@@ -132,7 +107,7 @@ impl TranscriptAreaRenderable<'_> {
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
-        self.last_rendered_width.set(Some(area.width as usize));
+        self.note_rendered_width(area.width);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
