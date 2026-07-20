@@ -7,10 +7,10 @@ use super::*;
 
 impl ChatWidget {
     pub(super) fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_exec_approval(ev),
-            |s| s.handle_exec_approval_now(ev2),
+            ev,
+            InterruptManager::push_exec_approval,
+            Self::handle_exec_approval_now,
         );
     }
 
@@ -19,10 +19,10 @@ impl ChatWidget {
         _id: String,
         ev: ApplyPatchApprovalRequestEvent,
     ) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_apply_patch_approval(ev),
-            |s| s.handle_apply_patch_approval_now(ev2),
+            ev,
+            InterruptManager::push_apply_patch_approval,
+            Self::handle_apply_patch_approval_now,
         );
     }
 
@@ -256,27 +256,26 @@ impl ChatWidget {
         request_id: AppServerRequestId,
         params: McpServerElicitationRequestParams,
     ) {
-        let request_id2 = request_id.clone();
-        let params2 = params.clone();
         self.defer_or_handle(
-            |q| q.push_elicitation(request_id, params),
-            |s| s.handle_elicitation_request_now(request_id2, params2),
+            (request_id, params),
+            |q, (request_id, params)| q.push_elicitation(request_id, params),
+            |s, (request_id, params)| s.handle_elicitation_request_now(request_id, params),
         );
     }
 
     pub(super) fn on_request_user_input(&mut self, ev: ToolRequestUserInputParams) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_user_input(ev),
-            |s| s.handle_request_user_input_now(ev2),
+            ev,
+            InterruptManager::push_user_input,
+            Self::handle_request_user_input_now,
         );
     }
 
     pub(super) fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
-        let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_request_permissions(ev),
-            |s| s.handle_request_permissions_now(ev2),
+            ev,
+            InterruptManager::push_request_permissions,
+            Self::handle_request_permissions_now,
         );
     }
 
@@ -310,12 +309,13 @@ impl ChatWidget {
     pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
 
+        let changed_paths = ev.changes.keys().cloned().collect();
         let request = ApprovalRequest::ApplyPatch(ApplyPatchApprovalRequest {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             id: ev.call_id,
             reason: ev.reason,
-            changes: ev.changes.clone(),
+            changes: ev.changes,
             cwd: self.config.cwd.clone(),
         });
         self.bottom_pane
@@ -327,7 +327,7 @@ impl ChatWidget {
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.to_path_buf(),
-            changes: ev.changes.keys().cloned().collect(),
+            changes: changed_paths,
         });
     }
 
@@ -354,7 +354,7 @@ impl ChatWidget {
         } else if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
             thread_id,
             request_id.clone(),
-            params.clone(),
+            &params,
         ) {
             self.bottom_pane
                 .push_mcp_server_elicitation_request(request);
