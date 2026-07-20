@@ -202,6 +202,11 @@ pub struct ConnectorMetadata {
     pub name: String,
     pub description: Option<String>,
     pub icon_url: Option<String>,
+    pub icon_url_dark: Option<String>,
+    pub distribution_channel: Option<String>,
+    pub install_url: Option<String>,
+    #[serde(default)]
+    pub plugin_display_names: Vec<String>,
     pub tool_summaries: Option<Vec<AppToolSummary>>,
 }
 

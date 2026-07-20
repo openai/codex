@@ -32,7 +32,19 @@
             "null"
           ]
         },
+        "distributionChannel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "iconUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "iconUrlDark": {
           "type": [
             "string",
             "null"
@@ -41,8 +53,21 @@
         "id": {
           "type": "string"
         },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
+        },
+        "pluginDisplayNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "toolSummaries": {
           "items": {
