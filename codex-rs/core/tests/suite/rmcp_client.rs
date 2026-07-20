@@ -2453,7 +2453,7 @@ async fn streamable_http_chatgpt_auth_is_not_sent_to_configured_origin() -> anyh
     let server = responses::start_mock_server().await;
     let untrusted_server = MockServer::start().await;
     let untrusted_apps = AppsTestServer::mount(&untrusted_server).await?;
-    let untrusted_mcp_url = format!("{}/api/codex/apps", untrusted_apps.chatgpt_base_url);
+    let untrusted_mcp_url = format!("{}/api/codex/ps/mcp", untrusted_apps.chatgpt_base_url);
     let untrusted_chatgpt_base_url = untrusted_apps.chatgpt_base_url;
 
     let fixture = test_codex()
@@ -2484,7 +2484,7 @@ async fn streamable_http_chatgpt_auth_is_not_sent_to_configured_origin() -> anyh
         .await
         .expect("mock server should capture MCP startup requests")
         .into_iter()
-        .filter(|request| request.url.path() == "/api/codex/apps")
+        .filter(|request| request.url.path() == "/api/codex/ps/mcp")
         .filter_map(|request| {
             let body: Value = serde_json::from_slice(&request.body).ok()?;
             let method = body.get("method")?.as_str()?.to_string();
@@ -2516,7 +2516,7 @@ async fn configured_chatgpt_base_url_does_not_grant_mcp_chatgpt_auth() -> anyhow
     let server = responses::start_mock_server().await;
     let untrusted_server = MockServer::start().await;
     let untrusted_apps = AppsTestServer::mount(&untrusted_server).await?;
-    let untrusted_mcp_url = format!("{}/api/codex/apps", untrusted_apps.chatgpt_base_url);
+    let untrusted_mcp_url = format!("{}/api/codex/ps/mcp", untrusted_apps.chatgpt_base_url);
     let untrusted_chatgpt_base_url = untrusted_apps.chatgpt_base_url;
 
     let fixture = test_codex()
@@ -2545,7 +2545,7 @@ auth = "chatgpt"
         .await
         .expect("mock server should capture MCP startup requests")
         .into_iter()
-        .filter(|request| request.url.path() == "/api/codex/apps")
+        .filter(|request| request.url.path() == "/api/codex/ps/mcp")
         .filter_map(|request| {
             let body: Value = serde_json::from_slice(&request.body).ok()?;
             let method = body.get("method")?.as_str()?.to_string();

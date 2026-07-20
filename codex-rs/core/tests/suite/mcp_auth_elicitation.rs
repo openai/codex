@@ -77,7 +77,7 @@ async fn codex_apps_auth_failure_requests_elicitation_by_default() -> Result<()>
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount_searchable(&server).await?;
     Mock::given(method("POST"))
-        .and(path_regex("^/api/codex/apps/?$"))
+        .and(path_regex("^/api/codex/ps/mcp/?$"))
         .and(body_partial_json(json!({
             "method": "tools/call",
             "params": {
