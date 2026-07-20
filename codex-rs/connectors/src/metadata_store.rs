@@ -16,14 +16,16 @@ pub struct ConnectorToolSummary {
 /// Metadata returned by the app batch-read API.
 ///
 /// This intentionally excludes connector runtime state, full actions, and model descriptions.
-/// Tool summaries contain display text only, and the icon URL is already projected as a public
-/// URL by the backend.
+/// Tool summaries contain display text only, and icon URLs are already projected as public URLs by
+/// the backend.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorMetadata {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub icon_url: Option<String>,
+    pub icon_url_dark: Option<String>,
+    pub distribution_channel: Option<String>,
     pub tool_summaries: Option<Vec<ConnectorToolSummary>>,
 }
 

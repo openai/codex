@@ -12,6 +12,7 @@ use codex_connectors::AppReview;
 use codex_connectors::AppScreenshot;
 use codex_connectors::ConnectorMetadata;
 use codex_connectors::ConnectorToolSummary;
+use codex_connectors::metadata::connector_install_url;
 
 /// Converts connector-domain app metadata owned by `codex-connectors` into the app-server wire
 /// type owned by `codex-app-server-protocol`.
@@ -59,20 +60,27 @@ pub(crate) fn app_info_to_api(app: AppInfo) -> ApiAppInfo {
 /// Converts metadata-only connector data into the app-server wire type.
 ///
 /// Keeping this separate from app_info_to_api makes it impossible for app/read to accidentally
-/// grow runtime state from the broader app/list shape.
+/// expose full runtime tool state from the broader app/list path.
 pub(crate) fn connector_metadata_to_api(metadata: ConnectorMetadata) -> ApiConnectorMetadata {
     let ConnectorMetadata {
         id,
         name,
         description,
         icon_url,
+        icon_url_dark,
+        distribution_channel,
         tool_summaries,
     } = metadata;
+    let install_url = Some(connector_install_url(&name, &id));
     ApiConnectorMetadata {
         id,
         name,
         description,
         icon_url,
+        icon_url_dark,
+        distribution_channel,
+        install_url,
+        plugin_display_names: Vec::new(),
         tool_summaries: tool_summaries.map(|tools| {
             tools
                 .into_iter()

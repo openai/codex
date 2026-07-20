@@ -10,6 +10,8 @@ fn metadata(id: &str) -> ConnectorMetadata {
         name: format!("{id} name"),
         description: None,
         icon_url: None,
+        icon_url_dark: None,
+        distribution_channel: None,
         tool_summaries: None,
     }
 }
