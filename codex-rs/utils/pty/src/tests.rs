@@ -7,10 +7,6 @@ use crate::ProcessDriver;
 use crate::SpawnedProcess;
 use crate::TerminalSize;
 use crate::combine_output_receivers;
-#[cfg(unix)]
-use crate::pipe::spawn_process_no_stdin_with_inherited_fds;
-#[cfg(unix)]
-use crate::pty::spawn_process_with_inherited_fds;
 use crate::spawn_from_driver;
 use crate::spawn_pipe_process;
 use crate::spawn_pipe_process_no_stdin;
@@ -365,6 +361,7 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
         &env_map,
         &None,
         TerminalSize::default(),
+        &[],
     )
     .await?;
     let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
@@ -421,7 +418,7 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
         )
     };
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None, &[]).await?;
     let (session, output_rx, exit_rx) = combine_spawned_output(spawned);
     let writer = session.writer_sender();
     let newline = if cfg!(windows) { "\r\n" } else { "\n" };
@@ -454,7 +451,7 @@ async fn pipe_process_detaches_from_parent_session() -> anyhow::Result<()> {
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let script = "echo $$; sleep 0.2";
     let (program, args) = shell_command(script);
-    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None, &[]).await?;
 
     let (_session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
     let pid_bytes =
@@ -493,8 +490,15 @@ async fn pipe_and_pty_share_interface() -> anyhow::Result<()> {
     let (pipe_program, pipe_args) = shell_command(&echo_sleep_command("pipe_ok"));
     let (pty_program, pty_args) = shell_command(&echo_sleep_command("pty_ok"));
 
-    let pipe =
-        spawn_pipe_process(&pipe_program, &pipe_args, Path::new("."), &env_map, &None).await?;
+    let pipe = spawn_pipe_process(
+        &pipe_program,
+        &pipe_args,
+        Path::new("."),
+        &env_map,
+        &None,
+        &[],
+    )
+    .await?;
     let pty = spawn_pty_process(
         &pty_program,
         &pty_args,
@@ -502,6 +506,7 @@ async fn pipe_and_pty_share_interface() -> anyhow::Result<()> {
         &env_map,
         &None,
         TerminalSize::default(),
+        &[],
     )
     .await?;
     let (_pipe_session, pipe_output_rx, pipe_exit_rx) = combine_spawned_output(pipe);
@@ -537,7 +542,7 @@ async fn pipe_drains_stderr_without_stdout_activity() -> anyhow::Result<()> {
     let script = "import sys\nchunk = 'E' * 65536\nfor _ in range(64):\n    sys.stderr.write(chunk)\n    sys.stderr.flush()\n";
     let args = vec!["-c".to_string(), script.to_string()];
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pipe_process(&python, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pipe_process(&python, &args, Path::new("."), &env_map, &None, &[]).await?;
     let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
 
     let (output, code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
@@ -553,7 +558,7 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let (program, args) = shell_command(&split_stdout_stderr_command());
     let spawned =
-        spawn_pipe_process_no_stdin(&program, &args, Path::new("."), &env_map, &None).await?;
+        spawn_pipe_process_no_stdin(&program, &args, Path::new("."), &env_map, &None, &[]).await?;
     let SpawnedProcess {
         session: _session,
         stdout_rx,
@@ -747,7 +752,7 @@ async fn pipe_terminate_aborts_detached_readers() -> anyhow::Result<()> {
     let script =
         "setsid sh -c 'i=0; while [ $i -lt 200 ]; do echo tick; sleep 0.01; i=$((i+1)); done' &";
     let (program, args) = shell_command(script);
-    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None, &[]).await?;
     let (session, mut output_rx, _exit_rx) = combine_spawned_output(spawned);
 
     let _ = tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv())
@@ -787,6 +792,7 @@ async fn pty_terminate_kills_background_children_in_same_process_group() -> anyh
         &env_map,
         &None,
         TerminalSize::default(),
+        &[],
     )
     .await?;
     let (session, mut output_rx, _exit_rx) = combine_spawned_output(spawned);
@@ -841,7 +847,7 @@ async fn pty_spawn_can_preserve_inherited_fds() -> anyhow::Result<()> {
     );
 
     let script = "printf __preserved__ >\"/dev/fd/$PRESERVED_FD\"";
-    let spawned = spawn_process_with_inherited_fds(
+    let spawned = spawn_pty_process(
         "/bin/sh",
         &["-c".to_string(), script.to_string()],
         Path::new("."),
@@ -893,7 +899,7 @@ async fn pty_preserving_inherited_fds_keeps_python_repl_running() -> anyhow::Res
         preserved_fd.as_raw_fd().to_string(),
     );
 
-    let spawned = spawn_process_with_inherited_fds(
+    let spawned = spawn_pty_process(
         &python,
         &[],
         Path::new("."),
@@ -959,7 +965,7 @@ async fn pty_spawn_with_inherited_fds_reports_exec_failures() -> anyhow::Result<
     let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
 
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawn_result = spawn_process_with_inherited_fds(
+    let spawn_result = spawn_pty_process(
         "/definitely/missing/command",
         &[],
         Path::new("."),
@@ -1008,7 +1014,7 @@ async fn pty_spawn_with_inherited_fds_supports_resize() -> anyhow::Result<()> {
 
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let script = "stty -echo; printf 'start:%s\\n' \"$(stty size)\"; IFS= read _line; printf 'after:%s\\n' \"$(stty size)\"";
-    let spawned = spawn_process_with_inherited_fds(
+    let spawned = spawn_pty_process(
         "/bin/sh",
         &["-c".to_string(), script.to_string()],
         Path::new("."),
@@ -1079,7 +1085,7 @@ async fn pipe_spawn_no_stdin_can_preserve_inherited_fds() -> anyhow::Result<()> 
     );
 
     let script = "printf __pipe_preserved__ >\"/dev/fd/$PRESERVED_FD\"";
-    let spawned = spawn_process_no_stdin_with_inherited_fds(
+    let spawned = spawn_pipe_process_no_stdin(
         "/bin/sh",
         &["-c".to_string(), script.to_string()],
         Path::new("."),

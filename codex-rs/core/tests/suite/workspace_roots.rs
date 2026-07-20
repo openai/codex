@@ -5,6 +5,8 @@ use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_path_uri::PathUri;
+#[cfg(windows)]
+use core_test_support::PathExt;
 use core_test_support::TestTargetOs;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
@@ -15,7 +17,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_target_windows;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_target_os;
@@ -36,12 +38,19 @@ fn workspace_roots_profile() -> PermissionProfile {
 
 async fn workspace_roots_test(server: &MockServer) -> Result<TestCodex> {
     let mut builder = test_codex().with_config(|config| {
+        #[cfg(windows)]
+        {
+            config.cwd = dunce::canonicalize(config.cwd.as_path())
+                .expect("test workspace should be canonicalizable")
+                .abs();
+        }
         config.use_experimental_unified_exec_tool = true;
         config
             .features
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
         config.workspace_roots = vec![config.cwd.clone()];
+        config.set_windows_sandbox_enabled(/*value*/ true);
     });
     builder.build_with_auto_env(server).await
 }
@@ -60,10 +69,7 @@ fn command_arguments(path: &str, contents: &str) -> Result<String> {
         TestTargetOs::Linux | TestTargetOs::MacOs => {
             ("bash", format!("printf %s '{contents}' > '{path}'"))
         }
-        TestTargetOs::Windows => (
-            "powershell",
-            format!("Set-Content -NoNewline -Path '{path}' -Value '{contents}'"),
-        ),
+        TestTargetOs::Windows => ("cmd", format!("echo {contents}>{path}")),
     };
     Ok(serde_json::to_string(&json!({
         "cmd": command,
@@ -134,9 +140,9 @@ async fn workspace_roots_allow_file_and_command_writes() -> Result<()> {
     const PATCH_CONTENTS: &str = "workspace root patch access";
     const COMMAND_CONTENTS: &str = "workspace root command access";
 
-    skip_if_target_windows!(
+    skip_if_wine_exec!(
         Ok(()),
-        "sandboxed process launch is not supported by the exec-server Windows backend"
+        "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
     );
 
     let server = start_mock_server().await;
@@ -173,7 +179,10 @@ async fn workspace_roots_allow_file_and_command_writes() -> Result<()> {
         read_file(&test, &patch_path).await?,
         format!("{PATCH_CONTENTS}\n")
     );
-    assert_eq!(read_file(&test, &command_path).await?, COMMAND_CONTENTS);
+    assert_eq!(
+        read_file(&test, &command_path).await?.trim_end(),
+        COMMAND_CONTENTS
+    );
 
     remove_files(&test, &[&patch_path, &command_path]).await
 }
@@ -183,19 +192,24 @@ async fn workspace_roots_deny_file_and_command_writes_outside_roots() -> Result<
     const PATCH_CONTENTS: &str = "outside workspace root patch";
     const COMMAND_CONTENTS: &str = "outside workspace root command";
 
-    skip_if_target_windows!(
+    skip_if_wine_exec!(
         Ok(()),
-        "sandboxed process launch is not supported by the exec-server Windows backend"
+        "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
     );
 
     let server = start_mock_server().await;
     let test = workspace_roots_test(&server).await?;
     let patch_path = outside_workspace_path(&test, "outside-patch.txt")?;
     let command_path = outside_workspace_path(&test, "outside-command.txt")?;
-    let patch_path_display = patch_path.inferred_native_path_string();
+    let patch_relative_path = format!(
+        "../{}",
+        patch_path
+            .basename()
+            .context("outside patch path should have a file name")?
+    );
     let command_path_display = command_path.inferred_native_path_string();
     let patch = format!(
-        "*** Begin Patch\n*** Add File: {patch_path_display}\n+{PATCH_CONTENTS}\n*** End Patch\n"
+        "*** Begin Patch\n*** Add File: {patch_relative_path}\n+{PATCH_CONTENTS}\n*** End Patch\n"
     );
 
     let response_mock =
@@ -222,8 +236,9 @@ async fn workspace_roots_deny_file_and_command_writes_outside_roots() -> Result<
         .context("denied command result should be present")?;
     let command_output = command_output.context("denied command output should be present")?;
     assert!(
-        command_output.contains(&command_path_display),
-        "denied command output should identify {command_path_display}, got {command_output:?}"
+        command_output.contains("Access is denied")
+            || command_output.contains(&command_path_display),
+        "outside command should be denied, got {command_output:?}"
     );
     assert!(
         test.fs()

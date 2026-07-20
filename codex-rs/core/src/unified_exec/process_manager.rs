@@ -1004,92 +1004,6 @@ impl UnifiedExecProcessManager {
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
-        #[cfg(target_os = "windows")]
-        if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-            // TODO(anp): Keep PathUri through the Windows sandbox launch boundary.
-            let native_cwd =
-                request
-                    .cwd
-                    .to_abs_path()
-                    .map_err(|_| UnifiedExecError::ForeignPath {
-                        path: request.cwd.clone(),
-                    })?;
-            let codex_home = crate::config::find_codex_home().map_err(|err| {
-                UnifiedExecError::create_process(format!(
-                    "windows sandbox: failed to resolve codex_home: {err}"
-                ))
-            })?;
-            let additional_deny_write_paths = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .map(|overrides| overrides.additional_deny_write_paths.clone())
-                .unwrap_or_default();
-            let additional_deny_read_paths = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .map(|overrides| overrides.additional_deny_read_paths.clone())
-                .unwrap_or_default();
-            let elevated_read_roots_override = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.read_roots_override.clone());
-            let elevated_read_roots_include_platform_defaults = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
-            let elevated_write_roots_override = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.write_roots_override.clone());
-            let spawned = match request.windows_sandbox_level {
-                codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile(
-                        &request.permission_profile,
-                        request.windows_sandbox_workspace_roots.as_slice(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        native_cwd.as_path(),
-                        request.env.clone(),
-                        request.network.is_some(),
-                        None,
-                        elevated_read_roots_override.as_deref(),
-                        elevated_read_roots_include_platform_defaults,
-                        elevated_write_roots_override.as_deref(),
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
-                | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
-                        &request.permission_profile,
-                        request.windows_sandbox_workspace_roots.as_slice(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        native_cwd.as_path(),
-                        request.env.clone(),
-                        None,
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-            };
-            spawn_lifecycle.after_spawn();
-            return UnifiedExecProcess::from_spawned(
-                spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
-                request.sandbox,
-                spawn_lifecycle,
-            )
-            .await;
-        }
         if environment.is_remote() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(
@@ -1114,35 +1028,39 @@ impl UnifiedExecProcessManager {
                 path: request.cwd.clone(),
             })?;
 
-        let (program, args) = request
-            .command
-            .split_first()
-            .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let spawn_result = if tty {
-            codex_utils_pty::pty::spawn_process_with_inherited_fds(
-                program,
-                args,
-                native_cwd.as_path(),
-                &request.env,
-                &request.arg0,
-                codex_utils_pty::TerminalSize::default(),
-                &inherited_fds,
-            )
-            .await
+        if request.command.is_empty() {
+            return Err(UnifiedExecError::MissingCommandLine);
+        }
+        let windows_sandbox = if request.sandbox
+            == codex_sandboxing::SandboxType::WindowsRestrictedToken
+        {
+            Some(codex_sandboxing::WindowsSandboxSpawnRequest {
+                permission_profile: &request.permission_profile,
+                workspace_roots: &request.windows_sandbox_workspace_roots,
+                windows_sandbox_level: request.windows_sandbox_level,
+                proxy_enforced: request.network.is_some(),
+                proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+                filesystem_overrides: request.windows_sandbox_filesystem_overrides.as_ref(),
+                use_private_desktop: request.windows_sandbox_private_desktop,
+            })
         } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
-                program,
-                args,
-                native_cwd.as_path(),
-                &request.env,
-                &request.arg0,
-                &inherited_fds,
-            )
-            .await
+            None
         };
+        let spawn_result = codex_sandboxing::spawn_process(codex_sandboxing::SpawnRequest {
+            command: &request.command,
+            cwd: native_cwd.as_path(),
+            env: &request.env,
+            arg0: &request.arg0,
+            sandbox: request.sandbox,
+            windows_sandbox,
+            tty,
+            stdin_open: tty,
+            inherited_fds: &inherited_fds,
+        })
+        .await;
+        spawn_lifecycle.after_spawn();
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        spawn_lifecycle.after_spawn();
         UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
     }
 

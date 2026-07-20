@@ -3870,6 +3870,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "codex-utils-path-uri",
+ "codex-utils-pty",
  "codex-windows-sandbox",
  "dunce",
  "libc",

@@ -13,13 +13,14 @@ use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteStatus;
+use codex_protocol::config_types::WindowsSandboxLevel;
 #[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
 #[cfg(unix)]
@@ -34,6 +35,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 #[cfg(unix)]
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -699,6 +701,65 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
     Ok(())
 }
 
+async fn assert_remote_windows_sandbox_process_write() -> Result<()> {
+    let context = create_process_context(/*use_remote*/ true).await?;
+    let workspace = TempDir::new()?;
+    let blocked_file = workspace.path().join("blocked.txt");
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let mut sandbox = FileSystemSandboxContext::from_legacy_sandbox_policy(
+        SandboxPolicy::new_read_only_policy(),
+        cwd.clone(),
+    )?;
+    sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+
+    let session = match context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-windows-sandbox-stdin"),
+            argv: vec![
+                r"C:\Windows\System32\cmd.exe".to_string(),
+                "/D".to_string(),
+                "/V:ON".to_string(),
+                "/S".to_string(),
+                "/C".to_string(),
+                format!(
+                    "set /P line= & echo blocked > \"{}\" & echo from-stdin:!line!",
+                    blocked_file.display()
+                ),
+            ],
+            cwd,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: true,
+            arg0: None,
+            sandbox: Some(sandbox),
+            enforce_managed_network: false,
+            managed_network: None,
+            network_proxy: None,
+        })
+        .await
+    {
+        Ok(session) => session,
+        Err(err) => return Err(err.into()),
+    };
+
+    let write_response = session.process.write(b"hello\n".to_vec()).await?;
+    assert_eq!(write_response.status, WriteStatus::Accepted);
+    let StartedExecProcess { process, .. } = session;
+    let wake_rx = process.subscribe_wake();
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+
+    assert!(
+        output.contains("from-stdin:hello"),
+        "unexpected output: {output:?}"
+    );
+    assert_eq!(exit_code, Some(0));
+    assert!(closed);
+    assert!(!blocked_file.exists());
+    Ok(())
+}
+
 async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
     let process_id = "proc-stdin-closed".to_string();
@@ -1096,6 +1157,13 @@ async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_write_then_read_without_tty(use_remote: bool) -> Result<()> {
     assert_exec_process_write_then_read_without_tty(use_remote).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(not(windows), ignore = "Windows-only exec-server sandbox process test")]
+#[serial_test::serial(remote_exec_server)]
+async fn remote_windows_sandbox_process_accepts_process_write() -> Result<()> {
+    assert_remote_windows_sandbox_process_write().await
 }
 
 #[test_case(false ; "local")]

@@ -263,31 +263,31 @@ async fn spawn_process_with_stdin_mode(
     })
 }
 
-/// Spawn a process using regular pipes (no PTY), returning handles for stdin, split output, and exit.
+/// Spawn a process using regular pipes and preserve selected inherited file
+/// descriptors across exec on Unix.
 pub async fn spawn_process(
     program: &str,
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
     arg0: &Option<String>,
+    inherited_fds: &[i32],
 ) -> Result<SpawnedProcess> {
-    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped, &[]).await
-}
-
-/// Spawn a process using regular pipes, but close stdin immediately.
-pub async fn spawn_process_no_stdin(
-    program: &str,
-    args: &[String],
-    cwd: &Path,
-    env: &HashMap<String, String>,
-    arg0: &Option<String>,
-) -> Result<SpawnedProcess> {
-    spawn_process_no_stdin_with_inherited_fds(program, args, cwd, env, arg0, &[]).await
+    spawn_process_with_stdin_mode(
+        program,
+        args,
+        cwd,
+        env,
+        arg0,
+        PipeStdinMode::Piped,
+        inherited_fds,
+    )
+    .await
 }
 
 /// Spawn a process using regular pipes, close stdin immediately, and preserve
 /// selected inherited file descriptors across exec on Unix.
-pub async fn spawn_process_no_stdin_with_inherited_fds(
+pub async fn spawn_process_no_stdin(
     program: &str,
     args: &[String],
     cwd: &Path,
