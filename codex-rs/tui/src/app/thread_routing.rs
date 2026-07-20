@@ -279,7 +279,7 @@ impl App {
                     McpServerElicitationFormRequest::from_app_server_request(
                         thread_id,
                         request_id.clone(),
-                        params.clone(),
+                        params,
                     )
                 {
                     Some(ThreadInteractiveRequest::McpServerElicitation(request))

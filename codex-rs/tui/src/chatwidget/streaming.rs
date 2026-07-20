@@ -396,19 +396,21 @@ impl ChatWidget {
         self.interrupts = mgr;
     }
 
+    /// Move a lifecycle payload into the interrupt queue or its immediate handler.
     #[inline]
-    pub(super) fn defer_or_handle(
+    pub(super) fn defer_or_handle<T>(
         &mut self,
-        push: impl FnOnce(&mut InterruptManager),
-        handle: impl FnOnce(&mut Self),
+        payload: T,
+        push: impl FnOnce(&mut InterruptManager, T),
+        handle: impl FnOnce(&mut Self, T),
     ) {
         // Preserve deterministic FIFO across queued interrupts: once anything
         // is queued due to an active write cycle, continue queueing until the
         // queue is flushed to avoid reordering (e.g., ExecEnd before ExecBegin).
         if self.stream_controller.is_some() || !self.interrupts.is_empty() {
-            push(&mut self.interrupts);
+            push(&mut self.interrupts, payload);
         } else {
-            handle(self);
+            handle(self, payload);
         }
     }
 

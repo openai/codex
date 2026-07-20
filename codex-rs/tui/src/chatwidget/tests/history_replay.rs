@@ -1136,6 +1136,64 @@ async fn replayed_in_progress_mcp_tool_call_stays_active() {
 }
 
 #[tokio::test]
+async fn deferred_mcp_lifecycle_events_keep_fifo_after_stream_finishes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
+        /*width*/ Some(80),
+        cwd.as_path(),
+        chat.history_render_mode(),
+    ));
+
+    chat.on_mcp_tool_call_started(AppServerThreadItem::McpToolCall {
+        id: "mcp-deferred".to_string(),
+        server: "copilot-bridge".to_string(),
+        tool: "copilot".to_string(),
+        status: codex_app_server_protocol::McpToolCallStatus::InProgress,
+        arguments: json!({"action": "wait"}),
+        app_context: None,
+        mcp_app_resource_uri: None,
+        plugin_id: None,
+        result: None,
+        error: None,
+        duration_ms: None,
+    });
+    assert!(!chat.interrupts.is_empty());
+
+    chat.stream_controller = None;
+    chat.on_mcp_tool_call_completed(AppServerThreadItem::McpToolCall {
+        id: "mcp-deferred".to_string(),
+        server: "copilot-bridge".to_string(),
+        tool: "copilot".to_string(),
+        status: codex_app_server_protocol::McpToolCallStatus::Completed,
+        arguments: json!({"action": "wait"}),
+        app_context: None,
+        mcp_app_resource_uri: None,
+        plugin_id: None,
+        result: Some(Box::new(codex_app_server_protocol::McpToolCallResult {
+            content: vec![json!({"type": "text", "text": "deferred result"})],
+            structured_content: None,
+            meta: None,
+        })),
+        error: None,
+        duration_ms: Some(5),
+    });
+
+    assert!(!chat.interrupts.is_empty());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.flush_interrupt_queue();
+
+    assert!(chat.interrupts.is_empty());
+    assert!(chat.transcript.active_cell.is_none());
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(rendered.contains("deferred result"), "{rendered}");
+}
+
+#[tokio::test]
 async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
