@@ -166,6 +166,10 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         "output hint should identify the path the extension saved"
     );
     assert!(
+        output_hint.contains("already displayed to the user"),
+        "output hint should tell the model not to repeat the generated image: {output_hint}"
+    );
+    assert!(
         !requests[1]
             .message_input_texts("developer")
             .iter()

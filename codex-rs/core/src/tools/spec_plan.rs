@@ -364,33 +364,36 @@ fn agent_jobs_worker_tools_enabled(turn_context: &TurnContext) -> bool {
         )
 }
 
-fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
-    (turn_context
-        .provider
-        .info()
-        .uses_openai_actor_authorization()
-        || (turn_context.provider.info().requires_openai_auth
-            && turn_context
-                .auth_manager
-                .as_deref()
-                .is_some_and(AuthManager::current_auth_uses_codex_backend)))
-        && turn_context.provider.capabilities().image_generation
-        && turn_context
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-}
-
-fn standalone_image_generation_model_visible(turn_context: &TurnContext) -> bool {
-    if !image_generation_runtime_enabled(turn_context) || !namespace_tools_enabled(turn_context) {
-        return false;
-    }
-
-    turn_context
+fn image_generation_available(turn_context: &TurnContext) -> bool {
+    if !turn_context
         .config
         .features
         .get()
         .enabled(Feature::ImageGeneration)
+    {
+        return false;
+    }
+
+    let capabilities = turn_context.provider.capabilities();
+    if !capabilities.image_generation || !capabilities.namespace_tools {
+        return false;
+    }
+
+    if !turn_context
+        .model_info
+        .input_modalities
+        .contains(&InputModality::Image)
+    {
+        return false;
+    }
+
+    let provider = turn_context.provider.info();
+    provider.uses_openai_actor_authorization()
+        || (provider.requires_openai_auth
+            && turn_context
+                .auth_manager
+                .as_deref()
+                .is_some_and(AuthManager::current_auth_uses_codex_backend))
 }
 
 fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
@@ -996,7 +999,7 @@ fn append_extension_tool_executors(
             continue;
         }
         if tool_name == ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
-            && !standalone_image_generation_model_visible(turn_context)
+            && !image_generation_available(turn_context)
         {
             continue;
         }
