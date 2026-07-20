@@ -78,8 +78,9 @@ pub(crate) fn ordinal_state_for_rollout(
             path.display()
         ))
     })?;
-    // The child metadata is written before its inherited prefix. Never resume a
-    // partial initialization: later child records would otherwise stay below the boundary.
+    // Child records must start at `subagent_history_start_ordinal`. If initialization died while
+    // copying the inherited parent records, resuming would append child records before that
+    // boundary.
     if let Some(prefix_end) = subagent_history_start_ordinal.and_then(|start| start.checked_sub(1))
         && ordinal < prefix_end
     {
