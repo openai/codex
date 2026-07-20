@@ -4,6 +4,7 @@ use std::io;
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
+pub use codex_skills::EnvironmentSkillMetadata;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 
@@ -36,17 +37,6 @@ struct ParsedEnvironmentSkill {
     policy: Option<SkillPolicy>,
 }
 
-/// URI-native metadata for one skill owned by an execution environment.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EnvironmentSkillMetadata {
-    pub path_to_skills_md: PathUri,
-    pub name: String,
-    pub description: String,
-    pub short_description: Option<String>,
-    pub dependencies: Option<SkillDependencies>,
-    pub policy: Option<SkillPolicy>,
-}
-
 /// Parsed executor skill plus the instructions already materialized by capability discovery.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvironmentSkillSnapshot {
@@ -58,27 +48,6 @@ pub struct EnvironmentSkillSnapshot {
 pub struct EnvironmentSkillSnapshotOutcome {
     pub skills: Vec<EnvironmentSkillSnapshot>,
     pub warnings: Vec<String>,
-}
-
-impl EnvironmentSkillMetadata {
-    pub fn allows_implicit_invocation(&self) -> bool {
-        self.policy
-            .as_ref()
-            .and_then(|policy| policy.allow_implicit_invocation)
-            .unwrap_or(true)
-    }
-
-    fn matches_product_restriction(&self, restriction_product: Option<Product>) -> bool {
-        match &self.policy {
-            Some(policy) => {
-                policy.products.is_empty()
-                    || restriction_product.is_some_and(|product| {
-                        product.matches_product_restriction(&policy.products)
-                    })
-            }
-            None => true,
-        }
-    }
 }
 
 impl ParsedEnvironmentSkill {

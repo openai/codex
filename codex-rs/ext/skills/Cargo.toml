@@ -19,6 +19,7 @@ codex-extension-api = { workspace = true }
 codex-mcp = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-skills = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }

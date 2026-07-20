@@ -1,4 +1,4 @@
-use codex_core_skills::model::SkillDependencies;
+use codex_skills::SkillDependencies;
 use codex_utils_path_uri::PathUri;
 use std::sync::Arc;
 
