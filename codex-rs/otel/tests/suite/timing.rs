@@ -48,6 +48,7 @@ fn record_duration_keeps_whole_millisecond_behavior() -> Result<()> {
     Ok(())
 }
 
+/// Keeps long-running requests observable instead of collapsing their latency into the overflow bucket.
 #[test]
 fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
@@ -56,6 +57,13 @@ fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Resul
         Duration::from_millis(200),
         Duration::from_secs(1),
         Duration::from_millis(4900),
+        Duration::from_secs(12),
+        Duration::from_secs(15),
+        Duration::from_secs(20),
+        Duration::from_secs(30),
+        Duration::from_secs(60),
+        Duration::from_secs(120),
+        Duration::from_secs(121),
     ] {
         metrics.record_duration_seconds_with_description(
             "codex.request_duration_seconds",
@@ -73,14 +81,17 @@ fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Resul
         bounds,
         vec![
             0.0, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+            12.0, 15.0, 20.0, 30.0, 60.0, 120.0,
         ]
     );
     assert_eq!(
         bucket_counts,
-        vec![0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0]
+        vec![
+            0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1
+        ]
     );
-    assert!((sum - 6.1).abs() < f64::EPSILON * 8.0);
-    assert_eq!(count, 3);
+    assert!((sum - 384.1).abs() < f64::EPSILON * 512.0);
+    assert_eq!(count, 10);
     let metric = crate::harness::find_metric(&resource_metrics, "codex.request_duration_seconds")
         .expect("codex.request_duration_seconds metric should exist");
     assert_eq!(metric.unit(), "s");
