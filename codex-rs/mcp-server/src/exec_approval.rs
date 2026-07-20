@@ -130,7 +130,7 @@ async fn on_exec_approval_response(
         // If we cannot deserialize the response, we deny the request to be
         // conservative.
         ExecApprovalResponse {
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("approval request failed"),
         }
     });
 

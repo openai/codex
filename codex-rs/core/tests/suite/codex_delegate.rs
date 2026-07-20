@@ -184,7 +184,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     test.codex
         .submit(Op::PatchApproval {
             id: approval.call_id,
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("rejected by user"),
         })
         .await
         .expect("submit patch approval");

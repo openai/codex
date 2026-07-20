@@ -21,11 +21,18 @@ use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use codex_utils_string::truncate_middle_with_token_budget;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use super::format_exec_output_str;
+
+const REJECTION_MESSAGE_MAX_TOKENS: usize = 900;
+
+pub(super) fn truncate_rejection_message(message: &str) -> String {
+    truncate_middle_with_token_budget(message, REJECTION_MESSAGE_MAX_TOKENS).0
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct ToolEventCtx<'a> {
@@ -422,6 +429,7 @@ impl ToolEmitter {
                 } else {
                     msg
                 };
+                let normalized = truncate_rejection_message(&normalized);
                 let event = ToolEventStage::Failure(ToolEventFailure::Rejected {
                     message: normalized.clone(),
                     applied_patch_delta,

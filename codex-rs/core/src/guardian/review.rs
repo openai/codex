@@ -35,7 +35,6 @@ use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
 use super::GuardianAssessmentOutcome;
-use super::GuardianRejection;
 use super::GuardianRejectionCircuitBreakerAction;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
@@ -66,27 +65,6 @@ const GUARDIAN_REVIEW_MAX_ATTEMPTS: i64 = 3;
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
-}
-
-pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &str) -> String {
-    let rejection = session
-        .services
-        .guardian_rejections
-        .lock()
-        .await
-        .remove(review_id)
-        .filter(|rejection| !rejection.rationale.trim().is_empty())
-        .unwrap_or_else(|| GuardianRejection {
-            rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
-            source: GuardianAssessmentDecisionSource::Agent,
-        });
-    match rejection.source {
-        GuardianAssessmentDecisionSource::Agent => format!(
-            "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-            rejection.rationale.trim(),
-            GUARDIAN_REJECTION_INSTRUCTIONS
-        ),
-    }
 }
 
 pub(crate) fn guardian_timeout_message() -> String {
@@ -551,18 +529,6 @@ async fn run_guardian_review(
     } else {
         GuardianAssessmentStatus::Denied
     };
-    {
-        let mut rationales = session.services.guardian_rejections.lock().await;
-        if approved {
-            rationales.remove(&review_id);
-        } else {
-            let rejection = GuardianRejection {
-                rationale: assessment.rationale.clone(),
-                source: GuardianAssessmentDecisionSource::Agent,
-            };
-            rationales.insert(review_id.clone(), rejection);
-        }
-    }
     session
         .send_event(
             turn.as_ref(),
@@ -591,7 +557,14 @@ async fn run_guardian_review(
     if approved {
         ReviewDecision::Approved
     } else {
-        ReviewDecision::Denied
+        let rationale = if assessment.rationale.trim().is_empty() {
+            "Auto-reviewer denied the action without a specific rationale."
+        } else {
+            assessment.rationale.trim()
+        };
+        ReviewDecision::denied(format!(
+            "This action was rejected due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}"
+        ))
     }
 }
 
@@ -648,25 +621,32 @@ pub(crate) fn spawn_approval_request_review(
     cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
-    std::thread::spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
-            let _ = tx.send(ReviewDecision::Denied);
-            return;
-        };
-        let decision = runtime.block_on(review_approval_request_with_cancel(
-            &session,
-            &turn,
-            review_id,
-            request,
-            retry_reason,
-            approval_request_source,
-            cancel_token,
-        ));
-        let _ = tx.send(decision);
-    });
+    let spawn_result = std::thread::Builder::new()
+        .name("codex-approval-review".to_string())
+        .spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                let _ = tx.send(ReviewDecision::denied(
+                    "automatic approval review could not complete",
+                ));
+                return;
+            };
+            let decision = runtime.block_on(review_approval_request_with_cancel(
+                &session,
+                &turn,
+                review_id,
+                request,
+                retry_reason,
+                approval_request_source,
+                cancel_token,
+            ));
+            let _ = tx.send(decision);
+        });
+    if let Err(err) = spawn_result {
+        tracing::error!(%err, "failed to spawn automatic approval review worker");
+    }
     rx
 }
 

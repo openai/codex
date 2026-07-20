@@ -2337,7 +2337,9 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    let ReviewDecision::Denied { rejection } = decision else {
+        panic!("guardian error should deny the approval");
+    };
     assert_eq!(request_log.requests().len(), 1);
 
     let mut warnings = Vec::new();
@@ -2373,17 +2375,10 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         }),
         "denial rationale should not fall back to the generic missing payload error"
     );
-    {
-        let rationales = session.services.guardian_rejections.lock().await;
-        assert!(rationales.contains_key("review-shell-guardian-error"));
-        assert!(!rationales.contains_key("shell-guardian-error"));
-    }
-    let rejection_message =
-        guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
     assert!(
-        rejection_message.contains("Reason: Automatic approval review failed:")
-            && rejection_message.contains(error_message),
-        "rejection message should include guardian rationale: {rejection_message}"
+        rejection.contains("Reason: Automatic approval review failed:")
+            && rejection.contains(error_message),
+        "rejection message should include guardian rationale: {rejection}"
     );
 
     Ok(())
@@ -2470,7 +2465,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert!(matches!(decision, ReviewDecision::Denied { .. }));
     assert_eq!(request_log.requests().len(), 1);
     Ok(())
 }
@@ -2574,7 +2569,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert!(matches!(decision, ReviewDecision::Denied { .. }));
     assert_eq!(request_log.requests().len(), 3);
     let mut statuses = Vec::new();
     while let Ok(event) = rx.try_recv() {
@@ -2625,7 +2620,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert!(matches!(decision, ReviewDecision::Denied { .. }));
     assert_eq!(request_log.requests().len(), 1);
     Ok(())
 }

@@ -8,8 +8,6 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
-use crate::guardian::guardian_rejection_message;
-use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
@@ -1292,7 +1290,7 @@ async fn maybe_request_mcp_tool_approval(
             /*retry_reason*/ None,
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(sess, &review_id, decision).await;
+        let decision = mcp_tool_approval_decision_from_guardian(decision);
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -1464,21 +1462,17 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     }
 }
 
-async fn mcp_tool_approval_decision_from_guardian(
-    sess: &Session,
-    review_id: &str,
-    decision: ReviewDecision,
-) -> McpToolApprovalDecision {
+fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
     match decision {
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied => McpToolApprovalDecision::Decline {
-            message: Some(guardian_rejection_message(sess, review_id).await),
+        ReviewDecision::Denied { rejection } => McpToolApprovalDecision::Decline {
+            message: Some(rejection),
         },
         ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
-            message: Some(guardian_timeout_message()),
+            message: Some(crate::guardian::guardian_timeout_message()),
         },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }

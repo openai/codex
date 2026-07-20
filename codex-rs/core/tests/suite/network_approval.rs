@@ -519,7 +519,7 @@ async fn user_network_approval_once_session_and_denial_semantics() -> Result<()>
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: Some(approval.turn_id),
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied("rejected by user"),
         })
         .await?;
     wait_for_turn_complete(&test).await;
@@ -1096,7 +1096,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         .await?;
     wait_for_turn_complete(&test).await;
 
-    mount_exec_network_turn(
+    let remote_responses = mount_exec_network_turn(
         &server,
         "resp-network-remote",
         "exec-network-remote",
@@ -1112,14 +1112,19 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
     )
     .await?;
     let approval = expect_network_approval(&test, REMOTE_ENVIRONMENT_ID).await?;
+    let rejection = "approval request failed because the client disconnected";
     test.codex
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::denied(rejection),
         })
         .await?;
     wait_for_turn_complete(&test).await;
+    assert_eq!(
+        remote_responses.function_call_output_text("exec-network-remote"),
+        Some(rejection.to_string())
+    );
 
     test.fs()
         .remove(
