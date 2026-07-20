@@ -342,6 +342,13 @@ export_lines=$(export -p | awk '
   line=$0
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
+  if (name ~ /^-[A-Za-z]*r[A-Za-z]* /) {
+    next
+  }
+  if (name ~ /^-[A-Za-z]*T[A-Za-z]* /) {
+    sub(/^-[A-Za-z]*T[A-Za-z]* /, "", name)
+    sub(/ [A-Za-z_][A-Za-z0-9_]*=.*/, "", name)
+  }
   sub(/=.*/, "", name)
   if (name ~ /^(EXCLUDED_EXPORTS)$/) {
     next

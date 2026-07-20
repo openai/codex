@@ -187,6 +187,99 @@ fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn zsh_snapshot_restores_tied_path() -> Result<()> {
+    let dir = tempdir()?;
+    let path_with_spaces = dir.path().join("path with spaces").join("bin");
+    let plain_path = dir.path().join("plain-path").join("bin");
+    let expected_path = format!(
+        "{}:{}:/usr/bin:/bin",
+        path_with_spaces.display(),
+        plain_path.display()
+    );
+    let zshrc = format!(
+        "export -UT PATH path=('{}' '{}' '{}' /usr/bin /bin)\n",
+        path_with_spaces.display(),
+        plain_path.display(),
+        plain_path.display()
+    );
+    std::fs::write(dir.path().join(".zshrc"), zshrc)?;
+
+    let snapshot = Command::new("/bin/zsh")
+        .arg("-f")
+        .arg("-c")
+        .arg(zsh_snapshot_script())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("ZDOTDIR", dir.path())
+        .output()?;
+    assert!(snapshot.status.success());
+
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(&snapshot_path, &snapshot.stdout)?;
+
+    let restored = Command::new("/bin/zsh")
+        .arg("-f")
+        .arg("-c")
+        .arg("set -e; . \"$1\"; print -r -- \"$PATH\"")
+        .arg("zsh")
+        .arg(&snapshot_path)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output()?;
+    assert!(restored.status.success());
+    assert_eq!(
+        String::from_utf8(restored.stdout)?.trim_end(),
+        expected_path
+    );
+
+    let snapshot = String::from_utf8(snapshot.stdout)?;
+    assert!(
+        snapshot
+            .lines()
+            .any(|line| line.starts_with("export -UT PATH path=")),
+        "snapshot should capture the tied PATH export"
+    );
+
+    std::fs::write(dir.path().join(".zshrc"), "readonly PATH\n")?;
+    let readonly_snapshot = Command::new("/bin/zsh")
+        .arg("-f")
+        .arg("-c")
+        .arg(zsh_snapshot_script())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("ZDOTDIR", dir.path())
+        .output()?;
+    assert!(readonly_snapshot.status.success());
+    std::fs::write(&snapshot_path, &readonly_snapshot.stdout)?;
+
+    let readonly_restored = Command::new("/bin/zsh")
+        .arg("-f")
+        .arg("-c")
+        .arg("set -e; . \"$1\"; export PATH='/codex-path':\"$PATH\"; print -r -- \"$PATH\"")
+        .arg("zsh")
+        .arg(&snapshot_path)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output()?;
+    assert!(readonly_restored.status.success());
+    assert_eq!(
+        String::from_utf8(readonly_restored.stdout)?.trim_end(),
+        "/codex-path:/usr/bin:/bin"
+    );
+
+    let readonly_snapshot = String::from_utf8(readonly_snapshot.stdout)?;
+    assert!(
+        !readonly_snapshot
+            .lines()
+            .any(|line| line.starts_with("export -rT PATH path=")),
+        "snapshot should not capture the readonly tied PATH export"
+    );
+
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn try_create_creates_and_deletes_snapshot_file() -> Result<()> {
