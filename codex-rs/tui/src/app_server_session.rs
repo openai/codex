@@ -302,36 +302,47 @@ impl AppServerSession {
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
         let started_at = Instant::now();
         let account = self.read_account().await?;
+        // `hooks/list` holds the global config queue during startup. Submit models and config
+        // requirements together so an uncached model fetch can overlap both config requests.
+        let model_request_id = self.next_request_id();
         let requirements_request_id = self.next_request_id();
-        let requirements: ConfigRequirementsReadResponse = self
-            .client
-            .request_typed(ClientRequest::ConfigRequirementsRead {
-                request_id: requirements_request_id,
-                params: None,
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("configRequirements/read failed during TUI bootstrap", err)
-            })?;
+        let (models, requirements) = tokio::try_join!(
+            async {
+                self.client
+                    .request_typed::<ModelListResponse>(ClientRequest::ModelList {
+                        request_id: model_request_id,
+                        params: ModelListParams {
+                            cursor: None,
+                            limit: None,
+                            include_hidden: Some(true),
+                        },
+                    })
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error("model/list failed during TUI bootstrap", err)
+                    })
+            },
+            async {
+                self.client
+                    .request_typed::<ConfigRequirementsReadResponse>(
+                        ClientRequest::ConfigRequirementsRead {
+                            request_id: requirements_request_id,
+                            params: None,
+                        },
+                    )
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error(
+                            "configRequirements/read failed during TUI bootstrap",
+                            err,
+                        )
+                    })
+            },
+        )?;
         self.managed_new_thread_defaults = requirements
             .requirements
             .and_then(|requirements| requirements.models)
             .and_then(|models| models.new_thread);
-        let model_request_id = self.next_request_id();
-        let models: ModelListResponse = self
-            .client
-            .request_typed(ClientRequest::ModelList {
-                request_id: model_request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
-                },
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("model/list failed during TUI bootstrap", err)
-            })?;
         let available_models = models
             .data
             .into_iter()
