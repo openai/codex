@@ -258,20 +258,32 @@ fn root_write_read_only_carveout_requires_direct_runtime_enforcement() {
 }
 
 #[test]
-fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
+fn managed_proxy_preflight_argv_unshares_network() {
     let mode = bwrap_network_mode(
         NetworkSandboxPolicy::Enabled,
         /*allow_network_for_proxy*/ true,
     );
-    let argv = build_preflight_bwrap_argv(
-        Path::new("/"),
-        Path::new("/"),
-        &FileSystemSandboxPolicy::unrestricted(),
-        mode,
-    )
-    .expect("build preflight argv")
-    .args;
+    let argv = build_preflight_bwrap_argv(mode)
+        .expect("build preflight argv")
+        .args;
     assert!(argv.iter().any(|arg| arg == "--"));
+    assert!(argv.iter().any(|arg| arg == "--unshare-net"));
+}
+
+#[test]
+fn proc_mount_preflight_does_not_bind_the_full_filesystem() {
+    let argv = build_preflight_bwrap_argv(BwrapNetworkMode::FullAccess)
+        .expect("build preflight argv")
+        .args;
+
+    assert!(argv.windows(2).any(|window| window == ["--tmpfs", "/"]));
+    assert!(argv.windows(2).any(|window| window == ["--proc", "/proc"]));
+    assert!(
+        !argv
+            .windows(3)
+            .any(|window| window == ["--ro-bind", "/", "/"])
+    );
+    assert!(!argv.windows(3).any(|window| window == ["--bind", "/", "/"]));
 }
 
 #[test]
