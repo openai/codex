@@ -1449,7 +1449,6 @@ async fn host_owned_codex_apps_manager(
     let auth = session.services.auth_manager.auth().await;
     let startup_cancellation_token = CancellationToken::new();
     startup_cancellation_token.cancel();
-    let (tx_event, _rx_event) = async_channel::unbounded();
     let mcp_servers = HashMap::from([(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         codex_mcp::EffectiveMcpServer::configured(codex_mcp::codex_apps_mcp_server_config(
@@ -1464,7 +1463,7 @@ async fn host_owned_codex_apps_manager(
         turn_context.config.auth_keyring_backend_kind(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
-        tx_event,
+        /*tx_event*/ None,
         startup_cancellation_token,
         turn_context.permission_profile(),
         codex_mcp::McpRuntimeContext::new(

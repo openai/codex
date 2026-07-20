@@ -163,7 +163,7 @@ impl ElicitationRequestManager {
     pub(crate) fn make_sender(
         &self,
         server_name: String,
-        tx_event: Sender<Event>,
+        tx_event: Option<Sender<Event>>,
     ) -> SendElicitation {
         let router = self.router.clone();
         let approval_policy = self.approval_policy.clone();
@@ -232,6 +232,14 @@ impl ElicitationRequestManager {
                         return Ok(response);
                     }
                 }
+
+                let Some(tx_event) = tx_event else {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Decline,
+                        content: None,
+                        meta: None,
+                    });
+                };
 
                 let public_request_id = format!(
                     "codex-mcp-elicitation-{}",

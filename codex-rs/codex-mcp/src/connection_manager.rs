@@ -124,6 +124,8 @@ pub struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
+    /// Creates an MCP connection manager. Threadless callers can pass no `tx_event`; startup
+    /// notifications are then skipped and interactive elicitations are declined.
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         mcp_servers: &HashMap<String, EffectiveMcpServer>,
@@ -131,7 +133,7 @@ impl McpConnectionManager {
         keyring_backend_kind: AuthKeyringBackendKind,
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
-        tx_event: Sender<Event>,
+        tx_event: Option<Sender<Event>>,
         startup_cancellation_token: CancellationToken,
         initial_permission_profile: PermissionProfile,
         runtime_context: McpRuntimeContext,
@@ -182,15 +184,17 @@ impl McpConnectionManager {
         {
             server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = startup_cancellation_token.child_token();
-            let _ = emit_update(
-                startup_submit_id.as_str(),
-                &tx_event,
-                McpStartupUpdateEvent {
-                    server: server_name.clone(),
-                    status: McpStartupStatus::Starting,
-                },
-            )
-            .await;
+            if let Some(tx_event) = tx_event.as_ref() {
+                let _ = emit_update(
+                    startup_submit_id.as_str(),
+                    tx_event,
+                    McpStartupUpdateEvent {
+                        server: server_name.clone(),
+                        status: McpStartupStatus::Starting,
+                    },
+                )
+                .await;
+            }
             let configured_config = server.configured_config().cloned();
             let resolved_environment = configured_config.as_ref().map_or_else(
                 || Ok(None),
@@ -277,68 +281,73 @@ impl McpConnectionManager {
                 if cancel_token.is_cancelled() {
                     outcome = Err(StartupOutcomeError::Cancelled);
                 }
-                let auth_state = match &outcome {
-                    Err(error) if error.is_authentication_required() && !has_runtime_auth => {
-                        configured_config.as_ref().and_then(|config| {
-                            let McpServerTransportConfig::StreamableHttp {
-                                url,
-                                bearer_token_env_var,
-                                http_headers,
-                                env_http_headers,
-                            } = &config.transport
-                            else {
-                                return None;
-                            };
-                            match determine_streamable_http_auth_status_from_credentials(
-                                &server_name,
-                                url,
-                                bearer_token_env_var.as_deref(),
-                                http_headers.clone(),
-                                env_http_headers.clone(),
-                                store_mode,
-                                keyring_backend_kind,
-                            ) {
-                                Ok(auth_state) => auth_state,
-                                Err(error) => {
-                                    warn!(
-                                        "failed to read stored auth status for MCP server `{server_name}`: {error:?}"
-                                    );
-                                    None
+                if let Some(tx_event) = tx_event.as_ref() {
+                    let auth_state = match &outcome {
+                        Err(error) if error.is_authentication_required() && !has_runtime_auth => {
+                            configured_config.as_ref().and_then(|config| {
+                                let McpServerTransportConfig::StreamableHttp {
+                                    url,
+                                    bearer_token_env_var,
+                                    http_headers,
+                                    env_http_headers,
+                                } = &config.transport
+                                else {
+                                    return None;
+                                };
+                                match determine_streamable_http_auth_status_from_credentials(
+                                    &server_name,
+                                    url,
+                                    bearer_token_env_var.as_deref(),
+                                    http_headers.clone(),
+                                    env_http_headers.clone(),
+                                    store_mode,
+                                    keyring_backend_kind,
+                                ) {
+                                    Ok(auth_state) => auth_state,
+                                    Err(error) => {
+                                        warn!(
+                                            "failed to read stored auth status for MCP server `{server_name}`: {error:?}"
+                                        );
+                                        None
+                                    }
                                 }
-                            }
-                        })
+                            })
+                        }
+                        Ok(_) | Err(_) => None,
+                    };
+                    if cancel_token.is_cancelled() {
+                        outcome = Err(StartupOutcomeError::Cancelled);
                     }
-                    Ok(_) | Err(_) => None,
-                };
+                    let status = match &outcome {
+                        Ok(_) => McpStartupStatus::Ready,
+                        Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                        Err(error) => {
+                            let reason = mcp_startup_failure_reason(auth_state, error);
+                            let error_str = mcp_init_error_display(
+                                server_name.as_str(),
+                                configured_config.as_ref(),
+                                error,
+                            );
+                            McpStartupStatus::Failed {
+                                error: error_str,
+                                reason,
+                            }
+                        }
+                    };
+
+                    let _ = emit_update(
+                        submit_id.as_str(),
+                        tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name.clone(),
+                            status,
+                        },
+                    )
+                    .await;
+                }
                 if cancel_token.is_cancelled() {
                     outcome = Err(StartupOutcomeError::Cancelled);
                 }
-                let status = match &outcome {
-                    Ok(_) => McpStartupStatus::Ready,
-                    Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
-                    Err(error) => {
-                        let reason = mcp_startup_failure_reason(auth_state, error);
-                        let error_str = mcp_init_error_display(
-                            server_name.as_str(),
-                            configured_config.as_ref(),
-                            error,
-                        );
-                        McpStartupStatus::Failed {
-                            error: error_str,
-                            reason,
-                        }
-                    }
-                };
-
-                let _ = emit_update(
-                    submit_id.as_str(),
-                    &tx_event,
-                    McpStartupUpdateEvent {
-                        server: server_name.clone(),
-                        status,
-                    },
-                )
-                .await;
 
                 if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
                     async_managed_client.reconnect_failed_startup().await;
@@ -358,25 +367,27 @@ impl McpConnectionManager {
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
-            let mut summary = McpStartupCompleteEvent::default();
-            for (server_name, outcome) in outcomes {
-                match outcome {
-                    Ok(_) => summary.ready.push(server_name),
-                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
-                    Err(StartupOutcomeError::Failed { error, .. }) => {
-                        summary.failed.push(McpStartupFailure {
-                            server: server_name,
-                            error,
-                        })
+            if let Some(tx_event) = tx_event {
+                let mut summary = McpStartupCompleteEvent::default();
+                for (server_name, outcome) in outcomes {
+                    match outcome {
+                        Ok(_) => summary.ready.push(server_name),
+                        Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                        Err(StartupOutcomeError::Failed { error, .. }) => {
+                            summary.failed.push(McpStartupFailure {
+                                server: server_name,
+                                error,
+                            })
+                        }
                     }
                 }
+                let _ = tx_event
+                    .send(Event {
+                        id: startup_submit_id,
+                        msg: EventMsg::McpStartupComplete(summary),
+                    })
+                    .await;
             }
-            let _ = tx_event
-                .send(Event {
-                    id: startup_submit_id,
-                    msg: EventMsg::McpStartupComplete(summary),
-                })
-                .await;
         });
         manager
     }
