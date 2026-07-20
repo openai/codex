@@ -72,7 +72,7 @@ async fn runtime_overlay_preserves_disabled_server() -> TestResult {
 }
 
 #[tokio::test]
-async fn legacy_fallback_overwrites_reserved_config_without_an_extension() -> TestResult {
+async fn default_fallback_overwrites_reserved_config_without_an_extension() -> TestResult {
     let codex_home = tempfile::tempdir()?;
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -95,11 +95,11 @@ async fn legacy_fallback_overwrites_reserved_config_without_an_extension() -> Te
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .and_then(|server| server.configured_config())
-        .ok_or("legacy Apps MCP should be present")?;
+        .ok_or("default Apps MCP should be present")?;
     let McpServerTransportConfig::StreamableHttp { url, .. } = &server.transport else {
-        panic!("legacy Apps MCP should use streamable HTTP");
+        panic!("default Apps MCP should use streamable HTTP");
     };
-    assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
+    assert_eq!(url, "https://chatgpt.com/backend-api/ps/mcp");
 
     Ok(())
 }
