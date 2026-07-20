@@ -578,6 +578,7 @@ mod tests {
     use crate::DB_INIT_METRIC;
     use crate::DbTelemetry;
     use crate::migrations::STATE_MIGRATOR;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
     use sqlx::migrate::MigrateError;
@@ -638,7 +639,7 @@ mod tests {
     }
 
     async fn open_db_pool(path: &Path) -> SqlitePool {
-        crate::SqliteConfig::new_for_testing(path.parent().unwrap_or(path).to_path_buf())
+        crate::SqliteConfig::new_for_testing(path.parent().unwrap_or(path).abs())
             .open_read_write_pool(path)
             .await
             .expect("open sqlite pool")
@@ -651,7 +652,7 @@ mod tests {
             .await
             .expect("create codex home");
         let path = state_db_path(codex_home.as_path());
-        let pool = crate::SqliteConfig::new_for_testing(codex_home.clone())
+        let pool = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs())
             .open_read_write_pool(&path)
             .await
             .expect("open sqlite db");
@@ -676,7 +677,7 @@ mod tests {
             .await
             .expect("create codex home");
         let state_path = state_db_path(codex_home.as_path());
-        let pool = crate::SqliteConfig::new_for_testing(codex_home.clone())
+        let pool = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs())
             .open_read_write_pool(&state_path)
             .await
             .expect("open state db");
@@ -707,7 +708,7 @@ mod tests {
 
         let tolerant_migrator = runtime_state_migrator();
         let tolerant_pool = open_state_sqlite(
-            &crate::SqliteConfig::new_for_testing(codex_home.clone()),
+            &crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
             state_path.as_path(),
             &tolerant_migrator,
             /*telemetry_override*/ None,

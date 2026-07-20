@@ -548,6 +548,7 @@ mod tests {
     use crate::logs_db_path;
     use crate::migrations::LOGS_MIGRATOR;
     use chrono::Utc;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
     use sqlx::migrate::Migrator;
@@ -555,7 +556,7 @@ mod tests {
     use std::path::Path;
 
     async fn open_db_pool(path: &Path) -> SqlitePool {
-        crate::SqliteConfig::new_for_testing(path.parent().unwrap_or(path).to_path_buf())
+        crate::SqliteConfig::new_for_testing(path.parent().unwrap_or(path).abs())
             .open_read_write_pool(path)
             .await
             .expect("open sqlite pool")
@@ -617,7 +618,7 @@ mod tests {
             table_name: LOGS_MIGRATOR.table_name.clone(),
             create_schemas: LOGS_MIGRATOR.create_schemas.clone(),
         };
-        let pool = crate::SqliteConfig::new_for_testing(codex_home.clone())
+        let pool = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs())
             .open_read_write_pool(&logs_path)
             .await
             .expect("open old logs db");
