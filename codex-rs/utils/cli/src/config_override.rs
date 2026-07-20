@@ -82,17 +82,6 @@ impl CliConfigOverrides {
             })
             .collect()
     }
-
-    /// Apply all parsed overrides onto `target`. Intermediate objects will be
-    /// created as necessary. Values located at the destination path will be
-    /// replaced.
-    pub fn apply_on_value(&self, target: &mut Value) -> Result<(), String> {
-        let overrides = self.parse_overrides()?;
-        for (path, value) in overrides {
-            apply_single_override(target, &path, value);
-        }
-        Ok(())
-    }
 }
 
 fn canonicalize_override_key(key: &str) -> String {
@@ -100,50 +89,6 @@ fn canonicalize_override_key(key: &str) -> String {
         "features.use_legacy_landlock".to_string()
     } else {
         key.to_string()
-    }
-}
-
-/// Apply a single override onto `root`, creating intermediate objects as
-/// necessary.
-fn apply_single_override(root: &mut Value, path: &str, value: Value) {
-    use toml::value::Table;
-
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut current = root;
-
-    for (i, part) in parts.iter().enumerate() {
-        let is_last = i == parts.len() - 1;
-
-        if is_last {
-            match current {
-                Value::Table(tbl) => {
-                    tbl.insert((*part).to_string(), value);
-                }
-                _ => {
-                    let mut tbl = Table::new();
-                    tbl.insert((*part).to_string(), value);
-                    *current = Value::Table(tbl);
-                }
-            }
-            return;
-        }
-
-        // Traverse or create intermediate table.
-        match current {
-            Value::Table(tbl) => {
-                current = tbl
-                    .entry((*part).to_string())
-                    .or_insert_with(|| Value::Table(Table::new()));
-            }
-            _ => {
-                *current = Value::Table(Table::new());
-                if let Value::Table(tbl) = current {
-                    current = tbl
-                        .entry((*part).to_string())
-                        .or_insert_with(|| Value::Table(Table::new()));
-                }
-            }
-        }
     }
 }
 

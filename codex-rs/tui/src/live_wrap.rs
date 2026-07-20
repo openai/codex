@@ -35,10 +35,6 @@ impl RowBuilder {
         }
     }
 
-    pub fn width(&self) -> usize {
-        self.target_width
-    }
-
     pub fn set_width(&mut self, width: usize) {
         self.target_width = width.max(1);
         // Rewrap everything we have (simple approach for Step 1).
@@ -74,11 +70,6 @@ impl RowBuilder {
             self.current_line.push_str(&fragment[start..]);
             self.wrap_current_line();
         }
-    }
-
-    /// Mark the end of the current logical line (equivalent to pushing a '\n').
-    pub fn end_line(&mut self) {
-        self.flush_current_line(/*explicit_break*/ true);
     }
 
     /// Return a snapshot of produced rows (non-draining).

@@ -11,7 +11,6 @@ use std::process::ExitStatus;
 use tokio::fs::create_dir_all;
 use tokio::process::Child;
 
-#[cfg(target_os = "macos")]
 async fn spawn_command_under_sandbox(
     command: Vec<String>,
     command_cwd: AbsolutePathBuf,
@@ -27,6 +26,12 @@ async fn spawn_command_under_sandbox(
     use codex_protocol::config_types::WindowsSandboxLevel;
     use std::process::Stdio;
 
+    #[cfg(target_os = "linux")]
+    let codex_linux_sandbox_exe = Some(
+        core_test_support::find_codex_linux_sandbox_exe()
+            .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?,
+    );
+    #[cfg(target_os = "macos")]
     let codex_linux_sandbox_exe = None;
     let exec_request = build_exec_request(
         ExecParams {
@@ -84,33 +89,6 @@ async fn spawn_command_under_sandbox(
     }
 
     child.kill_on_drop(true).spawn()
-}
-
-#[cfg(target_os = "linux")]
-async fn spawn_command_under_sandbox(
-    command: Vec<String>,
-    command_cwd: AbsolutePathBuf,
-    permission_profile: &PermissionProfile,
-    sandbox_cwd: &AbsolutePathBuf,
-    stdio_policy: StdioPolicy,
-    env: HashMap<String, String>,
-) -> std::io::Result<Child> {
-    use codex_core::spawn_command_under_linux_sandbox;
-
-    let codex_linux_sandbox_exe = core_test_support::find_codex_linux_sandbox_exe()
-        .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
-    spawn_command_under_linux_sandbox(
-        codex_linux_sandbox_exe,
-        command,
-        command_cwd,
-        permission_profile,
-        sandbox_cwd,
-        /*use_legacy_landlock*/ false,
-        stdio_policy,
-        /*network*/ None,
-        env,
-    )
-    .await
 }
 
 #[cfg(target_os = "linux")]

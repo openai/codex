@@ -28,12 +28,3 @@ pub fn web_search_action_detail(action: &WebSearchAction) -> String {
         WebSearchAction::Other => String::new(),
     }
 }
-
-pub fn web_search_detail(action: Option<&WebSearchAction>, query: &str) -> String {
-    let detail = action.map(web_search_action_detail).unwrap_or_default();
-    if detail.is_empty() {
-        query.to_string()
-    } else {
-        detail
-    }
-}

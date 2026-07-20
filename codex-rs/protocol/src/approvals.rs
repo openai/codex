@@ -361,16 +361,6 @@ pub enum ElicitationRequest {
     },
 }
 
-impl ElicitationRequest {
-    pub fn message(&self) -> &str {
-        match self {
-            Self::Form { message, .. }
-            | Self::OpenAiForm { message, .. }
-            | Self::Url { message, .. } => message,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ElicitationRequestEvent {
     /// Turn ID that this elicitation belongs to, when known.
