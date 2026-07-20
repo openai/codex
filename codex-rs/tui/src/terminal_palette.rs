@@ -40,7 +40,7 @@ pub fn best_color_for_level(target: (u8, u8, u8), color_level: StdoutColorLevel)
     best_color_for_color_level(target, color_level)
 }
 
-fn effective_stdout_color_level() -> StdoutColorLevel {
+pub(crate) fn effective_stdout_color_level() -> StdoutColorLevel {
     stdout_color_level_for_terminal(
         stdout_color_level(),
         terminal_info().name,

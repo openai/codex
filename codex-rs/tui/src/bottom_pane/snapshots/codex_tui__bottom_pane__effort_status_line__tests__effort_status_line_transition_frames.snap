@@ -1,0 +1,28 @@
+---
+source: tui/src/bottom_pane/effort_status_line_tests.rs
+expression: "frames.join(\"\\n\")"
+---
+MAX      0ms │gpt-5.4 high · main             │
+MAX    300ms │    gpt-5.4 high · main         │
+MAX    520ms │                   gpt-5.4 high │
+MAX    680ms │   M           A           X    │
+MAX    820ms │        M      A      X         │
+MAX   1050ms │            M  A  X             │
+MAX   1320ms │             M A X              │
+MAX   1550ms │             M A X              │
+MAX   1800ms │             M A X              │
+MAX   2020ms │gpt-5.4 max · main              │
+MAX   2250ms │gpt-5.4 max · main              │
+MAX   2500ms │gpt-5.4 max · main              │
+ULTRA    0ms │gpt-5.4 high · main             │
+ULTRA  300ms │    gpt-5.4 high · main         │
+ULTRA  520ms │                   gpt-5.4 high │
+ULTRA  680ms │  U       L    T    R       A   │
+ULTRA  820ms │        U   L  T  R   A         │
+ULTRA 1050ms │           U L T R A            │
+ULTRA 1320ms │           U L T R A            │
+ULTRA 1550ms │           U L T R A            │
+ULTRA 1800ms │           U L T R A            │
+ULTRA 2020ms │gpt-5.4 ultra · main            │
+ULTRA 2250ms │gpt-5.4 ultra · main            │
+ULTRA 2500ms │gpt-5.4 ultra · main            │
