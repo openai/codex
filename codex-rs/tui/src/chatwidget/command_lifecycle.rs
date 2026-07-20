@@ -380,15 +380,9 @@ impl ChatWidget {
         // Unified exec interaction rows intentionally hide command output text in the exec cell and
         // instead render the interaction-specific content elsewhere in the UI.
         let output = if is_unified_exec_interaction {
-            CommandOutput {
-                exit_code,
-                aggregated_output: String::new(),
-            }
+            CommandOutput::new(exit_code, String::new())
         } else {
-            CommandOutput {
-                exit_code,
-                aggregated_output,
-            }
+            CommandOutput::new(exit_code, aggregated_output)
         };
 
         match end_target {
