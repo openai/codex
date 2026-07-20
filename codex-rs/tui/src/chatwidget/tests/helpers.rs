@@ -215,6 +215,10 @@ pub(super) async fn make_chatwidget_manual_with_auth(
     (widget, rx, op_rx)
 }
 
+pub(crate) fn set_active_cell(chat: &mut ChatWidget, cell: Box<dyn HistoryCell>) {
+    chat.transcript.active_cell = Some(cell);
+}
+
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
 // filters until we see a submission op.
 pub(super) fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::Arc;
 
 use crossterm::cursor::SetCursorStyle;
@@ -247,6 +248,7 @@ impl<'a> ColumnRenderable<'a> {
 pub struct FlexChild<'a> {
     flex: i32,
     child: RenderableItem<'a>,
+    cached_height: Cell<Option<(u16, u16)>>,
 }
 
 pub struct FlexRenderable<'a> {
@@ -266,6 +268,7 @@ impl<'a> FlexRenderable<'a> {
         self.children.push(FlexChild {
             flex,
             child: child.into(),
+            cached_height: Cell::new(None),
         });
     }
 
@@ -280,13 +283,20 @@ impl<'a> FlexRenderable<'a> {
 
         // 1. Allocate space to non-flex children.
         let max_size = area.height;
-        for (i, FlexChild { flex, child }) in self.children.iter().enumerate() {
-            if *flex > 0 {
-                flex_children.push((i, *flex as u16, child.desired_height(area.width)));
+        for (i, child) in self.children.iter().enumerate() {
+            let desired_height = if let Some((width, height)) = child.cached_height.get()
+                && width == area.width
+            {
+                height
             } else {
-                child_sizes[i] = child
-                    .desired_height(area.width)
-                    .min(max_size.saturating_sub(allocated_size));
+                let height = child.child.desired_height(area.width);
+                child.cached_height.set(Some((area.width, height)));
+                height
+            };
+            if child.flex > 0 {
+                flex_children.push((i, child.flex as u16, desired_height));
+            } else {
+                child_sizes[i] = desired_height.min(max_size.saturating_sub(allocated_size));
                 allocated_size += child_sizes[i];
             }
         }

@@ -1364,18 +1364,30 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui) -> Result<Rect> {
-        let desired_height = self.chat_widget.desired_height(tui.terminal.size()?.width);
-        let mut rendered_area = Rect::default();
-        tui.draw_with_resize_reflow(desired_height, |frame| {
-            let area = frame.area();
-            rendered_area = area;
-            self.chat_widget.render(area, frame.buffer);
-            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                frame.set_cursor_position((x, y));
-            }
-        })?;
-        Ok(rendered_area)
+        let width = tui.terminal.size()?.width;
+        self.with_chat_widget_frame(width, |desired_height, chat_widget| {
+            let mut rendered_area = Rect::default();
+            tui.draw_with_resize_reflow(desired_height, |frame| {
+                let area = frame.area();
+                rendered_area = area;
+                chat_widget.render(area, frame.buffer);
+                self.chat_widget.note_rendered_width(area.width);
+                if let Some((x, y)) = chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })?;
+            Ok(rendered_area)
+        })
+    }
+
+    fn with_chat_widget_frame<T>(
+        &self,
+        width: u16,
+        render: impl FnOnce(u16, &dyn Renderable) -> T,
+    ) -> T {
+        let chat_widget = self.chat_widget.as_renderable();
+        render(chat_widget.desired_height(width), &chat_widget)
     }
 }
 
