@@ -10,6 +10,8 @@ mod bundled_bwrap;
 #[cfg(target_os = "linux")]
 mod bwrap;
 #[cfg(target_os = "linux")]
+mod capabilities;
+#[cfg(target_os = "linux")]
 mod exec_util;
 #[cfg(target_os = "linux")]
 mod landlock;
@@ -19,6 +21,8 @@ mod launcher;
 mod linux_run_main;
 #[cfg(target_os = "linux")]
 mod proxy_routing;
+#[cfg(target_os = "linux")]
+mod transparent_network;
 
 #[cfg(target_os = "linux")]
 pub fn run_main() -> ! {
