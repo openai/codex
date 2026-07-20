@@ -136,7 +136,6 @@ WHERE kind = ? AND job_key = ?
     /// - starts from `threads` filtered to active threads and allowed sources
     ///   (`push_thread_filters`)
     /// - excludes threads with `memory_mode != 'enabled'`
-    /// - excludes paginated threads because stage 1 still full-loads rollout JSONL
     /// - excludes the current thread id
     /// - keeps only threads whose millisecond `updated_at` is in the age window
     /// - checks memory staleness against the memories DB
@@ -216,7 +215,7 @@ FROM threads
             },
             /*include_thread_id_tiebreaker*/ false,
         );
-        builder.push(" AND threads.memory_mode = 'enabled' AND threads.history_mode = 'legacy'");
+        builder.push(" AND threads.memory_mode = 'enabled'");
         builder
             .push(" AND threads.id != ")
             .push_bind(current_thread_id.as_str());
@@ -574,7 +573,7 @@ SELECT
     threads.git_branch,
     threads.git_origin_url
 FROM threads
-WHERE threads.id = ? AND threads.memory_mode = 'enabled' AND threads.history_mode = 'legacy'
+WHERE threads.id = ? AND threads.memory_mode = 'enabled'
             "#,
         )
         .bind(thread_id.to_string())
@@ -2167,7 +2166,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_stage1_jobs_skips_threads_without_legacy_enabled_memory() {
+    async fn claim_stage1_jobs_skips_threads_without_enabled_memory() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2198,6 +2197,7 @@ mod tests {
             test_thread_metadata(&codex_home, disabled_thread_id, codex_home.join("disabled"));
         disabled.created_at = eligible_at;
         disabled.updated_at = eligible_at;
+        disabled.history_mode = ThreadHistoryMode::Paginated;
         runtime
             .upsert_thread(&disabled)
             .await
@@ -2246,8 +2246,17 @@ mod tests {
             .await
             .expect("claim stage1 startup jobs");
 
-        assert_eq!(claims.len(), 1);
-        assert_eq!(claims[0].thread.id, enabled_thread_id);
+        let mut claimed_ids = claims
+            .iter()
+            .map(|claim| claim.thread.id.to_string())
+            .collect::<Vec<_>>();
+        claimed_ids.sort();
+        let mut expected_ids = vec![
+            enabled_thread_id.to_string(),
+            paginated_thread_id.to_string(),
+        ];
+        expected_ids.sort();
+        assert_eq!(claimed_ids, expected_ids);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3301,7 +3310,7 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn list_stage1_outputs_for_global_skips_polluted_threads() {
+    async fn list_stage1_outputs_for_global_includes_paginated_and_skips_polluted_threads() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -3317,12 +3326,11 @@ VALUES (?, ?, ?, ?, ?)
             (thread_id_enabled, "workspace-enabled"),
             (thread_id_polluted, "workspace-polluted"),
         ] {
+            let mut metadata =
+                test_thread_metadata(&codex_home, thread_id, codex_home.join(workspace));
+            metadata.history_mode = ThreadHistoryMode::Paginated;
             runtime
-                .upsert_thread(&test_thread_metadata(
-                    &codex_home,
-                    thread_id,
-                    codex_home.join(workspace),
-                ))
+                .upsert_thread(&metadata)
                 .await
                 .expect("upsert thread");
 

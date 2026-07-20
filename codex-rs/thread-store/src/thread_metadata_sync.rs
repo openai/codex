@@ -201,8 +201,9 @@ impl ThreadMetadataSync {
             ThreadHistoryMode::Paginated
         ) {
             // Paginated rollouts never append metadata-only SessionMeta updates. Do not reapply
-            // the initial Git tuple when resume history is flushed after the first append.
+            // initial metadata when resume history is flushed after the first append.
             update.git_info = None;
+            update.memory_mode = None;
         }
         Some(update)
     }
@@ -675,10 +676,11 @@ mod tests {
     }
 
     #[test]
-    fn paginated_resume_history_does_not_reapply_initial_git_info() {
+    fn paginated_resume_history_does_not_reapply_initial_metadata() {
         let thread_id = ThreadId::new();
         let mut meta = session_meta(thread_id);
         meta.meta.history_mode = ThreadHistoryMode::Paginated;
+        meta.meta.memory_mode = Some("disabled".to_string());
         meta.git = Some(GitInfo {
             commit_hash: None,
             branch: Some("stale-branch".to_string()),
@@ -694,6 +696,7 @@ mod tests {
 
         let update = sync.take_pending_update().expect("pending metadata update");
         assert_eq!(update.patch.git_info, None);
+        assert_eq!(update.patch.memory_mode, None);
         assert_eq!(update.patch.preview.as_deref(), Some("hello metadata"));
     }
 
