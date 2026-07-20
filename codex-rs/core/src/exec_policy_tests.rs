@@ -1946,6 +1946,7 @@ fn derive_requested_execpolicy_amendment_returns_none_for_shell_and_powershell_v
         vec!["pwsh".to_string()],
         vec!["pwsh".to_string(), "-Command".to_string()],
         vec!["pwsh".to_string(), "-c".to_string()],
+        vec!["pwsh".to_string(), "-ec".to_string()],
         vec!["powershell".to_string()],
         vec!["powershell".to_string(), "-Command".to_string()],
         vec!["powershell".to_string(), "-c".to_string()],

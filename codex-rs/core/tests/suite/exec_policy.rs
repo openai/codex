@@ -95,6 +95,55 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
 }
 
 #[tokio::test]
+async fn startup_migrates_default_policy_and_honors_ignore_rules() -> Result<()> {
+    const LEGACY_POLICY: &str = r#"prefix_rule(pattern=["rm"], decision="allow")
+prefix_rule(pattern=["git", "status"], decision="allow")
+"#;
+    const MIGRATED_POLICY: &str = r#"prefix_rule(pattern=["git", "status"], decision="allow")
+"#;
+    const MIGRATION_MARKER_FILENAME: &str = ".sandbox_migration";
+
+    let server = start_mock_server().await;
+    let mut migrated_builder = test_codex().with_config(|config| {
+        let policy_path = config.codex_home.join("rules/default.rules");
+        fs::create_dir_all(policy_path.parent().expect("rules directory"))
+            .expect("create rules directory");
+        fs::write(policy_path, LEGACY_POLICY).expect("write legacy policy");
+    });
+    let migrated = migrated_builder.build_with_auto_env(&server).await?;
+    let migrated_policy_path = migrated.codex_home_path().join("rules/default.rules");
+    assert_eq!(fs::read_to_string(&migrated_policy_path)?, MIGRATED_POLICY);
+    assert_eq!(
+        fs::read_to_string(migrated.codex_home_path().join(MIGRATION_MARKER_FILENAME))?,
+        "v1\n"
+    );
+
+    let mut ignored_builder = test_codex().with_config(|config| {
+        let policy_path = config.codex_home.join("rules/default.rules");
+        fs::create_dir_all(policy_path.parent().expect("rules directory"))
+            .expect("create rules directory");
+        fs::write(policy_path, LEGACY_POLICY).expect("write legacy policy");
+        config.config_layer_stack = config
+            .config_layer_stack
+            .clone()
+            .with_user_and_project_exec_policy_rules_ignored(
+                /*ignore_user_and_project_exec_policy_rules*/ true,
+            );
+    });
+    let ignored = ignored_builder.build_with_auto_env(&server).await?;
+    let ignored_policy_path = ignored.codex_home_path().join("rules/default.rules");
+    assert_eq!(fs::read_to_string(&ignored_policy_path)?, LEGACY_POLICY);
+    assert!(
+        !ignored
+            .codex_home_path()
+            .join(MIGRATION_MARKER_FILENAME)
+            .exists()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected() -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
 
