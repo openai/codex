@@ -4114,7 +4114,6 @@ dependencies = [
  "codex-config",
  "codex-connectors",
  "codex-core-plugins",
- "codex-core-skills",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",

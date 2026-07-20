@@ -1,4 +1,4 @@
-use codex_core_skills::model::SkillMetadata;
+use codex_app_server_protocol::SkillMetadata;
 use codex_utils_fuzzy_match::fuzzy_match;
 
 pub(crate) fn skill_display_name(skill: &SkillMetadata) -> String {

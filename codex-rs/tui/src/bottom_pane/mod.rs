@@ -36,8 +36,8 @@ use crate::terminal_palette::effective_stdout_color_level;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
 pub(crate) use bottom_pane_view::ViewCompletion;
+use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::ToolRequestUserInputParams;
-use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_plugin::PluginCapabilitySummary;
@@ -2650,10 +2650,9 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: None,
-                path_to_skills_md: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
+                path: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
                 scope: crate::test_support::skill_scope_user(),
-                plugin_id: None,
+                enabled: true,
             }]),
         });
 
