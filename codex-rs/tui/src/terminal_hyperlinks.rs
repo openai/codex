@@ -19,6 +19,7 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
 
+use crate::render::line_utils::line_to_borrowed;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -125,6 +126,13 @@ impl From<String> for HyperlinkLine {
 
 pub(crate) fn visible_lines(lines: Vec<HyperlinkLine>) -> Vec<Line<'static>> {
     lines.into_iter().map(|line| line.line).collect()
+}
+
+pub(crate) fn visible_lines_ref(lines: &[HyperlinkLine]) -> Vec<Line<'_>> {
+    lines
+        .iter()
+        .map(|line| line_to_borrowed(&line.line))
+        .collect()
 }
 
 pub(crate) fn plain_hyperlink_lines(lines: Vec<Line<'static>>) -> Vec<HyperlinkLine> {
@@ -483,7 +491,8 @@ pub(crate) fn mark_buffer_hyperlinks(
     }
     let mut logical_row = 0usize;
     for line in lines {
-        let paragraph = Paragraph::new(Text::from(line.line.clone())).wrap(Wrap { trim: false });
+        let paragraph =
+            Paragraph::new(Text::from(line_to_borrowed(&line.line))).wrap(Wrap { trim: false });
         let rendered_height = paragraph.line_count(area.width).max(/*other*/ 1);
         if line.hyperlinks.is_empty() {
             logical_row += rendered_height;
