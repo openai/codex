@@ -26,6 +26,8 @@ pub(super) struct StreamingRender {
     stable_rendered_len: usize,
     /// Reference-style link definitions can affect any earlier or later markdown block.
     has_reference_link_definition: bool,
+    /// Inline visualization directives require source-wide rewriting once one is committed.
+    has_inline_visualization_directive: bool,
 }
 
 impl StreamingRender {
@@ -35,6 +37,7 @@ impl StreamingRender {
             stable_source_len: 0,
             stable_rendered_len: 0,
             has_reference_link_definition: false,
+            has_inline_visualization_directive: false,
         }
     }
 
@@ -43,6 +46,7 @@ impl StreamingRender {
         self.stable_source_len = 0;
         self.stable_rendered_len = 0;
         self.has_reference_link_definition = false;
+        self.has_inline_visualization_directive = false;
     }
 
     /// Re-render the full source and reset both stable-prefix boundaries.
@@ -57,8 +61,9 @@ impl StreamingRender {
         render_mode: HistoryRenderMode,
         inline_visualization_context: Option<&InlineVisualizationContext>,
     ) {
+        self.has_inline_visualization_directive = source.contains(DIRECTIVE_PREFIX);
         self.lines = match (render_mode, inline_visualization_context) {
-            (HistoryRenderMode::Rich, None) if !source.contains(DIRECTIVE_PREFIX) => {
+            (HistoryRenderMode::Rich, None) if !self.has_inline_visualization_directive => {
                 let rendered =
                     render_streaming_markdown_agent_with_links_and_cwd(source, width, Some(cwd));
                 self.has_reference_link_definition = rendered.has_reference_link_definition;
@@ -102,7 +107,8 @@ impl StreamingRender {
             return;
         }
 
-        if raw_source.contains(DIRECTIVE_PREFIX) {
+        self.has_inline_visualization_directive |= committed_source.contains(DIRECTIVE_PREFIX);
+        if self.has_inline_visualization_directive {
             self.recompute(
                 raw_source,
                 width,
