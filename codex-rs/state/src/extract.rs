@@ -288,6 +288,27 @@ mod tests {
     }
 
     #[test]
+    fn event_msg_audio_only_user_message_sets_audio_placeholder_preview() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: String::new(),
+            images: None,
+            local_images: vec![],
+            audio: Some(vec!["https://example.com/audio.mp3".to_string()]),
+            local_audio: vec![],
+            text_elements: vec![],
+            ..Default::default()
+        }));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.first_user_message.as_deref(), Some("[Audio]"));
+        assert_eq!(metadata.preview.as_deref(), Some("[Audio]"));
+        assert_eq!(metadata.title, "");
+    }
+
+    #[test]
     fn event_msg_blank_user_message_without_images_keeps_first_user_message_empty() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {

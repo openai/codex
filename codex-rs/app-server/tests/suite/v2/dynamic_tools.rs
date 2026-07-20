@@ -29,6 +29,7 @@ use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::openai_models::InputModality;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -597,7 +598,9 @@ async fn start_function_dynamic_tool_call(call_id: &str) -> Result<PendingDynami
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let config = load_default_config_for_test(&codex_home).await;
-    let model_info = codex_core::test_support::construct_model_info_offline("mock-model", &config);
+    let mut model_info =
+        codex_core::test_support::construct_model_info_offline("mock-model", &config);
+    model_info.input_modalities.push(InputModality::Audio);
     write_models_cache_with_models(codex_home.path(), vec![model_info])?;
 
     let mut mcp = TestAppServer::builder()
@@ -707,8 +710,6 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
             audio_url: INLINE_AUDIO_DATA_URL.to_string(),
         },
     ];
-    // Audio remains available on the app-server item, but the base truncation policy intentionally
-    // omits it from the model-visible payload until the history/accounting layer.
     let model_content_items = vec![
         FunctionCallOutputContentItem::InputText {
             text: "dynamic-ok".to_string(),
@@ -716,6 +717,9 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
         FunctionCallOutputContentItem::InputImage {
             image_url: TINY_PNG_DATA_URL.to_string(),
             detail: Some(DEFAULT_IMAGE_DETAIL),
+        },
+        FunctionCallOutputContentItem::InputAudio {
+            audio_url: INLINE_AUDIO_DATA_URL.to_string(),
         },
     ];
     let response = DynamicToolCallResponse {
@@ -776,6 +780,10 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
                 "type": "input_image",
                 "image_url": TINY_PNG_DATA_URL,
                 "detail": "high"
+            },
+            {
+                "type": "input_audio",
+                "audio_url": INLINE_AUDIO_DATA_URL
             }
         ])
     );

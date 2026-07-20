@@ -3,6 +3,17 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_cache::BlockingLruCache;
+use codex_utils_cache::sha1_digest;
+use codex_utils_output_truncation::approx_token_count;
+use std::io::Cursor;
+use std::num::NonZeroUsize;
+use std::sync::LazyLock;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::TrackType;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
 use tracing::warn;
 
 const AUDIO_PROCESSING_ERROR_PLACEHOLDER: &str =
@@ -17,6 +28,15 @@ const UNSUPPORTED_AUDIO_FORMAT_PLACEHOLDER: &str =
 /// This matches the Responses API audio input limit.
 const MAX_PROMPT_AUDIO_INPUT_BYTES: usize = 50 * 1024 * 1024;
 const MAX_PROMPT_AUDIO_BASE64_BYTES: usize = MAX_PROMPT_AUDIO_INPUT_BYTES.div_ceil(3) * 4;
+const AUDIO_TOKEN_ESTIMATE_CACHE_SIZE: usize = 32;
+const AUDIO_TOKENS_PER_SECOND: f64 = 10.0;
+
+static AUDIO_TOKEN_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], usize>> =
+    LazyLock::new(|| {
+        BlockingLruCache::new(
+            NonZeroUsize::new(AUDIO_TOKEN_ESTIMATE_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN),
+        )
+    });
 
 #[derive(Debug, thiserror::Error)]
 enum AudioPreparationError {
@@ -119,6 +139,65 @@ fn canonical_audio_mime(mime: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+pub(crate) fn estimate_audio_token_count(audio_url: &str) -> usize {
+    let key = sha1_digest(audio_url.as_bytes());
+    AUDIO_TOKEN_ESTIMATE_CACHE.get_or_insert_with(key, || {
+        let Some(duration_seconds) = audio_duration_seconds(audio_url) else {
+            return approx_token_count(audio_url);
+        };
+        let token_count = (duration_seconds * AUDIO_TOKENS_PER_SECOND).ceil();
+        if token_count >= usize::MAX as f64 {
+            usize::MAX
+        } else {
+            token_count as usize
+        }
+    })
+}
+
+fn audio_duration_seconds(audio_url: &str) -> Option<f64> {
+    let (metadata, payload) = audio_url.split_once(',')?;
+    let metadata = metadata.get("data:".len()..)?;
+    let mut metadata_parts = metadata.split(';');
+    let canonical_mime = canonical_audio_mime(metadata_parts.next()?)?;
+    if !metadata_parts.any(|part| part.eq_ignore_ascii_case("base64")) {
+        return None;
+    }
+
+    let bytes = match BASE64_STANDARD.decode(payload) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::trace!(%error, "failed to decode audio payload for token estimation");
+            return None;
+        }
+    };
+    let media_source = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
+    let mut hint = Hint::new();
+    hint.mime_type(canonical_mime);
+    let format = match symphonia::default::get_probe().probe(
+        &hint,
+        media_source,
+        FormatOptions::default(),
+        MetadataOptions::default(),
+    ) {
+        Ok(format) => format,
+        Err(error) => {
+            tracing::trace!(%error, "failed to read audio duration for token estimation");
+            return None;
+        }
+    };
+    let track = format.default_track(TrackType::Audio)?;
+    let timing = track.time_base.zip(track.duration).or_else(|| {
+        format
+            .media_info()
+            .time_base
+            .zip(format.media_info().duration)
+    });
+    let (time_base, duration) = timing?;
+    let duration_seconds =
+        duration.get() as f64 * f64::from(time_base.numer.get()) / f64::from(time_base.denom.get());
+    duration_seconds.is_finite().then_some(duration_seconds)
 }
 
 fn prepare_audio(audio_url: &mut String) -> Result<(), AudioPreparationError> {

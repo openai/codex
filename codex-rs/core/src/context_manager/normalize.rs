@@ -369,7 +369,7 @@ pub(crate) fn strip_images_when_unsupported(
     }
 }
 
-/// Strip audio content from messages when the model does not support audio.
+/// Strip audio content from messages and tool outputs when the model does not support audio.
 /// When `input_modalities` contains `InputModality::Audio`, no stripping is performed.
 pub(crate) fn strip_audio_when_unsupported(
     input_modalities: &[InputModality],
@@ -380,14 +380,32 @@ pub(crate) fn strip_audio_when_unsupported(
     }
 
     for item in items.iter_mut() {
-        if let ResponseItem::Message { content, .. } = item {
-            for content_item in content.iter_mut() {
-                if matches!(content_item, ContentItem::InputAudio { .. }) {
-                    *content_item = ContentItem::InputText {
-                        text: AUDIO_CONTENT_OMITTED_PLACEHOLDER.to_string(),
-                    };
+        match item {
+            ResponseItem::Message { content, .. } => {
+                for content_item in content.iter_mut() {
+                    if matches!(content_item, ContentItem::InputAudio { .. }) {
+                        *content_item = ContentItem::InputText {
+                            text: AUDIO_CONTENT_OMITTED_PLACEHOLDER.to_string(),
+                        };
+                    }
                 }
             }
+            ResponseItem::FunctionCallOutput { output, .. }
+            | ResponseItem::CustomToolCallOutput { output, .. } => {
+                if let Some(content_items) = output.content_items_mut() {
+                    for content_item in content_items.iter_mut() {
+                        if matches!(
+                            content_item,
+                            FunctionCallOutputContentItem::InputAudio { .. }
+                        ) {
+                            *content_item = FunctionCallOutputContentItem::InputText {
+                                text: AUDIO_CONTENT_OMITTED_PLACEHOLDER.to_string(),
+                            };
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

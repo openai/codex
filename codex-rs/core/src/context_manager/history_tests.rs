@@ -40,6 +40,31 @@ use regex_lite::Regex;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
+const TEST_WAV_SAMPLE_RATE: u32 = 8_000;
+
+fn pcm_wav_data_url(sample_count: u32) -> (String, usize) {
+    let padding = sample_count % 2;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + sample_count + padding).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&TEST_WAV_SAMPLE_RATE.to_le_bytes());
+    bytes.extend_from_slice(&TEST_WAV_SAMPLE_RATE.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&8u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&sample_count.to_le_bytes());
+    bytes.resize(
+        bytes.len() + sample_count as usize + padding as usize,
+        /*value*/ 0,
+    );
+    let payload = BASE64_STANDARD.encode(bytes);
+    let payload_len = payload.len();
+    (format!("data:audio/wav;base64,{payload}"), payload_len)
+}
 
 fn assistant_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -513,6 +538,9 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                     image_url: "https://example.com/result.png".to_string(),
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
+                FunctionCallOutputContentItem::InputAudio {
+                    audio_url: "data:audio/mpeg;base64,YXVkaW8=".to_string(),
+                },
             ]),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -537,10 +565,14 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                     image_url: "https://example.com/js-repl-result.png".to_string(),
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
+                FunctionCallOutputContentItem::InputAudio {
+                    audio_url: "data:audio/ogg;base64,YXVkaW8=".to_string(),
+                },
             ]),
             internal_chat_message_metadata_passthrough: None,
         },
     ];
+    let fully_supported_items = items.clone();
     let history = create_history_with_items(items);
     let text_only_modalities = vec![InputModality::Text];
     let stripped = history.for_prompt(&text_only_modalities);
@@ -587,6 +619,10 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                     text: "image content omitted because you do not support image input"
                         .to_string(),
                 },
+                FunctionCallOutputContentItem::InputText {
+                    text: "audio content omitted because you do not support audio input"
+                        .to_string(),
+                },
             ]),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -611,11 +647,23 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                     text: "image content omitted because you do not support image input"
                         .to_string(),
                 },
+                FunctionCallOutputContentItem::InputText {
+                    text: "audio content omitted because you do not support audio input"
+                        .to_string(),
+                },
             ]),
             internal_chat_message_metadata_passthrough: None,
         },
     ];
     assert_eq!(stripped, expected);
+    assert_eq!(
+        create_history_with_items(fully_supported_items.clone()).for_prompt(&[
+            InputModality::Text,
+            InputModality::Image,
+            InputModality::Audio,
+        ]),
+        fully_supported_items
+    );
 
     // With image support, images are preserved
     let modalities = default_input_modalities();
@@ -1947,6 +1995,121 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
 
     assert_eq!(estimated, expected);
     assert!(estimated < raw_len);
+}
+
+#[test]
+fn audio_data_url_payload_does_not_dominate_message_estimate() {
+    let (audio_url, payload_len) = pcm_wav_data_url(/*sample_count*/ 801);
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputAudio { audio_url }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload_len as i64 + approx_bytes_for_tokens(/*tokens*/ 2) as i64;
+
+    assert_eq!(estimated, expected);
+    assert!(estimated < raw_len);
+}
+
+#[test]
+fn audio_data_url_payload_does_not_dominate_function_call_output_estimate() {
+    let (audio_url, payload_len) = pcm_wav_data_url(/*sample_count*/ 800);
+    let item = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "call-audio".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputAudio { audio_url },
+        ]),
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload_len as i64 + approx_bytes_for_tokens(/*tokens*/ 1) as i64;
+
+    assert_eq!(estimated, expected);
+    assert!(estimated < raw_len);
+}
+
+#[test]
+fn audio_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
+    let (audio_url, payload_len) = pcm_wav_data_url(/*sample_count*/ 80_000);
+    let item = ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "call-custom-audio".to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputAudio { audio_url },
+        ]),
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload_len as i64 + approx_bytes_for_tokens(/*tokens*/ 100) as i64;
+
+    assert_eq!(estimated, expected);
+    assert!(estimated < raw_len);
+}
+
+#[test]
+fn malformed_audio_data_url_falls_back_to_whole_url_size_cost() {
+    let payload = "A".repeat(/*n*/ 100_000);
+    let audio_url = format!("data:audio/wav;base64,{payload}");
+    let fallback_bytes = approx_bytes_for_tokens(approx_token_count(&audio_url)) as i64;
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputAudio { audio_url }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+
+    assert_eq!(estimated, raw_len - payload.len() as i64 + fallback_bytes);
+}
+
+#[test]
+fn record_items_omits_audio_that_exceeds_the_output_budget() {
+    let (audio_url, _) = pcm_wav_data_url(/*sample_count*/ 80_000);
+    let item = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "call-audio".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputAudio { audio_url },
+            ]),
+            success: Some(true),
+        },
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut history = ContextManager::new();
+
+    history.record_items([&item], TruncationPolicy::Tokens(50));
+
+    assert_eq!(
+        history.items,
+        vec![ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call-audio".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "[omitted 1 audio items ...]".to_string(),
+                    },
+                ]),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
 }
 
 #[test]

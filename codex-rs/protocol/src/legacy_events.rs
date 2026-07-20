@@ -85,6 +85,8 @@ impl UserMessageItem {
             image_details: self.image_details(),
             local_images: self.local_image_paths(),
             local_image_details: self.local_image_details(),
+            audio: Some(self.audio_urls()),
+            local_audio: self.local_audio_paths(),
             text_elements: self.text_elements(),
         }
     }

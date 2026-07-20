@@ -37,6 +37,7 @@ mod agents_md;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
+mod audio_truncation;
 mod auto_review;
 mod catalog_permission_messages;
 mod cli_stream;
