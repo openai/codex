@@ -577,7 +577,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status.clone(),
         has_live_in_progress_turn,
     );
-    let token_usage_thread = pending.include_turns.then(|| thread.clone());
+    let token_usage_turn_id = pending
+        .include_turns
+        .then(|| restored_token_usage_turn_id(&pending.history_items, &thread));
     let mut initial_turns_page = if let Some(mut page) = pending.paginated_initial_turns_page.take()
     {
         if let (Some(active_turn), Some(params)) =
@@ -714,18 +716,13 @@ pub(super) async fn handle_pending_thread_resume_request(
         .await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
-    if let Some(token_usage_thread) = token_usage_thread {
-        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-            &pending.history_items,
-            token_usage_thread.turns.as_slice(),
-        );
+    if let Some(token_usage_turn_id) = token_usage_turn_id {
         // Rejoining a loaded thread has the same UI contract as a cold resume, but
         // uses the live conversation state instead of reconstructing a new session.
         send_thread_token_usage_update_to_connection(
             outgoing,
             connection_id,
             conversation_id,
-            &token_usage_thread,
             conversation.as_ref(),
             token_usage_turn_id,
         )
