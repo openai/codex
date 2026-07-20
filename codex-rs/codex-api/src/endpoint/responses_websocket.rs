@@ -230,7 +230,7 @@ impl ResponsesWebsocketConnection {
     )]
     pub async fn stream_request(
         &self,
-        request: ResponsesWsRequest,
+        request: ResponsesWsRequest<'_>,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
@@ -245,7 +245,7 @@ impl ResponsesWebsocketConnection {
         let ResponsesWsRequest::ResponseCreate(ws_request) = &request;
         let client_metadata = ws_request.client_metadata.as_ref();
         let timing_log_context = ResponsesWebsocketTimingLogContext {
-            model: ws_request.model.clone(),
+            model: ws_request.model.to_string(),
             session_id: client_metadata
                 .and_then(|metadata| metadata.get(SESSION_ID_CLIENT_METADATA_KEY))
                 .cloned(),
@@ -883,7 +883,7 @@ async fn send_websocket_request(
     Ok(())
 }
 
-fn serialize_websocket_request(request: &ResponsesWsRequest) -> Result<String, ApiError> {
+fn serialize_websocket_request(request: &ResponsesWsRequest<'_>) -> Result<String, ApiError> {
     serde_json::to_string(request)
         .map_err(|err| ApiError::Stream(format!("failed to encode websocket request: {err}")))
 }
@@ -892,6 +892,7 @@ fn serialize_websocket_request(request: &ResponsesWsRequest) -> Result<String, A
 mod tests {
     use super::*;
     use crate::common::ResponseCreateWsRequest;
+    use crate::common::ResponsesApiRequest;
     use codex_protocol::ResponseItemId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -901,10 +902,9 @@ mod tests {
 
     #[test]
     fn direct_serialization_preserves_websocket_request_payload() {
-        let request = ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
+        let api_request = ResponsesApiRequest {
             model: "gpt-test".to_string(),
             instructions: "Use the available tools.".to_string(),
-            previous_response_id: Some("resp-1".to_string()),
             input: vec![ResponseItem::Message {
                 id: Some(ResponseItemId::with_suffix("msg", "1")),
                 role: "user".to_string(),
@@ -929,20 +929,28 @@ mod tests {
             service_tier: Some("priority".to_string()),
             prompt_cache_key: Some("cache-key".to_string()),
             text: None,
-            generate: Some(false),
             client_metadata: Some(HashMap::from([(
                 "traceparent".to_string(),
                 "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01".to_string(),
             )])),
+        };
+        let request = ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
+            previous_response_id: Some("resp-1".to_string()),
+            generate: Some(false),
+            ..ResponseCreateWsRequest::from(&api_request)
         });
 
-        let previous_payload = serde_json::to_value(&request).expect("serialize previous payload");
+        let mut expected_payload =
+            serde_json::to_value(&api_request).expect("serialize responses API request");
+        expected_payload["type"] = json!("response.create");
+        expected_payload["previous_response_id"] = json!("resp-1");
+        expected_payload["generate"] = json!(false);
         let request_text =
             serialize_websocket_request(&request).expect("serialize websocket request");
         let wire_payload =
             serde_json::from_str::<Value>(&request_text).expect("parse websocket request");
 
-        assert_eq!(wire_payload, previous_payload);
+        assert_eq!(wire_payload, expected_payload);
     }
 
     #[test]
