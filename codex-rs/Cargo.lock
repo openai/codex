@@ -2687,7 +2687,6 @@ dependencies = [
  "codex-web-search-extension",
  "codex-windows-sandbox",
  "core_test_support",
- "csv",
  "ctor 0.6.3",
  "dirs",
  "dunce",

@@ -10,5 +10,4 @@ expression: render_to_text(&render_agents_config_lines(&config))
   - max_depth = -2 (V1 only; ignored by V2)
   - default_subagent_model = gpt-5.6-terra
   - default_subagent_reasoning_effort = high
-  - job_max_runtime_seconds = 900
   - interrupt_message = false

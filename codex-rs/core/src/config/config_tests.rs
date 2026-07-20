@@ -8359,6 +8359,25 @@ model = "gpt-5-mini"
     Ok(())
 }
 
+#[test]
+fn legacy_agent_job_max_runtime_seconds_is_accepted_as_noop() {
+    let parsed = toml::from_str::<ConfigToml>(
+        r#"
+[agents]
+job_max_runtime_seconds = 900
+"#,
+    )
+    .expect("legacy agent job setting should deserialize");
+
+    assert_eq!(
+        parsed.agents,
+        Some(AgentsToml {
+            job_max_runtime_seconds: Some(900),
+            ..Default::default()
+        })
+    );
+}
+
 #[tokio::test]
 async fn load_config_resolves_agent_controls() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;

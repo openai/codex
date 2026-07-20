@@ -81,11 +81,6 @@ fn render_agents_config_lines(config: &Config) -> Vec<Line<'static>> {
         )
         .into(),
         format!(
-            "  - job_max_runtime_seconds = {}",
-            format_optional(config.agent_job_max_runtime_seconds)
-        )
-        .into(),
-        format!(
             "  - interrupt_message = {}",
             config.agent_interrupt_message_enabled
         )
@@ -651,7 +646,6 @@ max_concurrent_threads_per_session = 7
 max_depth = -2
 default_subagent_model = "gpt-5.6-terra"
 default_subagent_reasoning_effort = "high"
-job_max_runtime_seconds = 900
 interrupt_message = false
 "#,
         )
