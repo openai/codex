@@ -6,6 +6,7 @@ mod manager;
 pub mod policy_transforms;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
+mod spawn;
 mod windows;
 
 #[cfg(target_os = "linux")]
@@ -25,6 +26,9 @@ pub use manager::SandboxablePreference;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
 pub use manager::with_managed_mitm_ca_readable_root;
+pub use spawn::SpawnRequest;
+pub use spawn::WindowsSandboxSpawnRequest;
+pub use spawn::spawn_process;
 pub use windows::WindowsSandboxFilesystemOverrides;
 pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
 pub use windows::resolve_windows_elevated_filesystem_overrides;
