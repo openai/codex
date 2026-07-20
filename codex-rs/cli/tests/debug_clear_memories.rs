@@ -4,6 +4,7 @@ use anyhow::Result;
 use codex_state::StateRuntime;
 use codex_state::memories_db_path;
 use codex_state::state_db_path;
+use codex_utils_absolute_path::test_support::PathExt;
 use predicates::str::contains;
 use tempfile::TempDir;
 
@@ -16,7 +17,7 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 #[tokio::test]
 async fn debug_clear_memories_resets_state_and_removes_memory_dir() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().to_path_buf());
+    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     let runtime =
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
     drop(runtime);
@@ -139,7 +140,7 @@ INSERT INTO jobs (
 #[tokio::test]
 async fn debug_clear_memories_resets_memories_db_without_state_db() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().to_path_buf());
+    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     let runtime =
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
     runtime.close().await;

@@ -745,6 +745,7 @@ where
 mod tests {
     use super::*;
     use codex_protocol::ThreadId;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -1348,11 +1349,10 @@ mod tests {
 
         async fn insert_thread_row(&self, id: &str, rollout_path: &Path, archived: bool) {
             let state_db_path = codex_state::state_db_path(self.sqlite_home.path());
-            let pool =
-                codex_state::SqliteConfig::new_for_testing(self.sqlite_home.path().to_path_buf())
-                    .open_read_write_pool(&state_db_path)
-                    .await
-                    .expect("sqlite pool");
+            let pool = codex_state::SqliteConfig::new_for_testing(self.sqlite_home.path().abs())
+                .open_read_write_pool(&state_db_path)
+                .await
+                .expect("sqlite pool");
             sqlx::query(
                 r#"
 INSERT INTO threads (

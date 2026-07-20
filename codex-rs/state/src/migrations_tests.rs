@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::test_support::PathExt;
 use sqlx::Connection;
 use sqlx::Row;
 use sqlx::migrate::Migration;
@@ -35,7 +36,7 @@ async fn recency_migration_backfills_and_seeds_old_binary_inserts() {
     let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
-    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.clone());
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
     let pool = sqlite
         .open_read_write_pool(&state_db_path(&sqlite_home))
         .await
@@ -148,7 +149,7 @@ async fn repairs_recency_migration_that_was_applied_as_version_38() {
     let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
-    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.clone());
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
     let pool = sqlite
         .open_read_write_pool(&state_db_path(&sqlite_home))
         .await
@@ -224,7 +225,7 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
     let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
-    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.clone());
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
     let state_path = state_db_path(&sqlite_home);
     let pool = sqlite
         .open_read_write_pool(&state_path)

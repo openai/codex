@@ -11,7 +11,6 @@ use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
 use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
 /// Resolved configuration shared by all Codex SQLite connections.
@@ -25,14 +24,8 @@ impl SqliteConfig {
         Self { sqlite_home }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "test sqlite homes must already be absolute"
-    )]
-    pub fn new_for_testing(sqlite_home: PathBuf) -> Self {
-        Self::from_sqlite_home(
-            AbsolutePathBuf::try_from(sqlite_home).expect("sqlite home should be absolute"),
-        )
+    pub fn new_for_testing(sqlite_home: AbsolutePathBuf) -> Self {
+        Self::from_sqlite_home(sqlite_home)
     }
 
     pub fn home(&self) -> &Path {
