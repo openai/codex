@@ -6,6 +6,7 @@ mod executable_name;
 pub(crate) mod parser;
 pub(crate) mod policy;
 pub mod rule;
+mod sandbox_migration;
 
 pub use amend::AmendError;
 pub use amend::blocking_append_allow_prefix_rule;
@@ -28,3 +29,4 @@ pub use rule::PrefixRule;
 pub use rule::Rule;
 pub use rule::RuleMatch;
 pub use rule::RuleRef;
+pub use sandbox_migration::prefix_rule_migration;
