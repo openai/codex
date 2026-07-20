@@ -23,7 +23,8 @@ fn hooks_file_deserializes_existing_json_shape() {
             "type": "command",
             "command": "python3 /tmp/pre.py",
             "timeout": 10,
-            "statusMessage": "checking"
+            "statusMessage": "checking",
+            "additionalContextLimit": 4096
           }
         ]
       }
@@ -46,6 +47,7 @@ fn hooks_file_deserializes_existing_json_shape() {
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
+                        additional_context_limit: Some(4096),
                     }],
                 }],
                 ..Default::default()
@@ -90,6 +92,7 @@ type = "command"
 command = "python3 /tmp/pre.py"
 timeout = 10
 statusMessage = "checking"
+additionalContextLimit = 4096
 "#,
     )
     .expect("hook events TOML should deserialize");
@@ -105,6 +108,7 @@ statusMessage = "checking"
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    additional_context_limit: Some(4096),
                 }],
             }],
             ..Default::default()
@@ -142,6 +146,7 @@ command = "python3 /tmp/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        additional_context_limit: None,
                     }],
                 }],
                 ..Default::default()
@@ -187,6 +192,7 @@ command = "python3 /enterprise/place/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        additional_context_limit: None,
                     }],
                 }],
                 ..Default::default()
@@ -223,6 +229,7 @@ command_windows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -258,9 +265,26 @@ commandWindows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
         }
     );
+}
+
+#[test]
+fn hook_handler_omits_unset_additional_context_limit() {
+    let handler = HookHandlerConfig::Command {
+        command: "python3 /tmp/pre.py".to_string(),
+        command_windows: None,
+        timeout_sec: None,
+        r#async: false,
+        status_message: None,
+        additional_context_limit: None,
+    };
+
+    let serialized = serde_json::to_value(handler).expect("hook handler should serialize");
+
+    assert_eq!(serialized.get("additionalContextLimit"), None);
 }

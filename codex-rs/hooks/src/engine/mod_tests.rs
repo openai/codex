@@ -66,6 +66,7 @@ fn pre_tool_use_hook_events(command: impl Into<String>) -> HookEventsToml {
                 timeout_sec: Some(10),
                 r#async: false,
                 status_message: Some("checking".to_string()),
+                additional_context_limit: None,
             }],
         }],
         ..Default::default()
@@ -173,6 +174,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -279,6 +281,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -358,6 +361,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -426,6 +430,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -667,6 +672,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -1320,6 +1326,7 @@ print(json.dumps({
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -1439,6 +1446,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()

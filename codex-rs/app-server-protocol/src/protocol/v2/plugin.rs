@@ -519,6 +519,9 @@ pub struct HookMetadata {
     pub command: Option<String>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
+    /// Configured `additionalContext` spill threshold.
+    /// `null` uses 2,500 tokens; `0` disables spilling.
+    pub additional_context_limit: Option<usize>,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
     pub plugin_id: Option<String>,

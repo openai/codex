@@ -311,6 +311,7 @@ mod tests {
             command: Some("/tmp/hook.sh".to_string()),
             timeout_sec: 30,
             status_message: None,
+            additional_context_limit: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
             plugin_id: None,

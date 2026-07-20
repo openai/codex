@@ -600,6 +600,7 @@ mod tests {
             command: "python3 compact_hook.py".to_string(),
             timeout_sec: 5,
             status_message: Some("running compact hook".to_string()),
+            additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,

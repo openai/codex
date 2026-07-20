@@ -72,6 +72,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
             command: hook.command.clone(),
             timeout_sec: hook.timeout_sec,
             status_message: hook.status_message.clone(),
+            additional_context_limit: hook.additional_context_limit,
             source_path: hook.source_path.clone(),
             source: hook.source.into(),
             plugin_id: hook.plugin_id.clone(),

@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookRunSummary;
 
 use crate::engine::ConfiguredHandler;
 use crate::engine::dispatcher;
+use crate::output_spill::AdditionalContext;
 
 /// Identifies a thread-spawned subagent when a normal hook runs inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,19 +35,23 @@ pub(crate) fn trimmed_non_empty(text: &str) -> Option<String> {
 
 pub(crate) fn append_additional_context(
     entries: &mut Vec<HookOutputEntry>,
-    additional_contexts_for_model: &mut Vec<String>,
+    additional_contexts_for_model: &mut Vec<AdditionalContext>,
+    handler: &ConfiguredHandler,
     additional_context: String,
 ) {
     entries.push(HookOutputEntry {
         kind: HookOutputEntryKind::Context,
         text: additional_context.clone(),
     });
-    additional_contexts_for_model.push(additional_context);
+    additional_contexts_for_model.push(AdditionalContext {
+        text: additional_context,
+        limit: handler.additional_context_limit,
+    });
 }
 
 pub(crate) fn flatten_additional_contexts<'a>(
-    additional_contexts: impl IntoIterator<Item = &'a [String]>,
-) -> Vec<String> {
+    additional_contexts: impl IntoIterator<Item = &'a [AdditionalContext]>,
+) -> Vec<AdditionalContext> {
     additional_contexts
         .into_iter()
         .flat_map(|chunk| chunk.iter().cloned())

@@ -492,6 +492,14 @@ impl HooksBrowserView {
             Some(MAX_COMMAND_DETAIL_LINES),
         ));
         lines.push(detail_line("Timeout", &format!("{}s", hook.timeout_sec)));
+        if let Some(limit) = hook.additional_context_limit {
+            let value = if limit == 0 {
+                "unlimited".to_string()
+            } else {
+                format!("limit: {limit} approximate tokens")
+            };
+            lines.push(detail_line("Context", &value));
+        }
         lines.push(detail_line("Trust", hook_trust_label(hook.trust_status)));
         lines
     }
@@ -936,6 +944,7 @@ mod tests {
             command: Some(command.to_string()),
             timeout_sec: 30,
             status_message: None,
+            additional_context_limit: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source,
             plugin_id: plugin_id.map(str::to_string),
@@ -1078,6 +1087,35 @@ mod tests {
         let mut view = view();
         view.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_snapshot!("hooks_browser_handlers", render_lines(&view, /*width*/ 112));
+    }
+
+    #[test]
+    fn renders_handler_additional_context_limit() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut configured_hook = hook(
+            "path:context-limit",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use.sh",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        configured_hook.additional_context_limit = Some(0);
+        let mut view = HooksBrowserView::new(
+            vec![configured_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert_snapshot!(
+            "hooks_browser_additional_context_limit",
+            render_lines(&view, /*width*/ 112)
+        );
     }
 
     #[test]

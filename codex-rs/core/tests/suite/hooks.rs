@@ -842,6 +842,34 @@ print(json.dumps({{
     Ok(())
 }
 
+fn write_session_start_hooks_with_individual_context_limits(
+    home: &Path,
+    limited_additional_context: &str,
+    expanded_additional_context: &str,
+) -> Result<()> {
+    let mut hook_handlers = Vec::new();
+    for (additional_context, additional_context_limit) in [
+        (limited_additional_context, 1),
+        (expanded_additional_context, 100),
+    ] {
+        hook_handlers.push(serde_json::json!({
+            "type": "command",
+            "command": format!("echo {additional_context}"),
+            "additionalContextLimit": additional_context_limit,
+        }));
+    }
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": hook_handlers,
+            }]
+        }
+    });
+
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_compact_session_start_hook_with_context(
     home: &Path,
     additional_context: &str,
@@ -1438,6 +1466,59 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
     let path = spilled_hook_output_path(developer_message).context("spill path")?;
     assert_eq!(fs::read_to_string(path)?, additional_context);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_hooks_apply_additional_context_limits_individually() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello from the reef"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let limited_additional_context = "spill this limited reef context".to_string();
+    let expanded_additional_context = "keep this expanded reef context inline".to_string();
+
+    let test = test_codex()
+        .with_pre_build_hook({
+            let limited_additional_context = limited_additional_context.clone();
+            let expanded_additional_context = expanded_additional_context.clone();
+            move |home| {
+                write_session_start_hooks_with_individual_context_limits(
+                    home,
+                    &limited_additional_context,
+                    &expanded_additional_context,
+                )
+                .expect("failed to write session start hook test fixtures");
+            }
+        })
+        .with_config(trust_discovered_hooks)
+        .build(&server)
+        .await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    let spilled_message = developer_messages
+        .iter()
+        .find(|message| spilled_hook_output_path(message).is_some())
+        .context("spilled limited session start context")?;
+    let path = spilled_hook_output_path(spilled_message).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, limited_additional_context);
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message == &expanded_additional_context),
+        "expected the expanded-limit hook context inline, got {developer_messages:?}"
+    );
     Ok(())
 }
 

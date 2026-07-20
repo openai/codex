@@ -9,7 +9,32 @@ use tracing::warn;
 use uuid::Uuid;
 
 const HOOK_OUTPUTS_DIR: &str = "hook_outputs";
-const HOOK_OUTPUT_TOKEN_LIMIT: usize = 2_500;
+pub(crate) const DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT: usize = 2_500;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AdditionalContextLimit {
+    token_limit: usize,
+}
+
+impl AdditionalContextLimit {
+    pub(crate) fn from_config(value: Option<usize>) -> Self {
+        Self {
+            token_limit: value.unwrap_or(DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT),
+        }
+    }
+}
+
+impl Default for AdditionalContextLimit {
+    fn default() -> Self {
+        Self::from_config(/*value*/ None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AdditionalContext {
+    pub text: String,
+    pub limit: AdditionalContextLimit,
+}
 
 #[derive(Clone)]
 pub(crate) struct HookOutputSpiller {
@@ -31,7 +56,18 @@ impl HookOutputSpiller {
     /// and replaced with the same head/tail preview style used for other truncated
     /// output, plus a path back to the preserved full text.
     pub(crate) async fn maybe_spill_text(&self, thread_id: ThreadId, text: String) -> String {
-        if approx_token_count(&text) <= HOOK_OUTPUT_TOKEN_LIMIT {
+        self.maybe_spill_text_with_limit(thread_id, text, AdditionalContextLimit::default())
+            .await
+    }
+
+    async fn maybe_spill_text_with_limit(
+        &self,
+        thread_id: ThreadId,
+        text: String,
+        limit: AdditionalContextLimit,
+    ) -> String {
+        let token_limit = limit.token_limit;
+        if token_limit == 0 || approx_token_count(&text) <= token_limit {
             return text;
         }
 
@@ -43,31 +79,28 @@ impl HookOutputSpiller {
                 "failed to create hook output directory {}: {err}",
                 parent.display()
             );
-            return formatted_truncate_text(
-                &text,
-                TruncationPolicy::Tokens(HOOK_OUTPUT_TOKEN_LIMIT),
-            );
+            return formatted_truncate_text(&text, TruncationPolicy::Tokens(token_limit));
         }
 
         if let Err(err) = fs::write(path.as_ref(), &text).await {
             warn!("failed to write hook output {}: {err}", path.display());
-            return formatted_truncate_text(
-                &text,
-                TruncationPolicy::Tokens(HOOK_OUTPUT_TOKEN_LIMIT),
-            );
+            return formatted_truncate_text(&text, TruncationPolicy::Tokens(token_limit));
         }
 
-        spilled_hook_output_preview(&text, &path)
+        spilled_hook_output_preview(&text, &path, token_limit)
     }
 
-    pub(crate) async fn maybe_spill_texts(
+    pub(crate) async fn maybe_spill_additional_contexts(
         &self,
         thread_id: ThreadId,
-        texts: Vec<String>,
+        contexts: Vec<AdditionalContext>,
     ) -> Vec<String> {
-        let mut spilled = Vec::with_capacity(texts.len());
-        for text in texts {
-            spilled.push(self.maybe_spill_text(thread_id, text).await);
+        let mut spilled = Vec::with_capacity(contexts.len());
+        for context in contexts {
+            spilled.push(
+                self.maybe_spill_text_with_limit(thread_id, context.text, context.limit)
+                    .await,
+            );
         }
         spilled
     }
@@ -97,12 +130,11 @@ fn hook_output_path(output_dir: &AbsolutePathBuf, thread_id: ThreadId) -> Absolu
 /// Builds the model-visible replacement for a spilled hook output.
 ///
 /// The path footer is budgeted before truncation so adding the recovery path
-/// does not let the preview grow past the hook-output limit.
-fn spilled_hook_output_preview(text: &str, path: &AbsolutePathBuf) -> String {
+/// does not consume the configured preview budget.
+fn spilled_hook_output_preview(text: &str, path: &AbsolutePathBuf, token_limit: usize) -> String {
     let footer = format!("\n\nFull hook output saved to: {}", path.display());
-    let preview_policy = TruncationPolicy::Tokens(
-        HOOK_OUTPUT_TOKEN_LIMIT.saturating_sub(approx_token_count(&footer)),
-    );
+    let preview_policy =
+        TruncationPolicy::Tokens(token_limit.saturating_sub(approx_token_count(&footer)));
     format!("{}{footer}", formatted_truncate_text(text, preview_policy))
 }
 

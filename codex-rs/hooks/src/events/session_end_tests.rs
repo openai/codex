@@ -65,6 +65,7 @@ fn handler(matcher: Option<&str>) -> ConfiguredHandler {
         command: "echo hook".to_string(),
         timeout_sec: 2,
         status_message: None,
+        additional_context_limit: Default::default(),
         source_path: test_path_buf("/tmp/hooks.json").abs(),
         source: HookSource::User,
         display_order: 0,
