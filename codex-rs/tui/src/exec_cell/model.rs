@@ -5,6 +5,7 @@
 //! end events into the right cell, and it treats "call id not found" as a real signal (for
 //! example, an orphan end that should render as a separate history entry).
 
+use std::borrow::Cow;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -15,7 +16,32 @@ use codex_protocol::parse_command::ParsedCommand;
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     /// The aggregated stderr + stdout interleaved.
-    pub(crate) aggregated_output: String,
+    aggregated_output: String,
+}
+
+impl CommandOutput {
+    pub(crate) fn new(exit_code: i32, aggregated_output: String) -> Self {
+        Self {
+            exit_code,
+            aggregated_output,
+        }
+    }
+
+    /// Returns the total number of logical lines and the number retained for rendering.
+    pub(super) fn line_counts(&self) -> (usize, usize) {
+        let total = self.aggregated_output.lines().count();
+        (total, total)
+    }
+
+    /// Returns retained preview lines with reverse traversal for efficient tail rendering.
+    pub(super) fn lines(&self) -> impl DoubleEndedIterator<Item = Cow<'_, str>> {
+        self.aggregated_output.lines().map(Cow::Borrowed)
+    }
+
+    /// Returns lines for the expanded transcript, including any storage-level omission marker.
+    pub(super) fn transcript_lines(&self) -> impl Iterator<Item = Cow<'_, str>> {
+        self.aggregated_output.lines().map(Cow::Borrowed)
+    }
 }
 
 #[derive(Debug)]
