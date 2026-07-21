@@ -11,6 +11,7 @@ use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
 use codex_exec_server::LOCAL_FS;
 use codex_otel::SessionTelemetry;
+use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -135,11 +136,12 @@ fn emit_skill_injected_metric(
     let Some(otel) = otel else {
         return;
     };
+    let skill_name_tag = sanitize_metric_tag_value(skill.name.as_str());
 
     otel.counter(
         "codex.skill.injected",
         /*inc*/ 1,
-        &[("status", status), ("skill", skill.name.as_str())],
+        &[("status", status), ("skill", skill_name_tag.as_str())],
     );
 }
 
