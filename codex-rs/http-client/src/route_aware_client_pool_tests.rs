@@ -11,6 +11,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use pretty_assertions::assert_eq;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
 
 use super::*;
 use crate::OutboundProxyPolicy;
@@ -210,6 +212,213 @@ async fn bounds_cached_routes_and_rebuilds_an_evicted_route() {
     );
 }
 
+#[tokio::test]
+async fn request_timeout_covers_route_selection() {
+    let pool = manual_redirect_pool();
+    let mut request = reqwest::Request::new(
+        Method::GET,
+        reqwest::Url::parse("http://route-selection-timeout.test/start")
+            .expect("request URL should parse"),
+    );
+    *request.timeout_mut() = Some(Duration::from_millis(10));
+    let resolver_calls = Arc::new(AtomicUsize::new(0));
+    let observed_resolver_calls = Arc::clone(&resolver_calls);
+
+    let error = pool
+        .send_with_resolver(request, move |_| {
+            observed_resolver_calls.fetch_add(1, Ordering::SeqCst);
+            async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(OutboundProxyRoute::Direct)
+            }
+        })
+        .await
+        .expect_err("request should time out during route selection");
+
+    assert!(matches!(error, RouteAwareRequestError::Timeout));
+    assert_eq!(resolver_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn request_timeout_is_shared_across_redirect_hops() {
+    let (address, server) = spawn_response_server(vec![
+        "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_string(),
+    ]);
+    let pool = manual_redirect_pool();
+    let mut request = reqwest::Request::new(
+        Method::GET,
+        reqwest::Url::parse(&format!("http://{address}/start")).expect("request URL should parse"),
+    );
+    *request.timeout_mut() = Some(Duration::from_secs(2));
+    let resolver_calls = Arc::new(AtomicUsize::new(0));
+    let observed_resolver_calls = Arc::clone(&resolver_calls);
+
+    let error = pool
+        .send_with_resolver(request, move |_| {
+            let resolver_call = observed_resolver_calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                let delay = if resolver_call == 0 {
+                    Duration::from_millis(500)
+                } else {
+                    Duration::from_millis(1_750)
+                };
+                tokio::time::sleep(delay).await;
+                Ok(OutboundProxyRoute::Direct)
+            }
+        })
+        .await
+        .expect_err("redirect chain should exceed its shared timeout");
+
+    assert!(matches!(error, RouteAwareRequestError::Timeout));
+    assert_eq!(resolver_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        server.join().expect("redirect server should finish").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn rejects_replayable_redirect_to_unsupported_scheme() {
+    let (address, server) = spawn_response_server(vec![
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: ftp://example.com/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_string(),
+    ]);
+    let pool = manual_redirect_pool();
+    let request = reqwest::Request::new(
+        Method::GET,
+        reqwest::Url::parse(&format!("http://{address}/start")).expect("request URL should parse"),
+    );
+
+    let error = pool
+        .send_with_resolver(request, |_| async { Ok(OutboundProxyRoute::Direct) })
+        .await
+        .expect_err("unsupported redirect scheme should fail");
+
+    assert!(matches!(
+        error,
+        RouteAwareRequestError::UnsupportedRedirectScheme(scheme) if scheme == "ftp"
+    ));
+    assert_eq!(
+        server.join().expect("redirect server should finish").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn rejects_redirects_beyond_the_limit() {
+    let responses = (0..=MAX_REDIRECTS)
+        .map(|redirect| {
+            format!(
+                "HTTP/1.1 302 Found\r\nLocation: /hop/{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                redirect + 1
+            )
+        })
+        .collect();
+    let (address, server) = spawn_response_server(responses);
+    let pool = manual_redirect_pool();
+    let request = reqwest::Request::new(
+        Method::GET,
+        reqwest::Url::parse(&format!("http://{address}/start")).expect("request URL should parse"),
+    );
+
+    let error = pool
+        .send_with_resolver(request, |_| async { Ok(OutboundProxyRoute::Direct) })
+        .await
+        .expect_err("redirect chain should stop at the limit");
+    let requests = server.join().expect("redirect server should finish");
+
+    assert!(matches!(error, RouteAwareRequestError::TooManyRedirects));
+    assert_eq!(requests.len(), MAX_REDIRECTS + 1);
+    assert_eq!(
+        requests.last().and_then(|request| request.lines().next()),
+        Some("GET /hop/10 HTTP/1.1")
+    );
+}
+
+#[tokio::test]
+async fn disabled_pool_logging_does_not_expose_request_or_response_data() {
+    let (address, server) = spawn_response_server(vec![
+        "HTTP/1.1 200 OK\r\nx-sensitive-response: response-secret-value\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            .to_string(),
+    ]);
+    let pool = RouteAwareClientPool::with_builder_factory(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+        || reqwest::Client::builder().no_proxy(),
+        PoolRequestLogging::Disabled,
+    );
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(TestLogWriter {
+                buffer: Arc::clone(&buffer),
+            })
+            .with_filter(
+                tracing_subscriber::filter::Targets::new()
+                    .with_target("codex_http_client", tracing::Level::TRACE),
+            ),
+    );
+    let _guard = tracing::subscriber::set_default(subscriber);
+    tracing::debug!(target: "codex_http_client", "log capture sentinel");
+    let request_url = format!(
+        "http://auth-user:password-secret-value@{address}/token?client_secret=query-secret-value"
+    );
+    let mut request = reqwest::Request::new(
+        Method::POST,
+        reqwest::Url::parse(&request_url).expect("request URL should parse"),
+    );
+    request.headers_mut().insert(
+        "x-sensitive-request",
+        HeaderValue::from_static("request-header-secret-value"),
+    );
+    *request.body_mut() = Some("request-body-secret-value".into());
+    *request.timeout_mut() = Some(Duration::from_secs(2));
+
+    let response = pool
+        .send_with_resolver(request, |_| async { Ok(OutboundProxyRoute::Direct) })
+        .await
+        .expect("route-aware request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    server.join().expect("server thread should finish");
+
+    let unresponsive_listener =
+        TcpListener::bind(("127.0.0.1", 0)).expect("unresponsive listener should bind");
+    let unresponsive_address = unresponsive_listener
+        .local_addr()
+        .expect("unresponsive listener should have an address");
+    let failure_url = format!(
+        "http://auth-user:failure-password-secret-value@{unresponsive_address}/token?client_secret=failure-query-secret-value"
+    );
+    let mut request = reqwest::Request::new(
+        Method::POST,
+        reqwest::Url::parse(&failure_url).expect("failure URL should parse"),
+    );
+    *request.timeout_mut() = Some(Duration::from_millis(100));
+
+    let error = pool
+        .send_with_resolver(request, |_| async { Ok(OutboundProxyRoute::Direct) })
+        .await
+        .expect_err("request to an unresponsive listener should time out");
+    assert!(error.is_timeout());
+
+    let logs = String::from_utf8(buffer.lock().expect("log buffer lock").clone())
+        .expect("logs should be UTF-8");
+    assert!(logs.contains("log capture sentinel"));
+    for secret in [
+        "password-secret-value",
+        "query-secret-value",
+        "request-header-secret-value",
+        "request-body-secret-value",
+        "response-secret-value",
+        "failure-password-secret-value",
+        "failure-query-secret-value",
+    ] {
+        assert!(!logs.contains(secret), "logs exposed {secret}:\n{logs}");
+    }
+}
+
 #[derive(Clone)]
 struct FakeRouteResolver {
     routes: Arc<HashMap<String, OutboundProxyRoute>>,
@@ -255,4 +464,116 @@ async fn resolve_with(
         })
         .await?;
     Ok(client)
+}
+
+fn manual_redirect_pool() -> RouteAwareClientPool {
+    RouteAwareClientPool::with_builder_factory(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+        || reqwest::Client::builder().no_proxy(),
+        PoolRequestLogging::Enabled,
+    )
+}
+
+fn spawn_response_server(
+    responses: Vec<String>,
+) -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("response listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("response listener should have an address");
+    listener
+        .set_nonblocking(true)
+        .expect("response listener should become nonblocking");
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for response in responses {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "response server should receive the next request"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("response server should accept: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("response stream should get a read timeout");
+            requests.push(read_http_message(&mut stream));
+            stream
+                .write_all(response.as_bytes())
+                .expect("response server should write response");
+        }
+        requests
+    });
+    (address, server)
+}
+
+fn read_http_message(stream: &mut impl Read) -> String {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let bytes_read = stream.read(&mut chunk).expect("HTTP message should read");
+        if bytes_read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..bytes_read]);
+        if let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            let body_start = header_end + 4;
+            let headers = String::from_utf8_lossy(&buffer[..body_start]);
+            let content_length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find_map(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if buffer.len() >= body_start + content_length {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&buffer).into_owned()
+}
+
+#[derive(Clone)]
+struct TestLogWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+struct TestLogSink {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestLogWriter {
+    type Writer = TestLogSink;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TestLogSink {
+            buffer: Arc::clone(&self.buffer),
+        }
+    }
+}
+
+impl Write for TestLogSink {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let mut log_buffer = self
+            .buffer
+            .lock()
+            .map_err(|_| io::Error::other("log buffer lock was poisoned"))?;
+        log_buffer.extend(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
