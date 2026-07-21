@@ -204,21 +204,6 @@ pub fn path_mask_allows(
     )
 }
 
-/// Returns whether an explicit allow ACE for one of the provided SIDs grants any bit in `desired_mask`.
-pub fn path_mask_has_explicit_allow_ace(
-    path: &Path,
-    psids: &[*mut c_void],
-    desired_mask: u32,
-) -> Result<bool> {
-    path_mask_allows_with_scope(
-        path,
-        psids,
-        desired_mask,
-        /*require_all_bits*/ false,
-        AceScope::Explicit,
-    )
-}
-
 fn path_mask_allows_with_scope(
     path: &Path,
     psids: &[*mut c_void],
@@ -366,6 +351,36 @@ pub unsafe fn dacl_has_read_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) ->
 const WRITE_ALLOW_MASK: u32 =
     FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 
+unsafe fn dacl_allow_mask_needs_refresh(
+    p_dacl: *mut ACL,
+    psid: *mut c_void,
+    allow_mask: u32,
+    disallow_mask: u32,
+) -> bool {
+    !dacl_mask_allows(p_dacl, &[psid], allow_mask, /*require_all_bits*/ true)
+        || dacl_mask_allows_with_scope(
+            p_dacl,
+            &[psid],
+            disallow_mask,
+            /*require_all_bits*/ false,
+            AceScope::Explicit,
+        )
+}
+
+/// Returns whether any provided SID needs its writable-root allow ACE refreshed.
+pub fn path_write_aces_need_refresh(path: &Path, psids: &[*mut c_void]) -> Result<bool> {
+    unsafe {
+        let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+        let needs_refresh = psids.iter().any(|psid| {
+            dacl_allow_mask_needs_refresh(p_dacl, *psid, WRITE_ALLOW_MASK, FILE_DELETE_CHILD)
+        });
+        if !p_sd.is_null() {
+            LocalFree(p_sd as HLOCAL);
+        }
+        Ok(needs_refresh)
+    }
+}
+
 unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     path: &Path,
     sids: &[*mut c_void],
@@ -376,15 +391,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
-        if dacl_mask_allows(p_dacl, &[*sid], allow_mask, /*require_all_bits*/ true)
-            && !dacl_mask_allows_with_scope(
-                p_dacl,
-                &[*sid],
-                disallow_mask,
-                /*require_all_bits*/ false,
-                AceScope::Explicit,
-            )
-        {
+        if !dacl_allow_mask_needs_refresh(p_dacl, *sid, allow_mask, disallow_mask) {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {

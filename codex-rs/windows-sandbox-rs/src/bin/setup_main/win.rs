@@ -11,18 +11,16 @@ use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::add_deny_write_ace;
-use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::install_wfp_filters;
-use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
-use codex_windows_sandbox::path_mask_has_explicit_allow_ace;
+use codex_windows_sandbox::path_write_aces_need_refresh;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -60,12 +58,12 @@ use windows_sys::Win32::Security::CONTAINER_INHERIT_ACE;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OBJECT_INHERIT_ACE;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
-use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+#[cfg(test)]
 const WRITE_ROOT_ALLOW_MASK: u32 =
     FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 
@@ -159,18 +157,6 @@ fn workspace_write_cap_sids_for_path(
         }
     }
     Ok(sid_strs)
-}
-
-fn write_root_needs_refresh(root: &Path, psid: *mut c_void) -> Result<bool> {
-    if !path_mask_allows(
-        root,
-        &[psid],
-        WRITE_ROOT_ALLOW_MASK,
-        /*require_all_bits*/ true,
-    )? {
-        return Ok(true);
-    }
-    path_mask_has_explicit_allow_ace(root, &[psid], FILE_DELETE_CHILD)
 }
 
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
@@ -845,8 +831,6 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 
     let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
-    let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
-
     for root in &payload.write_roots {
         if !seen_write_roots.insert(root.clone()) {
             continue;
@@ -858,35 +842,25 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             )?;
             continue;
         }
-        let mut need_grant = false;
-        let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
-        let cap_label = if is_command_cwd {
-            "workspace_cap"
-        } else {
-            "root_cap"
-        };
         let root_cap_sid_str =
             workspace_write_cap_sid_for_root(&payload.codex_home, &payload.command_cwd, root)?;
         let root_cap_psid = unsafe {
             convert_string_sid_to_sid(&root_cap_sid_str)
                 .ok_or_else(|| anyhow::anyhow!("convert write root capability SID failed"))?
         };
-        for (label, psid) in [
-            ("sandbox_group", sandbox_group_psid),
-            (cap_label, root_cap_psid),
-        ] {
-            let needs_refresh = match write_root_needs_refresh(root, psid) {
+        let need_grant =
+            match path_write_aces_need_refresh(root, &[sandbox_group_psid, root_cap_psid]) {
                 Ok(needs_refresh) => needs_refresh,
                 Err(e) => {
                     refresh_errors.push(format!(
-                        "write ACE check failed on {} for {label}: {}",
+                        "write ACE check failed on {}: {}",
                         root.display(),
                         e
                     ));
                     log_line(
                         log,
                         &format!(
-                            "write ACE check failed on {} for {label}: {}; continuing",
+                            "write ACE check failed on {}: {}; continuing",
                             root.display(),
                             e
                         ),
@@ -894,10 +868,6 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
                     true
                 }
             };
-            if needs_refresh {
-                need_grant = true;
-            }
-        }
         unsafe {
             LocalFree(root_cap_psid as HLOCAL);
         }
@@ -1051,12 +1021,12 @@ mod tests {
     use super::WRITE_ROOT_ALLOW_MASK;
     use super::convert_string_sid_to_sid;
     use super::workspace_write_cap_sids_for_path;
-    use super::write_root_needs_refresh;
     use codex_otel::StatsigMetricsSettings;
     use codex_windows_sandbox::ensure_allow_mask_aces;
     use codex_windows_sandbox::ensure_allow_write_aces;
     use codex_windows_sandbox::load_or_create_cap_sids;
     use codex_windows_sandbox::path_mask_allows;
+    use codex_windows_sandbox::path_write_aces_need_refresh;
     use codex_windows_sandbox::workspace_write_cap_sid_for_root;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1126,17 +1096,58 @@ mod tests {
         let seeded = unsafe { ensure_allow_mask_aces(&workspace, &[psid], stale_write_mask) }
             .expect("seed stale write ACE");
         let needs_refresh_before =
-            write_root_needs_refresh(&workspace, psid).expect("check stale write ACE");
+            path_write_aces_need_refresh(&workspace, &[psid]).expect("check stale write ACE");
         let replaced = unsafe { ensure_allow_write_aces(&workspace, &[psid]) }
             .expect("replace stale write ACE");
         let needs_refresh_after =
-            write_root_needs_refresh(&workspace, psid).expect("check refreshed write ACE");
+            path_write_aces_need_refresh(&workspace, &[psid]).expect("check refreshed write ACE");
         unsafe {
             LocalFree(psid as HLOCAL);
         }
 
         assert_eq!(
             (seeded, needs_refresh_before, replaced, needs_refresh_after),
+            (true, true, true, false)
+        );
+    }
+
+    #[test]
+    fn write_root_refresh_checks_each_sid() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let workspace = temp.path().join("workspace");
+        let other_root = temp.path().join("other-root");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&workspace).expect("create workspace");
+        fs::create_dir_all(&other_root).expect("create other root");
+
+        let workspace_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
+            .expect("workspace sid");
+        let other_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &other_root)
+            .expect("other root sid");
+        let workspace_psid =
+            unsafe { convert_string_sid_to_sid(&workspace_sid).expect("convert workspace sid") };
+        let other_psid =
+            unsafe { convert_string_sid_to_sid(&other_sid).expect("convert other root sid") };
+
+        let seeded = unsafe { ensure_allow_write_aces(&workspace, &[workspace_psid]) }
+            .expect("seed workspace SID");
+        let needs_refresh_before =
+            path_write_aces_need_refresh(&workspace, &[workspace_psid, other_psid])
+                .expect("check both SIDs");
+        let refreshed =
+            unsafe { ensure_allow_write_aces(&workspace, &[workspace_psid, other_psid]) }
+                .expect("refresh both SIDs");
+        let needs_refresh_after =
+            path_write_aces_need_refresh(&workspace, &[workspace_psid, other_psid])
+                .expect("recheck both SIDs");
+        unsafe {
+            LocalFree(workspace_psid as HLOCAL);
+            LocalFree(other_psid as HLOCAL);
+        }
+
+        assert_eq!(
+            (seeded, needs_refresh_before, refreshed, needs_refresh_after,),
             (true, true, true, false)
         );
     }
@@ -1167,8 +1178,8 @@ mod tests {
             /*require_all_bits*/ false,
         )
         .expect("check inherited stale write ACE");
-        let needs_refresh =
-            write_root_needs_refresh(&workspace, psid).expect("check inherited stale write ACE");
+        let needs_refresh = path_write_aces_need_refresh(&workspace, &[psid])
+            .expect("check inherited stale write ACE");
         let first_refresh = unsafe { ensure_allow_write_aces(&workspace, &[psid]) }
             .expect("first inherited write ACE refresh");
         let second_refresh = unsafe { ensure_allow_write_aces(&workspace, &[psid]) }
