@@ -274,6 +274,8 @@ pub(crate) async fn handle_external_agent_config_migration_prompt(
             .external_agent_config_detect(ExternalAgentConfigDetectParams {
                 include_home: true,
                 cwds: Some(vec![cwd.clone()]),
+                max_session_age_days: None,
+                max_sessions: None,
                 source: None,
                 migration_source: Some(source.migration_source().to_string()),
             })

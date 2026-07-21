@@ -64,6 +64,7 @@ pub use service::ExternalAgentConfigImportSuccess;
 pub use service::ExternalAgentConfigMigrationItem;
 pub use service::ExternalAgentConfigMigrationItemType;
 pub use service::ExternalAgentConfigService;
+pub use service::ExternalAgentSessionImportLimits;
 pub use service::MigrationDetails;
 pub use service::NamedMigration;
 pub use service::PendingPluginImport;

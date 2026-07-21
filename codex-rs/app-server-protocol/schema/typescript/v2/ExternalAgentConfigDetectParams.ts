@@ -12,6 +12,14 @@ includeHome?: boolean,
  */
 cwds?: Array<string> | null,
 /**
+ * Maximum age in days for detected sessions. Missing values use the default limit.
+ */
+maxSessionAgeDays?: number | null,
+/**
+ * Maximum number of sessions to detect. Missing values use the default limit.
+ */
+maxSessions?: number | null,
+/**
  * Deprecated field retained for compatibility. This field is ignored; use `migrationSource`
  * to select the migration source.
  */

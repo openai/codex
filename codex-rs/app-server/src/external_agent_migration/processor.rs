@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
@@ -30,6 +31,7 @@ use codex_external_agent_migration::ExternalAgentConfigImportItemResult as CoreI
 use codex_external_agent_migration::ExternalAgentConfigImportOutcome as CoreImportOutcome;
 use codex_external_agent_migration::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use codex_external_agent_migration::ExternalAgentConfigService;
+use codex_external_agent_migration::ExternalAgentSessionImportLimits;
 use codex_external_agent_migration::PluginImportOutcome;
 use codex_external_agent_migration::record_import_error;
 use codex_external_agent_migration::sessions::ExternalAgentSessionMigration as CoreSessionMigration;
@@ -119,6 +121,18 @@ impl ExternalAgentConfigRequestProcessor {
         let migration_service = self
             .migration_service
             .with_migration_source(params.migration_source.as_deref());
+        let default_session_import_limits = ExternalAgentSessionImportLimits::default();
+        let migration_service =
+            migration_service.with_session_import_limits(ExternalAgentSessionImportLimits {
+                max_age: params
+                    .max_session_age_days
+                    .map(|days| Duration::from_secs(u64::from(days) * 24 * 60 * 60))
+                    .unwrap_or(default_session_import_limits.max_age),
+                max_sessions: params
+                    .max_sessions
+                    .map(|max_sessions| max_sessions as usize)
+                    .unwrap_or(default_session_import_limits.max_sessions),
+            });
         let options = ExternalAgentConfigDetectOptions {
             include_home: params.include_home,
             include_memory: self.external_agent_memory_import_enabled().await,

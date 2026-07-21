@@ -171,7 +171,8 @@ fn detects_cur_sessions_in_batches_and_redetects_modified_imports() {
     let encoded_project = encode_project_path(&project_root);
     let modified_at = SystemTime::now();
     let mut expected = Vec::new();
-    for index in 0..=SESSION_IMPORT_MAX_COUNT {
+    let default_limits = ExternalAgentSessionImportLimits::default();
+    for index in 0..=default_limits.max_sessions {
         let session_id = format!("session-{index:02}");
         let title = format!("request {index}");
         let path = write_transcript(&external_agent_home, &encoded_project, &session_id, &title);

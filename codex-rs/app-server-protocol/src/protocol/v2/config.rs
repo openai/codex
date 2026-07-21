@@ -699,6 +699,12 @@ pub struct ExternalAgentConfigDetectParams {
     /// Zero or more working directories to include for repo-scoped detection.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<PathBuf>>,
+    /// Maximum age in days for detected sessions. Missing values use the default limit.
+    #[ts(optional = nullable)]
+    pub max_session_age_days: Option<u32>,
+    /// Maximum number of sessions to detect. Missing values use the default limit.
+    #[ts(optional = nullable)]
+    pub max_sessions: Option<u32>,
     /// Deprecated field retained for compatibility. This field is ignored; use `migrationSource`
     /// to select the migration source.
     #[ts(optional = nullable)]
