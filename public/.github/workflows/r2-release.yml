@@ -6,6 +6,12 @@ on:
       tag:
         required: true
         type: string
+      make_latest:
+        required: true
+        type: boolean
+      prerelease:
+        required: true
+        type: boolean
 
 permissions: {}
 
@@ -32,7 +38,11 @@ jobs:
           AWS_REGION: ${{ vars.CODEX_R2_REGION }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_MAKE_LATEST: ${{ inputs.make_latest }}
+          RELEASE_PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
           python3 .github/scripts/publish_r2_release.py \
-            --tag "${RELEASE_TAG}"
+            --tag "${RELEASE_TAG}" \
+            --make-latest "${RELEASE_MAKE_LATEST}" \
+            --prerelease "${RELEASE_PRERELEASE}"
