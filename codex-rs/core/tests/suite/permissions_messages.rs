@@ -51,6 +51,8 @@ fn model_with_approval_messages(
         approvals: Some(ApprovalMessages {
             on_request: Some(on_request.to_string()),
             on_request_auto_review: Some(on_request_auto_review.to_string()),
+            never: None,
+            unless_trusted: None,
         }),
         auto_review: None,
         permissions: None,
@@ -176,6 +178,69 @@ async fn model_change_appends_new_catalog_approval_message() -> Result<()> {
             .last()
             .is_some_and(|text| text.contains("model B approvals"))
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_non_on_request_approval_messages_are_sent_in_initial_permissions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    for (approval_policy, approvals, expected, unexpected) in [
+        (
+            AskForApproval::Never,
+            ApprovalMessages {
+                on_request: None,
+                on_request_auto_review: None,
+                never: Some("catalog never approval instructions".to_string()),
+                unless_trusted: None,
+            },
+            "catalog never approval instructions",
+            "Approval policy is currently never",
+        ),
+        (
+            AskForApproval::UnlessTrusted,
+            ApprovalMessages {
+                on_request: None,
+                on_request_auto_review: None,
+                never: None,
+                unless_trusted: Some("catalog unless-trusted approval instructions".to_string()),
+            },
+            "catalog unless-trusted approval instructions",
+            "`approval_policy` is `unless-trusted`",
+        ),
+    ] {
+        let server = start_mock_server().await;
+        let req = mount_sse_once(
+            &server,
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+        )
+        .await;
+        let model_slug = "catalog-non-on-request-approvals-model";
+        let mut model = model_info_from_slug(model_slug);
+        model.model_messages = Some(ModelMessages {
+            instructions_template: None,
+            instructions_variables: None,
+            approvals: Some(approvals),
+            auto_review: None,
+            permissions: None,
+        });
+        let mut builder = test_codex()
+            .with_model(model_slug)
+            .with_config(move |config| {
+                config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+                config.model_catalog = Some(ModelsResponse {
+                    models: vec![model],
+                });
+            });
+        let test = builder.build(&server).await?;
+
+        submit_text_turn(&test, "hello").await?;
+
+        let permissions = permissions_texts(&req.single_request());
+        assert_eq!(permissions.len(), 1);
+        assert!(permissions[0].contains(expected));
+        assert!(!permissions[0].contains(unexpected));
+    }
     Ok(())
 }
 
