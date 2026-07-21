@@ -125,7 +125,21 @@ impl Default for CrosstermEventSource {
 
 impl EventSource for CrosstermEventSource {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>> {
-        Pin::new(&mut self.get_mut().0).poll_next(cx)
+        // Crossterm's Windows backend expects Win32 input records. If VT input is inherited or
+        // restored by another console client, navigation keys arrive as literal escape bytes.
+        #[cfg(windows)]
+        let _ = super::windows_console::ensure_input_record_mode();
+
+        let result = Pin::new(&mut self.get_mut().0).poll_next(cx);
+
+        // EventStream starts its blocking reader before returning Pending, so reassert the mode
+        // after that transition as well.
+        #[cfg(windows)]
+        if result.is_pending() {
+            let _ = super::windows_console::ensure_input_record_mode();
+        }
+
+        result
     }
 }
 
