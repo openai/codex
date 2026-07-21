@@ -355,7 +355,8 @@ async fn plugins_popup_upgrades_user_configured_git_marketplace_from_marketplace
             "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
         )
         .expect("marketplace config"),
-    );
+    )
+    .expect("marketplace user config should be valid");
 
     render_loaded_plugins_popup(
         &mut chat,
@@ -426,7 +427,8 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
             "[marketplaces.debug]\nsource_type = \"git\"\nsource = \"https://github.com/owner/debug.git\"\n",
         )
         .expect("marketplace config"),
-    );
+    )
+    .expect("marketplace user config should be valid");
     render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
@@ -515,7 +517,8 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
             "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
         )
         .expect("marketplace config"),
-    );
+    )
+    .expect("marketplace user config should be valid");
 
     render_loaded_plugins_popup(
         &mut chat,

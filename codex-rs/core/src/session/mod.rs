@@ -1709,9 +1709,17 @@ impl Session {
             let state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             for (config_toml_path, user_config) in reloaded_user_configs {
-                config.config_layer_stack = config
+                let config_layer_stack = match config
                     .config_layer_stack
-                    .with_user_config(&config_toml_path, user_config);
+                    .with_user_config(&config_toml_path, user_config)
+                {
+                    Ok(config_layer_stack) => config_layer_stack,
+                    Err(err) => {
+                        warn!("failed to validate user config while reloading layer: {err}");
+                        return;
+                    }
+                };
+                config.config_layer_stack = config_layer_stack;
             }
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);

@@ -25,12 +25,14 @@ use codex_config::ThreadConfigSource;
 use codex_config::compose_requirements;
 use codex_config::config_error_from_ignored_toml_fields;
 use codex_config::config_error_from_toml;
+use codex_config::config_error_from_typed_toml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_requirements_toml;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::LOCAL_FS;
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -379,6 +381,236 @@ unknown_key = true"#;
         config_error_from_ignored_toml_fields::<ConfigToml>(&config_path, contents)
             .expect("unknown field error");
     assert_eq!(config_error, &expected_config_error);
+}
+
+#[tokio::test]
+async fn non_strict_config_rejects_mixed_shell_environment_policy_before_higher_layer_merge() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[shell_environment_policy]
+exclude = ["LEGACY_*"]
+
+[shell_environment_policy.filters]
+"CANONICAL_*" = "include"
+"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![(
+            "shell_environment_policy.filters.HIGHER_*".to_string(),
+            TomlValue::String("exclude".to_string()),
+        )])
+        .strict_config(/*strict_config*/ false)
+        .build()
+        .await
+        .expect_err("one config layer must not mix legacy lists and filters");
+
+    assert_eq!(
+        config_error_from_io(&err),
+        &config_error_from_typed_toml::<ConfigToml>(&config_path, contents)
+            .expect("mixed shell policy should produce a typed config error")
+    );
+}
+
+#[tokio::test]
+async fn shell_environment_policy_unknown_fields_follow_strict_config() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[shell_environment_policy]
+future_field = true
+"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ false)
+        .build()
+        .await
+        .expect("non-strict config should ignore unknown fields");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("strict config should reject unknown fields");
+
+    assert_eq!(
+        config_error_from_io(&err).message,
+        "unknown configuration field `shell_environment_policy.future_field`"
+    );
+}
+
+#[tokio::test]
+async fn non_strict_config_merges_shell_filter_case_variants_across_layers() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[shell_environment_policy.filters]
+"SECRET_TOKEN" = "exclude"
+"#;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![(
+            "shell_environment_policy.filters.secret_token".to_string(),
+            TomlValue::String("include".to_string()),
+        )])
+        .strict_config(/*strict_config*/ false)
+        .build()
+        .await
+        .expect("higher-priority case-variant filter should override the lower layer");
+
+    assert!(
+        config
+            .permissions
+            .shell_environment_policy
+            .exclude
+            .is_empty()
+    );
+    assert_eq!(
+        config.permissions.shell_environment_policy.include_only,
+        vec![EnvironmentVariablePattern::new_case_insensitive(
+            "secret_token"
+        )]
+    );
+}
+
+#[tokio::test]
+async fn non_strict_config_rejects_malformed_shell_policy_before_representation_conversion() {
+    let cases = [
+        (
+            r#"
+[shell_environment_policy]
+exclude = ["SECRET_*", 17]
+"#,
+            vec![(
+                "shell_environment_policy.filters.PATH".to_string(),
+                TomlValue::String("include".to_string()),
+            )],
+        ),
+        (
+            r#"
+[shell_environment_policy.filters]
+"SECRET_*" = "keep"
+"#,
+            vec![(
+                "shell_environment_policy.exclude".to_string(),
+                TomlValue::Array(vec![TomlValue::String("PATH".to_string())]),
+            )],
+        ),
+    ];
+
+    for (contents, cli_overrides) in cases {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+        ConfigBuilder::default()
+            .codex_home(tmp.path().to_path_buf())
+            .fallback_cwd(Some(tmp.path().to_path_buf()))
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .cli_overrides(cli_overrides)
+            .strict_config(/*strict_config*/ false)
+            .build()
+            .await
+            .expect_err("malformed shell policy should be rejected before conversion");
+    }
+}
+
+#[tokio::test]
+async fn non_strict_config_allows_replaced_shell_policy_fields_outside_filter_representation() {
+    let cases = [
+        (
+            r#"
+[shell_environment_policy]
+inherit = "invalid"
+set = ["invalid"]
+"#,
+            vec![
+                (
+                    "shell_environment_policy.inherit".to_string(),
+                    TomlValue::String("core".to_string()),
+                ),
+                (
+                    "shell_environment_policy.set.PATH".to_string(),
+                    TomlValue::String("/bin".to_string()),
+                ),
+            ],
+        ),
+        (
+            r#"shell_environment_policy = 17"#,
+            vec![(
+                "shell_environment_policy.inherit".to_string(),
+                TomlValue::String("core".to_string()),
+            )],
+        ),
+    ];
+
+    for (contents, cli_overrides) in cases {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+        ConfigBuilder::default()
+            .codex_home(tmp.path().to_path_buf())
+            .fallback_cwd(Some(tmp.path().to_path_buf()))
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .cli_overrides(cli_overrides)
+            .strict_config(/*strict_config*/ false)
+            .build()
+            .await
+            .expect("replaced shell policy fields should preserve normal overlay behavior");
+    }
+}
+
+#[tokio::test]
+async fn malformed_higher_shell_filter_reports_its_layer_when_lower_fields_are_replaced() {
+    let tmp = tempdir().expect("tempdir");
+    let managed_path = tmp.path().join("managed_config.toml");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"[shell_environment_policy]
+inherit = "invalid"
+set = ["invalid"]
+"#,
+    )
+    .expect("write user config");
+    std::fs::write(
+        &managed_path,
+        r#"[shell_environment_policy]
+inherit = "core"
+set = { PATH = "/bin" }
+
+[shell_environment_policy.filters]
+"SECRET_*" = "keep"
+"#,
+    )
+    .expect("write managed config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::with_managed_config_path_for_tests(
+            managed_path.clone(),
+        ))
+        .strict_config(/*strict_config*/ false)
+        .build()
+        .await
+        .expect_err("malformed shell filter should be rejected");
+
+    let config_error = config_error_from_io(&err);
+    assert_eq!(config_error.path, managed_path);
+    assert!(config_error.message.contains("unknown variant `keep`"));
 }
 
 #[tokio::test]

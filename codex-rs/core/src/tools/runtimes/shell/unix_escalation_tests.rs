@@ -528,7 +528,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
             },
         }))
         .context("build trusted hook state")?,
-    );
+    )?;
 
     let mut hook_shell_argv = session
         .user_shell()

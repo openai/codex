@@ -1334,6 +1334,45 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 }
 
 #[tokio::test]
+async fn reload_user_config_layer_keeps_previous_config_for_malformed_shell_policy() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    std::fs::write(&config_toml_path, "[apps.calendar]\nenabled = false\n")
+        .expect("write valid user config");
+    session.reload_user_config_layer().await;
+    let previous_config = session
+        .get_config()
+        .await
+        .config_layer_stack
+        .effective_user_config()
+        .expect("previous user config");
+
+    std::fs::write(
+        &config_toml_path,
+        r#"
+[apps.calendar]
+enabled = true
+
+[shell_environment_policy]
+exclude = ["SECRET_*", 17]
+"#,
+    )
+    .expect("write malformed user config");
+
+    session.reload_user_config_layer().await;
+
+    let current_config = session
+        .get_config()
+        .await
+        .config_layer_stack
+        .effective_user_config()
+        .expect("current user config");
+    assert_eq!(current_config, previous_config);
+}
+
+#[tokio::test]
 async fn reload_user_config_layer_updates_base_and_selected_profile_layers() {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
@@ -1438,7 +1477,8 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
         config_layer_stack: Some(
             config
                 .config_layer_stack
-                .with_user_config(&config_toml_path, user_config.clone()),
+                .with_user_config(&config_toml_path, user_config.clone())
+                .expect("hook user config should be valid"),
         ),
         ..codex_hooks::HooksConfig::default()
     });

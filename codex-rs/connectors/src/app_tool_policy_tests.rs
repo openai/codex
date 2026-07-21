@@ -712,7 +712,9 @@ fn policy_from_config_parts(
         let config_toml_path =
             AbsolutePathBuf::try_from(std::env::temp_dir().join(CONFIG_TOML_FILE))
                 .expect("absolute config path");
-        config_layer_stack.with_user_config(&config_toml_path, user_config)
+        config_layer_stack
+            .with_user_config(&config_toml_path, user_config)
+            .expect("apps user config should be valid")
     } else {
         config_layer_stack
     };

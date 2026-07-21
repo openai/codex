@@ -12,14 +12,12 @@ pub use crate::mcp_types::McpServerOAuthConfig;
 pub use crate::mcp_types::McpServerToolConfig;
 pub use crate::mcp_types::McpServerTransportConfig;
 pub use crate::mcp_types::RawMcpServerConfig;
+pub use crate::shell_environment_policy::ShellEnvironmentPolicyToml;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::config_types::EnvironmentVariablePattern;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
-use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -933,56 +931,6 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
-}
-
-/// Policy for building the `env` when spawning a process via shell-like tools.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct ShellEnvironmentPolicyToml {
-    pub inherit: Option<ShellEnvironmentPolicyInherit>,
-
-    pub ignore_default_excludes: Option<bool>,
-
-    /// List of regular expressions.
-    pub exclude: Option<Vec<String>>,
-
-    pub r#set: Option<HashMap<String, String>>,
-
-    /// List of regular expressions.
-    pub include_only: Option<Vec<String>>,
-
-    pub experimental_use_profile: Option<bool>,
-}
-
-impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
-    fn from(toml: ShellEnvironmentPolicyToml) -> Self {
-        // Default to inheriting the full environment when not specified.
-        let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::All);
-        let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(true);
-        let exclude = toml
-            .exclude
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
-            .collect();
-        let r#set = toml.r#set.unwrap_or_default();
-        let include_only = toml
-            .include_only
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
-            .collect();
-        let use_profile = toml.experimental_use_profile.unwrap_or(false);
-
-        Self {
-            inherit,
-            ignore_default_excludes,
-            exclude,
-            r#set,
-            include_only,
-            use_profile,
-        }
-    }
 }
 
 #[cfg(test)]

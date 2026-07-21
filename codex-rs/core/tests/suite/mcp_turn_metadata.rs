@@ -59,7 +59,8 @@ default_tools_approval_mode = "{approval_mode}"
     .expect("apps config should parse");
     config.config_layer_stack = config
         .config_layer_stack
-        .with_user_config(&user_config_path, user_config);
+        .with_user_config(&user_config_path, user_config)
+        .expect("apps user config should be valid");
 }
 
 fn set_default_app_approval_mode_and_reviewer(
@@ -84,7 +85,8 @@ default_tools_approval_mode = "{approval_mode}"
     .expect("apps config should parse");
     config.config_layer_stack = config
         .config_layer_stack
-        .with_user_config(&user_config_path, user_config);
+        .with_user_config(&user_config_path, user_config)
+        .expect("apps user config should be valid");
 }
 
 async fn submit_user_turn(

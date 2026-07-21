@@ -129,7 +129,8 @@ default_tools_approval_mode = "auto"
             .expect("apps config should parse");
             config.config_layer_stack = config
                 .config_layer_stack
-                .with_user_config(&user_config_path, user_config);
+                .with_user_config(&user_config_path, user_config)
+                .expect("apps user config should be valid");
         });
     let test = builder.build(&server).await?;
 
