@@ -8,6 +8,7 @@ pub(crate) fn create_code_mode_tool(
     enabled_tools: &[CodeModeToolDefinition],
     deferred_tools: &[CodeModeToolDefinition],
     namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+    default_exec_yield_time_ms: u64,
     code_mode_only: bool,
 ) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
@@ -26,6 +27,7 @@ SOURCE: /[\s\S]+/
             enabled_tools,
             deferred_tools,
             namespace_descriptions,
+            default_exec_yield_time_ms,
             code_mode_only,
         ),
         format: FreeformToolFormat {
@@ -58,6 +60,7 @@ mod tests {
                 &enabled_tools,
                 &[],
                 &BTreeMap::new(),
+                codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                 /*code_mode_only*/ true,
             ),
             ToolSpec::Freeform(FreeformTool {
@@ -66,6 +69,7 @@ mod tests {
                     &enabled_tools,
                     &[],
                     &BTreeMap::new(),
+                    codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                     /*code_mode_only*/ true,
                 ),
                 format: FreeformToolFormat {

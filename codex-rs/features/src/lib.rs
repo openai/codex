@@ -92,6 +92,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript code mode backed by the in-process V8 runtime.
     CodeMode,
+    /// Use a 30-second default yield timeout for code mode exec calls.
+    CodeModeBufferedExec,
     /// Run JavaScript code mode in the standalone host process.
     CodeModeHost,
     /// Restrict model-visible tools to code mode entrypoints (`exec`, `wait`).
@@ -856,6 +858,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeMode,
         key: "code_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeModeBufferedExec,
+        key: "code_mode_buffered_exec",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
