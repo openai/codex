@@ -231,9 +231,11 @@ pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControl
     Daemon::from_environment()?.set_remote_control(mode).await
 }
 
-pub async fn run_pid_update_loop() -> Result<()> {
+pub async fn run_pid_update_loop(
+    http_client_factory: codex_http_client::HttpClientFactory,
+) -> Result<()> {
     ensure_supported_platform()?;
-    update_loop::run().await
+    update_loop::run(http_client_factory).await
 }
 
 #[cfg(unix)]
