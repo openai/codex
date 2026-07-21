@@ -242,7 +242,6 @@ deny = [
         "codex-agent-identity",
         "codex-api",
         "codex-app-server",
-        "codex-app-server-daemon",
         "codex-core",
         "codex-core-plugins",
         "codex-exec-server",
