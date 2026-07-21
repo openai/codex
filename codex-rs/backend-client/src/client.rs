@@ -1,5 +1,6 @@
 use crate::types::AccountsCheckResponse;
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::CodexUserSettingsResponse;
 use crate::types::CodexWorkspaceMessagesResponse;
 use crate::types::ConfigBundleResponse;
 use crate::types::PaginatedListTaskListItem;
@@ -454,6 +455,26 @@ impl Client {
             .map_err(RequestError::from)
     }
 
+    /// Fetch authenticated Codex user settings from the active backend route.
+    ///
+    /// Uses `GET /api/codex/settings/user` for Codex API hosts and
+    /// `GET /wham/settings/user` for ChatGPT `backend-api` hosts.
+    pub async fn get_user_settings(
+        &self,
+    ) -> std::result::Result<CodexUserSettingsResponse, RequestError> {
+        let url = self.user_settings_url();
+        let req = self
+            .request(Method::GET, &url)
+            .headers(self.headers())
+            .header(
+                CACHE_CONTROL,
+                HeaderValue::from_static("no-cache, no-store"),
+            );
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
+        self.decode_json::<CodexUserSettingsResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
     pub async fn list_workspace_messages(
         &self,
     ) -> std::result::Result<CodexWorkspaceMessagesResponse, RequestError> {
@@ -613,6 +634,13 @@ impl Client {
         }
     }
 
+    fn user_settings_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/settings/user", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/settings/user", self.base_url),
+        }
+    }
+
     fn map_rate_limit_window(
         window: Option<Option<Box<crate::types::RateLimitWindowSnapshot>>>,
     ) -> Option<RateLimitWindow> {
@@ -695,6 +723,12 @@ mod tests {
     use codex_backend_openapi_models::models::RateLimitReachedKind;
     use codex_backend_openapi_models::models::RateLimitReachedType as BackendRateLimitReachedType;
     use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header_regex;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     #[test]
     fn map_plan_type_supports_usage_based_business_variants() {
@@ -1022,6 +1056,90 @@ mod tests {
         assert_eq!(
             chatgpt_client.workspace_messages_url(),
             "https://chatgpt.com/backend-api/wham/workspace-messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn user_settings_request_uses_expected_paths_and_revalidates_cached_responses() {
+        let server = MockServer::start().await;
+        for (request_path, commit_attribution_enabled) in [
+            ("/api/codex/settings/user", true),
+            ("/backend-api/wham/settings/user", false),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(request_path))
+                .and(header_regex("cache-control", "^no-cache, no-store$"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "commit_attribution_enabled": commit_attribution_enabled,
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let codex_response = Client::new(
+            server.uri(),
+            HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault),
+        )
+        .get_user_settings()
+        .await
+        .unwrap();
+        let chatgpt_response = Client::new(
+            format!("{}/backend-api", server.uri()),
+            HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault),
+        )
+        .get_user_settings()
+        .await
+        .unwrap();
+
+        assert_eq!(
+            [codex_response, chatgpt_response],
+            [
+                CodexUserSettingsResponse {
+                    commit_attribution_enabled: true,
+                },
+                CodexUserSettingsResponse {
+                    commit_attribution_enabled: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn user_settings_missing_attribution_policy_defaults_to_disabled() {
+        assert_eq!(
+            serde_json::from_value::<CodexUserSettingsResponse>(serde_json::json!({})).unwrap(),
+            CodexUserSettingsResponse {
+                commit_attribution_enabled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn authenticated_user_settings_client_uses_active_workspace_headers() {
+        let auth = CodexAuth::from_external_chatgpt_tokens(
+            "e30.e30.c2ln",
+            "workspace-123",
+            Some("enterprise"),
+        )
+        .unwrap();
+        let client = Client::from_auth(
+            "https://chatgpt.com/backend-api",
+            &auth,
+            HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault),
+        );
+        let headers = client.headers();
+
+        assert_eq!(
+            [
+                headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                headers
+                    .get("chatgpt-account-id")
+                    .and_then(|value| value.to_str().ok()),
+            ],
+            [Some("Bearer e30.e30.c2ln"), Some("workspace-123")]
         );
     }
 

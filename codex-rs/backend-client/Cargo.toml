@@ -28,3 +28,4 @@ codex-protocol = { workspace = true }
 [dev-dependencies]
 pretty_assertions = "1"
 tokio = { workspace = true, features = ["macros", "rt"] }
+wiremock = { workspace = true }

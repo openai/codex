@@ -2263,6 +2263,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]
