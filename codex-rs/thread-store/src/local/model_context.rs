@@ -1,7 +1,5 @@
 use std::fs::File;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
 
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -14,6 +12,7 @@ use codex_rollout::ScanOutcome;
 
 use super::LocalThreadStore;
 use super::read_thread;
+use super::rollout_lineage::RolloutLineage;
 use crate::LoadThreadHistoryParams;
 use crate::StoredModelContext;
 use crate::ThreadStoreError;
@@ -64,7 +63,8 @@ pub(super) async fn load_latest_model_context(
             .and_then(|file_name| file_name.to_str())
             .is_some_and(|file_name| file_name.ends_with(".jsonl.zst"))
     {
-        scan_model_context_from_end(path, session_meta).await?
+        let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+        scan_model_context_from_lineage(lineage, session_meta).await?
     } else {
         read_thread::load_history_items(path.as_path()).await?
     };
@@ -75,13 +75,12 @@ pub(super) async fn load_latest_model_context(
     })
 }
 
-async fn scan_model_context_from_end(
-    path: PathBuf,
+async fn scan_model_context_from_lineage(
+    lineage: RolloutLineage,
     session_meta: SessionMetaLine,
 ) -> ThreadStoreResult<Vec<RolloutItem>> {
-    let path_for_scan = path.clone();
     let scan = tokio::task::spawn_blocking(move || {
-        scan_model_context_from_end_blocking(&path_for_scan, session_meta)
+        scan_model_context_from_lineage_blocking(&lineage, session_meta)
     })
     .await
     .map_err(|err| ThreadStoreError::Internal {
@@ -89,33 +88,43 @@ async fn scan_model_context_from_end(
     })?;
     match scan {
         Ok(items) => Ok(items),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            // Compression can replace the resolved plain rollout with its compressed sibling
-            // before the blocking reverse scanner opens it. The forward loader re-resolves that
-            // representation transition and already supports compressed rollouts.
-            read_thread::load_history_items(path.as_path()).await
-        }
         Err(err) => Err(ThreadStoreError::Internal {
-            message: format!("failed to scan model context {}: {err}", path.display()),
+            message: format!("failed to scan paginated model context lineage: {err}"),
         }),
     }
 }
 
-fn scan_model_context_from_end_blocking(
-    path: &Path,
+fn scan_model_context_from_lineage_blocking(
+    lineage: &RolloutLineage,
     session_meta: SessionMetaLine,
 ) -> io::Result<Vec<RolloutItem>> {
     let mut scan = ModelContextScan::default();
-    let mut scanner = ReverseJsonlScanner::new(File::open(path)?)?;
-    while let Some(outcome) = scanner.scan_next::<RolloutLine>()? {
-        let ScanOutcome::Parsed(line) = outcome else {
-            continue;
+    'segments: for segment in lineage.segments().iter().rev() {
+        let file = File::open(segment.rollout_path.as_path())?;
+        let mut scanner = match segment.end.map(|end| end.end_byte_offset) {
+            Some(end_byte_offset) => ReverseJsonlScanner::new_at(file, end_byte_offset)?,
+            None => ReverseJsonlScanner::new(file)?,
         };
-        match scan.push(line.item) {
-            ModelContextScanProgress::Continue => {}
-            ModelContextScanProgress::Complete => break,
+        while let Some(outcome) = scanner.scan_next::<RolloutLine>()? {
+            let ScanOutcome::Parsed(line) = outcome else {
+                continue;
+            };
+            // Each physical segment contributes only its local delta. Its head metadata is
+            // replaced with the requested thread's canonical SessionMeta after replay.
+            if matches!(&line.item, RolloutItem::SessionMeta(_)) {
+                break;
+            }
+            match scan.push(line.item) {
+                ModelContextScanProgress::Continue => {}
+                ModelContextScanProgress::Complete => break 'segments,
+            }
         }
     }
 
-    Ok(scan.finish(session_meta))
+    let canonical_meta = session_meta.clone();
+    let mut items = scan.finish(session_meta);
+    if !matches!(items.first(), Some(RolloutItem::SessionMeta(_))) {
+        items.insert(0, RolloutItem::SessionMeta(canonical_meta));
+    }
+    Ok(items)
 }
