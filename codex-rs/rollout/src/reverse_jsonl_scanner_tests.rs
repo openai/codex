@@ -79,6 +79,18 @@ fn accepts_valid_json_at_eof() -> std::io::Result<()> {
 }
 
 #[test]
+fn scans_from_a_frozen_prefix_end() -> std::io::Result<()> {
+    let prefix = b"{\"value\":\"first\"}\n{\"value\":\"second\"}\n";
+    let mut input = prefix.to_vec();
+    input.extend_from_slice(b"{\"value\":\"later\"}\n");
+
+    assert_records(
+        &mut ReverseJsonlScanner::new_at(Cursor::new(input), prefix.len() as u64)?,
+        &["second", "first"],
+    )
+}
+
+#[test]
 fn rejects_invalid_json_at_eof_and_continues_scanning() -> std::io::Result<()> {
     let input = b"{\"value\":\"first\"}\n{\"value\":";
     let mut scanner = ReverseJsonlScanner::new(Cursor::new(input))?;

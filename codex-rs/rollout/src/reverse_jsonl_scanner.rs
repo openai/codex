@@ -31,9 +31,24 @@ where
 {
     pub fn new(mut reader: R) -> io::Result<Self> {
         let next_chunk_end = reader.seek(SeekFrom::End(0))?;
+        Self::new_at(reader, next_chunk_end)
+    }
+
+    /// Creates a reverse scanner whose logical end is the given byte offset.
+    ///
+    /// This lets callers scan a frozen JSONL prefix without reading records appended after that
+    /// prefix was captured.
+    pub fn new_at(mut reader: R, end_byte_offset: u64) -> io::Result<Self> {
+        let file_len = reader.seek(SeekFrom::End(0))?;
+        if end_byte_offset > file_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "reverse JSONL scan end is past the file",
+            ));
+        }
         Ok(Self {
             reader,
-            next_chunk_end,
+            next_chunk_end: end_byte_offset,
             chunk_position: 0,
             chunk: vec![0; READ_CHUNK_SIZE],
             record_reversed: Vec::new(),
