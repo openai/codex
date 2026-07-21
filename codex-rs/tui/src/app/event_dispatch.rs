@@ -413,7 +413,8 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                if matches!(&op, AppCommand::UserTurn { .. }) {
+                let is_user_turn = matches!(&op, AppCommand::UserTurn { .. });
+                if is_user_turn {
                     self.handle_draw_pre_render(tui)?;
                     if self.transcript_reflow.has_pending_reflow() {
                         self.transcript_reflow.schedule_immediate();
@@ -423,7 +424,21 @@ impl App {
                     self.render_chat_widget_frame(tui)?;
                 }
                 self.chat_widget.prepare_local_op_submission(&op);
-                self.submit_active_thread_op(app_server, op).await?;
+                if let Err(err) = self.submit_active_thread_op(app_server, op).await {
+                    let handled = is_user_turn
+                        && matches!(
+                            err.downcast_ref::<TypedRequestError>(),
+                            Some(TypedRequestError::Server { method, .. })
+                                if method == "turn/start"
+                        )
+                        && self
+                            .chat_widget
+                            .handle_turn_start_rejection(format!("Failed to start turn: {err:#}"));
+                    if !handled {
+                        return Err(err);
+                    }
+                    tracing::error!(error = ?err, "failed to start turn through app server");
+                }
             }
             AppEvent::RetrySafetyBufferedTurn {
                 thread_id,

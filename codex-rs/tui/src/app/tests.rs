@@ -10,6 +10,8 @@ mod safety_buffering;
 mod session_lifecycle_requests;
 mod session_summary;
 mod startup;
+#[path = "tests/turn_submission.rs"]
+mod turn_submission;
 
 use super::*;
 use crate::app_backtrack::BacktrackSelection;
