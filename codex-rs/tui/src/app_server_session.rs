@@ -471,6 +471,7 @@ impl AppServerSession {
                 params: ExternalAgentConfigImportParams {
                     migration_items,
                     source: Some("cli".to_string()),
+                    provider_id: Some(migration_source.clone()),
                     migration_source: Some(migration_source),
                 },
             })

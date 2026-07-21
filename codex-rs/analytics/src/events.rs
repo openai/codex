@@ -1025,6 +1025,7 @@ pub(crate) struct CodexPluginInstallFailedEventRequest {
 pub(crate) struct CodexOnboardingExternalAgentImportCompleteMetadata {
     pub(crate) import_id: String,
     pub(crate) source: String,
+    pub(crate) provider_id: String,
     #[serde(rename = "type")]
     pub(crate) item_type: String,
     pub(crate) success_count: usize,
@@ -1042,6 +1043,7 @@ pub(crate) struct CodexOnboardingExternalAgentImportCompleteEventRequest {
 pub(crate) struct CodexOnboardingExternalAgentImportFailureMetadata {
     pub(crate) import_id: String,
     pub(crate) source: String,
+    pub(crate) provider_id: String,
     #[serde(rename = "type")]
     pub(crate) item_type: String,
     pub(crate) failure_stage: String,
