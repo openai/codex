@@ -540,6 +540,7 @@ impl PluginRequestProcessor {
         let PluginListParams {
             cwds,
             marketplace_kinds,
+            force_refetch: _,
         } = params;
         let roots = cwds.unwrap_or_default();
         let explicit_marketplace_kinds = marketplace_kinds.is_some();

@@ -1938,6 +1938,7 @@ mod tests {
             params: v2::PluginListParams {
                 cwds: None,
                 marketplace_kinds: None,
+                force_refetch: false,
             },
         };
         assert_eq!(plugin_list.serialization_scope(), None);

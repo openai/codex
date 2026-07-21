@@ -499,6 +499,7 @@ source = {:?}
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -1473,6 +1474,7 @@ async fn external_agent_config_import_reinstalls_plugins_from_known_marketplaces
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
