@@ -209,7 +209,7 @@ fn emit_non_domain_policy_decision_audit_event(
             decision,
             source: args.source.as_str(),
             reason: args.reason,
-            protocol: args.protocol,
+            protocol: args.protocol.as_policy_protocol(),
             server_address: args.server_address,
             server_port: args.server_port,
             method: args.method,
@@ -225,7 +225,7 @@ struct PolicyAuditEventArgs<'a> {
     decision: &'a str,
     source: &'a str,
     reason: &'a str,
-    protocol: NetworkProtocol,
+    protocol: &'a str,
     server_address: &'a str,
     server_port: u16,
     method: Option<&'a str>,
@@ -254,13 +254,50 @@ fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs
         network.policy.decision = args.decision,
         network.policy.source = args.source,
         network.policy.reason = args.reason,
-        network.transport.protocol = args.protocol.as_policy_protocol(),
+        network.transport.protocol = args.protocol,
         server.address = args.server_address,
         server.port = args.server_port,
         http.request.method = args.method.unwrap_or(DEFAULT_METHOD),
         client.address = args.client_addr.unwrap_or(DEFAULT_CLIENT_ADDRESS),
         execution.id = args.execution_id,
         network.policy.override = args.policy_override,
+    );
+}
+
+pub(crate) fn emit_dns_policy_decision_audit_event(
+    state: &NetworkProxyState,
+    host: &str,
+    network_decision: &NetworkDecision,
+    client_addr: Option<&str>,
+) {
+    let execution_id = state.execution_id();
+    let (decision, source, reason) = match network_decision {
+        NetworkDecision::Allow => (
+            POLICY_DECISION_ALLOW,
+            NetworkDecisionSource::BaselinePolicy,
+            POLICY_REASON_ALLOW,
+        ),
+        NetworkDecision::Deny {
+            reason,
+            source,
+            decision,
+        } => (decision.as_str(), *source, reason.as_str()),
+    };
+    emit_policy_audit_event(
+        state,
+        PolicyAuditEventArgs {
+            scope: POLICY_SCOPE_DOMAIN,
+            decision,
+            source: source.as_str(),
+            reason,
+            protocol: "dns",
+            server_address: host,
+            server_port: 53,
+            method: None,
+            client_addr,
+            execution_id: execution_id.as_deref(),
+            policy_override: false,
+        },
     );
 }
 
@@ -364,7 +401,7 @@ pub(crate) async fn evaluate_host_policy(
             decision: policy_decision,
             source: source.as_str(),
             reason,
-            protocol: request.protocol,
+            protocol: request.protocol.as_policy_protocol(),
             server_address: request.host.as_str(),
             server_port: request.port,
             method: request.method.as_deref(),
