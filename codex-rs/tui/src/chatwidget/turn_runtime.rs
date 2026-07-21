@@ -366,7 +366,7 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    pub(super) fn on_error(&mut self, message: String) {
+    fn on_error(&mut self, message: String) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.flush_answer_stream_with_separator();
         self.finalize_turn();
@@ -379,6 +379,14 @@ impl ChatWidget {
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    pub(crate) fn handle_turn_start_rejection(&mut self, message: String) -> bool {
+        if !self.input_queue.user_turn_pending_start {
+            return false;
+        }
+        self.on_error(message);
+        true
     }
 
     pub(super) fn on_cyber_policy_error(&mut self) {
