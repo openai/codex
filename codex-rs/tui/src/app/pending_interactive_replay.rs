@@ -82,7 +82,6 @@ impl PendingInteractiveReplayState {
                 | AppCommand::ResolveElicitation { .. }
                 | AppCommand::RequestPermissionsResponse { .. }
                 | AppCommand::UserInputAnswer { .. }
-                | AppCommand::Shutdown
         )
     }
 
@@ -164,7 +163,6 @@ impl PendingInteractiveReplayState {
                     self.request_user_input_call_ids_by_turn_id.remove(id);
                 }
             }
-            AppCommand::Shutdown => self.clear(),
             _ => {}
         }
     }
