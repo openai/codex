@@ -1,4 +1,6 @@
 use super::*;
+use crate::test_support::RecordingHttpClientSelector;
+use crate::test_support::recorded_http_client_urls;
 use pretty_assertions::assert_eq;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -10,12 +12,83 @@ use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header_exists;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[tokio::test]
+async fn github_http_routes_repository_ref_and_zipball_urls() {
+    let server = MockServer::start().await;
+    let sha = TEST_CURATED_PLUGIN_SHA;
+    let zipball = b"archive".to_vec();
+    mount_github_repo_and_ref(&server, sha).await;
+    mount_github_zipball(&server, sha, zipball.clone()).await;
+    let api_base_url = server.uri();
+    let repo_url = format!("{api_base_url}/repos/openai/plugins");
+    let ref_url = format!("{repo_url}/git/ref/heads/main");
+    let zipball_url = format!("{repo_url}/zipball/{sha}");
+    let (http_clients, selected_urls) = RecordingHttpClientSelector::new();
+    let http_clients = StartupSyncHttpClient::route_aware(http_clients);
+
+    let remote_sha = fetch_curated_repo_remote_sha(&http_clients, &api_base_url)
+        .await
+        .expect("remote SHA request should succeed");
+    let downloaded_zipball = fetch_curated_repo_zipball(&http_clients, &api_base_url, &remote_sha)
+        .await
+        .expect("zipball request should succeed");
+
+    assert_eq!(remote_sha, sha);
+    assert_eq!(downloaded_zipball, zipball);
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![repo_url, ref_url, zipball_url]
+    );
+}
+
+#[tokio::test]
+async fn backup_archive_routes_metadata_and_backend_supplied_download_urls() {
+    let metadata_server = MockServer::start().await;
+    let download_server = MockServer::start().await;
+    let download_url = format!(
+        "{}/files/curated-plugins.zip?sig=signed",
+        download_server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/export/curated"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"download_url": download_url.clone()})),
+        )
+        .expect(1)
+        .mount(&metadata_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/curated-plugins.zip"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"archive".to_vec()))
+        .expect(1)
+        .mount(&download_server)
+        .await;
+    let metadata_url = format!(
+        "{}/backend-api/plugins/export/curated",
+        metadata_server.uri()
+    );
+    let (http_clients, selected_urls) = RecordingHttpClientSelector::new();
+    let http_clients = StartupSyncHttpClient::route_aware(http_clients);
+
+    let body = fetch_curated_repo_backup_archive_zip(&http_clients, &metadata_url)
+        .await
+        .expect("backup archive download should succeed");
+
+    assert_eq!(body, b"archive");
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![metadata_url, download_url]
+    );
+}
 
 #[test]
 fn git_command_sanitizes_ambient_repository_environment() {
@@ -133,11 +206,15 @@ fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {
 async fn mount_github_repo_and_ref(server: &MockServer, sha: &str) {
     Mock::given(method("GET"))
         .and(path("/repos/openai/plugins"))
+        .and(header_exists("user-agent"))
+        .and(header_exists("originator"))
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"default_branch":"main"}"#))
         .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/repos/openai/plugins/git/ref/heads/main"))
+        .and(header_exists("user-agent"))
+        .and(header_exists("originator"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_string(format!(r#"{{"object":{{"sha":"{sha}"}}}}"#)),
@@ -149,6 +226,8 @@ async fn mount_github_repo_and_ref(server: &MockServer, sha: &str) {
 async fn mount_github_zipball(server: &MockServer, sha: &str, bytes: Vec<u8>) {
     Mock::given(method("GET"))
         .and(path(format!("/repos/openai/plugins/zipball/{sha}")))
+        .and(header_exists("user-agent"))
+        .and(header_exists("originator"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "application/zip")
@@ -162,6 +241,8 @@ async fn mount_export_archive(server: &MockServer, bytes: Vec<u8>) -> String {
     let export_api_url = format!("{}/backend-api/plugins/export/curated", server.uri());
     Mock::given(method("GET"))
         .and(path("/backend-api/plugins/export/curated"))
+        .and(header_exists("user-agent"))
+        .and(header_exists("originator"))
         .respond_with(ResponseTemplate::new(200).set_body_string(format!(
             r#"{{"download_url":"{}/files/curated-plugins.zip"}}"#,
             server.uri()
@@ -170,6 +251,8 @@ async fn mount_export_archive(server: &MockServer, bytes: Vec<u8>) -> String {
         .await;
     Mock::given(method("GET"))
         .and(path("/files/curated-plugins.zip"))
+        .and(header_exists("user-agent"))
+        .and(header_exists("originator"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "application/zip")
@@ -196,6 +279,7 @@ async fn run_sync_with_transport_overrides(
             Some(git_binary.as_path()),
             &api_base_url,
             &backup_archive_api_url,
+            &crate::test_support::test_http_client_factory(),
         )
     })
     .await
@@ -215,6 +299,7 @@ async fn run_sync_without_git(
             /*git_binary*/ None,
             &api_base_url,
             &backup_archive_api_url,
+            &crate::test_support::test_http_client_factory(),
         )
     })
     .await
@@ -227,7 +312,11 @@ async fn run_http_sync(
 ) -> Result<String, String> {
     let api_base_url = api_base_url.into();
     tokio::task::spawn_blocking(move || {
-        sync_openai_plugins_repo_via_http(codex_home.as_path(), &api_base_url)
+        sync_openai_plugins_repo_via_http(
+            codex_home.as_path(),
+            &api_base_url,
+            &crate::test_support::test_http_client_factory(),
+        )
     })
     .await
     .expect("sync task should join")
@@ -366,6 +455,7 @@ exit 1
                 Some(git_path.as_path()),
                 "http://127.0.0.1:9",
                 "http://127.0.0.1:9/backend-api/plugins/export/curated",
+                &crate::test_support::test_http_client_factory(),
             )
         };
         let first = scope.spawn(run_sync);
