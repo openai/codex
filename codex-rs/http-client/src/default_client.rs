@@ -31,9 +31,9 @@ impl HttpClient {
 
     /// Creates a client that suppresses request URL and response-header diagnostics.
     ///
-    /// Use this for authentication endpoints whose URLs or headers may contain credentials that
-    /// are redacted by the caller above the HTTP transport boundary.
-    pub(crate) fn new_without_request_logging(inner: reqwest::Client) -> Self {
+    /// Use this for endpoints whose URLs or headers may contain credentials that are redacted by
+    /// the caller above the HTTP transport boundary.
+    pub fn new_without_request_logging(inner: reqwest::Client) -> Self {
         Self {
             inner,
             request_logging: RequestLogging::Disabled,

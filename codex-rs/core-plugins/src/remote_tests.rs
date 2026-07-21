@@ -1,5 +1,50 @@
 use super::*;
+use crate::test_support::recorded_http_client_urls;
+use crate::test_support::recording_remote_plugin_service_config;
 use pretty_assertions::assert_eq;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header_exists;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+
+#[tokio::test]
+async fn remote_plugin_list_routes_the_complete_query_url() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/list"))
+        .and(header_exists("user-agent"))
+        .and(header_exists("originator"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": [],
+            "pagination": {"next_page_token": null},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (config, selected_urls) =
+        recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    get_remote_plugin_list_page(
+        &config,
+        &auth,
+        RemotePluginScope::Global,
+        Some("next page/+"),
+        Some("vertical & special"),
+    )
+    .await
+    .expect("plugin list request should succeed");
+
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![format!(
+            "{}/backend-api/ps/plugins/list?scope=GLOBAL&limit=200&collection=vertical+%26+special&pageToken=next+page%2F%2B",
+            server.uri()
+        )]
+    );
+}
 
 #[test]
 fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only_plugins() {

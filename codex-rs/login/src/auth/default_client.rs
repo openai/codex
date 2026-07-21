@@ -225,6 +225,15 @@ pub fn create_client() -> HttpClient {
     HttpClient::new(inner)
 }
 
+/// Create the default HTTP client without request URL or response-header diagnostics.
+///
+/// This preserves the default client's legacy custom-CA fallback and reqwest proxy behavior while
+/// avoiding diagnostics that could expose credentials embedded in request URLs or headers.
+pub fn create_client_without_request_logging() -> HttpClient {
+    let inner = build_reqwest_client();
+    HttpClient::new_without_request_logging(inner)
+}
+
 /// Builds the default reqwest client used for ordinary Codex HTTP traffic.
 ///
 /// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
