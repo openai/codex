@@ -79,7 +79,7 @@ async fn assert_terminate_kills_descendant(
     );
     let args = vec!["-u".to_string(), "-c".to_string(), code];
     let spawned = if backend == "pipe" {
-        spawn_pipe_process_no_stdin(python, &args, Path::new("."), env, /*arg0*/ &None).await?
+        spawn_pipe_process_no_stdin(python, &args, Path::new("."), env, /*arg0*/ &None, &[]).await?
     } else {
         spawn_pty_process(
             python,
@@ -88,6 +88,7 @@ async fn assert_terminate_kills_descendant(
             env,
             /*arg0*/ &None,
             TerminalSize::default(),
+            &[],
         )
         .await?
     };
@@ -134,7 +135,7 @@ async fn assert_normal_exit_preserves_descendant(
     );
     let args = vec!["-u".to_string(), "-c".to_string(), code];
     let spawned = if backend == "pipe" {
-        spawn_pipe_process_no_stdin(python, &args, Path::new("."), env, /*arg0*/ &None).await?
+        spawn_pipe_process_no_stdin(python, &args, Path::new("."), env, /*arg0*/ &None, &[]).await?
     } else {
         spawn_pty_process(
             python,
@@ -143,6 +144,7 @@ async fn assert_normal_exit_preserves_descendant(
             env,
             /*arg0*/ &None,
             TerminalSize::default(),
+            &[],
         )
         .await?
     };
