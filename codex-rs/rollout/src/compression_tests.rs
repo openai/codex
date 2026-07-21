@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -303,6 +304,86 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
             .join("rollout-compression.lock")
             .exists()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn worker_skips_archived_paginated_fork_pointer_chain() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let source_uuid = Uuid::from_u128(16);
+    let source_id = ThreadId::from_string(&source_uuid.to_string())?;
+    let source_path = rollout_path(home.path(), "2025-01-03T12-00-00", source_uuid);
+    write_rollout(&source_path, source_id, "referenced source")?;
+    set_old_mtime(&source_path)?;
+
+    let child_uuid = Uuid::from_u128(17);
+    let child_id = ThreadId::from_string(&child_uuid.to_string())?;
+    let child_path = archived_rollout_path(home.path(), "2025-01-03T12-00-01", child_uuid);
+    write_rollout(&child_path, child_id, "fork child")?;
+    set_history_base(
+        child_path.as_path(),
+        HistoryPosition {
+            thread_id: source_id,
+            end_ordinal_exclusive: 2,
+            end_byte_offset: std::fs::metadata(source_path.as_path())?.len(),
+        },
+    )?;
+    set_old_mtime(&child_path)?;
+
+    worker::run(home.path().to_path_buf()).await?;
+
+    assert!(source_path.exists());
+    assert!(child_path.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn worker_skips_source_referenced_by_archived_compressed_rollout() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let source_uuid = Uuid::from_u128(18);
+    let source_id = ThreadId::from_string(&source_uuid.to_string())?;
+    let source_path = rollout_path(home.path(), "2025-01-03T12-00-00", source_uuid);
+    write_rollout(&source_path, source_id, "referenced source")?;
+    set_old_mtime(&source_path)?;
+
+    let child_uuid = Uuid::from_u128(19);
+    let child_id = ThreadId::from_string(&child_uuid.to_string())?;
+    let child_path = archived_rollout_path(home.path(), "2025-01-03T12-00-01", child_uuid);
+    write_rollout(&child_path, child_id, "fork child")?;
+    set_history_base(
+        child_path.as_path(),
+        HistoryPosition {
+            thread_id: source_id,
+            end_ordinal_exclusive: 2,
+            end_byte_offset: std::fs::metadata(source_path.as_path())?.len(),
+        },
+    )?;
+    compress_now(child_path.as_path())?;
+
+    worker::run(home.path().to_path_buf()).await?;
+
+    assert!(source_path.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn worker_skips_unreadable_metadata_without_blocking_other_compression() -> anyhow::Result<()>
+{
+    let home = TempDir::new()?;
+    let source_uuid = Uuid::from_u128(20);
+    let source_id = ThreadId::from_string(&source_uuid.to_string())?;
+    let source_path = rollout_path(home.path(), "2025-01-03T12-00-00", source_uuid);
+    write_rollout(&source_path, source_id, "candidate")?;
+    set_old_mtime(&source_path)?;
+
+    let unreadable_path = rollout_path(home.path(), "2025-01-03T12-00-01", Uuid::from_u128(21));
+    fs::write(unreadable_path.as_path(), "{not json}\n")?;
+
+    worker::run(home.path().to_path_buf()).await?;
+
+    assert!(!source_path.exists());
+    assert!(compressed_rollout_path(&source_path).exists());
+    assert!(unreadable_path.exists());
     Ok(())
 }
 
@@ -634,6 +715,21 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
         .collect::<Result<Vec<_>, _>>()?
         .join("\n");
     fs::write(path, format!("{jsonl}\n"))?;
+    Ok(())
+}
+
+fn set_history_base(path: &std::path::Path, history_base: HistoryPosition) -> anyhow::Result<()> {
+    let contents = fs::read_to_string(path)?;
+    let mut lines = contents.lines();
+    let mut head: serde_json::Value = serde_json::from_str(lines.next().expect("session meta"))?;
+    head["payload"]["history_base"] = serde_json::to_value(history_base)?;
+    let mut updated = serde_json::to_string(&head)?;
+    for line in lines {
+        updated.push('\n');
+        updated.push_str(line);
+    }
+    updated.push('\n');
+    fs::write(path, updated)?;
     Ok(())
 }
 

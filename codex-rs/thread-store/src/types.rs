@@ -792,6 +792,13 @@ pub struct DeleteThreadParams {
     pub thread_id: ThreadId,
 }
 
+/// Parameters for deleting a set of threads as one store operation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteThreadsParams {
+    /// Thread ids to delete, in the order their persisted data should be removed.
+    pub thread_ids: Vec<ThreadId>,
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;

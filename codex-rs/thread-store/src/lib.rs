@@ -27,6 +27,7 @@ pub use types::ArchiveThreadParams;
 pub use types::ClearableField;
 pub use types::CreateThreadParams;
 pub use types::DeleteThreadParams;
+pub use types::DeleteThreadsParams;
 pub use types::ExtraConfig;
 pub use types::GitInfoPatch;
 pub use types::ItemPage;
