@@ -436,6 +436,7 @@ fn external_agent_config_import_params_accept_legacy_plugin_details() {
                 }),
             }],
             source: None,
+            provider_id: None,
             migration_source: None,
         }
     );

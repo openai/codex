@@ -722,6 +722,10 @@ pub struct ExternalAgentConfigImportParams {
     /// Optional identifier for the product that initiated the import.
     #[ts(optional = nullable)]
     pub source: Option<String>,
+    /// Opaque provider identifier supplied by the caller for analytics attribution. This does not
+    /// select the migration source.
+    #[ts(optional = nullable)]
+    pub provider_id: Option<String>,
     /// Migration-source selector used to produce the migration items. Pass the same value to
     /// detection and import; missing or unrecognized values use the default source.
     #[ts(optional = nullable)]

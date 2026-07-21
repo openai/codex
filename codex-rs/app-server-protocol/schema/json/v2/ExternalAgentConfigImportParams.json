@@ -217,6 +217,13 @@
         "null"
       ]
     },
+    "providerId": {
+      "description": "Opaque provider identifier supplied by the caller for analytics attribution. This does not select the migration source.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "source": {
       "description": "Optional identifier for the product that initiated the import.",
       "type": [

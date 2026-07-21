@@ -9,6 +9,11 @@ export type ExternalAgentConfigImportParams = { migrationItems: Array<ExternalAg
  */
 source?: string | null,
 /**
+ * Opaque provider identifier supplied by the caller for analytics attribution. This does not
+ * select the migration source.
+ */
+providerId?: string | null,
+/**
  * Migration-source selector used to produce the migration items. Pass the same value to
  * detection and import; missing or unrecognized values use the default source.
  */
