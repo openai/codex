@@ -387,18 +387,35 @@ fn catalog_approval_messages_select_reviewer_variant() {
     let messages = ApprovalMessages {
         on_request: Some("user catalog approvals".to_string()),
         on_request_auto_review: Some("auto-review catalog approvals".to_string()),
+        never: Some("never catalog approvals".to_string()),
+        unless_trusted: Some("unless-trusted catalog approvals".to_string()),
     };
 
-    for (reviewer, expected) in [
-        (ApprovalsReviewer::User, "user catalog approvals"),
+    for (approval_policy, reviewer, expected) in [
         (
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
+            "user catalog approvals",
+        ),
+        (
+            AskForApproval::OnRequest,
             ApprovalsReviewer::AutoReview,
             "auto-review catalog approvals",
+        ),
+        (
+            AskForApproval::Never,
+            ApprovalsReviewer::AutoReview,
+            "never catalog approvals",
+        ),
+        (
+            AskForApproval::UnlessTrusted,
+            ApprovalsReviewer::AutoReview,
+            "unless-trusted catalog approvals",
         ),
     ] {
         assert_eq!(
             approval_text(
-                AskForApproval::OnRequest,
+                approval_policy,
                 reviewer,
                 Some(&messages),
                 &Policy::empty(),
@@ -415,6 +432,8 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
     let messages = ApprovalMessages {
         on_request: Some(String::new()),
         on_request_auto_review: None,
+        never: None,
+        unless_trusted: None,
     };
     let mut exec_policy = Policy::empty();
     exec_policy
@@ -452,10 +471,12 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
 }
 
 #[test]
-fn missing_catalog_key_and_non_on_request_policy_use_legacy_approval_text() {
+fn missing_catalog_key_uses_legacy_approval_text() {
     let messages = ApprovalMessages {
         on_request: None,
         on_request_auto_review: Some("unused catalog approvals".to_string()),
+        never: None,
+        unless_trusted: None,
     };
 
     let on_request = approval_text(
@@ -477,6 +498,30 @@ fn missing_catalog_key_and_non_on_request_policy_use_legacy_approval_text() {
 
     assert!(on_request.contains("How to request escalation"));
     assert_eq!(never, APPROVAL_POLICY_NEVER);
+}
+
+#[test]
+fn empty_catalog_non_on_request_approval_messages_suppress_legacy_approval_text() {
+    let messages = ApprovalMessages {
+        on_request: None,
+        on_request_auto_review: None,
+        never: Some(String::new()),
+        unless_trusted: Some(String::new()),
+    };
+
+    for approval_policy in [AskForApproval::Never, AskForApproval::UnlessTrusted] {
+        assert_eq!(
+            approval_text(
+                approval_policy,
+                ApprovalsReviewer::AutoReview,
+                Some(&messages),
+                &Policy::empty(),
+                /*exec_permission_approvals_enabled*/ true,
+                /*request_permissions_tool_enabled*/ true,
+            ),
+            ""
+        );
+    }
 }
 
 #[test]

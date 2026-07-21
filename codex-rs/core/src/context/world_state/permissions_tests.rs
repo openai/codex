@@ -72,6 +72,8 @@ fn permissions_state(
     let approval_messages = ApprovalMessages {
         on_request: Some("Ask for approval.".to_string()),
         on_request_auto_review: None,
+        never: None,
+        unless_trusted: None,
     };
     let permission_messages = PermissionMessages {
         danger_full_access: Some("Full access.".to_string()),
