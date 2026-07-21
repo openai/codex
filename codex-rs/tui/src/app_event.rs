@@ -235,8 +235,10 @@ pub(crate) enum AppEvent {
         log_id: u64,
     },
 
-    /// Start a new session.
-    NewSession,
+    /// Start a new session, optionally assigning it a name.
+    NewSession {
+        name: Option<String>,
+    },
 
     /// Result of the fresh startup thread that is attached after the input UI is live.
     StartupThreadStarted {
@@ -245,7 +247,9 @@ pub(crate) enum AppEvent {
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.
-    ClearUi,
+    ClearUi {
+        name: Option<String>,
+    },
 
     /// Re-render the transcript using the selected scrollback rendering mode.
     RawOutputModeChanged {

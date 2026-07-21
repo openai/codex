@@ -126,7 +126,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 
     match event {
-        AppEvent::NewSession => {
+        AppEvent::NewSession { .. } => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
@@ -134,7 +134,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
-        AppEvent::ClearUi => {
+        AppEvent::ClearUi { .. } => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",

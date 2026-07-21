@@ -604,6 +604,7 @@ impl App {
         app_server: &mut AppServerSession,
         session_start_source: Option<ThreadStartSource>,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
+        new_thread_name: Option<String>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
@@ -637,7 +638,21 @@ impl App {
             .start_thread_with_session_start_source(&config, session_start_source)
             .await
         {
-            Ok(started) => {
+            Ok(mut started) => {
+                let name_error = if let Some(name) = new_thread_name {
+                    match app_server
+                        .thread_set_name(started.session.thread_id, name.clone())
+                        .await
+                    {
+                        Ok(()) => {
+                            started.session.thread_name = Some(name);
+                            None
+                        }
+                        Err(err) => Some(format!("Failed to name the new session: {err}")),
+                    }
+                } else {
+                    None
+                };
                 if let Err(err) = self
                     .replace_chat_widget_with_app_server_thread(
                         tui,
@@ -650,16 +665,22 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to attach to fresh app-server thread: {err}"
                     ));
-                } else if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = Vec::new();
-                    if let Some(usage_line) = summary.usage_line {
-                        lines.push(usage_line.into());
+                } else {
+                    if let Some(err) = name_error {
+                        self.chat_widget.add_error_message(err);
                     }
-                    if let Some(command) = summary.resume_hint {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
+                    if let Some(summary) = summary {
+                        let mut lines: Vec<Line<'static>> = Vec::new();
+                        if let Some(usage_line) = summary.usage_line {
+                            lines.push(usage_line.into());
+                        }
+                        if let Some(command) = summary.resume_hint {
+                            let spans =
+                                vec!["To continue this session, run ".into(), command.cyan()];
+                            lines.push(spans.into());
+                        }
+                        self.chat_widget.add_plain_history_lines(lines);
                     }
-                    self.chat_widget.add_plain_history_lines(lines);
                 }
             }
             Err(err) => {
