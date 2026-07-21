@@ -108,12 +108,14 @@ async fn remote_sandboxed_process_preserves_custom_arg0() -> Result<()> {
                 value: FileSystemSpecialPath::Minimal,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
     ]);
     let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
