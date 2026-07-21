@@ -69,6 +69,7 @@ fn multi_query_preserves_bounded_input_signals() {
             name,
             short_description: None,
             description: "match logs",
+            dependencies: None,
         })
         .collect::<Vec<_>>();
 
@@ -86,5 +87,6 @@ fn document<'a>(id: usize, name: &'a str, description: &'a str) -> SkillSelectio
         name,
         short_description: None,
         description,
+        dependencies: None,
     }
 }
