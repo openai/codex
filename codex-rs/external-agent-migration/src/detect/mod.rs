@@ -378,9 +378,11 @@ impl ExternalAgentConfigService {
         }
 
         if scope.is_home() {
-            let sessions = self
-                .source
-                .recent_sessions(&self.external_agent_home, &self.codex_home)?;
+            let sessions = self.source.recent_sessions(
+                &self.external_agent_home,
+                &self.codex_home,
+                self.session_import_limits,
+            )?;
             if !sessions.is_empty() {
                 items.push(ExternalAgentConfigMigrationItem {
                     item_type: ExternalAgentConfigMigrationItemType::Sessions,

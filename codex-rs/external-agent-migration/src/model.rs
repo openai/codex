@@ -1,5 +1,27 @@
 use crate::sessions::ExternalAgentSessionMigration;
 use std::path::PathBuf;
+use std::time::Duration;
+
+const DEFAULT_SESSION_IMPORT_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const DEFAULT_SESSION_IMPORT_MAX_COUNT: usize = 50;
+
+/// Bounds session discovery for an external-agent import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExternalAgentSessionImportLimits {
+    /// Oldest source-session modification age that remains eligible.
+    pub max_age: Duration,
+    /// Maximum number of eligible sessions returned by detection.
+    pub max_sessions: usize,
+}
+
+impl Default for ExternalAgentSessionImportLimits {
+    fn default() -> Self {
+        Self {
+            max_age: DEFAULT_SESSION_IMPORT_MAX_AGE,
+            max_sessions: DEFAULT_SESSION_IMPORT_MAX_COUNT,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {

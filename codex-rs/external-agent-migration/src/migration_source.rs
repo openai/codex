@@ -2,8 +2,9 @@ use crate::ClaSource;
 use crate::CurSource;
 use crate::RewriteProfile;
 use crate::detect::plugins;
-use crate::detect::sessions::detect_recent_cla_sessions;
-use crate::detect::sessions::detect_recent_cur_sessions;
+use crate::detect::sessions::detect_recent_cla_sessions_with_limits;
+use crate::detect::sessions::detect_recent_cur_sessions_with_limits;
+use crate::model::ExternalAgentSessionImportLimits;
 use crate::sessions::ExternalAgentSessionMigration;
 use crate::sessions::SessionMetadataMode;
 use serde_json::Value as JsonValue;
@@ -122,10 +123,15 @@ impl ExternalAgentSource {
         self,
         external_agent_home: &Path,
         codex_home: &Path,
+        limits: ExternalAgentSessionImportLimits,
     ) -> io::Result<Vec<ExternalAgentSessionMigration>> {
         match self {
-            Self::Cla => detect_recent_cla_sessions(external_agent_home, codex_home),
-            Self::Cur => detect_recent_cur_sessions(external_agent_home, codex_home),
+            Self::Cla => {
+                detect_recent_cla_sessions_with_limits(external_agent_home, codex_home, limits)
+            }
+            Self::Cur => {
+                detect_recent_cur_sessions_with_limits(external_agent_home, codex_home, limits)
+            }
         }
     }
 

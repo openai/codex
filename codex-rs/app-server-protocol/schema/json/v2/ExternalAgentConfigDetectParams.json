@@ -15,6 +15,24 @@
       "description": "If true, include detection under the user's home directory.",
       "type": "boolean"
     },
+    "maxSessionAgeDays": {
+      "description": "Maximum age in days for detected sessions. Missing values use the default limit.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "maxSessions": {
+      "description": "Maximum number of sessions to detect. Missing values use the default limit.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "migrationSource": {
       "description": "Optional migration-source selector. Missing or unrecognized values use the default source.",
       "type": [

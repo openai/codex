@@ -1,7 +1,6 @@
-#[cfg(test)]
-use super::common::SESSION_IMPORT_MAX_COUNT;
 use super::common::SessionFileCandidate;
 use super::common::detect_recent_sessions;
+use crate::model::ExternalAgentSessionImportLimits;
 use crate::sessions::ExternalAgentSessionMigration;
 use std::fs;
 use std::io;
@@ -11,6 +10,18 @@ use std::path::PathBuf;
 pub fn detect_recent_cur_sessions(
     external_agent_home: &Path,
     codex_home: &Path,
+) -> io::Result<Vec<ExternalAgentSessionMigration>> {
+    detect_recent_cur_sessions_with_limits(
+        external_agent_home,
+        codex_home,
+        ExternalAgentSessionImportLimits::default(),
+    )
+}
+
+pub(crate) fn detect_recent_cur_sessions_with_limits(
+    external_agent_home: &Path,
+    codex_home: &Path,
+    limits: ExternalAgentSessionImportLimits,
 ) -> io::Result<Vec<ExternalAgentSessionMigration>> {
     let projects_root = external_agent_home.join("projects");
     if !projects_root.is_dir() {
@@ -34,7 +45,9 @@ pub fn detect_recent_cur_sessions(
             });
         }
     }
-    detect_recent_sessions(codex_home, candidates, /*require_existing_cwd*/ false)
+    detect_recent_sessions(
+        codex_home, candidates, /*require_existing_cwd*/ false, limits,
+    )
 }
 
 fn cur_transcript_files(transcripts_root: &Path) -> Vec<PathBuf> {
