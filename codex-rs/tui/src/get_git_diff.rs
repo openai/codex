@@ -34,7 +34,7 @@ struct WorkspaceFsmonitorProbeRunner<'a> {
 impl FsmonitorProbeRunner for WorkspaceFsmonitorProbeRunner<'_> {
     async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
         let argv = ["git"].into_iter().chain(args.iter().copied());
-        let command = WorkspaceCommand::new(argv).cwd(self.cwd.to_path_buf());
+        let command = WorkspaceCommand::local_only_git(argv).cwd(self.cwd.to_path_buf());
         match self.runner.run(command).await {
             Ok(output) if output.success() => Some(output.stdout.into_bytes()),
             _ => None,
@@ -238,7 +238,7 @@ async fn run_git_command(
     ]
     .into_iter()
     .chain(args.iter().copied());
-    let mut command = WorkspaceCommand::new(argv)
+    let mut command = WorkspaceCommand::local_only_git(argv)
         .cwd(cwd.to_path_buf())
         .timeout(DIFF_COMMAND_TIMEOUT)
         .disable_output_cap();
@@ -764,7 +764,8 @@ mod tests {
     }
 
     fn filter_override_env(driver: &str) -> HashMap<String, Option<String>> {
-        HashMap::from([
+        let mut env = expected_local_only_git_env();
+        env.extend([
             ("GIT_CONFIG_COUNT".to_string(), Some("3".to_string())),
             (
                 "GIT_CONFIG_KEY_0".to_string(),
@@ -781,6 +782,14 @@ mod tests {
                 Some(format!("{driver}.required")),
             ),
             ("GIT_CONFIG_VALUE_2".to_string(), Some("false".to_string())),
+        ]);
+        env
+    }
+
+    fn expected_local_only_git_env() -> HashMap<String, Option<String>> {
+        HashMap::from([
+            ("GIT_ALLOW_PROTOCOL".to_string(), Some(String::new())),
+            ("GIT_NO_LAZY_FETCH".to_string(), Some("1".to_string())),
         ])
     }
 
@@ -833,11 +842,19 @@ mod tests {
                 command.argv.get(1).map(String::as_str),
                 Some("config" | "version")
             ) {
-                assert_eq!(command.env, HashMap::new());
+                assert_eq!(command.env, expected_local_only_git_env());
                 assert_eq!(command.timeout, Duration::from_secs(/*secs*/ 5));
                 assert_eq!(command.output_bytes_cap, 64 * 1024);
                 assert_eq!(command.disable_output_cap, false);
             } else {
+                assert_eq!(
+                    command.env.get("GIT_ALLOW_PROTOCOL"),
+                    Some(&Some(String::new()))
+                );
+                assert_eq!(
+                    command.env.get("GIT_NO_LAZY_FETCH"),
+                    Some(&Some("1".to_string()))
+                );
                 assert_eq!(command.timeout, DIFF_COMMAND_TIMEOUT);
                 assert_eq!(command.disable_output_cap, true);
             }

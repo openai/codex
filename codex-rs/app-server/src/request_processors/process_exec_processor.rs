@@ -42,6 +42,7 @@ use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::request_processors::environment_overrides::apply_environment_overrides;
 
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124;
 const OUTPUT_CHUNK_SIZE_HINT: usize = 64 * 1024;
@@ -96,16 +97,8 @@ impl ProcessExecRequestProcessor {
         }
         let mut env = std::env::vars().collect::<HashMap<_, _>>();
         if let Some(env_overrides) = env_overrides {
-            for (key, value) in env_overrides {
-                match value {
-                    Some(value) => {
-                        env.insert(key, value);
-                    }
-                    None => {
-                        env.remove(&key);
-                    }
-                }
-            }
+            apply_environment_overrides(&mut env, env_overrides)
+                .map_err(|error| invalid_params(format!("{method_name} env: {error}")))?;
         }
         let expiration = match timeout_ms {
             Some(Some(timeout_ms)) => match u64::try_from(timeout_ms) {

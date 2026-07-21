@@ -1,3 +1,4 @@
+use super::environment_overrides::apply_environment_overrides;
 use super::*;
 
 #[derive(Clone)]
@@ -152,16 +153,8 @@ impl CommandExecRequestProcessor {
             /*thread_id*/ None,
         );
         if let Some(env_overrides) = env_overrides {
-            for (key, value) in env_overrides {
-                match value {
-                    Some(value) => {
-                        env.insert(key, value);
-                    }
-                    None => {
-                        env.remove(&key);
-                    }
-                }
-            }
+            apply_environment_overrides(&mut env, env_overrides)
+                .map_err(|error| invalid_params(format!("command/exec env: {error}")))?;
         }
         let timeout_ms = match timeout_ms {
             Some(timeout_ms) => match u64::try_from(timeout_ms) {

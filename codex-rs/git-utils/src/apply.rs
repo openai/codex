@@ -124,7 +124,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 }
 
 fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = local_git_command()
         .arg("rev-parse")
         .arg("--show-toplevel")
         .current_dir(cwd)
@@ -149,7 +149,7 @@ fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
 }
 
 fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, String, String)> {
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = local_git_command();
     for p in git_cfg {
         cmd.arg(p);
     }
@@ -161,6 +161,12 @@ fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, 
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     Ok((code, stdout, stderr))
+}
+
+fn local_git_command() -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    command.envs(crate::local_only_git_env());
+    command
 }
 
 fn quote_shell(s: &str) -> String {
@@ -329,7 +335,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     if existing.is_empty() {
         return Ok(());
     }
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = local_git_command();
     cmd.arg("add");
     cmd.arg("--");
     for p in &existing {
@@ -591,6 +597,10 @@ pub fn parse_git_apply_output(
 fn regex_ci(pat: &str) -> Regex {
     Regex::new(&format!("(?i){pat}")).unwrap_or_else(|e| panic!("invalid regex: {e}"))
 }
+
+#[cfg(all(test, unix))]
+#[path = "apply_transport_tests.rs"]
+mod transport_tests;
 
 #[cfg(test)]
 mod tests {

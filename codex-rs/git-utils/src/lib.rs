@@ -4,6 +4,7 @@ mod branch;
 mod errors;
 mod fsmonitor;
 mod info;
+mod local_only;
 mod operations;
 mod platform;
 
@@ -42,4 +43,5 @@ pub use info::git_diff_to_remote;
 pub use info::local_git_branches;
 pub use info::recent_commits;
 pub use info::resolve_root_git_project_for_trust;
+pub use local_only::local_only_git_env;
 pub use platform::create_symlink;
