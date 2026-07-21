@@ -88,6 +88,75 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_sandboxed_process_preserves_custom_arg0() -> Result<()> {
+    if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
+        eprintln!("skipping bwrap test: {warning}");
+        return Ok(());
+    }
+
+    let context = create_process_context(/*use_remote*/ true).await?;
+    let workspace = TempDir::new()?;
+    let outside_workspace = TempDir::new()?;
+    let denied_file = outside_workspace.path().join("denied.txt");
+    std::fs::write(&denied_file, b"denied")?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+    ]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd.clone(),
+    );
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-custom-arg0"),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf '%s' \"$0\"; if /bin/cat \"$CODEX_TEST_DENIED_FILE\" >/dev/null 2>&1; then exit 42; fi"
+                    .to_string(),
+            ],
+            cwd,
+            env_policy: None,
+            env: HashMap::from([
+                ("PATH".to_string(), std::env::var("PATH")?),
+                (
+                    "CODEX_TEST_DENIED_FILE".to_string(),
+                    denied_file.to_string_lossy().into_owned(),
+                ),
+            ]),
+            tty: false,
+            pipe_stdin: false,
+            arg0: Some("custom-arg0".to_string()),
+            sandbox: Some(sandbox),
+            enforce_managed_network: false,
+            managed_network: None,
+            network_proxy: None,
+        })
+        .await?;
+    let output = collect_process_output_from_events(session.process).await?;
+
+    assert_eq!(
+        output,
+        ("custom-arg0".to_string(), String::new(), Some(0), true)
+    );
+    Ok(())
+}
+
 async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
     let session = context

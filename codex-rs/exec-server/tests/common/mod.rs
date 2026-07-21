@@ -6,6 +6,7 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::Duration;
 
+use codex_exec_server::CODEX_ARG0_EXEC_HELPER_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
@@ -25,6 +26,9 @@ const DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG: &str = "--codex-test-delayed-output-a
 #[ctor]
 pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
     let guard = configure_test_binary_dispatch("codex-exec-server-tests", |exe_name, argv1| {
+        if argv1 == Some(CODEX_ARG0_EXEC_HELPER_ARG1) {
+            return TestBinaryDispatchMode::DispatchArg0Only;
+        }
         if argv1 == Some(CODEX_FS_HELPER_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
