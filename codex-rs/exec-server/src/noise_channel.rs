@@ -145,16 +145,18 @@ impl InitiatorHandshake {
                 "handshake payload is too large",
             ));
         }
-        let mut output = [0u8; MAX_MESSAGE_LEN];
+        let mut output = vec![0u8; payload.len() + overhead];
         let output_len = handshake.write_message(payload, &mut output)?;
-        Ok((Self { handshake }, output[..output_len].to_vec()))
+        output.truncate(output_len);
+        Ok((Self { handshake }, output))
     }
 
     /// Consume the executor response and enter transport mode.
     /// The v1 response does not carry an application payload.
     pub(crate) fn finish(mut self, response: &[u8]) -> Result<NoiseTransport, NoiseChannelError> {
         ensure_noise_frame_len(response.len(), "handshake response is too large")?;
-        let mut payload = [0u8; MAX_MESSAGE_LEN];
+        let overhead = self.handshake.get_next_message_overhead()?;
+        let mut payload = vec![0u8; response.len().saturating_sub(overhead)];
         let payload_len = self.handshake.read_message(response, &mut payload)?;
         if payload_len != 0 {
             return Err(NoiseChannelError::InvalidMessage(
@@ -190,7 +192,8 @@ impl PendingResponderHandshake {
             .with_s(identity.dh.clone())
             .with_s_kem(identity.kem.clone());
         let mut handshake = Handshake::new(params)?;
-        let mut payload = [0u8; MAX_MESSAGE_LEN];
+        let overhead = handshake.get_next_message_overhead()?;
+        let mut payload = vec![0u8; request.len().saturating_sub(overhead)];
         let payload_len = handshake.read_message(request, &mut payload)?;
         // Clatter exposes this key only after the first IK message authenticates.
         let remote = handshake
@@ -203,22 +206,25 @@ impl PendingResponderHandshake {
             x25519_public_key: STANDARD.encode(remote.dh()),
             mlkem768_public_key: STANDARD.encode(remote.kem().as_slice()),
         };
+        payload.truncate(payload_len);
         Ok(Self {
             handshake,
             initiator_public_key,
-            payload: payload[..payload_len].to_vec(),
+            payload,
         })
     }
 
     /// Finish the handshake after the registry authorizes the harness key.
     pub(crate) fn complete(mut self) -> Result<(NoiseTransport, Vec<u8>), NoiseChannelError> {
-        let mut response = [0u8; MAX_MESSAGE_LEN];
+        let overhead = self.handshake.get_next_message_overhead()?;
+        let mut response = vec![0u8; overhead];
         let response_len = self.handshake.write_message(&[], &mut response)?;
+        response.truncate(response_len);
         Ok((
             NoiseTransport {
                 transport: self.handshake.finalize()?,
             },
-            response[..response_len].to_vec(),
+            response,
         ))
     }
 }
