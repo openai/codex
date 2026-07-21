@@ -2,6 +2,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use crate::tools::code_mode::default_exec_yield_time_override_ms;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
 use crate::tools::effective_tool_mode;
@@ -472,6 +473,9 @@ fn build_code_mode_executors(
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
     let deferred_tools =
         collect_code_mode_exec_prompt_tool_definitions(deferred_exec_prompt_tool_specs.iter());
+    let default_exec_yield_time_ms =
+        default_exec_yield_time_override_ms(&turn_context.config.features)
+            .unwrap_or(codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS);
 
     vec![
         Arc::new(CodeModeExecuteHandler::new(
@@ -479,6 +483,7 @@ fn build_code_mode_executors(
                 &enabled_tools,
                 &deferred_tools,
                 &namespace_descriptions,
+                default_exec_yield_time_ms,
                 tool_mode == ToolMode::CodeModeOnly,
             ),
             code_mode_nested_tool_specs,
