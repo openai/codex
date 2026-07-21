@@ -19,6 +19,7 @@ use codex_extension_api::ToolCall;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::WorldStateContributionInput;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
@@ -648,6 +649,109 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         )],
         read_request_keys(&read_requests)
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_context_window_scales_executor_catalog_but_not_thread_catalog() -> TestResult {
+    let orchestrator_entries = (0..40)
+        .map(|index| {
+            test_entry(
+                SkillSourceKind::Orchestrator,
+                "orchestrator",
+                &format!("orchestrator/skill-{index:02}"),
+                &format!("skill-{index:02}/SKILL.md"),
+            )
+        })
+        .collect();
+    let executor_entries = (0..200)
+        .map(|index| {
+            test_entry(
+                SkillSourceKind::Executor,
+                "env-1",
+                &format!("executor/skill-{index:02}"),
+                &format!("skill-{index:02}/SKILL.md"),
+            )
+        })
+        .collect();
+    let providers = SkillProviders::new()
+        .with_orchestrator_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: orchestrator_entries,
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }))
+        .with_executor_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: executor_entries,
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }));
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let mut config = default_config();
+    config.bundled_skills_enabled = false;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let mut model_info = model_info_from_slug("test-model");
+    model_info.context_window = Some(10_000);
+    thread_store.insert(model_info);
+
+    let thread_fragments = registry.context_contributors()[0]
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
+        .await;
+    assert_eq!(1, thread_fragments.len());
+    assert!(thread_fragments[0].text().contains("skill-39"));
+    assert!(
+        !thread_fragments[0]
+            .text()
+            .contains("additional skills omitted")
+    );
+
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "skills".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "env-1".to_string(),
+            path: PathUri::parse("file:///skills").expect("skill root URI"),
+        },
+    }];
+    let turn_store = ExtensionData::new("turn-1");
+    let sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+            step_store: &ExtensionData::new("step"),
+        })
+        .await;
+    let fragment = sections[0]
+        .render_diff(PreviousWorldStateSection::Absent)
+        .ok_or("bounded executor catalog should render")?;
+    assert!(fragment.body().contains("additional skills omitted"));
+    assert!(!fragment.body().contains("skill-39"));
 
     Ok(())
 }
