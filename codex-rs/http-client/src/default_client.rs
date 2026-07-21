@@ -1,4 +1,4 @@
-use http::Error as HttpError;
+use http::Error as HttpRequestBuildError;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
@@ -6,12 +6,14 @@ use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use reqwest::IntoUrl;
 use reqwest::Method;
-use reqwest::Response;
 use serde::Serialize;
 use std::fmt::Display;
 use std::time::Duration;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+pub type HttpError = reqwest::Error;
+pub type HttpResponse = reqwest::Response;
 
 #[derive(Clone, Debug)]
 pub struct HttpClient {
@@ -64,6 +66,43 @@ impl HttpClient {
             self.request_logging,
         )
     }
+
+    pub(crate) async fn execute(
+        &self,
+        mut request: reqwest::Request,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        request.headers_mut().extend(trace_headers());
+        let method = request.method().clone();
+        let url = request.url().to_string();
+
+        match self.inner.execute(request).await {
+            Ok(response) => {
+                if self.request_logging == RequestLogging::Enabled {
+                    tracing::debug!(
+                        method = %method,
+                        url = %url,
+                        status = %response.status(),
+                        headers = ?response.headers(),
+                        version = ?response.version(),
+                        "Request completed"
+                    );
+                }
+                Ok(response)
+            }
+            Err(error) => {
+                if self.request_logging == RequestLogging::Enabled {
+                    tracing::debug!(
+                        method = %method,
+                        url = %url,
+                        status = error.status().map(|status| status.as_u16()),
+                        error = %error,
+                        "Request failed"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,9 +151,9 @@ impl RequestBuilder {
     pub fn header<K, V>(self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
-        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
+        <HeaderName as TryFrom<K>>::Error: Into<HttpRequestBuildError>,
         HeaderValue: TryFrom<V>,
-        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpRequestBuildError>,
     {
         self.map(|builder| builder.header(key, value))
     }
@@ -144,7 +183,7 @@ impl RequestBuilder {
         self.map(|builder| builder.body(body))
     }
 
-    pub async fn send(self) -> Result<Response, reqwest::Error> {
+    pub async fn send(self) -> Result<HttpResponse, HttpError> {
         let headers = trace_headers();
 
         match self.builder.headers(headers).send().await {
@@ -192,7 +231,7 @@ impl<'a> Injector for HeaderMapInjector<'a> {
     }
 }
 
-fn trace_headers() -> HeaderMap {
+pub(crate) fn trace_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     global::get_text_map_propagator(|prop| {
         prop.inject_context(
