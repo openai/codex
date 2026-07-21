@@ -539,6 +539,8 @@ fn find_syntax(lang: &str) -> Option<&'static SyntaxReference> {
     let normalized = lang.to_ascii_lowercase();
     let patched = match normalized.as_str() {
         "csharp" | "c-sharp" => "c#",
+        // CUDA source (.cu) and header (.cuh) files use C++ highlighting as a fallback.
+        "cu" | "cuh" => "cpp",
         "cppm" | "cxxm" | "ixx" => "cpp",
         "golang" => "go",
         "python3" => "python",
@@ -1216,8 +1218,8 @@ mod tests {
         }
         // Patched aliases that two-face cannot resolve on its own.
         for alias in [
-            "csharp", "c-sharp", "cppm", "CPPM", "cxxm", "CxXm", "ixx", "IXX", "golang", "python3",
-            "shell",
+            "csharp", "c-sharp", "cu", "cuh", "cppm", "CPPM", "cxxm", "CxXm", "ixx", "IXX",
+            "golang", "python3", "shell",
         ] {
             assert!(
                 find_syntax(alias).is_some(),
