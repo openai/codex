@@ -33,6 +33,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
@@ -573,6 +575,138 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_preserves_goal_first_and_fork_approvals_reviewer() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
+    )?;
+
+    let (thread_id, fork_thread_id) = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build()
+            .await?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+        let start_id = mcp
+            .send_thread_start_request_with_auto_env(ThreadStartParams {
+                model: Some("gpt-5.2-codex".to_string()),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            })
+            .await?;
+        let start_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+        )
+        .await??;
+        let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+        let rollout_path = thread.path.clone().expect("thread path");
+
+        for objective in [
+            "keep auto review after restart",
+            "still keep auto review after restart",
+        ] {
+            let goal_id = mcp
+                .send_raw_request(
+                    "thread/goal/set",
+                    Some(json!({
+                        "threadId": thread.id,
+                        "objective": objective,
+                        "status": "paused",
+                    })),
+                )
+                .await?;
+            let goal_resp: JSONRPCResponse = timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+            )
+            .await??;
+            let _: ThreadGoalSetResponse = to_response(goal_resp)?;
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_notification_message("thread/goal/updated"),
+            )
+            .await??;
+        }
+
+        let persisted_rollout = std::fs::read_to_string(rollout_path)?;
+        assert_eq!(
+            persisted_rollout
+                .matches(r#""type":"thread_settings_applied""#)
+                .count(),
+            1
+        );
+
+        let fork_id = mcp
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: thread.id.clone(),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                ..Default::default()
+            })
+            .await?;
+        let fork_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+        )
+        .await??;
+        let ThreadForkResponse {
+            thread: fork_thread,
+            approvals_reviewer,
+            ..
+        } = to_response::<ThreadForkResponse>(fork_resp)?;
+        assert_eq!(approvals_reviewer, ApprovalsReviewer::User);
+
+        (thread.id, fork_thread.id)
+    };
+
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        config.replace(
+            "approval_policy = \"never\"\n",
+            "approval_policy = \"never\"\napprovals_reviewer = \"user\"\n",
+        ),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    for (thread_id, expected_reviewer) in [
+        (thread_id, ApprovalsReviewer::AutoReview),
+        (fork_thread_id, ApprovalsReviewer::User),
+    ] {
+        let resume_id = mcp
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id,
+                ..Default::default()
+            })
+            .await?;
+        let resume_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+        )
+        .await??;
+        let ThreadResumeResponse {
+            approvals_reviewer, ..
+        } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+        assert_eq!(approvals_reviewer, expected_reviewer);
+    }
 
     Ok(())
 }

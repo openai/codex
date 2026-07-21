@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
+use codex_core::ThreadConfigSnapshot;
 use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
@@ -10,6 +11,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -91,7 +93,7 @@ async fn fork_thread_twice_drops_to_first_message() {
 
     // After cutting at nth user input (n=1 → second user message), cut strictly before that input.
     let cut1 = user_inputs.get(1).copied().unwrap_or(0);
-    let expected_after_first: Vec<RolloutItem> = base_items[..cut1].to_vec();
+    let mut expected_after_first: Vec<RolloutItem> = base_items[..cut1].to_vec();
 
     // After dropping again (n=1 on fork1), compute expected relative to fork1's rollout.
 
@@ -111,6 +113,9 @@ async fn fork_thread_twice_drops_to_first_message() {
         .expect("fork 1");
 
     let fork1_path = codex_fork1.rollout_path().expect("rollout path");
+    expected_after_first.push(thread_settings_applied_item(
+        codex_fork1.config_snapshot().await,
+    ));
 
     // GetHistory on fork1 flushed; the file is ready.
     let fork1_items = read_rollout_items(&fork1_path);
@@ -142,12 +147,23 @@ async fn fork_thread_twice_drops_to_first_message() {
         .get(fork1_user_inputs.len().saturating_sub(1))
         .copied()
         .unwrap_or(0);
-    let expected_after_second: Vec<RolloutItem> = fork1_items[..cut_last_on_fork1].to_vec();
+    let mut expected_after_second: Vec<RolloutItem> = fork1_items[..cut_last_on_fork1].to_vec();
+    expected_after_second.push(thread_settings_applied_item(
+        codex_fork2.config_snapshot().await,
+    ));
     let fork2_items = read_rollout_items(&fork2_path);
     pretty_assertions::assert_eq!(
         serde_json::to_value(&fork2_items).unwrap(),
         serde_json::to_value(&expected_after_second).unwrap()
     );
+}
+
+fn thread_settings_applied_item(snapshot: ThreadConfigSnapshot) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
+        ThreadSettingsAppliedEvent {
+            thread_settings: snapshot.into_thread_settings_snapshot(),
+        },
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

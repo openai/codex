@@ -43,7 +43,6 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -165,27 +164,13 @@ async fn thread_settings_update(
     }
 }
 
-async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
+pub(super) async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
     let snapshot = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
     };
-    let cwd = snapshot.cwd().clone();
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
-        thread_settings: ThreadSettingsSnapshot {
-            model: snapshot.model,
-            model_provider_id: snapshot.model_provider_id,
-            service_tier: snapshot.service_tier,
-            approval_policy: snapshot.approval_policy,
-            approvals_reviewer: snapshot.approvals_reviewer,
-            permission_profile: snapshot.permission_profile,
-            active_permission_profile: snapshot.active_permission_profile,
-            cwd,
-            reasoning_effort: snapshot.reasoning_effort,
-            reasoning_summary: snapshot.reasoning_summary,
-            personality: snapshot.personality,
-            collaboration_mode: snapshot.collaboration_mode,
-        },
+        thread_settings: snapshot.into_thread_settings_snapshot(),
     })
 }
 
