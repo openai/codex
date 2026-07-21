@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       runtime_version:
-        description: "Runtime version to publish before updating the SDK pin, for example 0.136.0 or 0.136.0a2."
+        description: "Runtime version to publish before updating the SDK pin, for example 0.136.0, 0.136.0a2, or 0.136.0a2.post1."
         required: true
         type: string
 

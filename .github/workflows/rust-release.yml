@@ -40,7 +40,7 @@ jobs:
             || { echo "❌  Not a tag ref"; exit 1; }
 
           # Release tags must match the version in Cargo.toml.
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           tag_ver="${GITHUB_REF_NAME#rust-v}"
@@ -1220,7 +1220,7 @@ jobs:
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
-          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+(\.[0-9]+)?$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
           else
@@ -1303,7 +1303,7 @@ jobs:
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
-    # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
+    # Publish to npm for stable releases, numbered alphas, and alpha hotfixes.
     if: >-
       ${{
         !cancelled() &&

@@ -13,6 +13,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+_SDK_PYTHON_ROOT = str(Path(__file__).resolve().parent)
+if _SDK_PYTHON_ROOT not in sys.path:
+    sys.path.insert(0, _SDK_PYTHON_ROOT)
+
+from release_version import (  # noqa: E402
+    codex_release_tag as _release_tag,
+    normalize_codex_version as _normalized_package_version,
+)
+
 PACKAGE_NAME = "openai-codex-cli-bin"
 SDK_PACKAGE_NAME = "openai-codex"
 REPO_SLUG = "openai/codex"
@@ -324,34 +333,6 @@ def _github_token() -> str | None:
         if token:
             return token
     return None
-
-
-def _normalized_package_version(version: str) -> str:
-    normalized = version.strip()
-    if normalized.startswith("rust-v"):
-        normalized = normalized.removeprefix("rust-v")
-    elif normalized.startswith("v"):
-        normalized = normalized.removeprefix("v")
-
-    normalized = re.sub(r"-alpha\.?([0-9]+)$", r"a\1", normalized)
-    normalized = re.sub(r"-beta\.?([0-9]+)$", r"b\1", normalized)
-    normalized = re.sub(r"-rc\.?([0-9]+)$", r"rc\1", normalized)
-    return normalized
-
-
-def _codex_release_version(version: str) -> str:
-    normalized = _normalized_package_version(version)
-    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)*)(a|b|rc)([0-9]+)", normalized)
-    if match is None:
-        return normalized
-
-    base, prerelease, number = match.groups()
-    prerelease_name = {"a": "alpha", "b": "beta", "rc": "rc"}[prerelease]
-    return f"{base}-{prerelease_name}.{number}"
-
-
-def _release_tag(version: str) -> str:
-    return f"rust-v{_codex_release_version(version)}"
 
 
 def _source_tree_runtime_dependency_version() -> str | None:

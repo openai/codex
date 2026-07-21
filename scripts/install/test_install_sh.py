@@ -48,6 +48,22 @@ class InstallShTest(unittest.TestCase):
         )
         self.assertIn(f"Resolved version: {VERSION}", result.stdout)
 
+    def test_alpha_hotfix_release_is_valid(self) -> None:
+        version = "0.145.0-alpha.23.1"
+        result, requests = run_installer(version)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/openai/codex/releases/tags/"
+                f"rust-v{version}",
+                "https://github.com/openai/codex/releases/download/"
+                f"rust-v{version}/codex-package_SHA256SUMS",
+            ],
+        )
+        self.assertIn(f"Resolved version: {version}", result.stdout)
+
     def test_latest_release_reuses_version_metadata(self) -> None:
         result, requests = run_installer("latest")
 

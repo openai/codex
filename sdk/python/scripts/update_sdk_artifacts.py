@@ -17,6 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, get_args, get_origin
 
+_SDK_PYTHON_ROOT = str(Path(__file__).resolve().parents[1])
+if _SDK_PYTHON_ROOT not in sys.path:
+    sys.path.insert(0, _SDK_PYTHON_ROOT)
+
+from release_version import normalize_codex_version  # noqa: E402
+
 SDK_DISTRIBUTION_NAME = "openai-codex"
 RUNTIME_DISTRIBUTION_NAME = "openai-codex-cli-bin"
 RUNTIME_PACKAGE_ROOT = Path("src") / "codex_cli_bin"
@@ -128,22 +134,6 @@ def pinned_runtime_codex_path() -> Path:
     if not codex_path.exists():
         raise RuntimeError(f"Pinned Codex runtime binary not found at {codex_path}.")
     return codex_path
-
-
-def normalize_codex_version(version: str) -> str:
-    normalized = version.strip()
-    if normalized.startswith("rust-v"):
-        normalized = normalized.removeprefix("rust-v")
-    elif normalized.startswith("v"):
-        normalized = normalized.removeprefix("v")
-
-    normalized = re.sub(r"-alpha\.?([0-9]+)$", r"a\1", normalized)
-    normalized = re.sub(r"-beta\.?([0-9]+)$", r"b\1", normalized)
-    normalized = re.sub(r"-rc\.?([0-9]+)$", r"rc\1", normalized)
-
-    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?", normalized):
-        raise RuntimeError(f"Could not normalize Codex version {version!r} to a PEP 440 version")
-    return normalized
 
 
 def _copy_package_tree(src: Path, dst: Path) -> None:
@@ -1384,7 +1374,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             "Codex release version to write into the staged runtime package. "
-            "Accepts PEP 440 versions or release tags such as rust-v0.116.0-alpha.1."
+            "Accepts PEP 440 versions or release tags such as "
+            "rust-v0.116.0-alpha.1.2."
         ),
     )
     stage_runtime_parser.add_argument(

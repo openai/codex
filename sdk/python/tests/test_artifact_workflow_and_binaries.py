@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import sys
 import tarfile
 import urllib.error
@@ -45,6 +46,18 @@ def _load_runtime_setup_module():
     spec = importlib.util.spec_from_file_location("_runtime_setup", runtime_setup_path)
     if spec is None or spec.loader is None:
         raise AssertionError(f"Failed to load runtime setup module: {runtime_setup_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_release_version_module():
+    """Load the shared release-version conversions used by release tooling."""
+    script_path = ROOT / "release_version.py"
+    spec = importlib.util.spec_from_file_location("release_version", script_path)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Failed to load release-version module: {script_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -571,13 +584,19 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
         "normalized_release_version": runtime_setup._normalized_package_version(
             "rust-v0.116.0-alpha.1"
         ),
+        "normalized_alpha_hotfix_version": runtime_setup._normalized_package_version(
+            "rust-v0.116.0-alpha.1.2"
+        ),
         "release_tag": runtime_setup._release_tag("0.116.0a1"),
+        "alpha_hotfix_release_tag": runtime_setup._release_tag("0.116.0a1.post2"),
     } == {
         "package_name": "openai-codex-cli-bin",
         "sdk_template_version": "0.0.0-dev",
         "runtime_pin": "0.144.4",
         "normalized_release_version": "0.116.0a1",
+        "normalized_alpha_hotfix_version": "0.116.0a1.post2",
         "release_tag": "rust-v0.116.0-alpha.1",
+        "alpha_hotfix_release_tag": "rust-v0.116.0-alpha.1.2",
     }
 
 
@@ -703,9 +722,52 @@ def test_normalize_codex_version_accepts_release_tags_and_pep440_versions() -> N
     script = _load_update_script_module()
 
     assert script.normalize_codex_version("rust-v0.116.0-alpha.1") == "0.116.0a1"
+    assert script.normalize_codex_version("rust-v0.116.0-alpha.1.2") == "0.116.0a1.post2"
     assert script.normalize_codex_version("v0.116.0-beta.2") == "0.116.0b2"
     assert script.normalize_codex_version("0.116.0rc3") == "0.116.0rc3"
     assert script.normalize_codex_version("0.116.0") == "0.116.0"
+
+
+def test_release_version_conversions_map_python_versions_to_codex_tags() -> None:
+    release_version = _load_release_version_module()
+
+    assert {
+        version: release_version.codex_release_tag(version)
+        for version in ["0.116.0", "0.116.0a1", "0.116.0a1.post2"]
+    } == {
+        "0.116.0": "rust-v0.116.0",
+        "0.116.0a1": "rust-v0.116.0-alpha.1",
+        "0.116.0a1.post2": "rust-v0.116.0-alpha.1.2",
+    }
+
+
+def test_release_version_cli_writes_python_runtime_outputs(tmp_path: Path) -> None:
+    github_output = tmp_path / "github-output"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "release_version.py"),
+            "0.116.0a1.post2",
+            "--github-output",
+            str(github_output),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert {
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "github_output": github_output.read_text(),
+    } == {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "github_output": ("python_version=0.116.0a1.post2\nrelease_tag=rust-v0.116.0-alpha.1.2\n"),
+    }
 
 
 def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
