@@ -43,6 +43,7 @@ use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
 use crate::render::MAX_SKILL_NAME_BYTES;
 use crate::render::MAX_SKILL_PATH_BYTES;
+use crate::render::SkillCatalogRenderPolicy;
 use crate::render::available_skills_fragment;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
@@ -144,10 +145,14 @@ where
             let include_usage = thread_store
                 .get::<ModelInfo>()
                 .is_some_and(|model_info| model_info.include_skills_usage_instructions);
-            available_skills_fragment(&catalog, include_usage)
-                .map(|fragment| PromptFragment::developer_capability(fragment.render()))
-                .into_iter()
-                .collect()
+            available_skills_fragment(
+                &catalog,
+                include_usage,
+                SkillCatalogRenderPolicy::ExtensionCompatible,
+            )
+            .map(|fragment| PromptFragment::developer_capability(fragment.render()))
+            .into_iter()
+            .collect()
         })
     }
 
@@ -329,7 +334,11 @@ where
                 let include_usage = thread_store
                     .get::<ModelInfo>()
                     .is_some_and(|model_info| model_info.include_skills_usage_instructions);
-                if let Some(fragment) = available_skills_fragment(&turn_catalog, include_usage) {
+                if let Some(fragment) = available_skills_fragment(
+                    &turn_catalog,
+                    include_usage,
+                    SkillCatalogRenderPolicy::ExtensionCompatible,
+                ) {
                     fragments.push(Box::new(fragment));
                 }
             }
