@@ -357,7 +357,10 @@ pub(crate) async fn run_turn(
                         Arc::clone(&step_context),
                         /*fallback_step_context*/ None,
                         &mut client_session,
-                        InitialContextInjection::BeforeLastUserMessage(Arc::clone(&world_state)),
+                        InitialContextInjection::BeforeLastUserMessage {
+                            world_state: Arc::clone(&world_state),
+                            step_context: Arc::clone(&step_context),
+                        },
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
@@ -584,7 +587,7 @@ async fn build_skills_and_plugins(
     let skills_outcome = turn_context.turn_skills.snapshot.outcome();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
     let extension_injection_items =
-        build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
+        build_extension_turn_input_items(sess, step_context, &user_input, cancellation_token)
             .await?;
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
@@ -687,10 +690,11 @@ async fn build_skills_and_plugins(
 )]
 async fn build_extension_turn_input_items(
     sess: &Arc<Session>,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     user_input: &[UserInput],
     cancellation_token: &CancellationToken,
 ) -> Option<Vec<ResponseItem>> {
+    let turn_context = step_context.turn.as_ref();
     let contributors = sess.services.extensions.turn_input_contributors().to_vec();
     if contributors.is_empty() {
         return Some(Vec::new());
@@ -725,6 +729,7 @@ async fn build_extension_turn_input_items(
                 &sess.services.session_extension_data,
                 &sess.services.thread_extension_data,
                 turn_context.extension_data.as_ref(),
+                &step_context.extension_data,
             )
             .or_cancel(cancellation_token)
             .await
@@ -1341,7 +1346,7 @@ pub(crate) async fn built_tools(
         ToolRouterParams {
             tool_runtimes: mcp_tool_runtimes,
             tool_suggest_candidates,
-            extension_tool_executors: extension_tool_executors(sess),
+            extension_tool_executors: extension_tool_executors(sess, step_context),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
         &sess.services.tool_search_handler_cache,

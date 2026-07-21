@@ -38,7 +38,7 @@ pub(crate) async fn run_manual_compact_task(
     // Manual compaction runs outside run_turn, so it captures its own current step.
     let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
     let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await);
-    run_compact_task_inner(&sess, &turn_context, world_state, CompactionTrigger::Manual).await
+    run_compact_task_inner(&sess, &step_context, world_state, CompactionTrigger::Manual).await
 }
 
 /// Runs token-budget inline auto-compaction as a normal compaction lifecycle.
@@ -51,22 +51,22 @@ pub(crate) async fn run_inline_auto_compact_task(
     step_context: Arc<StepContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    let turn_context = &step_context.turn;
     let world_state = match initial_context_injection {
-        InitialContextInjection::BeforeLastUserMessage(world_state) => world_state,
+        InitialContextInjection::BeforeLastUserMessage { world_state, .. } => world_state,
         InitialContextInjection::DoNotInject => {
             Arc::new(sess.build_world_state_for_step(&step_context).await)
         }
     };
-    run_compact_task_inner(&sess, turn_context, world_state, CompactionTrigger::Auto).await
+    run_compact_task_inner(&sess, &step_context, world_state, CompactionTrigger::Auto).await
 }
 
 async fn run_compact_task_inner(
     sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     world_state: Arc<WorldState>,
     trigger: CompactionTrigger,
 ) -> CodexResult<()> {
+    let turn_context = &step_context.turn;
     let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
@@ -76,7 +76,7 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    sess.start_new_context_window(turn_context.as_ref(), world_state)
+    sess.start_new_context_window(step_context, world_state)
         .await;
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;

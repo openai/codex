@@ -113,6 +113,7 @@ where
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        _step_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
@@ -214,6 +215,7 @@ where
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
+        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
         let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
             return Vec::new();
@@ -269,6 +271,7 @@ where
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
+        _step_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
         Box::pin(async move {
             let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {

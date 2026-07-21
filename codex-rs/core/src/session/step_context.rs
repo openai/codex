@@ -6,6 +6,7 @@ use crate::session::McpRuntimeSnapshot;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_extension_api::ExtensionData;
 use codex_mcp::ToolInfo;
 use tokio::sync::OnceCell;
 
@@ -22,6 +23,8 @@ pub(crate) struct StepContext {
     pub(crate) mcp: Arc<McpRuntimeSnapshot>,
     /// The fixed MCP tool list used for this exact sampling request.
     mcp_tool_snapshot: OnceCell<Vec<ToolInfo>>,
+    /// Extension capabilities bound to this exact sampling step.
+    pub(crate) extension_data: ExtensionData,
     /// The canonical AGENTS.md value observed with this environment snapshot.
     pub(crate) loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
 }
@@ -35,6 +38,7 @@ impl StepContext {
         mcp: Arc<McpRuntimeSnapshot>,
         loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
     ) -> Self {
+        let extension_data = ExtensionData::new(turn.sub_id.clone());
         Self {
             turn,
             environments,
@@ -42,6 +46,7 @@ impl StepContext {
             executor_capability_discovery,
             mcp,
             mcp_tool_snapshot: OnceCell::new(),
+            extension_data,
             loaded_agents_md,
         }
     }

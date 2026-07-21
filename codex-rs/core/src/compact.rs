@@ -15,6 +15,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
@@ -64,20 +65,30 @@ const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 /// initial context into the replacement history just above the last real user message.
 #[derive(Debug)]
 pub(crate) enum InitialContextInjection {
-    BeforeLastUserMessage(Arc<WorldState>),
+    BeforeLastUserMessage {
+        world_state: Arc<WorldState>,
+        step_context: Arc<StepContext>,
+    },
     DoNotInject,
 }
 
 pub(crate) async fn build_compaction_initial_context(
     sess: &Session,
-    turn_context: &TurnContext,
     initial_context_injection: &InitialContextInjection,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Return the rendered state with its items so history and its baseline stay identical.
     match initial_context_injection {
-        InitialContextInjection::BeforeLastUserMessage(world_state) => {
+        InitialContextInjection::BeforeLastUserMessage {
+            world_state,
+            step_context,
+        } => {
             let items = sess
-                .build_initial_context_with_world_state(turn_context, world_state.as_ref())
+                .build_initial_context_with_world_state_and_mcp(
+                    step_context.turn.as_ref(),
+                    world_state.as_ref(),
+                    step_context.mcp.as_ref(),
+                    &step_context.extension_data,
+                )
                 .await;
             (items, Some(Arc::clone(world_state)))
         }
@@ -334,19 +345,15 @@ async fn run_compact_task_inner_impl(
     }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
-    let (initial_context, world_state_baseline) = build_compaction_initial_context(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &initial_context_injection,
-    )
-    .await;
+    let (initial_context, world_state_baseline) =
+        build_compaction_initial_context(sess.as_ref(), &initial_context_injection).await;
     if !initial_context.is_empty() {
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage(_) => {
+        InitialContextInjection::BeforeLastUserMessage { .. } => {
             Some(turn_context.to_turn_context_item())
         }
     };

@@ -539,12 +539,15 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     turn_context.session_source = guardian_source;
     turn_context.developer_instructions = Some(guardian_policy.clone());
     let turn_context = Arc::new(turn_context);
-    let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
-    let initial_context_injection = InitialContextInjection::BeforeLastUserMessage(world_state);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let world_state = Arc::new(session.build_world_state_for_step(&step_context).await);
+    let initial_context_injection = InitialContextInjection::BeforeLastUserMessage {
+        world_state,
+        step_context,
+    };
 
     let (refreshed, _) = crate::compact_remote::process_compacted_history(
         &session,
-        &turn_context,
         vec![
             ResponseItem::Message {
                 id: None,
