@@ -26,6 +26,8 @@ use codex_sandboxing::with_managed_mitm_ca_readable_root;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 
+#[cfg(unix)]
+use crate::CODEX_ARG0_EXEC_HELPER_ARG1;
 use crate::ExecServerRuntimePaths;
 use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
@@ -121,17 +123,27 @@ pub(crate) async fn prepare_exec_request(
         native_sandbox_policy_cwd.as_path(),
     );
     let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
+    #[cfg(unix)]
+    let sandbox_helper_paths = params
+        .arg0
+        .iter()
+        .map(|_| runtime_paths.codex_self_exe.clone())
+        .collect::<Vec<_>>();
     // Bubblewrap launches the configured helper, which may re-enter this executable to apply
     // seccomp, so the outer filesystem sandbox must expose both paths.
     #[cfg(target_os = "linux")]
-    let sandbox_helper_paths = std::iter::once(&runtime_paths.codex_self_exe)
-        .chain(runtime_paths.codex_linux_sandbox_exe.as_ref())
-        .cloned()
-        .collect::<Vec<_>>();
-    #[cfg(target_os = "linux")]
+    let sandbox_helper_paths = {
+        let mut sandbox_helper_paths = sandbox_helper_paths;
+        if !sandbox_helper_paths.contains(&runtime_paths.codex_self_exe) {
+            sandbox_helper_paths.push(runtime_paths.codex_self_exe.clone());
+        }
+        sandbox_helper_paths.extend(runtime_paths.codex_linux_sandbox_exe.iter().cloned());
+        sandbox_helper_paths
+    };
+    #[cfg(unix)]
     let file_system_policy = file_system_policy
         .with_additional_readable_roots(native_sandbox_policy_cwd.as_path(), &sandbox_helper_paths);
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
         permissions.enforcement(),
         &file_system_policy,
@@ -154,16 +166,34 @@ pub(crate) async fn prepare_exec_request(
         .argv
         .split_first()
         .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+    #[cfg(unix)]
+    let (program, args) = params.arg0.as_ref().map_or_else(
+        || (program.into(), args.to_vec()),
+        |arg0| {
+            let mut helper_args = Vec::with_capacity(params.argv.len() + 2);
+            helper_args.push(CODEX_ARG0_EXEC_HELPER_ARG1.to_string());
+            helper_args.push(arg0.clone());
+            helper_args.extend(params.argv.iter().cloned());
+            (
+                runtime_paths
+                    .codex_self_exe
+                    .as_path()
+                    .as_os_str()
+                    .to_owned(),
+                helper_args,
+            )
+        },
+    );
+    #[cfg(not(unix))]
+    let (program, args) = (program.into(), args.to_vec());
     let transform_request = SandboxDirectSpawnTransformRequest {
         workspace_roots,
         windows_sandbox_proxy_settings_mode:
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         transform: SandboxTransformRequest {
-            // TODO(jif): Preserve params.arg0 for the inner command across the sandbox
-            // wrapper, or reject sandboxed requests with a custom arg0.
             command: SandboxCommand {
-                program: program.into(),
-                args: args.to_vec(),
+                program,
+                args,
                 cwd: params.cwd.clone(),
                 env,
                 managed_network,

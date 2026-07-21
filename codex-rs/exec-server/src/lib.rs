@@ -1,3 +1,4 @@
+mod arg0_exec_helper;
 mod capability_discovery;
 mod capability_discovery_cache;
 mod client;
@@ -35,6 +36,8 @@ mod websocket_pong_watchdog;
 
 use codex_exec_server_protocol as protocol;
 
+pub use arg0_exec_helper::CODEX_ARG0_EXEC_HELPER_ARG1;
+pub use arg0_exec_helper::main as run_arg0_exec_helper_main;
 pub use capability_discovery::CapabilityDiscoveryError;
 pub use capability_discovery::discover_capability_roots;
 pub use capability_discovery_cache::ExecutorCapabilityDiscoveryCache;

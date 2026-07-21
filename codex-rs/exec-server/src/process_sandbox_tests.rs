@@ -11,6 +11,8 @@ use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 #[cfg(any(unix, windows))]
 use codex_protocol::models::PermissionProfile;
+#[cfg(target_os = "linux")]
+use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -19,6 +21,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 use super::prepare_exec_request;
+#[cfg(unix)]
+use crate::CODEX_ARG0_EXEC_HELPER_ARG1;
 use crate::ExecParams;
 #[cfg(any(unix, windows))]
 use crate::ExecServerRuntimePaths;
@@ -91,6 +95,61 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
         prepared.command.first().map(String::as_str),
         Some("/usr/bin/sandbox-exec")
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sandbox_request_routes_custom_arg0_to_inner_helper() {
+    let cwd: AbsolutePathBuf = std::env::current_dir()
+        .expect("current directory")
+        .try_into()
+        .expect("absolute cwd");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let self_exe = std::env::current_exe().expect("current executable");
+    let runtime_paths =
+        ExecServerRuntimePaths::new(self_exe.clone(), Some(self_exe)).expect("runtime paths");
+    let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::workspace_write(),
+        cwd_uri.clone(),
+    );
+    let params = ExecParams {
+        process_id: ProcessId::from("process-custom-arg0"),
+        argv: vec!["/bin/sh".to_string(), "-c".to_string(), "true".to_string()],
+        cwd: cwd_uri,
+        env_policy: None,
+        env: HashMap::new(),
+        tty: false,
+        pipe_stdin: false,
+        arg0: Some("custom-arg0".to_string()),
+        sandbox: Some(sandbox),
+        enforce_managed_network: false,
+        managed_network: None,
+        network_proxy: None,
+    };
+
+    let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
+        .await
+        .expect("prepare sandboxed request");
+    let helper_mode = prepared
+        .command
+        .iter()
+        .position(|arg| arg == CODEX_ARG0_EXEC_HELPER_ARG1)
+        .expect("sandboxed command should invoke arg0 helper");
+
+    assert_eq!(
+        prepared.command[helper_mode..],
+        [
+            CODEX_ARG0_EXEC_HELPER_ARG1,
+            "custom-arg0",
+            "/bin/sh",
+            "-c",
+            "true",
+        ]
+    );
+    #[cfg(target_os = "linux")]
+    assert_eq!(prepared.arg0, Some(CODEX_LINUX_SANDBOX_ARG0.to_string()));
+    #[cfg(target_os = "macos")]
+    assert_eq!(prepared.arg0, None);
 }
 
 #[cfg(target_os = "macos")]
