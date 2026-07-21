@@ -37,7 +37,7 @@ pub(crate) async fn connect(
     tls_config: Arc<ClientConfig>,
     proxy_route: OutboundProxyRoute,
 ) -> Result<(ConnectionInner, Response), WebSocketError> {
-    let stream: Box<dyn AsyncIo> = match proxy_route {
+    let proxy_url = match proxy_route {
         OutboundProxyRoute::TransportDefault => {
             // The workspace enables tokio-tungstenite's `proxy` feature, so its default dialer
             // resolves HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY before opening the socket.
@@ -50,7 +50,37 @@ pub(crate) async fn connect(
             .await?;
             return Ok((ConnectionInner::TransportDefault(stream), response));
         }
-        OutboundProxyRoute::Direct => {
+        OutboundProxyRoute::Direct => None,
+        OutboundProxyRoute::Proxy {
+            url,
+            no_proxy: None,
+        } => Some(url),
+        OutboundProxyRoute::Proxy {
+            url,
+            no_proxy: Some(_),
+        } => {
+            // Let Tungstenite apply its complete NO_PROXY semantics. Its environment parser does
+            // not accept HTTPS proxy URLs, but that error occurs only after it decides the target
+            // is not bypassed, so retry that case through the explicit TLS-to-proxy path below.
+            match connect_async_tls_with_config(
+                request.clone(),
+                Some(config),
+                false, // Preserve Tungstenite's recommended Nagle default.
+                Some(Connector::Rustls(Arc::clone(&tls_config))),
+            )
+            .await
+            {
+                Ok((stream, response)) => {
+                    return Ok((ConnectionInner::TransportDefault(stream), response));
+                }
+                Err(WebSocketError::Url(UrlError::UnsupportedProxyScheme)) => Some(url),
+                Err(error) => return Err(error),
+            }
+        }
+    };
+
+    let stream: Box<dyn AsyncIo> = match proxy_url {
+        None => {
             let host = websocket_host(&request)?;
             let port = websocket_port(&request)?;
             Box::new(
@@ -59,7 +89,7 @@ pub(crate) async fn connect(
                     .map_err(WebSocketError::Io)?,
             )
         }
-        OutboundProxyRoute::Proxy { url } => {
+        Some(url) => {
             let proxy = ProxyEndpoint::parse(&url)?;
             let host = websocket_host(&request)?;
             let port = websocket_port(&request)?;
