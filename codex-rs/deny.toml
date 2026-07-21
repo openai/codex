@@ -243,7 +243,6 @@ deny = [
         "codex-api",
         "codex-app-server",
         "codex-app-server-daemon",
-        "codex-backend-client",
         "codex-cloud-tasks",
         "codex-core",
         "codex-core-plugins",

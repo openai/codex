@@ -138,7 +138,12 @@ fn rate_limit_reset_contract_uses_expected_paths_and_payloads() {
 fn test_client(base_url: &str, path_style: PathStyle) -> Client {
     Client {
         base_url: base_url.to_string(),
-        http: reqwest::Client::new(),
+        http: codex_http_client::RouteAwareClientPool::new(
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
+            codex_http_client::ClientRouteClass::Api,
+        ),
         auth_provider: codex_model_provider::unauthenticated_auth_provider(),
         user_agent: None,
         chatgpt_account_id: None,

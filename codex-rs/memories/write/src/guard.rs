@@ -18,9 +18,11 @@ async fn rate_limits_check(auth_manager: &AuthManager, config: &Config) -> Optio
         return None;
     }
 
-    let client = BackendClient::from_auth(config.chatgpt_base_url.clone(), &auth)
-        .map_err(|err| warn!(%err, "failed to construct backend client"))
-        .ok()?;
+    let client = BackendClient::from_auth(
+        config.chatgpt_base_url.clone(),
+        &auth,
+        config.http_client_factory(),
+    );
 
     let snapshots = client
         .get_rate_limits_many()

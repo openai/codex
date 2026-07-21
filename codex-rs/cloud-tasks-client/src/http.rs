@@ -28,10 +28,13 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    pub fn new(base_url: impl Into<String>) -> anyhow::Result<Self> {
+    pub fn new(
+        base_url: impl Into<String>,
+        http_client_factory: codex_http_client::HttpClientFactory,
+    ) -> Self {
         let base_url = base_url.into();
-        let backend = backend::Client::new(base_url.clone())?;
-        Ok(Self { base_url, backend })
+        let backend = backend::Client::new(base_url.clone(), http_client_factory);
+        Self { base_url, backend }
     }
 
     pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {

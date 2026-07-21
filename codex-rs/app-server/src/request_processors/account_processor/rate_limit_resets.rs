@@ -109,8 +109,11 @@ impl AccountRequestProcessor {
             ));
         }
 
-        BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))
+        Ok(BackendClient::from_auth(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.config.http_client_factory(),
+        ))
     }
 }
 
