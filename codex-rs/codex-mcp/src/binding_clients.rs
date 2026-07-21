@@ -1,9 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Weak;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_rmcp_client::RmcpClient;
+use rmcp::model::ListResourceTemplatesResult;
+use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
 use tokio::task::JoinSet;
@@ -14,11 +21,94 @@ use crate::rmcp_client::ManagedClient;
 /// The ready clients captured for one model step.
 pub(crate) struct McpBindingClients {
     clients: HashMap<String, Arc<ManagedClient>>,
+    identity: McpBindingClientIdentity,
 }
+
+#[derive(Clone)]
+pub(crate) struct McpBindingClientIdentity(Vec<(String, Weak<RmcpClient>)>);
+
+impl PartialEq for McpBindingClientIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self.0.iter().zip(&other.0).all(
+                |((server, client), (other_server, other_client))| {
+                    server == other_server && client.ptr_eq(other_client)
+                },
+            )
+    }
+}
+
+impl Eq for McpBindingClientIdentity {}
 
 impl McpBindingClients {
     pub(crate) fn new(clients: HashMap<String, Arc<ManagedClient>>) -> Self {
-        Self { clients }
+        let mut identity = clients
+            .iter()
+            .map(|(server, client)| (server.clone(), Arc::downgrade(&client.client)))
+            .collect::<Vec<_>>();
+        identity.sort_by(|left, right| left.0.cmp(&right.0));
+        Self {
+            clients,
+            identity: McpBindingClientIdentity(identity),
+        }
+    }
+
+    pub(crate) fn client(&self, server: &str) -> Option<Arc<ManagedClient>> {
+        self.clients.get(server).cloned()
+    }
+
+    pub(crate) fn contains_server(&self, server: &str) -> bool {
+        self.clients.contains_key(server)
+    }
+
+    pub(crate) fn identity(&self) -> McpBindingClientIdentity {
+        self.identity.clone()
+    }
+
+    pub(crate) async fn list_resources(
+        &self,
+        server: &str,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<ListResourcesResult> {
+        let managed = self
+            .client(server)
+            .ok_or_else(|| anyhow!("MCP server '{server}' was not ready for this step"))?;
+        managed
+            .client
+            .list_resources(params, managed.tool_timeout)
+            .await
+            .with_context(|| format!("resources/list failed for `{server}`"))
+    }
+
+    pub(crate) async fn list_resource_templates(
+        &self,
+        server: &str,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<ListResourceTemplatesResult> {
+        let managed = self
+            .client(server)
+            .ok_or_else(|| anyhow!("MCP server '{server}' was not ready for this step"))?;
+        managed
+            .client
+            .list_resource_templates(params, managed.tool_timeout)
+            .await
+            .with_context(|| format!("resources/templates/list failed for `{server}`"))
+    }
+
+    pub(crate) async fn read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> Result<ReadResourceResult> {
+        let managed = self
+            .client(server)
+            .ok_or_else(|| anyhow!("MCP server '{server}' was not ready for this step"))?;
+        let uri = params.uri.clone();
+        managed
+            .client
+            .read_resource(params, managed.tool_timeout)
+            .await
+            .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
     pub(crate) async fn list_all_resources(

@@ -140,7 +140,7 @@ impl ManagedClient {
             );
         }
 
-        self.tools.clone()
+        filter_tools(self.tools.clone(), &self.tool_filter)
     }
 }
 
@@ -514,6 +514,50 @@ impl AsyncManagedClient {
             return Ok(client);
         }
         self.client.clone().await
+    }
+
+    /// Captures the ready client revision that is current now.
+    ///
+    /// A recovered Codex Apps connection replaces the failed startup future for
+    /// future steps, but cannot reroute a call that was already prepared.
+    fn ready_client_snapshot(&self) -> Option<ManagedClientFuture> {
+        if let Some(client) = self
+            .startup_reconnect
+            .as_ref()
+            .and_then(|reconnect| reconnect.current_client())
+        {
+            return Some(futures::future::ready(Ok(client)).boxed().shared());
+        }
+        match self.client.peek() {
+            Some(Ok(_)) => Some(self.client.clone()),
+            Some(Err(_)) | None => None,
+        }
+    }
+
+    /// Captures one ready client and derives its model-visible tools.
+    ///
+    /// A fresh client waits for initial startup even when metadata is cached.
+    /// After a failed startup, cached tools remain available to metadata-only
+    /// callers while recovery runs, but a model step still requires one exact
+    /// ready client.
+    pub(crate) async fn capture_ready_client_and_tools(
+        &self,
+        catalog_override: Option<Vec<ToolInfo>>,
+    ) -> Option<(Arc<ManagedClient>, Vec<ToolInfo>)> {
+        if !self.startup_complete.load(Ordering::Acquire) {
+            let _ = self.client().await;
+        }
+        self.reconnect_failed_startup().await;
+        let client = if self.has_cached_tools() {
+            self.ready_client_snapshot()?
+        } else {
+            self.client().await.ok()?;
+            self.ready_client_snapshot()?
+        };
+        let managed_client = Arc::new(client.await.ok()?);
+        let tools = catalog_override.unwrap_or_else(|| managed_client.tools.clone());
+        let tools = filter_tools(tools, &managed_client.tool_filter);
+        Some((Arc::clone(&managed_client), self.prepare_tools(tools)))
     }
 
     pub(crate) async fn reconnect_failed_startup(&self) {
@@ -915,7 +959,7 @@ async fn start_server_task(
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
         .map(|cache_context| cache_context.begin_fetch(ConnectorRuntimeFetchSource::Startup));
-    let tools = list_tools_for_client_uncached(
+    let client_tools = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
         /*codex_apps_refresh_trigger*/ "initial",
@@ -926,11 +970,13 @@ async fn start_server_task(
     .await
     .map_err(StartupOutcomeError::from)?;
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
-    let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
-        (Some(cache_context), Some(fetch_ticket)) => {
-            cache_context.publish_if_newest_accepted(fetch_ticket, &server_info, tools)
-        }
-        (None, None) => tools,
+    let shared_tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
+        (Some(cache_context), Some(fetch_ticket)) => cache_context.publish_if_newest_accepted(
+            fetch_ticket,
+            &server_info,
+            client_tools.clone(),
+        ),
+        (None, None) => client_tools.clone(),
         _ => unreachable!("Codex Apps fetch ticket requires cache context"),
     };
     let has_shared_tool_catalog = is_codex_apps_mcp_server || tool_catalog_cache_context.is_some();
@@ -938,7 +984,7 @@ async fn start_server_task(
         tool_catalog_cache_context.as_ref(),
         tool_catalog_fetch_ticket,
     ) {
-        cache_context.publish_if_newest(fetch_ticket, &tools);
+        cache_context.publish_if_newest(fetch_ticket, &shared_tools);
     }
     if has_shared_tool_catalog {
         emit_duration(
@@ -947,12 +993,10 @@ async fn start_server_task(
             &[("cache", "miss")],
         );
     }
-    let tools = filter_tools(tools, &tool_filter);
-
     let managed = ManagedClient {
         client: Arc::clone(&client),
         server_info,
-        tools,
+        tools: client_tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
         server_instructions: initialize_result.instructions,
