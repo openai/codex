@@ -8,6 +8,14 @@ expression: highlighted_tokens
         "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
     ),
     (
+        "cu",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "cuh",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
         "cppm",
         "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
     ),
