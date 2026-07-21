@@ -1336,9 +1336,16 @@ impl Session {
                     state.set_token_info(Some(info));
                 }
 
-                // Paginated subagents persist inherited model context while creating the live
-                // thread so the copied prefix is not observed as child-owned metadata.
-                if !rollout_items.is_empty() && !is_paginated_subagent {
+                let thread_settings_applied =
+                    RolloutItem::EventMsg(handlers::thread_settings_applied_event(self).await);
+                if is_paginated_subagent {
+                    // Paginated subagents persist inherited model context while creating the live
+                    // thread so the copied prefix is not observed as child-owned metadata.
+                    self.persist_rollout_items(&[thread_settings_applied]).await;
+                } else {
+                    // Keep the copied prefix and the child's effective settings in one append so a
+                    // cold resume cannot observe inherited settings as the child's latest value.
+                    rollout_items.push(thread_settings_applied);
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
