@@ -130,19 +130,31 @@ impl ConfigManager {
         };
 
         let effective = layers.effective_config();
-        let effective_config_toml: ConfigToml = effective
+        let mut effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
+        layers
+            .requirements_toml()
+            .apply_exact_to_config(&mut effective_config_toml);
+        effective_config_toml.allow_login_shell.get_or_insert(true);
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
         let config: ApiConfig = serde_json::from_value(json_value)
             .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
 
+        let mut origins = layers.origins();
+        origins.retain(|path, _| {
+            let segments = path.split('.').map(str::to_string).collect::<Vec<_>>();
+            layers
+                .requirements_toml()
+                .exact_requirement_for_config_path(&segments)
+                .is_none()
+        });
+
         Ok(ConfigReadResponse {
             config,
-            origins: layers
-                .origins()
+            origins: origins
                 .into_iter()
                 .map(|(path, metadata)| (path, config_layer_metadata_to_api(metadata)))
                 .collect(),
@@ -283,6 +295,15 @@ impl ConfigManager {
             let mut segments = parse_key_path(&key_path).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if let Some(field) = layers
+                .requirements_toml()
+                .exact_requirement_for_config_path(&segments)
+            {
+                return Err(ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigRequirementReadonly,
+                    format!("`{field}` is managed by requirements and cannot be changed"),
+                ));
+            }
             if (value.is_null() || matches!(strategy, MergeStrategy::Upsert))
                 && let Some(pattern) = shell_environment_filter_entry(&user_config, &segments)
                     .map(|(pattern, _)| pattern.clone())

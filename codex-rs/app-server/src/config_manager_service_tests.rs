@@ -778,6 +778,164 @@ personality = true
 }
 
 #[tokio::test]
+async fn write_value_rejects_exact_managed_requirement() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "allow_login_shell = true\n").unwrap();
+
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement("allow_login_shell = false"),
+    );
+
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "allow_login_shell".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("managed exact field should be read-only");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigRequirementReadonly)
+    );
+    assert!(error.to_string().contains("`allow_login_shell`"));
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "allow_login_shell = true\n"
+    );
+}
+
+fn toml_path(tmp: &Path, name: &str) -> String {
+    tmp.join(name).to_string_lossy().replace('\\', "\\\\")
+}
+
+#[tokio::test]
+async fn read_omits_origins_for_exact_managed_values() {
+    for has_user_values in [true, false] {
+        let tmp = tempdir().expect("tempdir");
+        let user_config = if has_user_values {
+            format!(
+                r#"model = "user-model"
+sqlite_home = "{}"
+allow_login_shell = true
+
+[feedback]
+enabled = true
+"#,
+                toml_path(tmp.path(), "user-sqlite"),
+            )
+        } else {
+            "model = \"user-model\"\n".to_string()
+        };
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), user_config).unwrap();
+
+        let requirements = format!(
+            r#"sqlite_home = "{}"
+allow_login_shell = false
+
+[feedback]
+enabled = false
+"#,
+            toml_path(tmp.path(), "managed-sqlite"),
+        );
+        let service = ConfigManager::new_for_tests(
+            tmp.path().to_path_buf(),
+            vec![],
+            LoaderOverrides::without_managed_config_for_tests(),
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+        );
+
+        let response = service
+            .read(ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            })
+            .await
+            .expect("config read should succeed");
+
+        assert_eq!(
+            response.config.additional.get("sqlite_home"),
+            Some(&serde_json::json!(tmp.path().join("managed-sqlite")))
+        );
+        assert_eq!(
+            response.config.additional.get("allow_login_shell"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            response.config.additional.get("feedback"),
+            Some(&serde_json::json!({"enabled": false}))
+        );
+        for path in ["sqlite_home", "allow_login_shell", "feedback.enabled"] {
+            assert!(!response.origins.contains_key(path), "origin for {path}");
+        }
+        assert!(response.origins.contains_key("model"));
+    }
+}
+
+#[tokio::test]
+async fn read_materializes_default_allow_login_shell() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let response = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read should succeed");
+
+    assert_eq!(
+        response.config.additional.get("allow_login_shell"),
+        Some(&serde_json::json!(true))
+    );
+}
+
+#[tokio::test]
+async fn write_value_allows_unmanaged_sibling_of_exact_requirement() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "").unwrap();
+
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"
+[windows]
+sandbox_private_desktop = false
+"#,
+        ),
+    );
+
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "windows.sandbox".to_string(),
+            value: serde_json::json!("elevated"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("unmanaged sibling should remain writable");
+
+    assert!(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .contains("sandbox = \"elevated\"")
+    );
+}
+
+#[tokio::test]
 async fn read_reports_managed_overrides_user_and_session_flags() {
     let tmp = tempdir().expect("tempdir");
     let user_path = tmp.path().join(CONFIG_TOML_FILE);

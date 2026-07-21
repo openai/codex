@@ -1166,7 +1166,12 @@ pub async fn run_main(
         .config_layer_stack
         .effective_config()
         .as_table()
-        .is_some_and(|table| table.contains_key("log_dir"));
+        .is_some_and(|table| table.contains_key("log_dir"))
+        || config
+            .config_layer_stack
+            .requirements_toml()
+            .log_dir
+            .is_some();
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 

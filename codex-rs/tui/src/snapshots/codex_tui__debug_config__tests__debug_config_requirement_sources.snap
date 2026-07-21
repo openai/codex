@@ -8,6 +8,13 @@ Config layer stack (lowest precedence first):
   1. user (/home/alice/.codex/config.toml) (enabled)
 
 Requirements:
+  - sqlite_home: /home/alice/.codex/state (source: MDM managed_config.toml (legacy))
+  - log_dir: /home/alice/.codex/logs (source: MDM managed_config.toml (legacy))
+  - model_catalog_json: /home/alice/.codex/models.json (source: MDM managed_config.toml (legacy))
+  - check_for_update_on_startup: false (source: MDM managed_config.toml (legacy))
+  - allow_login_shell: false (source: MDM managed_config.toml (legacy))
+  - feedback.enabled: false (source: MDM managed_config.toml (legacy))
+  - windows.sandbox_private_desktop: false (source: MDM managed_config.toml (legacy))
   - allowed_approval_policies: on-request (source: MDM managed_config.toml (legacy))
   - allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))
   - allowed_sandbox_modes: read-only (source: /etc/codex/requirements.toml)

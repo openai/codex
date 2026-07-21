@@ -1166,6 +1166,56 @@ allowed_sandbox_modes = ["read-only"]
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn managed_preferences_requirements_resolve_paths_against_codex_home() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home)?;
+
+    let mut loader_overrides =
+        LoaderOverrides::with_managed_config_path_for_tests(tmp.path().join("managed_config.toml"));
+    loader_overrides.macos_managed_config_requirements_base64 = Some(
+        base64::prelude::BASE64_STANDARD.encode(
+            r#"
+sqlite_home = "state"
+log_dir = "~/.codex/logs"
+model_catalog_json = "models.json"
+"#
+            .as_bytes(),
+        ),
+    );
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        loader_overrides,
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let expected_log_dir = AbsolutePathBuf::resolve_path_against_base("~/.codex/logs", &codex_home);
+    let requirements = layers.requirements_toml();
+
+    assert_eq!(
+        requirements.sqlite_home.as_deref(),
+        Some(codex_home.join("state").as_path())
+    );
+    assert_eq!(
+        requirements.log_dir.as_deref(),
+        Some(expected_log_dir.as_path())
+    );
+    assert_eq!(
+        requirements.model_catalog_json.as_deref(),
+        Some(codex_home.join("models.json").as_path())
+    );
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn managed_preferences_requirements_take_precedence() -> anyhow::Result<()> {
     use base64::Engine;
 
