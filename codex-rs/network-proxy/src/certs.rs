@@ -154,13 +154,14 @@ pub(crate) const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
 // This is intentionally curated rather than pretending to cover every TLS client.
-pub const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
+pub const CUSTOM_CA_ENV_KEYS: [&str; 11] = [
     "CODEX_CA_CERTIFICATE",
     "SSL_CERT_FILE",
     "REQUESTS_CA_BUNDLE",
     "CURL_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS",
     "GIT_SSL_CAINFO",
+    "CARGO_HTTP_CAINFO",
     "PIP_CERT",
     "BUNDLE_SSL_CA_CERT",
     "npm_config_cafile",
