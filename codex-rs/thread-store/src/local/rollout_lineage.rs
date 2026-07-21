@@ -102,6 +102,26 @@ impl LocalThreadStore {
     }
 }
 
+impl RolloutLineage {
+    pub(super) fn segments(&self) -> &[RolloutLineageSegment] {
+        self.segments.as_slice()
+    }
+}
+
+impl RolloutLineageSegment {
+    pub(super) fn thread_id(&self) -> ThreadId {
+        self.thread_id
+    }
+
+    pub(super) fn start_ordinal(&self) -> u64 {
+        1
+    }
+
+    pub(super) fn end_ordinal(&self) -> Option<u64> {
+        self.end.map(|end| end.end_ordinal_exclusive)
+    }
+}
+
 async fn validate_cutoff_bounds(
     requested_thread_id: ThreadId,
     rollout_path: &Path,

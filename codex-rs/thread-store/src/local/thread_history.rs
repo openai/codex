@@ -10,6 +10,7 @@ use crate::ThreadStoreResult;
 
 mod read;
 mod search;
+mod segment_paging;
 
 pub(super) use read::list_items;
 pub(super) use read::list_turns;

@@ -14,6 +14,7 @@ use sqlx::Row;
 
 use super::super::LocalThreadStore;
 use super::read::CursorScope;
+use super::read::PhysicalHistoryPosition;
 use super::read::serialize_cursor;
 use super::read::validate_thread_for_paginated_reads;
 use super::thread_history_error;
@@ -140,8 +141,11 @@ ORDER BY rollout_ordinal ASC
             .saturating_sub(items.len());
         let turn_cursor = serialize_cursor(
             params.thread_id,
-            &CursorScope::Turns,
-            row.turn_rollout_ordinal,
+            CursorScope::Turns,
+            PhysicalHistoryPosition {
+                physical_thread_id: params.thread_id,
+                rollout_ordinal: row.turn_rollout_ordinal,
+            },
             /*include_anchor*/ true,
         )?;
         for (occurrence_index, matched) in matcher
