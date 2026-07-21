@@ -16,6 +16,7 @@ use crate::dynamic_skill_selector::CheapSkillSelection;
 use crate::dynamic_skill_selector::CheapSkillSelector;
 use crate::dynamic_skill_selector::FieldedBm25SkillSelector;
 use crate::dynamic_skill_selector::MultiQueryLexicalSkillSelector;
+use crate::dynamic_skill_selector::RrfLexicalCharSkillSelector;
 use crate::dynamic_skill_selector::SkillSelectionDocument;
 use crate::dynamic_skill_selector::WeightedLexicalSkillSelector;
 
@@ -43,6 +44,7 @@ impl ShadowSelectionExperiment {
                 Box::new(FieldedBm25SkillSelector),
                 Box::new(CharacterNgramSkillSelector),
                 Box::new(MultiQueryLexicalSkillSelector),
+                Box::new(RrfLexicalCharSkillSelector),
             ],
             metrics_client,
         }

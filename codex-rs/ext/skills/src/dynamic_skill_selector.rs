@@ -1,10 +1,12 @@
 mod character_ngram;
 mod fielded_bm25;
 mod multi_query_lexical;
+mod rrf_lexical_char;
 mod weighted_lexical;
 pub(crate) use character_ngram::CharacterNgramSkillSelector;
 pub(crate) use fielded_bm25::FieldedBm25SkillSelector;
 pub(crate) use multi_query_lexical::MultiQueryLexicalSkillSelector;
+pub(crate) use rrf_lexical_char::RrfLexicalCharSkillSelector;
 pub(crate) use weighted_lexical::WeightedLexicalSkillSelector;
 
 /// Metadata searched by a cheap skill selector.
