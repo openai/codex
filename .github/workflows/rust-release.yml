@@ -19,7 +19,7 @@ env:
 
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   tag-check:
@@ -1272,6 +1272,16 @@ jobs:
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+
+  publish-r2:
+    name: publish-r2
+    needs: [release, publish-dotslash]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/r2-release.yml
+    secrets: inherit
+    with:
+      tag: ${{ needs.release.outputs.tag }}
 
   publish-dotslash:
     name: publish-dotslash
