@@ -9,18 +9,21 @@ fn lexical_selector_prioritizes_an_exact_skill_name() {
             name: "slides-helper",
             short_description: None,
             description: "Create presentations and visual decks.",
+            dependencies: None,
         },
         SkillSelectionDocument {
             id: 20,
             name: "presentations",
             short_description: None,
             description: "Create or edit PowerPoint presentations.",
+            dependencies: None,
         },
         SkillSelectionDocument {
             id: 30,
             name: "spreadsheets",
             short_description: None,
             description: "Analyze tabular data.",
+            dependencies: None,
         },
     ];
 
@@ -43,12 +46,14 @@ fn lexical_selector_uses_descriptions_and_drops_zero_score_candidates() {
             name: "ci-helper",
             short_description: Some("Diagnose continuous integration failures."),
             description: "Inspect failing GitHub Actions checks and logs.",
+            dependencies: None,
         },
         SkillSelectionDocument {
             id: 2,
             name: "document-editor",
             short_description: None,
             description: "Edit Word documents.",
+            dependencies: None,
         },
     ];
 
@@ -74,6 +79,7 @@ fn lexical_selector_respects_requested_limit() {
             name,
             short_description: None,
             description: "Fix lint errors.",
+            dependencies: None,
         })
         .collect::<Vec<_>>();
 
@@ -97,6 +103,7 @@ fn lexical_selector_reports_bounded_inputs() {
             name,
             short_description: None,
             description: "match",
+            dependencies: None,
         })
         .collect::<Vec<_>>();
 
@@ -124,6 +131,7 @@ fn lexical_selector_caps_query_terms() {
         name: "term0",
         short_description: None,
         description: "term0",
+        dependencies: None,
     }];
 
     let selection = WeightedLexicalSkillSelector.select(&query, &documents, /*limit*/ 20);
@@ -139,6 +147,7 @@ fn lexical_selector_returns_nothing_for_stop_words_only() {
         name: "anything",
         short_description: None,
         description: "Do anything.",
+        dependencies: None,
     }];
 
     let selection =
@@ -157,6 +166,7 @@ fn selector_can_be_used_behind_the_shared_trait() {
                 name: "code-review",
                 short_description: None,
                 description: "Review code.",
+                dependencies: None,
             }],
             /*limit*/ 20,
         )

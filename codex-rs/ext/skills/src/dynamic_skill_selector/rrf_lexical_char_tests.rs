@@ -23,6 +23,7 @@ fn selector_reports_the_combined_input_bounds() {
         name: "presentations",
         short_description: None,
         description: "Create visual decks.",
+        dependencies: None,
     }];
     let query = "presentation ".repeat(4 * 1024);
 

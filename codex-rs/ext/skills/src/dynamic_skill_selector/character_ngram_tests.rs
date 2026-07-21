@@ -57,6 +57,7 @@ fn ngrams_report_bounded_inputs() {
             name,
             short_description: None,
             description: "match",
+            dependencies: None,
         })
         .collect::<Vec<_>>();
 
@@ -73,5 +74,6 @@ fn document<'a>(id: usize, name: &'a str, description: &'a str) -> SkillSelectio
         name,
         short_description: None,
         description,
+        dependencies: None,
     }
 }
