@@ -118,3 +118,26 @@ fn launch_config_materializes_audit_and_execution_attribution() {
     assert_eq!(state.environment_id(), Some("remote"));
     assert_eq!(state.execution_id().as_deref(), Some("execution-1"));
 }
+
+#[test]
+fn policy_decision_callback_opt_in_is_backward_compatible() {
+    let mut config =
+        RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
+            .expect("supported remote config");
+    let legacy = serde_json::to_value(&config).expect("serialize legacy config");
+    assert_eq!(legacy.get("requestPolicyDecisions"), None);
+    assert!(
+        !serde_json::from_value::<RemoteNetworkProxyConfig>(legacy)
+            .expect("deserialize legacy remote config")
+            .request_policy_decisions
+    );
+
+    config.request_policy_decisions = true;
+    let enabled = serde_json::to_value(&config).expect("serialize callback-enabled config");
+    assert_eq!(enabled["requestPolicyDecisions"], true);
+    assert_eq!(
+        serde_json::from_value::<RemoteNetworkProxyConfig>(enabled)
+            .expect("deserialize callback-enabled config"),
+        config
+    );
+}
