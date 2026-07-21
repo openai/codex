@@ -337,6 +337,7 @@ fn permission_profile_from_toml(profile: &str) -> Result<PermissionProfile> {
             Ok(FileSystemSandboxEntry {
                 path,
                 access: *access,
+                missing_path_behavior: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;

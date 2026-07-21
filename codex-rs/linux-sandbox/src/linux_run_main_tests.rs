@@ -221,10 +221,12 @@ fn split_only_filesystem_policy_requires_direct_runtime_enforcement() {
                 ),
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
     ]);
 
@@ -245,10 +247,12 @@ fn root_write_read_only_carveout_requires_direct_runtime_enforcement() {
                 value: codex_protocol::permissions::FileSystemSpecialPath::Root,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
     ]);
 
@@ -566,10 +570,12 @@ fn resolve_permission_profile_preserves_direct_runtime_profile() {
                 value: codex_protocol::permissions::FileSystemSpecialPath::Root,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(
@@ -620,10 +626,12 @@ fn legacy_landlock_rejects_split_only_filesystem_policies() {
                 value: codex_protocol::permissions::FileSystemSpecialPath::Root,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
     ]);
 

@@ -194,6 +194,7 @@ fn builds_permissions_from_profile() {
                 path: writable_root.clone(),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         }]),
         NetworkSandboxPolicy::Enabled,
     );
@@ -230,18 +231,21 @@ fn builds_permissions_from_profile_with_denied_reads() {
                     value: codex_protocol::permissions::FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
                     path: denied_root.clone(),
                 },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
                     pattern: denied_glob.to_string_lossy().into_owned(),
                 },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
         ]),
         NetworkSandboxPolicy::Restricted,

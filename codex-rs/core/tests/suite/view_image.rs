@@ -532,6 +532,7 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
                 path: denied_path.clone(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         });
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &file_system_sandbox_policy,

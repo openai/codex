@@ -140,12 +140,14 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
                 path: read_only_root,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
     ]);
     PermissionProfile::from_runtime_permissions(
@@ -162,12 +164,14 @@ fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> Per
                 path: unreadable_path,
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
     ]);
     PermissionProfile::from_runtime_permissions(

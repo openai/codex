@@ -2410,6 +2410,7 @@ fn apply_managed_filesystem_constraints(
                     pattern: deny_read.as_str().to_string(),
                 },
                 access: codex_protocol::permissions::FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             }
         } else {
             let Ok(path) = AbsolutePathBuf::try_from(deny_read.as_str()) else {
@@ -2418,6 +2419,7 @@ fn apply_managed_filesystem_constraints(
             codex_protocol::permissions::FileSystemSandboxEntry {
                 path: codex_protocol::permissions::FileSystemPath::Path { path },
                 access: codex_protocol::permissions::FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             }
         };
         if !file_system_sandbox_policy

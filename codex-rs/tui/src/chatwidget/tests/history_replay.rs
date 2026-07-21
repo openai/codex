@@ -481,12 +481,14 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
                         value: FileSystemSpecialPath::Root,
                     },
                     access: FileSystemAccessMode::Read,
+                    missing_path_behavior: None,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
                         pattern: "**/.secret".to_string(),
                     },
                     access: FileSystemAccessMode::Deny,
+                    missing_path_behavior: None,
                 },
             ],
             glob_scan_max_depth: None,

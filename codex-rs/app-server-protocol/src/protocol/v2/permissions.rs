@@ -368,6 +368,7 @@ impl TryFrom<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
         Ok(Self {
             path: value.path.try_into()?,
             access: value.access.to_core(),
+            missing_path_behavior: None,
         })
     }
 }

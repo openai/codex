@@ -591,12 +591,14 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
                     value: CoreFileSystemSpecialPath::Root,
                 },
                 access: CoreFileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
             CoreFileSystemSandboxEntry {
                 path: CoreFileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
                 access: CoreFileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
         ],
         glob_scan_max_depth: NonZeroUsize::new(2),

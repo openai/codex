@@ -115,6 +115,7 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
                 path: denied_path.clone(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         });
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &file_system_sandbox_policy,

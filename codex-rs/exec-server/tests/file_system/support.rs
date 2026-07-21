@@ -86,6 +86,7 @@ pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystem
             path: readable_root,
         },
         access: FileSystemAccessMode::Read,
+        missing_path_behavior: None,
     }])
 }
 
@@ -98,6 +99,7 @@ pub(crate) fn workspace_write_sandbox(
             path: writable_root,
         },
         access: FileSystemAccessMode::Write,
+        missing_path_behavior: None,
     }])
 }
 

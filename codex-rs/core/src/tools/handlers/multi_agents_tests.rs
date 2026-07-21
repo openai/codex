@@ -2283,6 +2283,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
                 pattern: "**/.env".to_string(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         });
     let expected_network_sandbox_policy = NetworkSandboxPolicy::from(&expected_sandbox);
     let expected_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(

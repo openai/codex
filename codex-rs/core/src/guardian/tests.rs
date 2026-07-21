@@ -473,18 +473,21 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
                     value: codex_protocol::permissions::FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
                     path: denied_root.clone(),
                 },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
                     pattern: denied_glob.clone(),
                 },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
         ]),
         NetworkSandboxPolicy::Restricted,
