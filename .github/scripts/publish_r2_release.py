@@ -6,7 +6,9 @@ standard AWS credentials and the R2 endpoint from ``AWS_ENDPOINT_URL``.
 Objects are created under ``codex/releases/<version>/`` with a validated upload
 checksum and checked using object metadata before the run succeeds. The
 versioned prefix includes every release asset plus installer-facing
-``release.json`` metadata derived from the verified downloads.
+``release.json`` metadata derived from the verified downloads. Once those
+objects are verified, the same metadata advances ``codex/channels/latest`` when
+the release is marked latest and ``codex/channels/prerelease`` for prereleases.
 """
 
 import argparse
@@ -148,7 +150,14 @@ def raise_s3(
     ) from error
 
 
-def put_immutable(endpoint: str, key: str, path: Path, sha256: str) -> None:
+def put_object(
+    endpoint: str,
+    key: str,
+    path: Path,
+    sha256: str,
+    *,
+    extra_args: list[str],
+) -> None:
     try:
         run_command(
             [
@@ -157,7 +166,7 @@ def put_immutable(endpoint: str, key: str, path: Path, sha256: str) -> None:
                 "cp",
                 str(path),
                 f"s3://{BUCKET}/{key}",
-                "--no-overwrite",
+                *extra_args,
                 "--checksum-algorithm",
                 "CRC64NVME",
                 "--metadata",
@@ -223,6 +232,8 @@ def verify_remote(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--make-latest", choices=("true", "false"), required=True)
+    parser.add_argument("--prerelease", choices=("true", "false"), required=True)
     return parser.parse_args()
 
 
@@ -258,7 +269,7 @@ def main() -> int:
                 size = asset.size
                 sha256 = asset.sha256
                 key = f"{PREFIX}/releases/{version}/{path.name}"
-                put_immutable(endpoint, key, path, sha256)
+                put_object(endpoint, key, path, sha256, extra_args=["--no-overwrite"])
                 verify_remote(endpoint, key, size, sha256)
                 print(
                     f"published and verified s3://{BUCKET}/{key} "
@@ -298,7 +309,13 @@ def main() -> int:
             with metadata_path.open("rb") as source:
                 metadata_size, metadata_sha256 = stream_digest(source)
             metadata_key = f"{PREFIX}/releases/{version}/{RELEASE_METADATA_NAME}"
-            put_immutable(endpoint, metadata_key, metadata_path, metadata_sha256)
+            put_object(
+                endpoint,
+                metadata_key,
+                metadata_path,
+                metadata_sha256,
+                extra_args=["--no-overwrite"],
+            )
             verify_remote(
                 endpoint,
                 metadata_key,
@@ -310,6 +327,31 @@ def main() -> int:
                 f"size={metadata_size} sha256={metadata_sha256}",
                 file=sys.stderr,
             )
+            channels = []
+            if args.make_latest == "true":
+                channels.append("latest")
+            if args.prerelease == "true":
+                channels.append("prerelease")
+            for channel in channels:
+                channel_key = f"{PREFIX}/channels/{channel}"
+                put_object(
+                    endpoint,
+                    channel_key,
+                    metadata_path,
+                    metadata_sha256,
+                    extra_args=["--content-type", "application/json"],
+                )
+                verify_remote(
+                    endpoint,
+                    channel_key,
+                    metadata_size,
+                    metadata_sha256,
+                )
+                print(
+                    f"published and verified s3://{BUCKET}/{channel_key} "
+                    f"size={metadata_size} sha256={metadata_sha256}",
+                    file=sys.stderr,
+                )
 
         print(
             json.dumps(

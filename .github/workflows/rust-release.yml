@@ -1130,6 +1130,8 @@ jobs:
     outputs:
       version: ${{ steps.release_name.outputs.name }}
       tag: ${{ github.ref_name }}
+      make_latest: ${{ steps.release_name.outputs.make_latest }}
+      prerelease: ${{ steps.release_name.outputs.prerelease }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
 
@@ -1208,6 +1210,13 @@ jobs:
           # "rust-v0.1.0".
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
+          if [[ "${version}" == *-* ]]; then
+            echo "make_latest=false" >> $GITHUB_OUTPUT
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "make_latest=true" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Determine npm publish settings
         id: npm_publish_settings
@@ -1268,10 +1277,10 @@ jobs:
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           overwrite_files: true
-          make_latest: ${{ !contains(steps.release_name.outputs.name, '-') }}
+          make_latest: ${{ steps.release_name.outputs.make_latest }}
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
-          prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+          prerelease: ${{ steps.release_name.outputs.prerelease }}
 
   publish-r2:
     name: publish-r2
@@ -1282,6 +1291,8 @@ jobs:
     secrets: inherit
     with:
       tag: ${{ needs.release.outputs.tag }}
+      make_latest: ${{ fromJSON(needs.release.outputs.make_latest) }}
+      prerelease: ${{ fromJSON(needs.release.outputs.prerelease) }}
 
   publish-dotslash:
     name: publish-dotslash
