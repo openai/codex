@@ -820,5 +820,9 @@ fn proxy_env_value(env: &dyn EnvSource, upper: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "route_aware_redirect_integration_tests.rs"]
+mod redirect_integration_tests;
+
+#[cfg(test)]
 #[path = "outbound_proxy_tests.rs"]
 mod tests;

@@ -12,6 +12,7 @@ use http::HeaderValue;
 use http::Method;
 use http::StatusCode;
 use http::header::CONTENT_TYPE;
+use http::header::PROXY_AUTHORIZATION;
 use reqwest::IntoUrl;
 use serde::Serialize;
 
@@ -21,6 +22,12 @@ use crate::HttpClient;
 use crate::HttpClientFactory;
 use crate::OutboundProxyPolicy;
 use crate::OutboundProxyRoute;
+use crate::route_aware_redirect::MAX_REDIRECTS;
+use crate::route_aware_redirect::insert_referer;
+use crate::route_aware_redirect::is_redirect;
+use crate::route_aware_redirect::redirect_request;
+use crate::route_aware_redirect::redirect_url;
+use crate::route_aware_redirect::remove_sensitive_headers;
 use crate::with_chatgpt_cloudflare_cookie_store;
 
 const MAX_CACHED_ROUTES: usize = 16;
@@ -28,7 +35,8 @@ const MAX_CACHED_ROUTES: usize = 16;
 /// Reuses transport clients by resolved route while selecting a route for every request URL.
 ///
 /// Request creation stays on the pool so the URL used for PAC or system-proxy resolution cannot
-/// differ from the URL that is sent.
+/// differ from the URL that is sent. Redirects are followed through the pool as new requests, so
+/// each hop gets its own route decision while connections are still reused by route.
 #[derive(Clone)]
 pub struct RouteAwareClientPool {
     http_client_factory: HttpClientFactory,
@@ -73,18 +81,28 @@ pub enum RouteAwareRequestError {
     Route(#[from] RouteAwareClientPoolError),
     #[error("failed to build route-aware request: {0}")]
     Build(String),
+    #[error("redirect target uses unsupported URL scheme: {0}")]
+    UnsupportedRedirectScheme(String),
+    #[error("too many redirects")]
+    TooManyRedirects,
+    #[error("route-aware request timed out")]
+    Timeout,
 }
 
 impl RouteAwareRequestError {
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::Request(error) => error.status(),
-            Self::Route(_) | Self::Build(_) => None,
+            Self::Route(_)
+            | Self::Build(_)
+            | Self::UnsupportedRedirectScheme(_)
+            | Self::TooManyRedirects
+            | Self::Timeout => None,
         }
     }
 
     pub fn is_timeout(&self) -> bool {
-        matches!(self, Self::Request(error) if error.is_timeout())
+        matches!(self, Self::Timeout) || matches!(self, Self::Request(error) if error.is_timeout())
     }
 
     pub fn is_connect(&self) -> bool {
@@ -308,28 +326,137 @@ impl RouteAwareClientPool {
         &self,
         request: reqwest::Request,
     ) -> Result<reqwest::Response, RouteAwareRequestError> {
-        let client = self.client_for_url(request.url().as_str()).await?;
-        Ok(client.execute(request).await?)
-    }
-
-    async fn client_for_url(
-        &self,
-        request_url: &str,
-    ) -> Result<HttpClient, RouteAwareClientPoolError> {
         let http_client_factory = self.http_client_factory.clone();
-        self.client_for_url_with_resolver(request_url, move |request_url| async move {
-            http_client_factory
-                .resolve_proxy_route_async(request_url)
-                .await
+        self.send_with_resolver(request, move |request_url| {
+            let http_client_factory = http_client_factory.clone();
+            async move {
+                http_client_factory
+                    .resolve_proxy_route_async(request_url)
+                    .await
+            }
         })
         .await
+    }
+
+    async fn send_with_resolver<F, Fut>(
+        &self,
+        mut request: reqwest::Request,
+        resolve_route: F,
+    ) -> Result<reqwest::Response, RouteAwareRequestError>
+    where
+        F: Fn(String) -> Fut,
+        Fut: Future<Output = io::Result<OutboundProxyRoute>>,
+    {
+        let request_method = request.method().clone();
+        let request_url = request.url().to_string();
+        let follows_redirects_manually = self.http_client_factory.outbound_proxy_policy()
+            == OutboundProxyPolicy::RespectSystemProxy;
+        let timeout_deadline = request
+            .timeout()
+            .copied()
+            .map(|timeout| tokio::time::Instant::now() + timeout);
+        let mut redirects = 0;
+        let mut previous_route = None;
+        loop {
+            let current_url = request.url().clone();
+            let (current_route, client) = match timeout_deadline {
+                Some(timeout_deadline) => tokio::time::timeout_at(
+                    timeout_deadline,
+                    self.client_for_url_with_resolver(current_url.as_str(), &resolve_route),
+                )
+                .await
+                .map_err(|_| RouteAwareRequestError::Timeout)??,
+                None => {
+                    self.client_for_url_with_resolver(current_url.as_str(), &resolve_route)
+                        .await?
+                }
+            };
+            if previous_route
+                .as_ref()
+                .is_some_and(|previous_route| previous_route != &current_route)
+            {
+                request.headers_mut().remove(PROXY_AUTHORIZATION);
+            }
+            previous_route = Some(current_route);
+            if let Some(timeout_deadline) = timeout_deadline {
+                let remaining = timeout_deadline
+                    .checked_duration_since(tokio::time::Instant::now())
+                    .ok_or(RouteAwareRequestError::Timeout)?;
+                if remaining.is_zero() {
+                    return Err(RouteAwareRequestError::Timeout);
+                }
+                *request.timeout_mut() = Some(remaining);
+            }
+            let method = request.method().clone();
+            let headers = request.headers().clone();
+            let version = request.version();
+            let timeout = request.timeout().copied();
+            let replay = request.try_clone();
+            let execute_request = async {
+                if follows_redirects_manually {
+                    client.execute_without_request_logging(request).await
+                } else {
+                    client.execute(request).await
+                }
+            };
+            let response = match match timeout_deadline {
+                Some(timeout_deadline) => {
+                    tokio::time::timeout_at(timeout_deadline, execute_request)
+                        .await
+                        .map_err(|_| RouteAwareRequestError::Timeout)?
+                }
+                None => execute_request.await,
+            } {
+                Ok(response) => response,
+                Err(error) => {
+                    if follows_redirects_manually {
+                        client.log_error_summary(&request_method, &request_url, &error);
+                    }
+                    return Err(error.into());
+                }
+            };
+            let status = response.status();
+            if !is_redirect(status) {
+                if follows_redirects_manually {
+                    client.log_response(&request_method, &request_url, &response);
+                }
+                return Ok(response);
+            }
+            let Some(next_url) = redirect_url(&response) else {
+                if follows_redirects_manually {
+                    client.log_response(&request_method, &request_url, &response);
+                }
+                return Ok(response);
+            };
+            let Some(mut next_request) =
+                redirect_request(status, method, headers, version, timeout, replay, next_url)
+            else {
+                if follows_redirects_manually {
+                    client.log_response(&request_method, &request_url, &response);
+                }
+                return Ok(response);
+            };
+            let next_request_url = next_request.url().clone();
+            if !matches!(next_request_url.scheme(), "http" | "https") {
+                return Err(RouteAwareRequestError::UnsupportedRedirectScheme(
+                    next_request_url.scheme().to_string(),
+                ));
+            }
+            if redirects >= MAX_REDIRECTS {
+                return Err(RouteAwareRequestError::TooManyRedirects);
+            }
+            remove_sensitive_headers(next_request.headers_mut(), &current_url, &next_request_url);
+            insert_referer(next_request.headers_mut(), &current_url, &next_request_url);
+            request = next_request;
+            redirects += 1;
+        }
     }
 
     async fn client_for_url_with_resolver<F, Fut>(
         &self,
         request_url: &str,
         resolve_route: F,
-    ) -> Result<HttpClient, RouteAwareClientPoolError>
+    ) -> Result<(OutboundProxyRoute, HttpClient), RouteAwareClientPoolError>
     where
         F: FnOnce(String) -> Fut,
         Fut: Future<Output = io::Result<OutboundProxyRoute>>,
@@ -342,7 +469,7 @@ impl RouteAwareClientPool {
             Err(error) => panic!("route-aware client cache lock should not be poisoned: {error}"),
         };
         if let Some(client) = clients.get(&route) {
-            return Ok(client.clone());
+            return Ok((route, client.clone()));
         }
         drop(clients);
 
@@ -365,15 +492,15 @@ impl RouteAwareClientPool {
             Err(error) => panic!("route-aware client cache lock should not be poisoned: {error}"),
         };
         if let Some(existing_client) = clients.get(&route) {
-            return Ok(existing_client.clone());
+            return Ok((route, existing_client.clone()));
         }
         if clients.len() >= MAX_CACHED_ROUTES
             && let Some(route_to_evict) = clients.keys().next().cloned()
         {
             clients.remove(&route_to_evict);
         }
-        clients.insert(route, client.clone());
-        Ok(client)
+        clients.insert(route.clone(), client.clone());
+        Ok((route, client))
     }
 }
 

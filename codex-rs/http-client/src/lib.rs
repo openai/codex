@@ -6,6 +6,7 @@ mod error;
 mod outbound_proxy;
 mod request;
 mod route_aware_client_pool;
+mod route_aware_redirect;
 mod transport;
 
 pub use crate::chatgpt_cloudflare_cookies::with_chatgpt_cloudflare_cookie_store;

@@ -118,6 +118,18 @@ impl HttpClient {
             );
         }
     }
+    pub(crate) fn log_error_summary(&self, method: &Method, url: &str, error: &reqwest::Error) {
+        if self.request_logging == RequestLogging::Enabled {
+            tracing::debug!(
+                method = %method,
+                url = %url,
+                status = error.status().map(|status| status.as_u16()),
+                is_timeout = error.is_timeout(),
+                is_connect = error.is_connect(),
+                "Request failed"
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
