@@ -200,6 +200,9 @@ where
     I: IntoIterator<Item = &'a ConfigLayerEntry>,
 {
     for layer in layers {
+        if layer.is_disabled() {
+            continue;
+        }
         if let Some(contents) = layer.raw_toml() {
             let source_name = format_config_layer_source(&layer.name, config_toml_file);
             let Some(base_dir) = layer.raw_toml_base_dir() else {

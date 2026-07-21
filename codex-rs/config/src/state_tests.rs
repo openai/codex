@@ -40,6 +40,127 @@ no_memories_if_mcp_or_web_search = true
 }
 
 #[test]
+fn enabled_layers_validate_shell_environment_policy() {
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::from_str(
+            r#"
+[shell_environment_policy]
+exclude = ["LEGACY_*"]
+
+[shell_environment_policy.filters]
+"CANONICAL_*" = "include"
+"#,
+        )
+        .expect("session config"),
+    );
+
+    let error = ConfigLayerStack::new(
+        vec![layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect_err("enabled layers should be validated");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        error
+            .to_string()
+            .contains("cannot mix `filters` with legacy `exclude` or `include_only`")
+    );
+}
+
+#[test]
+fn disabled_layers_do_not_validate_shell_environment_policy() {
+    let layer = ConfigLayerEntry::new_disabled(
+        ConfigLayerSource::Project {
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path("/untrusted/.codex")
+                .expect("project path should be absolute"),
+        },
+        toml::from_str(
+            r#"
+[shell_environment_policy]
+exclude = ["LEGACY_*"]
+
+[shell_environment_policy.filters]
+"CANONICAL_*" = "include"
+"#,
+        )
+        .expect("project config"),
+        "project is untrusted",
+    );
+
+    ConfigLayerStack::new(
+        vec![layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("disabled layers should not be validated");
+}
+
+#[test]
+fn enabled_layers_only_validate_representation_sensitive_shell_policy_fields() {
+    let cases = [
+        r#"shell_environment_policy = 17"#,
+        r#"
+[shell_environment_policy]
+inherit = "invalid"
+set = ["invalid"]
+"#,
+    ];
+
+    for contents in cases {
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::SessionFlags,
+            toml::from_str(contents).expect("session config"),
+        );
+
+        ConfigLayerStack::new(
+            vec![layer],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("unrelated shell policy fields should retain normal overlay semantics");
+    }
+}
+
+#[test]
+fn with_user_config_rejects_malformed_shell_policy_filter_fields() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let config_file = test_user_config_path(&temp_dir, "config.toml");
+    let cases = [
+        r#"
+[shell_environment_policy]
+exclude = ["SECRET_*", 17]
+"#,
+        r#"
+[shell_environment_policy.filters]
+"SECRET_*" = "keep"
+"#,
+        r#"
+[shell_environment_policy]
+exclude = ["SECRET_*"]
+
+[shell_environment_policy.filters]
+"PATH" = "include"
+"#,
+        r#"
+[shell_environment_policy.filters]
+"SECRET_*" = "exclude"
+"secret_*" = "include"
+"#,
+    ];
+
+    for contents in cases {
+        let error = ConfigLayerStack::default()
+            .with_user_config(&config_file, toml::from_str(contents).expect("user config"))
+            .expect_err("malformed shell policy filter fields should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+}
+
+#[test]
 fn active_user_layer_is_highest_precedence_user_layer() {
     let temp_dir = TempDir::new().expect("tempdir");
     let base_file = test_user_config_path(&temp_dir, "config.toml");
@@ -116,10 +237,12 @@ fn with_user_config_updates_matching_user_layer_without_replacing_active_profile
     )
     .expect("multiple user layers should be valid");
 
-    let updated = stack.with_user_config(
-        &base_file,
-        toml::from_str(r#"model = "updated-base""#).expect("updated base config"),
-    );
+    let updated = stack
+        .with_user_config(
+            &base_file,
+            toml::from_str(r#"model = "updated-base""#).expect("updated base config"),
+        )
+        .expect("updated user layer should be valid");
 
     assert_eq!(updated.get_user_config_file(), Some(&profile_file));
     assert_eq!(

@@ -18,8 +18,11 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
+use codex_config::ShellEnvironmentPolicyFilterRepresentation;
 use codex_config::config_toml::ConfigToml;
 use codex_config::merge_toml_values;
+use codex_config::shell_environment_filter_entry;
+use codex_config::validate_shell_environment_policy_filter_config;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -277,9 +280,15 @@ impl ConfigManager {
         let mut config_edits = Vec::new();
 
         for (key_path, value, strategy) in edits.into_iter() {
-            let segments = parse_key_path(&key_path).map_err(|message| {
+            let mut segments = parse_key_path(&key_path).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if (value.is_null() || matches!(strategy, MergeStrategy::Upsert))
+                && let Some(pattern) = shell_environment_filter_entry(&user_config, &segments)
+                    .map(|(pattern, _)| pattern.clone())
+            {
+                segments[2] = pattern;
+            }
             if !value.is_null() {
                 match segments.as_slice() {
                     [segment] if segment == "profile" => {
@@ -297,10 +306,31 @@ impl ConfigManager {
                     _ => {}
                 }
             }
-            let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if matches!(strategy, MergeStrategy::Upsert)
+                && let Some(value) = parsed_value.as_ref()
+                && matches!(segments.as_slice(), [policy, ..] if policy == "shell_environment_policy")
+            {
+                validate_shell_environment_policy_filter_config(&sparse_overlay(&segments, value))
+                    .map_err(|err| {
+                        ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            format!("Invalid configuration: {err}"),
+                        )
+                    })?;
+            }
+
+            let persist_segments = if matches!(strategy, MergeStrategy::Upsert)
+                && parsed_value.as_ref().is_some_and(|value| {
+                    shell_environment_policy_representation_switch(&user_config, &segments, value)
+                }) {
+                vec!["shell_environment_policy".to_string()]
+            } else {
+                segments.clone()
+            };
+            let original_value = value_at_path(&user_config, &persist_segments).cloned();
 
             apply_merge(&mut user_config, &segments, parsed_value.as_ref(), strategy).map_err(
                 |err| match err {
@@ -311,20 +341,19 @@ impl ConfigManager {
                 },
             )?;
 
-            let updated_value = value_at_path(&user_config, &segments).cloned();
+            let updated_value = value_at_path(&user_config, &persist_segments).cloned();
             if original_value != updated_value {
-                let edit = match updated_value {
+                config_edits.push(match updated_value {
                     Some(value) => ConfigEdit::SetPath {
-                        segments: segments.clone(),
+                        segments: persist_segments,
                         value: toml_value_to_item(&value).map_err(|err| {
                             ConfigManagerError::anyhow("failed to build config edits", err)
                         })?,
                     },
                     None => ConfigEdit::ClearPath {
-                        segments: segments.clone(),
+                        segments: persist_segments,
                     },
-                };
-                config_edits.push(edit);
+                });
             }
 
             parsed_segments.push(segments);
@@ -355,7 +384,14 @@ impl ConfigManager {
                 format!("Invalid configuration: {err}"),
             )
         })?;
-        let updated_layers = layers.with_user_config(&provided_path, user_config.clone());
+        let updated_layers = layers
+            .with_user_config(&provided_path, user_config.clone())
+            .map_err(|err| {
+                ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigValidationError,
+                    format!("Invalid configuration: {err}"),
+                )
+            })?;
         let effective = updated_layers.effective_config();
         validate_config(&effective).map_err(|err| {
             ConfigManagerError::write(
@@ -526,6 +562,16 @@ fn apply_merge(
         ));
     };
 
+    if matches!(strategy, MergeStrategy::Upsert)
+        && (shell_environment_policy_representation_switch(root, segments, value)
+            || (matches!(value_at_path(root, segments), Some(TomlValue::Table(_)))
+                && matches!(value, TomlValue::Table(_))))
+    {
+        let overlay = sparse_overlay(segments, value);
+        merge_toml_values(root, &overlay);
+        return Ok(true);
+    }
+
     let mut current = root;
 
     for segment in parents {
@@ -550,21 +596,32 @@ fn apply_merge(
         MergeError::Validation("cannot set value on non-table parent".to_string())
     })?;
 
-    if matches!(strategy, MergeStrategy::Upsert)
-        && let Some(existing) = table.get_mut(last)
-        && matches!(existing, TomlValue::Table(_))
-        && matches!(value, TomlValue::Table(_))
-    {
-        merge_toml_values(existing, value);
-        return Ok(true);
-    }
-
     let changed = table
         .get(last)
         .map(|existing| Some(existing) != Some(value))
         .unwrap_or(true);
     table.insert(last.clone(), value.clone());
     Ok(changed)
+}
+
+fn sparse_overlay(path: &[String], value: &TomlValue) -> TomlValue {
+    path.iter().rev().fold(value.clone(), |value, segment| {
+        TomlValue::Table(toml::map::Map::from_iter([(segment.clone(), value)]))
+    })
+}
+
+fn shell_environment_policy_representation_switch(
+    root: &TomlValue,
+    segments: &[String],
+    value: &TomlValue,
+) -> bool {
+    let current = root
+        .get("shell_environment_policy")
+        .and_then(ShellEnvironmentPolicyFilterRepresentation::from_policy);
+    let edited = ShellEnvironmentPolicyFilterRepresentation::from_edit(segments, value);
+    current
+        .zip(edited)
+        .is_some_and(|(current, edited)| current != edited)
 }
 
 fn clear_path(root: &mut TomlValue, segments: &[String]) -> Result<bool, MergeError> {
@@ -659,6 +716,12 @@ fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a Tom
     Some(current)
 }
 
+fn value_at_semantic_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a TomlValue> {
+    shell_environment_filter_entry(root, segments)
+        .map(|(_, value)| value)
+        .or_else(|| value_at_path(root, segments))
+}
+
 fn override_message(layer: &ConfigLayerSource) -> String {
     match layer {
         ConfigLayerSource::Mdm { domain, key: _ } => {
@@ -696,10 +759,10 @@ fn compute_override_metadata(
     segments: &[String],
 ) -> Option<OverriddenMetadata> {
     let user_value = match layers.get_active_user_layer() {
-        Some(user_layer) => value_at_path(&user_layer.config, segments),
+        Some(user_layer) => value_at_semantic_path(&user_layer.config, segments),
         None => return None,
     };
-    let effective_value = value_at_path(effective, segments);
+    let effective_value = value_at_semantic_path(effective, segments);
 
     if user_value.is_some() && user_value == effective_value {
         return None;
@@ -739,8 +802,21 @@ fn find_effective_layer(
     segments: &[String],
 ) -> Option<ConfigLayerMetadata> {
     for layer in layers.layers_high_to_low() {
-        if let Some(meta) = value_at_path(&layer.config, segments).map(|_| layer.metadata()) {
-            return Some(meta);
+        if value_at_semantic_path(&layer.config, segments).is_some() {
+            return Some(layer.metadata());
+        }
+
+        let Some(layer_representation) = layer
+            .config
+            .get("shell_environment_policy")
+            .and_then(ShellEnvironmentPolicyFilterRepresentation::from_policy)
+        else {
+            continue;
+        };
+        if ShellEnvironmentPolicyFilterRepresentation::from_path(segments)
+            .is_some_and(|edit_representation| edit_representation != layer_representation)
+        {
+            return Some(layer.metadata());
         }
     }
 

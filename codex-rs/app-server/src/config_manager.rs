@@ -182,7 +182,7 @@ impl ConfigManager {
                 &user_config_path,
                 self.loader_overrides.user_config_profile.as_ref(),
                 TomlValue::Table(toml::map::Map::new()),
-            );
+            )?;
         }
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);

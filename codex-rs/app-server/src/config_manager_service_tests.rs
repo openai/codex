@@ -965,3 +965,382 @@ beta = "b"
 
     Ok(())
 }
+
+#[tokio::test]
+async fn config_writes_apply_path_sensitive_merge_rules() -> Result<()> {
+    let cases = [
+        (
+            r#"[shell_environment_policy]
+exclude = ["AWS_*"]
+"#,
+            "shell_environment_policy",
+            serde_json::json!({"filters": {"AWS_*": "include"}}),
+            r#"[shell_environment_policy.filters]
+"AWS_*" = "include"
+"#,
+        ),
+        (
+            r#"[shell_environment_policy]
+inherit = "core"
+exclude = ["AWS_*"]
+"#,
+            "shell_environment_policy.filters",
+            serde_json::json!({"AWS_*": "include"}),
+            r#"[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.filters]
+"AWS_*" = "include"
+"#,
+        ),
+        (
+            r#"[shell_environment_policy.filters]
+"AWS_*" = "include"
+"#,
+            "shell_environment_policy.exclude",
+            serde_json::json!(["AWS_*"]),
+            r#"[shell_environment_policy]
+exclude = ["AWS_*"]
+"#,
+        ),
+        (
+            r#"[shell_environment_policy]
+exclude = ["AWS_*"]
+include_only = ["PATH"]
+"#,
+            "shell_environment_policy.filters",
+            serde_json::json!({}),
+            r#"[shell_environment_policy.filters]
+"#,
+        ),
+        (
+            r#"[shell_environment_policy.filters]
+"AWS_*" = "include"
+"#,
+            "shell_environment_policy.exclude",
+            serde_json::json!([]),
+            r#"[shell_environment_policy]
+exclude = []
+"#,
+        ),
+        (
+            r#"[shell_environment_policy.filters]
+"aws_*" = "exclude"
+"#,
+            "shell_environment_policy.filters",
+            serde_json::json!({"AWS_*": "include"}),
+            r#"[shell_environment_policy.filters]
+"aws_*" = "include"
+"#,
+        ),
+        (
+            r#"[shell_environment_policy.filters]
+"aws_*" = "exclude"
+"#,
+            "shell_environment_policy.filters.AWS_*",
+            serde_json::json!("include"),
+            r#"[shell_environment_policy.filters]
+"aws_*" = "include"
+"#,
+        ),
+        (
+            r#"[shell_environment_policy.filters]
+"секрет_*" = "exclude"
+"#,
+            "shell_environment_policy.filters.СЕКРЕТ_*",
+            serde_json::json!("include"),
+            r#"[shell_environment_policy.filters]
+"секрет_*" = "include"
+"#,
+        ),
+        (
+            r#"[permissions.dev.network.domains]
+"example.com" = "deny"
+"#,
+            "permissions.dev.network.domains",
+            serde_json::json!({"EXAMPLE.COM": "allow"}),
+            r#"[permissions.dev.network.domains]
+"example.com" = "allow"
+"#,
+        ),
+        (
+            r#"[memories]
+no_memories_if_mcp_or_web_search = false
+"#,
+            "memories",
+            serde_json::json!({"disable_on_external_context": true}),
+            r#"[memories]
+disable_on_external_context = true
+"#,
+        ),
+    ];
+
+    for (base, key_path, value, expected) in cases {
+        let tmp = tempdir()?;
+        let path = tmp.path().join(CONFIG_TOML_FILE);
+        std::fs::write(&path, base)?;
+
+        let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(path.display().to_string()),
+                key_path: key_path.to_string(),
+                value,
+                merge_strategy: MergeStrategy::Upsert,
+                expected_version: None,
+            })
+            .await?;
+
+        let updated: TomlValue = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        let expected: TomlValue = toml::from_str(expected)?;
+        assert_eq!(updated, expected);
+
+        service
+            .read(ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            })
+            .await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn clear_shell_environment_filter_ignores_ascii_case() -> Result<()> {
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &path,
+        r#"[shell_environment_policy.filters]
+"aws_*" = "exclude"
+"keep_*" = "include"
+"#,
+    )?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let response = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "shell_environment_policy.filters.AWS_*".to_string(),
+            value: serde_json::Value::Null,
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await?;
+
+    assert_eq!(response.status, WriteStatus::Ok);
+    assert_eq!(response.overridden_metadata, None);
+    assert_eq!(
+        std::fs::read_to_string(&path)?,
+        r#"[shell_environment_policy.filters]
+"keep_*" = "include"
+"#
+    );
+    service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn upsert_shell_environment_scalar_preserves_unrelated_formatting() -> Result<()> {
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &path,
+        r#"[shell_environment_policy]
+inherit = "all"
+exclude = [
+    "AWS_*", # keep this comment
+]
+set = { KEEP = "1", OTHER = "2" } # keep this inline table
+"#,
+    )?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "shell_environment_policy.inherit".to_string(),
+            value: serde_json::json!("core"),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await?;
+
+    assert_eq!(
+        std::fs::read_to_string(&path)?,
+        r#"[shell_environment_policy]
+inherit = "core"
+exclude = [
+    "AWS_*", # keep this comment
+]
+set = { KEEP = "1", OTHER = "2" } # keep this inline table
+"#
+    );
+    service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn upsert_shell_environment_filter_scalar_preserves_formatting_and_version() -> Result<()> {
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &path,
+        r#"[shell_environment_policy]
+set = { KEEP = "1", OTHER = "2" } # keep this inline table
+
+[shell_environment_policy.filters]
+"AWS_*" = "exclude" # keep this edited comment
+"KEEP_*" = "include" # keep this untouched comment
+"#,
+    )?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+
+    let response = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "shell_environment_policy.filters.aws_*".to_string(),
+            value: serde_json::json!("include"),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await?;
+
+    assert_eq!(
+        std::fs::read_to_string(&path)?,
+        r#"[shell_environment_policy]
+set = { KEEP = "1", OTHER = "2" } # keep this inline table
+
+[shell_environment_policy.filters]
+"AWS_*" = "include" # keep this edited comment
+"KEEP_*" = "include" # keep this untouched comment
+"#
+    );
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "shell_environment_policy.filters.AWS_*".to_string(),
+            value: serde_json::json!("exclude"),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: Some(response.version),
+        })
+        .await?;
+    service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn shell_environment_upsert_rejects_case_variant_filters_in_one_edit() -> Result<()> {
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    let initial = r#"[shell_environment_policy.filters]
+"KEEP_*" = "include"
+"#;
+    std::fs::write(&path, initial)?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "shell_environment_policy.filters".to_string(),
+            value: serde_json::json!({"AWS_*": "include", "aws_*": "exclude"}),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await
+        .expect_err("one filter-map edit must not contain case-variant keys");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate shell environment filter")
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, initial);
+    Ok(())
+}
+
+#[tokio::test]
+async fn shell_environment_representation_switch_reports_managed_override() -> Result<()> {
+    let cases = [
+        (
+            r#"[shell_environment_policy]
+exclude = ["AWS_*"]
+"#,
+            "shell_environment_policy.filters.AWS_*",
+            serde_json::json!("include"),
+        ),
+        (
+            r#"[shell_environment_policy.filters]
+"AWS_*" = "include"
+"#,
+            "shell_environment_policy.exclude",
+            serde_json::json!(["AWS_*"]),
+        ),
+    ];
+
+    for (managed, key_path, value) in cases {
+        let tmp = tempdir()?;
+        let path = tmp.path().join(CONFIG_TOML_FILE);
+        std::fs::write(&path, "")?;
+        let managed_path = tmp.path().join("managed_config.toml");
+        std::fs::write(&managed_path, managed)?;
+        let managed_file = AbsolutePathBuf::try_from(managed_path.clone())?;
+        let service = ConfigManager::new_for_tests(
+            tmp.path().to_path_buf(),
+            vec![],
+            LoaderOverrides::with_managed_config_path_for_tests(managed_path),
+            CloudConfigBundleLoader::default(),
+        );
+
+        let response = service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(path.display().to_string()),
+                key_path: key_path.to_string(),
+                value,
+                merge_strategy: MergeStrategy::Upsert,
+                expected_version: None,
+            })
+            .await?;
+
+        assert_eq!(response.status, WriteStatus::OkOverridden);
+        let overridden = response
+            .overridden_metadata
+            .expect("managed representation should override the user edit");
+        assert_eq!(
+            overridden.overriding_layer.name,
+            ApiConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
+        );
+        assert_eq!(overridden.effective_value, serde_json::Value::Null);
+        service
+            .read(ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            })
+            .await?;
+    }
+
+    Ok(())
+}
