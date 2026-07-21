@@ -332,22 +332,6 @@ pub fn restore_keep_raw() -> Result<()> {
     restore_common(RawModeRestore::Keep, KeyboardRestore::PopStack)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RestoreMode {
-    #[allow(dead_code)]
-    Full, // Fully restore the terminal (disables raw mode).
-    KeepRaw, // Restore the terminal but keep raw mode enabled.
-}
-
-impl RestoreMode {
-    fn restore(self) -> Result<()> {
-        match self {
-            RestoreMode::Full => restore(),
-            RestoreMode::KeepRaw => restore_keep_raw(),
-        }
-    }
-}
-
 /// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
 /// For example, clears any user input that occurred while the crossterm EventStream was dropped.
 #[cfg(unix)]
@@ -658,9 +642,9 @@ impl Tui {
     /// Temporarily restore terminal state to run an external interactive program `f`.
     ///
     /// This pauses crossterm's stdin polling by dropping the underlying event stream, restores
-    /// terminal modes and stderr (optionally keeping raw mode enabled), then re-applies Codex TUI
-    /// modes and stderr suppression before resuming events.
-    pub async fn with_restored<R, F, Fut>(&mut self, mode: RestoreMode, f: F) -> R
+    /// terminal modes and stderr while keeping raw mode enabled, then re-applies Codex TUI modes
+    /// and stderr suppression before resuming events.
+    pub async fn with_restored<R, F, Fut>(&mut self, f: F) -> R
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = R>,
@@ -674,7 +658,7 @@ impl Tui {
             let _ = self.leave_alt_screen();
         }
 
-        if let Err(err) = mode.restore() {
+        if let Err(err) = restore_keep_raw() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
         }
         if let Err(err) = terminal_stderr::pause() {
