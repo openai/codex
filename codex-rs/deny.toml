@@ -239,7 +239,6 @@ deny = [
         # Intended owner.
         "codex-http-client",
         # Temporary migration exceptions.
-        "codex-agent-identity",
         "codex-api",
         "codex-app-server",
         "codex-core",

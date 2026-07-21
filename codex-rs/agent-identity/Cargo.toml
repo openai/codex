@@ -16,12 +16,13 @@ workspace = true
 anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
+codex-http-client = { workspace = true }
 codex-protocol = { workspace = true }
 crypto_box = { workspace = true }
 ed25519-dalek = { workspace = true }
+http = { workspace = true }
 jsonwebtoken = { workspace = true }
 rand = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
