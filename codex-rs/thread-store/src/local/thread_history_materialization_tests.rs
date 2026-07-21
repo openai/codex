@@ -78,6 +78,14 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
         .await
         .expect("append paginated items");
 
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    let (turn_start_byte_offset, _) =
+        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
+    let (_, turn_end_byte_offset) =
+        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 4);
     let pool = codex_state::open_thread_history_db(home.path())
         .await
         .expect("open thread history db");
@@ -85,6 +93,9 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
         _,
         (
             i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
             String,
             Option<i64>,
             Option<i64>,
@@ -96,6 +107,9 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
         r#"
 SELECT
     rollout_ordinal,
+    rollout_byte_offset,
+    rollout_end_ordinal,
+    rollout_end_byte_offset,
     status,
     started_at,
     completed_at,
@@ -115,6 +129,9 @@ WHERE thread_id = ? AND turn_id = ?
         turn,
         (
             1,
+            Some(turn_start_byte_offset),
+            Some(4),
+            Some(turn_end_byte_offset),
             "completed".to_string(),
             Some(10),
             Some(20),
@@ -141,10 +158,6 @@ ORDER BY rollout_ordinal
         vec![("user-1".to_string(), 2), ("agent-1".to_string(), 3)]
     );
 
-    let rollout_path = store
-        .live_rollout_path(thread_id)
-        .await
-        .expect("rollout path");
     let rollout_len = i64::try_from(fs::metadata(rollout_path).expect("rollout metadata").len())
         .expect("rollout length");
     let projection_state = sqlx::query_as::<_, (i64, i64)>(
@@ -159,6 +172,41 @@ WHERE thread_id = ?
     .await
     .expect("read projection state");
     assert_eq!(projection_state, (rollout_len, 5));
+}
+
+#[tokio::test]
+async fn active_turn_stores_only_its_start_position() {
+    let home = TempDir::new().expect("temp dir");
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![turn_started("turn-1")],
+        })
+        .await
+        .expect("append active turn");
+
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    let (turn_start_byte_offset, _) =
+        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
+    let pool = codex_state::open_thread_history_db(home.path())
+        .await
+        .expect("open thread history db");
+    let turn_position = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<i64>)>(
+        "SELECT rollout_byte_offset, rollout_end_ordinal, rollout_end_byte_offset FROM thread_turns WHERE thread_id = ? AND turn_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .bind("turn-1")
+    .fetch_one(&pool)
+    .await
+    .expect("read active turn position");
+    assert_eq!(turn_position, (Some(turn_start_byte_offset), None, None));
 }
 
 #[tokio::test]
@@ -208,17 +256,26 @@ async fn subagent_prefix_advances_projection_without_materializing_history() {
         .await
         .expect("append inherited prefix and child history");
 
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    let (child_start_byte_offset, _) =
+        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 4);
     let pool = codex_state::open_thread_history_db(home.path())
         .await
         .expect("open thread history db");
-    let turns = sqlx::query_as::<_, (String, i64)>(
-        "SELECT turn_id, rollout_ordinal FROM thread_turns WHERE thread_id = ?",
+    let turns = sqlx::query_as::<_, (String, i64, Option<i64>)>(
+        "SELECT turn_id, rollout_ordinal, rollout_byte_offset FROM thread_turns WHERE thread_id = ?",
     )
     .bind(thread_id.to_string())
     .fetch_all(&pool)
     .await
     .expect("read projected turns");
-    assert_eq!(turns, vec![("child-turn".to_string(), 4)]);
+    assert_eq!(
+        turns,
+        vec![("child-turn".to_string(), 4, Some(child_start_byte_offset))]
+    );
     let items = sqlx::query_as::<_, (String, i64)>(
         "SELECT item_id, rollout_ordinal FROM thread_items WHERE thread_id = ?",
     )
@@ -305,6 +362,91 @@ WHERE thread_id = ? AND turn_id = ? AND item_id = ?
             client_id: Some("updated".to_string()),
             content: Vec::new(),
         }
+    );
+}
+
+#[tokio::test]
+async fn terminal_turn_does_not_change_after_later_records() {
+    let home = TempDir::new().expect("temp dir");
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![turn_started("turn-1"), turn_completed("turn-1")],
+        })
+        .await
+        .expect("append terminal turn");
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("turn-1"),
+                completed_item(
+                    thread_id,
+                    "turn-1",
+                    TurnItem::UserMessage(UserMessageItem {
+                        id: "late-user".to_string(),
+                        client_id: None,
+                        content: Vec::new(),
+                    }),
+                ),
+            ],
+        })
+        .await
+        .expect("append later records");
+
+    let pool = codex_state::open_thread_history_db(home.path())
+        .await
+        .expect("open thread history db");
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    let (turn_start_byte_offset, _) =
+        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
+    let (_, turn_end_byte_offset) =
+        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 2);
+    let turn = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            String,
+            Option<String>,
+        ),
+    >(
+        r#"
+SELECT
+    rollout_ordinal,
+    rollout_byte_offset,
+    rollout_end_ordinal,
+    rollout_end_byte_offset,
+    status,
+    first_user_item_id
+FROM thread_turns
+WHERE thread_id = ? AND turn_id = ?
+        "#,
+    )
+    .bind(thread_id.to_string())
+    .bind("turn-1")
+    .fetch_one(&pool)
+    .await
+    .expect("read projected turn");
+    assert_eq!(
+        turn,
+        (
+            1,
+            Some(turn_start_byte_offset),
+            Some(2),
+            Some(turn_end_byte_offset),
+            "completed".to_string(),
+            None,
+        )
     );
 }
 
@@ -552,7 +694,7 @@ async fn synchronized_catch_up_does_not_replay_old_rows() {
 }
 
 #[tokio::test]
-async fn catch_up_leaves_trailing_partial_line_unprojected() {
+async fn catch_up_preserves_trailing_partial_line_boundaries() {
     let home = TempDir::new().expect("temp dir");
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
     let thread_id = ThreadId::default();
@@ -567,18 +709,7 @@ async fn catch_up_leaves_trailing_partial_line_unprojected() {
         .expect("open thread history db");
     let before = projection_state(&pool, thread_id).await;
     let complete_line = rollout_line(Some(1), turn_started("turn-1"));
-    let partial_line = rollout_line(
-        Some(2),
-        completed_item(
-            thread_id,
-            "turn-1",
-            TurnItem::UserMessage(UserMessageItem {
-                id: "user-1".to_string(),
-                client_id: None,
-                content: Vec::new(),
-            }),
-        ),
-    );
+    let partial_line = rollout_line(Some(2), turn_completed("turn-1"));
     let complete_suffix = format!("{complete_line}\n");
     let rollout_path = store
         .live_rollout_path(thread_id)
@@ -599,19 +730,22 @@ async fn catch_up_leaves_trailing_partial_line_unprojected() {
         projection_state(&pool, thread_id).await,
         (expected_offset, 2)
     );
-    let counts = sqlx::query_as::<_, (i64, i64)>(
-        r#"
-SELECT
-    (SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?),
-    (SELECT COUNT(*) FROM thread_items WHERE thread_id = ?)
-        "#,
+    append_suffix(rollout_path.as_path(), "\n");
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("catch up completed partial suffix");
+
+    let rollout_len = i64::try_from(fs::metadata(rollout_path).expect("rollout metadata").len())
+        .expect("rollout length");
+    let turn_position = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<i64>)>(
+        "SELECT rollout_byte_offset, rollout_end_ordinal, rollout_end_byte_offset FROM thread_turns WHERE thread_id = ? AND turn_id = ?",
     )
     .bind(thread_id.to_string())
-    .bind(thread_id.to_string())
+    .bind("turn-1")
     .fetch_one(&pool)
     .await
-    .expect("read projected row counts");
-    assert_eq!(counts, (1, 0));
+    .expect("read completed turn position");
+    assert_eq!(turn_position, (Some(before.0), Some(2), Some(rollout_len)));
 }
 
 #[tokio::test]
@@ -762,7 +896,7 @@ async fn sqlite_failure_does_not_fail_durable_jsonl_write() {
 }
 
 #[tokio::test]
-async fn rejected_rollout_line_does_not_poison_projection() {
+async fn blank_and_rejected_rollout_lines_do_not_poison_projection() {
     let home = TempDir::new().expect("temp dir");
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
     let thread_id = ThreadId::default();
@@ -780,8 +914,8 @@ async fn rejected_rollout_line_does_not_poison_projection() {
         .append(true)
         .open(rollout_path.as_path())
         .expect("open rollout for rejected line");
-    file.write_all(b"{not json}\n")
-        .expect("append rejected line");
+    file.write_all(b"\n \t\r\n{not json}\n\xff\n")
+        .expect("append blank and rejected lines");
     file.flush().expect("flush rejected line");
     let recorder = store
         .live_recorders
@@ -804,15 +938,17 @@ async fn rejected_rollout_line_does_not_poison_projection() {
     let pool = codex_state::open_thread_history_db(home.path())
         .await
         .expect("open thread history db");
-    let projected_turns = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM thread_turns WHERE thread_id = ? AND turn_id = ?",
+    let (expected_start_byte_offset, _) =
+        rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
+    let start_byte_offset = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT rollout_byte_offset FROM thread_turns WHERE thread_id = ? AND turn_id = ?",
     )
     .bind(thread_id.to_string())
     .bind("turn-1")
     .fetch_one(&pool)
     .await
-    .expect("read projected turns");
-    assert_eq!(projected_turns, 1);
+    .expect("read projected turn byte offset");
+    assert_eq!(start_byte_offset, Some(expected_start_byte_offset));
 }
 
 #[tokio::test]
@@ -990,6 +1126,26 @@ fn agent_message(id: &str, phase: MessagePhase) -> TurnItem {
         phase: Some(phase),
         memory_citation: None,
     })
+}
+
+fn rollout_line_byte_offsets(path: &std::path::Path, ordinal: u64) -> (i64, i64) {
+    let bytes = fs::read(path).expect("read rollout");
+    let mut start_byte_offset = 0;
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let end_byte_offset = start_byte_offset + line.len();
+        if serde_json::from_slice::<RolloutLine>(line)
+            .ok()
+            .and_then(|line| line.ordinal)
+            == Some(ordinal)
+        {
+            return (
+                i64::try_from(start_byte_offset).expect("start byte offset fits i64"),
+                i64::try_from(end_byte_offset).expect("end byte offset fits i64"),
+            );
+        }
+        start_byte_offset = end_byte_offset;
+    }
+    panic!("missing rollout ordinal {ordinal}");
 }
 
 async fn projection_state(pool: &sqlx::SqlitePool, thread_id: ThreadId) -> (i64, i64) {
