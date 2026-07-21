@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -10,10 +11,14 @@ use tracing::trace;
 use tracing::trace_span;
 
 use super::McpConnectionManager;
+use crate::binding::McpBinding;
+use crate::binding::PreparedMcpCall;
+use crate::binding_clients::McpBindingClients;
 use crate::codex_apps::prepare_openai_file_params_for_model;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
 use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
+use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::runtime::emit_duration;
 use crate::tools::ToolInfo;
@@ -80,12 +85,109 @@ impl McpConnectionManager {
         Some(self.with_server_metadata(tool))
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "catalog capture must remain serialized with catalog replacement"
+    )]
+    /// Captures the ready clients, their exact tools, and the supplied runtime metadata.
+    pub async fn capture_binding_with_metadata(
+        self: &Arc<Self>,
+        config: Arc<crate::McpConfig>,
+        plugins_available: bool,
+    ) -> McpBinding {
+        let revision = self.tool_catalog_revision.read().await;
+        let mut listed_tools = Vec::new();
+        let mut clients = std::collections::HashMap::new();
+        for (server_name, managed_client) in &self.clients {
+            let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                self.codex_apps_tools_override.read().await.clone()
+            } else {
+                None
+            };
+            let Some((client, server_tools)) = managed_client
+                .capture_ready_client_and_tools(catalog_override)
+                .await
+            else {
+                trace!(
+                    server_name = %server_name,
+                    "omitting MCP server without an exact ready client"
+                );
+                continue;
+            };
+            clients.insert(server_name.clone(), client);
+            listed_tools.extend(
+                server_tools
+                    .into_iter()
+                    .map(|tool| self.with_server_metadata(tool)),
+            );
+        }
+        let clients = Arc::new(McpBindingClients::new(clients));
+        let listed_tools =
+            normalize_tools_for_model_with_prefix(listed_tools, self.prefix_mcp_tool_names);
+        let mut tools = Vec::with_capacity(listed_tools.len());
+        let mut calls = std::collections::HashMap::with_capacity(listed_tools.len());
+        for tool_info in listed_tools {
+            let Some(client) = clients.client(&tool_info.server_name) else {
+                continue;
+            };
+            let Some(call) = self.prepare_call(&tool_info, client, *revision) else {
+                trace!(
+                    server_name = %tool_info.server_name,
+                    tool_name = %tool_info.tool.name,
+                    "omitting MCP tool without an exact ready client"
+                );
+                continue;
+            };
+            calls.insert(
+                (
+                    tool_info.server_name.clone(),
+                    tool_info.tool.name.to_string(),
+                ),
+                call,
+            );
+            tools.push(tool_info);
+        }
+        McpBinding::new(
+            Arc::clone(self),
+            clients,
+            config,
+            plugins_available,
+            tools,
+            calls,
+        )
+    }
+
+    fn prepare_call(
+        self: &Arc<Self>,
+        tool_info: &ToolInfo,
+        client: Arc<ManagedClient>,
+        tool_catalog_revision: u64,
+    ) -> Option<PreparedMcpCall> {
+        let server_name = &tool_info.server_name;
+        Some(PreparedMcpCall::new(
+            Arc::clone(self),
+            client,
+            tool_catalog_revision,
+            Arc::clone(&self.tool_catalog_revision),
+            tool_info.clone(),
+            self.server_metadata.get(server_name)?.clone(),
+            self.plugin_id_for_mcp_server_name(server_name)
+                .map(str::to_string),
+            self.is_selected_plugin_mcp_server(server_name),
+        ))
+    }
+
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace shared cache contents when the
     /// cache is enabled and the latest filtered tools are returned directly to
     /// the caller. On failure, existing shared cache contents remain unchanged.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "catalog publication must remain serialized with captured tool calls"
+    )]
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
+        let _refresh = self.codex_apps_refresh_lock.lock().await;
         let refresh_start = Instant::now();
         let managed_client = self
             .clients
@@ -103,7 +205,7 @@ impl McpConnectionManager {
                 .map(|cache_context| {
                     cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh)
                 });
-        let tools = list_tools_for_client_uncached(
+        let client_tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
             /*is_codex_apps_mcp_server*/ true,
             /*codex_apps_refresh_trigger*/ "explicit",
@@ -116,16 +218,22 @@ impl McpConnectionManager {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
 
-        let tools =
-            match (
-                managed_client.codex_apps_tools_cache_context.as_ref(),
+        let mut tool_catalog_revision = self.tool_catalog_revision.write().await;
+        let tools = match (
+            managed_client.codex_apps_tools_cache_context.as_ref(),
+            fetch_ticket,
+        ) {
+            (Some(cache_context), Some(fetch_ticket)) => cache_context.publish_if_newest_accepted(
                 fetch_ticket,
-            ) {
-                (Some(cache_context), Some(fetch_ticket)) => cache_context
-                    .publish_if_newest_accepted(fetch_ticket, &managed_client.server_info, tools),
-                (None, None) => tools,
-                _ => unreachable!("Codex Apps fetch ticket requires cache context"),
-            };
+                &managed_client.server_info,
+                client_tools.clone(),
+            ),
+            (None, None) => client_tools.clone(),
+            _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+        };
+        *self.codex_apps_tools_override.write().await = Some(client_tools);
+        *tool_catalog_revision += 1;
+        drop(tool_catalog_revision);
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),

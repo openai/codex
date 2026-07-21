@@ -8,8 +8,10 @@ use codex_protocol::mcp::ResourceContent;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 
-use crate::McpConnectionManager;
 use crate::McpRuntime;
+use crate::binding_clients::McpBindingClientIdentity;
+use crate::binding_clients::McpBindingClients;
+use crate::connection_manager::McpConnectionManager;
 
 /// One page of resources returned by an MCP server.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,21 +29,48 @@ pub struct McpResourceReadResult {
     pub contents: Vec<ResourceContent>,
 }
 
-/// Session-scoped access to MCP resources through the thread runtime.
-///
-/// Calls automatically use the connection set most recently published by the runtime.
+/// Access to MCP resources through either the latest runtime or one exact step.
 #[derive(Clone)]
 pub struct McpResourceClient {
-    runtime: Arc<McpRuntime>,
+    source: McpResourceSource,
 }
 
 /// Opaque identity for the connection set currently used by an MCP resource client.
 #[derive(Clone)]
-pub struct McpResourceClientCacheKey(Weak<McpConnectionManager>);
+pub struct McpResourceClientCacheKey(McpResourceClientCacheKeyInner);
+
+#[derive(Clone)]
+enum McpResourceClientCacheKeyInner {
+    Latest(Weak<McpConnectionManager>),
+    Exact(McpBindingClientIdentity),
+}
+
+#[derive(Clone)]
+enum McpResourceSource {
+    Latest(Arc<McpRuntime>),
+    Exact(Arc<McpBindingClients>),
+}
 
 impl PartialEq for McpResourceClientCacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.0.ptr_eq(&other.0)
+        match (&self.0, &other.0) {
+            (
+                McpResourceClientCacheKeyInner::Latest(left),
+                McpResourceClientCacheKeyInner::Latest(right),
+            ) => left.ptr_eq(right),
+            (
+                McpResourceClientCacheKeyInner::Exact(left),
+                McpResourceClientCacheKeyInner::Exact(right),
+            ) => left == right,
+            (
+                McpResourceClientCacheKeyInner::Latest(_),
+                McpResourceClientCacheKeyInner::Exact(_),
+            )
+            | (
+                McpResourceClientCacheKeyInner::Exact(_),
+                McpResourceClientCacheKeyInner::Latest(_),
+            ) => false,
+        }
     }
 }
 
@@ -56,21 +85,40 @@ impl std::fmt::Debug for McpResourceClient {
 }
 
 impl McpResourceClient {
-    /// Creates a resource client backed by the thread's MCP runtime.
+    /// Creates a resource client that follows the thread's latest published runtime.
     pub fn new(runtime: Arc<McpRuntime>) -> Self {
-        Self { runtime }
+        Self {
+            source: McpResourceSource::Latest(runtime),
+        }
     }
 
-    /// Returns an identity that changes whenever the published connection set changes.
+    pub(crate) fn for_binding(clients: Arc<McpBindingClients>) -> Self {
+        Self {
+            source: McpResourceSource::Exact(clients),
+        }
+    }
+
+    /// Returns the identity of the connection set used by this client.
     pub fn cache_key(&self) -> McpResourceClientCacheKey {
-        McpResourceClientCacheKey(Arc::downgrade(&self.runtime.snapshot()))
+        let key = match &self.source {
+            McpResourceSource::Latest(runtime) => {
+                McpResourceClientCacheKeyInner::Latest(Arc::downgrade(&runtime.snapshot()))
+            }
+            McpResourceSource::Exact(clients) => {
+                McpResourceClientCacheKeyInner::Exact(clients.identity())
+            }
+        };
+        McpResourceClientCacheKey(key)
     }
 
-    /// Returns whether the current connection set contains the named server.
+    /// Returns whether this client can address the named server.
     ///
-    /// This does not wait for server startup or imply that startup succeeded.
+    /// This does not wait for server startup.
     pub async fn has_server(&self, server: &str) -> bool {
-        self.runtime.snapshot().contains_server(server)
+        match &self.source {
+            McpResourceSource::Latest(runtime) => runtime.snapshot().contains_server(server),
+            McpResourceSource::Exact(clients) => clients.contains_server(server),
+        }
     }
 
     /// Lists one resource page from the named server.
@@ -81,11 +129,12 @@ impl McpResourceClient {
     ) -> Result<McpResourcePage> {
         let params =
             cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
-        let result = self
-            .runtime
-            .snapshot()
-            .list_resources(server, params)
-            .await?;
+        let result = match &self.source {
+            McpResourceSource::Latest(runtime) => {
+                runtime.snapshot().list_resources(server, params).await
+            }
+            McpResourceSource::Exact(clients) => clients.list_resources(server, params).await,
+        }?;
         let resources = result
             .resources
             .into_iter()
@@ -99,11 +148,13 @@ impl McpResourceClient {
 
     /// Reads one resource from the named server.
     pub async fn read_resource(&self, server: &str, uri: &str) -> Result<McpResourceReadResult> {
-        let result = self
-            .runtime
-            .snapshot()
-            .read_resource(server, ReadResourceRequestParams::new(uri.to_string()))
-            .await?;
+        let params = ReadResourceRequestParams::new(uri.to_string());
+        let result = match &self.source {
+            McpResourceSource::Latest(runtime) => {
+                runtime.snapshot().read_resource(server, params).await
+            }
+            McpResourceSource::Exact(clients) => clients.read_resource(server, params).await,
+        }?;
         let contents = result
             .contents
             .into_iter()
