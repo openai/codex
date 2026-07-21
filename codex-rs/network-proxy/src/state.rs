@@ -76,7 +76,6 @@ pub fn build_config_state(
     let mitm = if config.mitm {
         Some(Arc::new(MitmState::new(MitmUpstreamConfig {
             allow_upstream_proxy: config.allow_upstream_proxy,
-            allow_local_binding: config.allow_local_binding,
         })?))
     } else {
         None

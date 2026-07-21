@@ -44,6 +44,7 @@ use rama_http_backend::server::HttpServer;
 use rama_net::proxy::ProxyTarget;
 use rama_net::stream::SocketInfo;
 use rama_net::tls::server::TlsPeekStream;
+use rama_tls_rustls::dep::rustls;
 use rama_tls_rustls::server::TlsAcceptorData;
 use rama_tls_rustls::server::TlsAcceptorLayer;
 use std::pin::Pin;
@@ -59,14 +60,14 @@ use tracing::warn;
 /// State needed to terminate a CONNECT tunnel and enforce policy on inner HTTPS requests.
 pub struct MitmState {
     ca: Arc<ManagedMitmCa>,
-    upstream: UpstreamClient,
+    allow_upstream_proxy: bool,
+    upstream_tls_root_store: Arc<rustls::RootCertStore>,
     inspect: bool,
     max_body_bytes: usize,
 }
 
 pub(crate) struct MitmUpstreamConfig {
     pub(crate) allow_upstream_proxy: bool,
-    pub(crate) allow_local_binding: bool,
 }
 
 #[derive(Clone)]
@@ -81,6 +82,7 @@ struct MitmPolicyContext {
 struct MitmRequestContext {
     policy: MitmPolicyContext,
     mitm: Arc<MitmState>,
+    upstream: UpstreamClient,
 }
 
 enum MitmPolicyDecision {
@@ -160,21 +162,10 @@ impl MitmState {
         let upstream_tls_root_store =
             crate::certs::upstream_tls_root_store(&crate::certs::ca_env_from_process())?;
 
-        let upstream = if config.allow_upstream_proxy {
-            UpstreamClient::from_env_proxy_with_allow_local_binding(
-                config.allow_local_binding,
-                upstream_tls_root_store,
-            )
-        } else {
-            UpstreamClient::direct_with_allow_local_binding(
-                config.allow_local_binding,
-                upstream_tls_root_store,
-            )
-        };
-
         Ok(Self {
             ca,
-            upstream,
+            allow_upstream_proxy: config.allow_upstream_proxy,
+            upstream_tls_root_store,
             inspect: MITM_INSPECT_BODIES,
             max_body_bytes: MITM_MAX_BODY_BYTES,
         })
@@ -222,6 +213,17 @@ where
         .get::<NetworkMode>()
         .copied()
         .unwrap_or(NetworkMode::Full);
+    let upstream = if mitm.allow_upstream_proxy {
+        UpstreamClient::from_env_proxy_with_tls_root_store(
+            app_state.clone(),
+            mitm.upstream_tls_root_store.clone(),
+        )
+    } else {
+        UpstreamClient::direct_with_tls_root_store(
+            app_state.clone(),
+            mitm.upstream_tls_root_store.clone(),
+        )
+    };
     let request_ctx = Arc::new(MitmRequestContext {
         policy: MitmPolicyContext {
             target_host,
@@ -230,6 +232,7 @@ where
             app_state,
         },
         mitm,
+        upstream,
     });
 
     let executor = stream
@@ -320,7 +323,7 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
     };
 
     let upstream_req = Request::from_parts(parts, body);
-    let upstream_resp = mitm.upstream.serve(upstream_req).await?;
+    let upstream_resp = request_ctx.upstream.serve(upstream_req).await?;
     respond_with_inspection(
         upstream_resp,
         inspect,
