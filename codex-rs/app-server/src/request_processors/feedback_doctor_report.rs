@@ -8,6 +8,7 @@
 //! attaching exactly the same JSON a user could copy from the CLI.
 
 use std::collections::BTreeMap;
+use std::process::Stdio;
 use std::time::Duration;
 
 use codex_core::config::Config;
@@ -42,6 +43,7 @@ pub(crate) async fn doctor_feedback_report(config: &Config) -> Option<DoctorFeed
 
     let mut command = Command::new(&executable);
     command.arg("doctor").arg("--json");
+    command.stdin(Stdio::null());
     command.kill_on_drop(/*kill_on_drop*/ true);
     let output = match timeout(DOCTOR_FEEDBACK_REPORT_TIMEOUT, command.output()).await {
         Ok(Ok(output)) => output,
