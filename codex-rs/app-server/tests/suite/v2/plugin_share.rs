@@ -753,6 +753,7 @@ async fn plugin_share_checkout_adds_personal_marketplace_entry() -> Result<()> {
             marketplace_kinds: Some(vec![
                 codex_app_server_protocol::PluginListMarketplaceKind::Local,
             ]),
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(

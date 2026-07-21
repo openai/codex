@@ -14,4 +14,8 @@ cwds?: Array<AbsolutePathBuf> | null,
  * Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus
  * the default remote catalog when enabled by feature flag.
  */
-marketplaceKinds?: Array<PluginListMarketplaceKind> | null, };
+marketplaceKinds?: Array<PluginListMarketplaceKind> | null,
+/**
+ * Whether the client requests a fresh remote plugin catalog fetch.
+ */
+forceRefetch?: boolean, };

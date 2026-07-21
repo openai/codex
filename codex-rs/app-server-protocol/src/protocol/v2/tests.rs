@@ -3354,6 +3354,22 @@ fn plugin_list_params_ignore_removed_force_remote_sync_field() {
         PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
+        },
+    );
+}
+
+#[test]
+fn plugin_list_params_deserializes_force_refetch() {
+    assert_eq!(
+        serde_json::from_value::<PluginListParams>(json!({
+            "forceRefetch": true,
+        }))
+        .unwrap(),
+        PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+            force_refetch: true,
         },
     );
 }
@@ -3370,6 +3386,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
                 PluginListMarketplaceKind::SharedWithMe,
                 PluginListMarketplaceKind::CreatedByMeRemote,
             ]),
+            force_refetch: false,
         })
         .unwrap(),
         json!({

@@ -394,6 +394,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let plugin_list_response: JSONRPCResponse = timeout(
