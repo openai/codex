@@ -1,6 +1,9 @@
 //! Shared outbound proxy policy tests.
 
 use super::*;
+use crate::HttpClientBuilder;
+use http::HeaderMap;
+use http::HeaderValue;
 use http::header::AUTHORIZATION;
 use http::header::COOKIE;
 use http::header::PROXY_AUTHORIZATION;
@@ -47,7 +50,7 @@ fn spawn_http_listener(
     let thread = std::thread::spawn(move || {
         let mut requests = Vec::new();
         for response in responses {
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + Duration::from_secs(10);
             let (mut stream, _) = loop {
                 match listener.accept() {
                     Ok(connection) => break connection,
@@ -62,7 +65,7 @@ fn spawn_http_listener(
                 }
             };
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(Duration::from_secs(10)))
                 .expect("HTTP stream should get a read timeout");
             requests.push(read_http_message(&mut stream));
             stream
@@ -330,6 +333,34 @@ async fn enabled_environment_proxy_routes_request_through_proxy() {
     assert_eq!(
         proxy_request.lines().next(),
         Some("GET http://enabled-proxy.test/proxy-check HTTP/1.1")
+    );
+}
+
+#[tokio::test]
+async fn route_aware_builder_preserves_default_headers() {
+    let (server_addr, server_thread) = spawn_proxy_listener();
+    let request_url = format!("http://{server_addr}/builder-check");
+    cache_system_proxy_decision(&request_url, SystemProxyDecision::Direct);
+    let mut headers = HeaderMap::new();
+    headers.insert("x-builder-test", HeaderValue::from_static("preserved"));
+    let factory = HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy);
+    let client = HttpClientBuilder::new()
+        .default_headers(headers)
+        .build_respecting_outbound_proxy_policy(&factory, &request_url, ClientRouteClass::Api)
+        .expect("route-aware client should build");
+
+    let response = client
+        .get(&request_url)
+        .send()
+        .await
+        .expect("request should use direct route");
+    let request = only_request(server_thread, "server");
+
+    assert!(response.status().is_success());
+    assert!(
+        request
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("x-builder-test: preserved"))
     );
 }
 

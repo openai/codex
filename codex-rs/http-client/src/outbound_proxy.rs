@@ -17,7 +17,6 @@ use tokio::sync::Semaphore;
 
 use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
-use crate::default_client::HttpClient;
 use sha2::Digest;
 use sha2::Sha256;
 use thiserror::Error;
@@ -217,26 +216,6 @@ impl HttpClientFactory {
         }
         cached_system_proxy_decision(&request_url)
             .map(|decision| route_from_system_decision(&ProcessEnv, env_proxy_kind, decision))
-    }
-
-    /// Builds an HTTP client for a concrete outbound route.
-    pub fn build_client(
-        &self,
-        request_url: &str,
-        route_class: ClientRouteClass,
-    ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
-        self.build_reqwest_client(reqwest::Client::builder(), request_url, route_class)
-            .map(HttpClient::new)
-    }
-
-    /// Builds a route-aware client without request URL or response-header diagnostics.
-    pub fn build_client_without_request_logging(
-        &self,
-        request_url: &str,
-        route_class: ClientRouteClass,
-    ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
-        self.build_reqwest_client(reqwest::Client::builder(), request_url, route_class)
-            .map(HttpClient::new_without_request_logging)
     }
 
     /// Builds a reqwest client for a concrete outbound route.

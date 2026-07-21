@@ -1,3 +1,5 @@
+//! Reusable HTTP client and request-builder wrappers.
+
 use http::Error as HttpRequestBuildError;
 use http::HeaderMap;
 use http::HeaderName;
@@ -15,6 +17,10 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 pub type HttpError = reqwest::Error;
 pub type HttpResponse = reqwest::Response;
 
+/// Reusable HTTP client wrapper with shared tracing and request-diagnostic behavior.
+///
+/// Product callers should obtain this through [`crate::HttpClientFactory`] for a fixed
+/// destination or use [`crate::RouteAwareClientPool`] when request and redirect URLs can vary.
 #[derive(Clone, Debug)]
 pub struct HttpClient {
     inner: reqwest::Client,
@@ -23,10 +29,7 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn new(inner: reqwest::Client) -> Self {
-        Self {
-            inner,
-            request_logging: RequestLogging::Enabled,
-        }
+        Self::from_parts(inner, RequestLogging::Enabled)
     }
 
     /// Creates a client that suppresses request URL and response-header diagnostics.
@@ -34,9 +37,13 @@ impl HttpClient {
     /// Use this for endpoints whose URLs or headers may contain credentials that are redacted by
     /// the caller above the HTTP transport boundary.
     pub fn new_without_request_logging(inner: reqwest::Client) -> Self {
+        Self::from_parts(inner, RequestLogging::Disabled)
+    }
+
+    pub(crate) fn from_parts(inner: reqwest::Client, request_logging: RequestLogging) -> Self {
         Self {
             inner,
-            request_logging: RequestLogging::Disabled,
+            request_logging,
         }
     }
 
@@ -47,11 +54,25 @@ impl HttpClient {
         self.request(Method::GET, url)
     }
 
+    pub fn head<U>(&self, url: U) -> RequestBuilder
+    where
+        U: IntoUrl,
+    {
+        self.request(Method::HEAD, url)
+    }
+
     pub fn post<U>(&self, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         self.request(Method::POST, url)
+    }
+
+    pub fn delete<U>(&self, url: U) -> RequestBuilder
+    where
+        U: IntoUrl,
+    {
+        self.request(Method::DELETE, url)
     }
 
     pub fn request<U>(&self, method: Method, url: U) -> RequestBuilder
@@ -130,10 +151,15 @@ impl HttpClient {
             );
         }
     }
+
+    pub(crate) const fn request_logging_enabled(&self) -> bool {
+        matches!(self.request_logging, RequestLogging::Enabled)
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RequestLogging {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RequestLogging {
+    #[default]
     Enabled,
     Disabled,
 }
@@ -201,6 +227,13 @@ impl RequestBuilder {
         T: ?Sized + Serialize,
     {
         self.map(|builder| builder.json(value))
+    }
+
+    pub fn query<T>(self, query: &T) -> Self
+    where
+        T: ?Sized + Serialize,
+    {
+        self.map(|builder| builder.query(query))
     }
 
     pub fn body<B>(self, body: B) -> Self
@@ -278,6 +311,7 @@ mod tests {
     use opentelemetry::trace::TracerProvider;
     use opentelemetry_sdk::propagation::TraceContextPropagator;
     use opentelemetry_sdk::trace::SdkTracerProvider;
+    use pretty_assertions::assert_eq;
     use tracing::trace_span;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
