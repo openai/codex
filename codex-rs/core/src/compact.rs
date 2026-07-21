@@ -18,6 +18,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
+use crate::state::AutoCompactWindowIds;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -35,7 +36,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RawResponseCompletedEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -70,6 +70,16 @@ pub(crate) enum InitialContextInjection {
         step_context: Arc<StepContext>,
     },
     DoNotInject,
+}
+
+/// Metadata for a new compaction checkpoint, kept separate from its replacement history.
+///
+/// `Session::replace_compacted_history` assigns missing item IDs before constructing the persisted
+/// `CompactedItem`, ensuring the live and persisted histories remain identical.
+pub(crate) struct CompactedHistoryMetadata {
+    pub(crate) message: String,
+    pub(crate) window_number: u64,
+    pub(crate) window_ids: AutoCompactWindowIds,
 }
 
 pub(crate) async fn build_compaction_initial_context(
@@ -357,20 +367,16 @@ async fn run_compact_task_inner_impl(
             Some(turn_context.to_turn_context_item())
         }
     };
-    let compacted_item = CompactedItem {
-        message: summary_text.clone(),
-        replacement_history: Some(new_history.clone()),
-        window_number: Some(window_number),
-        first_window_id: Some(window_ids.first_window_id.to_string()),
-        previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
-        window_id: Some(window_ids.window_id.to_string()),
-    };
     sess.replace_compacted_history(
         turn_context.as_ref(),
         new_history,
         reference_context_item,
         world_state_baseline,
-        compacted_item,
+        CompactedHistoryMetadata {
+            message: summary_text,
+            window_number,
+            window_ids,
+        },
     )
     .await;
     sess.recompute_token_usage(&turn_context).await;

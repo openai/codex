@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use crate::compact::CompactedHistoryMetadata;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::InitialContextInjection;
@@ -32,7 +33,6 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
@@ -269,14 +269,6 @@ async fn run_remote_compact_task_inner_impl(
             Some(compaction_turn_context.to_turn_context_item())
         }
     };
-    let compacted_item = CompactedItem {
-        message: String::new(),
-        replacement_history: Some(new_history.clone()),
-        window_number: Some(new_window_number),
-        first_window_id: Some(new_window_ids.first_window_id.to_string()),
-        previous_window_id: new_window_ids.previous_window_id.map(|id| id.to_string()),
-        window_id: Some(new_window_ids.window_id.to_string()),
-    };
     // Install is the semantic boundary where the compact endpoint's output becomes live
     // thread history. Keep it distinct from the later inference request so the reducer can
     // still represent repeated developer/context prefix items exactly as the model saw them.
@@ -291,7 +283,11 @@ async fn run_remote_compact_task_inner_impl(
         new_history,
         reference_context_item,
         world_state_baseline,
-        compacted_item,
+        CompactedHistoryMetadata {
+            message: String::new(),
+            window_number: new_window_number,
+            window_ids: new_window_ids,
+        },
     )
     .await;
     sess.recompute_token_usage(compaction_turn_context).await;

@@ -20,6 +20,7 @@ use crate::attestation::AttestationProvider;
 use crate::audio_preparation::prepare_response_items as prepare_audio_response_items;
 use crate::build_available_skills;
 use crate::compact;
+use crate::compact::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ApprovedCommandPrefixSaved;
@@ -3052,7 +3053,7 @@ impl Session {
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         world_state_baseline: Option<Arc<WorldState>>,
-        compacted_item: CompactedItem,
+        metadata: CompactedHistoryMetadata,
     ) {
         let items = if turn_context.item_ids_enabled() {
             Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
@@ -3060,8 +3061,15 @@ impl Session {
             items
         };
         let compacted_item = CompactedItem {
+            message: metadata.message,
             replacement_history: Some(items.clone()),
-            ..compacted_item
+            window_number: Some(metadata.window_number),
+            first_window_id: Some(metadata.window_ids.first_window_id.to_string()),
+            previous_window_id: metadata
+                .window_ids
+                .previous_window_id
+                .map(|id| id.to_string()),
+            window_id: Some(metadata.window_ids.window_id.to_string()),
         };
         // Compaction starts a new history window, so its WorldState baseline must be full.
         let mut world_state_item = None;
@@ -3544,13 +3552,10 @@ impl Session {
             context_items,
             Some(turn_context_item),
             Some(world_state),
-            CompactedItem {
+            CompactedHistoryMetadata {
                 message: String::new(),
-                replacement_history: None,
-                window_number: Some(window_number),
-                first_window_id: Some(window_ids.first_window_id.to_string()),
-                previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
-                window_id: Some(window_ids.window_id.to_string()),
+                window_number,
+                window_ids,
             },
         )
         .await;
