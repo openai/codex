@@ -577,6 +577,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                 value: FileSystemSpecialPath::project_roots(Some("docs".into())),
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]),
         "trailing /** should compile as a subtree path instead of a glob pattern"
     );

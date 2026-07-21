@@ -743,11 +743,13 @@ mod tests {
     use codex_network_proxy::NetworkProxyConfig;
     use codex_network_proxy::RemoteNetworkProxyConfig;
     use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
+    use codex_protocol::models::ManagedFileSystemPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
@@ -871,7 +873,75 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_protocol_round_trips_permission_paths_as_uris() {
+    fn filesystem_protocol_round_trips_permission_entries() {
+        let native_cwd = std::env::current_dir().expect("current directory");
+        let cwd = PathUri::from_host_native_path(&native_cwd).expect("cwd URI");
+        let file_system = ManagedFileSystemPermissions::Restricted {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: native_cwd.clone().try_into().expect("absolute cwd"),
+                    },
+                    access: FileSystemAccessMode::Read,
+                    missing_path_behavior: None,
+                },
+                FileSystemSandboxEntry::skip_missing_path(
+                    FileSystemPath::Path {
+                        path: native_cwd.join(".git").try_into().expect("absolute path"),
+                    },
+                    FileSystemAccessMode::Read,
+                ),
+                FileSystemSandboxEntry::skip_missing_path(
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::ProjectRoots {
+                            subpath: Some(".codex".into()),
+                        },
+                    },
+                    FileSystemAccessMode::Read,
+                ),
+            ],
+            glob_scan_max_depth: Some(2.try_into().expect("non-zero depth")),
+        };
+        let permissions = PermissionProfile::Managed {
+            file_system,
+            network: NetworkSandboxPolicy::Restricted,
+        };
+        let sandbox =
+            FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone());
+
+        let serialized = serde_json::to_value(&sandbox).expect("serialize sandbox");
+
+        assert_eq!(
+            serialized["permissions"]["file_system"]["entries"][0]["path"]["path"],
+            serde_json::json!(cwd.to_string())
+        );
+        assert_eq!(
+            serialized["permissions"]["file_system"]["entries"][1]["path"]["type"],
+            serde_json::json!("path")
+        );
+        assert_eq!(
+            serialized["permissions"]["file_system"]["entries"][1]["missing_path_behavior"],
+            serde_json::json!("skip")
+        );
+        assert_eq!(
+            serialized["permissions"]["file_system"]["entries"][2]["path"]["type"],
+            serde_json::json!("special")
+        );
+        assert_eq!(
+            serialized["permissions"]["file_system"]["entries"][2]["missing_path_behavior"],
+            serde_json::json!("skip")
+        );
+        assert!(!serialized.to_string().contains("generated_default_path"));
+        assert!(!serialized.to_string().contains("generated_default_special"));
+        assert_eq!(
+            serde_json::from_value::<FileSystemSandboxContext>(serialized)
+                .expect("deserialize sandbox"),
+            sandbox
+        );
+    }
+
+    #[test]
+    fn filesystem_protocol_round_trips_legacy_policy_paths_as_uris() {
         let native_cwd = std::env::current_dir().expect("current directory");
         let cwd = PathUri::from_host_native_path(&native_cwd).expect("cwd URI");
         let mut file_system_policy =
@@ -880,6 +950,7 @@ mod tests {
                     path: native_cwd.try_into().expect("absolute cwd"),
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             }]);
         file_system_policy.glob_scan_max_depth = Some(2);
         let permissions = PermissionProfile::from_runtime_permissions(

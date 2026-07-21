@@ -151,6 +151,7 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
             pattern: "**/*.env".to_string(),
         },
         access: FileSystemAccessMode::Deny,
+        missing_path_behavior: None,
     }]);
 
     assert_eq!(

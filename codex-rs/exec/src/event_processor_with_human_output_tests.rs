@@ -143,12 +143,14 @@ fn summarizes_managed_workspace_write_permission_profile() {
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: cwd.clone() },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
                     path: cache_root.clone(),
                 },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
         ]),
         NetworkSandboxPolicy::Restricted,

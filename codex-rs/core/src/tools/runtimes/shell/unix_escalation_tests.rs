@@ -69,6 +69,7 @@ fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
             value: FileSystemSpecialPath::Root,
         },
         access: FileSystemAccessMode::Read,
+        missing_path_behavior: None,
     }])
 }
 
@@ -79,12 +80,14 @@ fn denied_read_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
                 value: FileSystemSpecialPath::Root,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         },
     ])
 }
@@ -299,12 +302,14 @@ fn shell_request_escalation_execution_is_explicit() {
                 path: AbsolutePathBuf::from_absolute_path("/tmp/original/output").unwrap(),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::from_absolute_path("/tmp/secret").unwrap(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         },
     ]);
     let network_sandbox_policy = NetworkSandboxPolicy::Restricted;

@@ -235,6 +235,7 @@ async fn remote_read_file_materializes_environment_workspace_roots() -> Result<(
             value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
         },
         access: FileSystemAccessMode::Read,
+        missing_path_behavior: None,
     }]);
     let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
@@ -276,6 +277,7 @@ async fn remote_read_file_preserves_empty_workspace_roots() -> Result<()> {
             value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
         },
         access: FileSystemAccessMode::Read,
+        missing_path_behavior: None,
     }]);
     let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),

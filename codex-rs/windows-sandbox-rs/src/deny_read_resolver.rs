@@ -44,6 +44,7 @@ pub fn resolve_windows_deny_read_paths(
                     pattern: pattern.clone(),
                 },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             })
             .collect(),
     );
@@ -206,6 +207,7 @@ mod tests {
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern { pattern },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         }
     }
 
@@ -215,6 +217,7 @@ mod tests {
                 path: AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         }
     }
 

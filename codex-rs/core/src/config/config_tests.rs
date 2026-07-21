@@ -2037,18 +2037,21 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                     value: FileSystemSpecialPath::Minimal,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
                     path: cwd_root.clone(),
                 },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
                     path: cwd_root.join("docs"),
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
         ]),
     );
@@ -2295,12 +2298,14 @@ async fn permission_profile_override_keeps_memories_root_out_of_legacy_projectio
                     value: FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
         ]),
         NetworkSandboxPolicy::Restricted,
@@ -2461,6 +2466,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                         pattern: expected_pattern,
                     },
                     access: FileSystemAccessMode::Deny,
+                    missing_path_behavior: None,
                 })
         );
     }
@@ -2800,6 +2806,7 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
                     value: FileSystemSpecialPath::SlashTmp,
                 },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             }
         )),
         "expected profile extending :workspace to keep inherited :slash_tmp writes, policy: {policy:?}"
@@ -2812,6 +2819,7 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
                     value: FileSystemSpecialPath::Tmpdir,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             }
         )),
         "expected child :tmpdir read entry to replace the inherited write entry, policy: {policy:?}"
@@ -2824,6 +2832,7 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
                     value: FileSystemSpecialPath::Tmpdir,
                 },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             }
         )),
         "expected inherited :tmpdir write entry to be removed, policy: {policy:?}"
@@ -3446,6 +3455,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
                 ),
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]),
     );
     assert_eq!(
@@ -3492,6 +3502,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
                 value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]),
     );
     assert!(
@@ -4247,6 +4258,7 @@ exclude_slash_tmp = true
                         .contains(&FileSystemSandboxEntry {
                             path: FileSystemPath::Path { path: cwd.abs() },
                             access: FileSystemAccessMode::Write,
+                            missing_path_behavior: None,
                         })
                 );
                 assert!(
@@ -4257,6 +4269,7 @@ exclude_slash_tmp = true
                                 path: extra_root.clone(),
                             },
                             access: FileSystemAccessMode::Write,
+                            missing_path_behavior: None,
                         })
                 );
                 for subpath in [".git", ".agents", ".codex"] {
@@ -4271,6 +4284,9 @@ exclude_slash_tmp = true
                                     ),
                                 },
                                 access: FileSystemAccessMode::Read,
+                                missing_path_behavior: Some(
+                                    codex_protocol::permissions::FileSystemSandboxEntryMissingPathBehavior::Skip,
+                                ),
                             }),
                         "case `{name}` should materialize `{subpath}` for the runtime workspace \
                          root"
@@ -9993,12 +10009,14 @@ async fn permission_profile_override_preserves_split_write_roots() -> std::io::R
                 value: FileSystemSpecialPath::Root,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: outside_root.clone(),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(

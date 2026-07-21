@@ -205,12 +205,14 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
                 value: FileSystemSpecialPath::Minimal,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
     ]);
     let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
@@ -272,12 +274,14 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
                 value: FileSystemSpecialPath::Minimal,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
     ]);
     let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
@@ -332,6 +336,7 @@ async fn remote_process_preserves_empty_workspace_roots() -> Result<()> {
             value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
         },
         access: FileSystemAccessMode::Read,
+        missing_path_behavior: None,
     }]);
     let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),

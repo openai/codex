@@ -455,6 +455,7 @@ fn build_preflight_bwrap_argv(
                 value: FileSystemSpecialPath::Minimal,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]);
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(

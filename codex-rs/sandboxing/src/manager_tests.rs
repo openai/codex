@@ -64,6 +64,7 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
                 value: FileSystemSpecialPath::Root,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]),
         NetworkSandboxPolicy::Enabled,
         SandboxablePreference::Auto,
@@ -194,12 +195,14 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 value: FileSystemSpecialPath::Root,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: denied_path.clone(),
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         },
     ]);
     let permissions = PermissionProfile::from_runtime_permissions(
@@ -243,14 +246,17 @@ fn transform_additional_permissions_preserves_denied_entries() {
                     value: FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: denied_path },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: allowed_path },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
         ])
     );
@@ -274,6 +280,7 @@ fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: cwd.clone() },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]),
         NetworkSandboxPolicy::Restricted,
     );
@@ -291,12 +298,14 @@ fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: cwd },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
                     path: managed_bundle_path,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
         ])
     );
@@ -342,6 +351,7 @@ fn wsl1_rejects_linux_bubblewrap_path() {
             value: FileSystemSpecialPath::Root,
         },
         access: FileSystemAccessMode::Read,
+        missing_path_behavior: None,
     }]);
 
     assert!(matches!(
@@ -391,6 +401,7 @@ fn wsl1_allows_non_bubblewrap_linux_paths() {
             value: FileSystemSpecialPath::Root,
         },
         access: FileSystemAccessMode::Read,
+        missing_path_behavior: None,
     }]);
     assert!(
         super::ensure_linux_bubblewrap_is_supported(
@@ -476,16 +487,19 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                     value: FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: blocked },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
         ]),
         NetworkSandboxPolicy::Restricted,

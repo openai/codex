@@ -396,6 +396,7 @@ fn read_only_sandbox(path: std::path::PathBuf) -> FileSystemSandboxContext {
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path { path },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]),
         NetworkSandboxPolicy::Restricted,
     ))
