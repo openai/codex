@@ -243,7 +243,6 @@ deny = [
         "codex-api",
         "codex-app-server",
         "codex-core",
-        "codex-core-plugins",
         "codex-exec-server",
         "codex-lmstudio",
         "codex-login",
