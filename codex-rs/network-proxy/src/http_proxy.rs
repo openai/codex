@@ -425,7 +425,7 @@ where
         }
     };
     let proxy = if allow_upstream_proxy {
-        proxy_for_connect()
+        proxy_for_connect(&authority)
     } else {
         None
     };

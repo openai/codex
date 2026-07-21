@@ -572,10 +572,14 @@ fn apply_proxy_env_overrides(
     // HTTP(S)_PROXY. Keep them aligned with the managed HTTP proxy endpoint.
     set_env_keys(env, WEBSOCKET_PROXY_ENV_KEYS, &http_proxy_url);
 
-    // Keep loopback and IP-literal private targets direct so local IPC/LAN access avoids the proxy.
-    // Do not include hostname suffixes here: those can force clients to resolve internal names
-    // locally instead of letting the proxy resolve them.
-    set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
+    // Keep local targets direct only when local binding is enabled. Otherwise route them through
+    // the proxy so explicit literal allowlists and local-network restrictions can be enforced.
+    let no_proxy = if allow_local_binding {
+        DEFAULT_NO_PROXY_VALUE
+    } else {
+        ""
+    };
+    set_env_keys(env, NO_PROXY_ENV_KEYS, no_proxy);
 
     env.insert(
         ELECTRON_GET_USE_PROXY_ENV_KEY.to_string(),
@@ -1413,15 +1417,7 @@ mod tests {
             env.get("FTP_PROXY"),
             Some(&"socks5h://127.0.0.1:8081".to_string())
         );
-        assert_eq!(
-            env.get("NO_PROXY"),
-            Some(&DEFAULT_NO_PROXY_VALUE.to_string())
-        );
-        let no_proxy = env.get("NO_PROXY").expect("NO_PROXY should be set");
-        assert!(no_proxy.contains("10.0.0.0/8"));
-        assert!(no_proxy.contains("172.16.0.0/12"));
-        assert!(no_proxy.contains("192.168.0.0/16"));
-        assert!(!no_proxy.contains("169.254.0.0/16"));
+        assert_eq!(env.get("NO_PROXY"), Some(&String::new()));
         assert_eq!(env.get(PROXY_ACTIVE_ENV_KEY), Some(&"1".to_string()));
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
         assert_eq!(
@@ -1439,6 +1435,24 @@ mod tests {
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(env.get(GIT_SSH_COMMAND_ENV_KEY), None);
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_keeps_local_targets_direct_when_local_binding_enabled() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ true,
+            /*mitm_ca_trust_bundle*/ None,
+        );
+
+        assert_eq!(
+            env.get("NO_PROXY"),
+            Some(&DEFAULT_NO_PROXY_VALUE.to_string())
+        );
     }
 
     #[test]

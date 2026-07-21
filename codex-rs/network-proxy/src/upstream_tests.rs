@@ -1,6 +1,11 @@
 use super::*;
+use crate::config::NetworkProxyConfig;
+use crate::state::network_proxy_state_for_policy;
 use pretty_assertions::assert_eq;
 use rama_http::StatusCode;
+use rama_http::Version;
+use rama_net::address::Host;
+use rama_net::address::HostWithPort;
 use rama_tls_rustls::dep::pki_types::CertificateDer;
 use rama_tls_rustls::dep::pki_types::PrivateKeyDer;
 use rama_tls_rustls::dep::pki_types::pem::PemObject;
@@ -94,11 +99,14 @@ async fn mitm_upstream_client_trusts_startup_custom_ca() {
             .unwrap();
     });
 
-    let client =
-        UpstreamClient::direct_with_allow_local_binding(/*allow_local_binding*/ true, roots);
+    let mut config = NetworkProxyConfig::default();
+    config.set_allowed_domains(vec!["localhost".to_string()]);
+    let state = Arc::new(network_proxy_state_for_policy(config));
+    let client = UpstreamClient::direct_with_tls_root_store(state, roots);
     let response = client
         .serve(
             Request::builder()
+                .version(Version::HTTP_2)
                 .uri(format!("https://localhost:{}/", address.port()))
                 .body(Body::empty())
                 .unwrap(),
@@ -108,4 +116,30 @@ async fn mitm_upstream_client_trusts_startup_custom_ca() {
 
     assert_eq!(response.status(), StatusCode::OK);
     server.await.unwrap();
+}
+
+#[test]
+fn inherited_upstream_proxy_is_bypassed_for_non_public_targets() {
+    let proxy = ProxyAddress::try_from("http://127.0.0.1:43128").unwrap();
+    let config = ProxyConfig {
+        http: Some(proxy.clone()),
+        https: Some(proxy),
+        all: None,
+    };
+
+    for target in [
+        HostWithPort::new(Host::LOCALHOST_NAME, 8080),
+        HostWithPort::new(Host::LOCALHOST_IPV4, 8080),
+        HostWithPort::new(Host::Address("10.0.0.1".parse().unwrap()), 8080),
+    ] {
+        assert_eq!(config.proxy_for_target(&target, /*is_secure*/ false), None);
+        assert_eq!(config.proxy_for_target(&target, /*is_secure*/ true), None);
+    }
+
+    let public = HostWithPort::new(Host::EXAMPLE_NAME, 443);
+    assert!(
+        config
+            .proxy_for_target(&public, /*is_secure*/ true)
+            .is_some()
+    );
 }

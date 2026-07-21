@@ -1,4 +1,5 @@
 use crate::connect_policy::TargetCheckedTcpConnector;
+use crate::connect_policy::is_non_public_target;
 use crate::state::NetworkProxyState;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
@@ -16,6 +17,7 @@ use rama_http::layer::version_adapter::RequestVersionAdapter;
 use rama_http_backend::client::HttpClientService;
 use rama_http_backend::client::HttpConnector;
 use rama_http_backend::client::proxy::layer::HttpProxyConnectorLayer;
+use rama_net::address::HostWithPort;
 use rama_net::address::ProxyAddress;
 use rama_net::client::EstablishedClientConnection;
 use rama_net::http::RequestContext;
@@ -56,6 +58,13 @@ impl ProxyConfig {
             self.http.clone().or_else(|| self.all.clone())
         }
     }
+
+    fn proxy_for_target(&self, target: &HostWithPort, is_secure: bool) -> Option<ProxyAddress> {
+        if is_non_public_target(&target.host) {
+            return None;
+        }
+        self.proxy_for_protocol(is_secure)
+    }
 }
 
 fn read_proxy_env(keys: &[&str]) -> Option<ProxyAddress> {
@@ -87,8 +96,8 @@ fn read_proxy_env(keys: &[&str]) -> Option<ProxyAddress> {
     None
 }
 
-pub(crate) fn proxy_for_connect() -> Option<ProxyAddress> {
-    ProxyConfig::from_env().proxy_for_protocol(/*is_secure*/ true)
+pub(crate) fn proxy_for_connect(target: &HostWithPort) -> Option<ProxyAddress> {
+    ProxyConfig::from_env().proxy_for_target(target, /*is_secure*/ true)
 }
 
 #[derive(Clone)]
@@ -118,24 +127,24 @@ impl UpstreamClient {
         )
     }
 
-    pub(crate) fn direct_with_allow_local_binding(
-        allow_local_binding: bool,
+    pub(crate) fn direct_with_tls_root_store(
+        state: Arc<NetworkProxyState>,
         tls_root_store: Arc<rustls::RootCertStore>,
     ) -> Self {
         Self::new(
             ProxyConfig::default(),
-            TargetCheckedTcpConnector::from_allow_local_binding(allow_local_binding),
+            TargetCheckedTcpConnector::new(state),
             tls_root_store,
         )
     }
 
-    pub(crate) fn from_env_proxy_with_allow_local_binding(
-        allow_local_binding: bool,
+    pub(crate) fn from_env_proxy_with_tls_root_store(
+        state: Arc<NetworkProxyState>,
         tls_root_store: Arc<rustls::RootCertStore>,
     ) -> Self {
         Self::new(
             ProxyConfig::from_env(),
-            TargetCheckedTcpConnector::from_allow_local_binding(allow_local_binding),
+            TargetCheckedTcpConnector::new(state),
             tls_root_store,
         )
     }
@@ -172,11 +181,12 @@ impl Service<Request<Body>> for UpstreamClient {
             .as_ref()
             .map(|ctx| ctx.host_with_port().to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let proxy = self.proxy_config.proxy_for_protocol(
-            request_context
-                .as_ref()
-                .map(|ctx| ctx.protocol.is_secure())
-                .unwrap_or(false),
+        let proxy = request_context.as_ref().map_or_else(
+            || self.proxy_config.proxy_for_protocol(/*is_secure*/ false),
+            |ctx| {
+                self.proxy_config
+                    .proxy_for_target(&ctx.host_with_port(), ctx.protocol.is_secure())
+            },
         );
         match proxy.as_ref() {
             Some(proxy) => info!(
