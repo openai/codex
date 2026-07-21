@@ -14,6 +14,31 @@ const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkillCatalogRenderPolicy {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "used by the host renderer compatibility path in a follow-up"
+        )
+    )]
+    CoreCompatible,
+    ExtensionCompatible,
+}
+
+impl SkillCatalogRenderPolicy {
+    fn description(self, entry: &SkillCatalogEntry) -> &str {
+        match self {
+            Self::CoreCompatible => entry.description.as_str(),
+            Self::ExtensionCompatible => entry
+                .short_description
+                .as_deref()
+                .unwrap_or(entry.description.as_str()),
+        }
+    }
+}
+
 #[tracing::instrument(
     level = "trace",
     skip_all,
@@ -22,6 +47,7 @@ pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 pub(crate) fn available_skills_fragment(
     catalog: &SkillCatalog,
     include_skills_usage_instructions: bool,
+    policy: SkillCatalogRenderPolicy,
 ) -> Option<AvailableSkillsInstructions> {
     let mut total_bytes = 0usize;
     let mut omitted = 0usize;
@@ -32,10 +58,7 @@ pub(crate) fn available_skills_fragment(
         .iter()
         .filter(|entry| entry.enabled && entry.prompt_visible)
     {
-        let description = entry
-            .short_description
-            .as_deref()
-            .unwrap_or(entry.description.as_str());
+        let description = policy.description(entry);
         let description = truncate_catalog_skill_description(description);
         let line = render_skill_line(entry, description.as_ref());
         let next_bytes = total_bytes.saturating_add(line.len());
@@ -107,3 +130,7 @@ pub(crate) fn truncate_utf8_to_bytes(contents: &str, max_bytes: usize) -> (Strin
     let truncated = take_bytes_at_char_boundary(contents, max_bytes);
     (truncated.to_string(), truncated.len() < contents.len())
 }
+
+#[cfg(test)]
+#[path = "render_tests.rs"]
+mod tests;

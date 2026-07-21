@@ -12,6 +12,7 @@ use serde_json::json;
 
 use crate::catalog::SkillCatalog;
 use crate::fragments::AvailableSkillsInstructions;
+use crate::render::SkillCatalogRenderPolicy;
 use crate::render::available_skills_fragment;
 
 pub(crate) const SKILLS_WORLD_STATE_ID: &str = "skills";
@@ -31,8 +32,12 @@ pub(crate) fn executor_skills_world_state_section(
     include_skills_usage_instructions: bool,
 ) -> WorldStateSectionContribution {
     let body = if include_instructions {
-        available_skills_fragment(catalog, include_skills_usage_instructions)
-            .map(|fragment| fragment.body())
+        available_skills_fragment(
+            catalog,
+            include_skills_usage_instructions,
+            SkillCatalogRenderPolicy::ExtensionCompatible,
+        )
+        .map(|fragment| fragment.body())
     } else {
         None
     };
