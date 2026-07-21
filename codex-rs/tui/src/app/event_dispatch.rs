@@ -22,10 +22,10 @@ impl App {
         event: AppEvent,
     ) -> Result<AppRunControl> {
         match event {
-            AppEvent::NewSession => {
+            AppEvent::NewSession { name } => {
                 self.start_fresh_session_with_summary_hint(
                     tui, app_server, /*session_start_source*/ None,
-                    /*initial_user_message*/ None,
+                    /*initial_user_message*/ None, name,
                 )
                 .await;
             }
@@ -33,7 +33,7 @@ impl App {
                 self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
-            AppEvent::ClearUi => {
+            AppEvent::ClearUi { name } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
@@ -42,6 +42,7 @@ impl App {
                     app_server,
                     Some(ThreadStartSource::Clear),
                     /*initial_user_message*/ None,
+                    name,
                 )
                 .await;
             }
@@ -61,6 +62,7 @@ impl App {
                         Vec::new(),
                         Vec::new(),
                     ),
+                    /*new_thread_name*/ None,
                 )
                 .await;
             }
