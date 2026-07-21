@@ -260,17 +260,12 @@ async fn run_remote_compact_task_inner_impl(
         trace_input_history,
     } = attempt;
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
-    let (new_history, world_state_baseline) = process_compacted_history(
-        sess.as_ref(),
-        compaction_turn_context.as_ref(),
-        new_history,
-        &initial_context_injection,
-    )
-    .await;
+    let (new_history, world_state_baseline) =
+        process_compacted_history(sess.as_ref(), new_history, &initial_context_injection).await;
 
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage(_) => {
+        InitialContextInjection::BeforeLastUserMessage { .. } => {
             Some(compaction_turn_context.to_turn_context_item())
         }
     };
@@ -308,7 +303,6 @@ async fn run_remote_compact_task_inner_impl(
 
 pub(crate) async fn process_compacted_history(
     sess: &Session,
-    turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: &InitialContextInjection,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
@@ -316,7 +310,7 @@ pub(crate) async fn process_compacted_history(
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
     let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess, turn_context, initial_context_injection).await;
+        build_compaction_initial_context(sess, initial_context_injection).await;
 
     compacted_history.retain(should_keep_compacted_history_item);
     (

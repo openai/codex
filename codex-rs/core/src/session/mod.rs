@@ -3152,8 +3152,9 @@ impl Session {
 
     async fn build_turn_context_contribution_items(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
     ) -> Vec<ResponseItem> {
+        let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::new();
         let mut contextual_user_sections = Vec::new();
         let mut separate_developer_sections = Vec::new();
@@ -3167,6 +3168,7 @@ impl Session {
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
+                    step_store: &step_context.extension_data,
                     model_context_window: turn_context.model_context_window(),
                 })
                 .await
@@ -3201,21 +3203,29 @@ impl Session {
         items
     }
 
+    #[cfg(test)]
     pub(crate) async fn build_initial_context_with_world_state(
         &self,
         turn_context: &TurnContext,
         world_state: &WorldState,
     ) -> Vec<ResponseItem> {
         let mcp = self.services.latest_mcp_runtime();
-        self.build_initial_context_with_world_state_and_mcp(turn_context, world_state, &mcp)
-            .await
+        let step_store = codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
+        self.build_initial_context_with_world_state_and_mcp(
+            turn_context,
+            world_state,
+            &mcp,
+            &step_store,
+        )
+        .await
     }
 
-    async fn build_initial_context_with_world_state_and_mcp(
+    pub(crate) async fn build_initial_context_with_world_state_and_mcp(
         &self,
         turn_context: &TurnContext,
         world_state: &WorldState,
         mcp: &McpRuntimeSnapshot,
+        step_store: &codex_extension_api::ExtensionData,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
@@ -3330,6 +3340,7 @@ impl Session {
                 .contribute_thread_context(
                     &self.services.session_extension_data,
                     &self.services.thread_extension_data,
+                    step_store,
                 )
                 .await
             {
@@ -3349,6 +3360,7 @@ impl Session {
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),
+                    step_store,
                     model_context_window: turn_context.model_context_window(),
                 })
                 .await
@@ -3509,16 +3521,22 @@ impl Session {
 
     pub(crate) async fn start_new_context_window(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         world_state: Arc<WorldState>,
     ) -> u64 {
+        let turn_context = step_context.turn.as_ref();
         let window = {
             let mut state = self.state.lock().await;
             state.start_new_context_window()
         };
         let (window_number, window_ids) = window;
         let context_items = self
-            .build_initial_context_with_world_state(turn_context, world_state.as_ref())
+            .build_initial_context_with_world_state_and_mcp(
+                turn_context,
+                world_state.as_ref(),
+                step_context.mcp.as_ref(),
+                &step_context.extension_data,
+            )
             .await;
         let turn_context_item = turn_context.to_turn_context_item();
         self.replace_compacted_history(
@@ -3579,6 +3597,7 @@ impl Session {
                     turn_context,
                     world_state.as_ref(),
                     step_context.mcp.as_ref(),
+                    &step_context.extension_data,
                 )
                 .await;
             let snapshot = world_state.snapshot();
@@ -3611,7 +3630,7 @@ impl Session {
         };
         if !should_inject_full_context && turn_context_changed {
             context_items.extend(
-                self.build_turn_context_contribution_items(turn_context)
+                self.build_turn_context_contribution_items(step_context)
                     .await,
             );
         }

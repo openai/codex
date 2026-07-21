@@ -120,6 +120,7 @@ impl ToolContributor for WebSearchExtension {
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
+        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
         let Some(config) = thread_store.get::<WebSearchExtensionConfig>() else {
             return Vec::new();
@@ -207,7 +208,9 @@ mod tests {
         let tool_names = registry
             .tool_contributors()
             .iter()
-            .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
+            .flat_map(|contributor| {
+                contributor.tools(&session_store, &thread_store, &ExtensionData::new("step"))
+            })
             .map(|tool| (tool.tool_name(), tool.supports_parallel_tool_calls()))
             .collect::<Vec<_>>();
 

@@ -20,6 +20,8 @@ pub struct WorldStateContributionInput<'a> {
     pub session_store: &'a ExtensionData,
     pub thread_store: &'a ExtensionData,
     pub turn_store: &'a ExtensionData,
+    /// Host capabilities bound to this exact sampling step.
+    pub step_store: &'a ExtensionData,
 }
 
 /// What the harness knows about the previous value of one extension-owned section.

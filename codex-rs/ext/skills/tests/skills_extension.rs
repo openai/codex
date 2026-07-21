@@ -121,6 +121,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
             &session_store,
             &thread_store,
             &turn_store,
+            &ExtensionData::new("step"),
         )
         .await;
 
@@ -192,7 +193,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .await;
 
     let prompt_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
         .await;
     assert!(prompt_fragments.is_empty());
 
@@ -212,6 +213,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     assert_eq!(1, available_sections.len());
@@ -239,6 +241,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             &session_store,
             &thread_store,
             &turn_store,
+            &ExtensionData::new("step"),
         )
         .await;
 
@@ -265,6 +268,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &unavailable_turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let unavailable_snapshot = unavailable_sections[0].snapshot().clone();
@@ -288,6 +292,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &restored_turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let restored_snapshot = restored_sections[0].snapshot().clone();
@@ -316,6 +321,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &listing_disabled_turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let listing_disabled_fragment = listing_disabled_sections[0]
@@ -380,7 +386,7 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
         .await;
 
     let fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
         .await;
     assert_eq!(1, fragments.len());
     let rendered = fragments[0].text();
@@ -429,7 +435,11 @@ async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResu
         })
         .await;
 
-    let tools = registry.tool_contributors()[0].tools(&session_store, &thread_store);
+    let tools = registry.tool_contributors()[0].tools(
+        &session_store,
+        &thread_store,
+        &ExtensionData::new("step"),
+    );
     let list_tool = tools
         .iter()
         .find(|tool| tool.tool_name().name == "list")
@@ -503,7 +513,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .await;
 
     let initial_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
         .await;
     assert!(initial_fragments.is_empty());
     let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
@@ -528,6 +538,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
                 &session_store,
                 &thread_store,
                 &ExtensionData::new(turn_id),
+                &ExtensionData::new("step"),
             )
             .await;
         assert!(fragments.is_empty());
@@ -607,6 +618,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let fragments = registry.turn_input_contributors()[0]
@@ -622,6 +634,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             &session_store,
             &thread_store,
             &turn_store,
+            &ExtensionData::new("step"),
         )
         .await;
 
@@ -697,6 +710,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
             &session_store,
             &thread_store,
             &ExtensionData::new("turn-1"),
+            &ExtensionData::new("step"),
         )
         .await;
 

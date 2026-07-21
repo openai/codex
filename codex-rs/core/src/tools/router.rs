@@ -246,6 +246,7 @@ impl ToolRouter {
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn extension_tool_executors(
     session: &Session,
+    step_context: &StepContext,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
@@ -256,6 +257,7 @@ pub(crate) fn extension_tool_executors(
             contributor.tools(
                 &session.services.session_extension_data,
                 &session.services.thread_extension_data,
+                &step_context.extension_data,
             )
         })
         .collect()
