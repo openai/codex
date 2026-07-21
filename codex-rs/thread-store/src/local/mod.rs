@@ -34,6 +34,7 @@ use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
+use crate::DeleteThreadsParams;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListThreadsParams;
@@ -400,6 +401,10 @@ impl ThreadStore for LocalThreadStore {
 
     fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { delete_thread::delete_thread(self, params).await })
+    }
+
+    fn delete_threads(&self, params: DeleteThreadsParams) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move { delete_thread::delete_threads(self, params).await })
     }
 }
 

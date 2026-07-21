@@ -8,6 +8,7 @@ use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
+use crate::DeleteThreadsParams;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListThreadsParams;
@@ -171,4 +172,20 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Deletes a thread's persisted rollout data and associated metadata.
     fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreFuture<'_, ()>;
+
+    /// Deletes threads in order, treating already-missing members as deleted.
+    ///
+    /// Stores with request-scoped delete preflight should override this instead of repeating
+    /// that work through [`ThreadStore::delete_thread`].
+    fn delete_threads(&self, params: DeleteThreadsParams) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            for thread_id in params.thread_ids {
+                match self.delete_thread(DeleteThreadParams { thread_id }).await {
+                    Ok(()) | Err(ThreadStoreError::ThreadNotFound { .. }) => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(())
+        })
+    }
 }
