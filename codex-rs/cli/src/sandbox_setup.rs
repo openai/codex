@@ -1,10 +1,14 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::ArgAction;
 use clap::ArgGroup;
 use clap::Parser;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_utils_cli::ProfileV2Name;
+use toml::Value as TomlValue;
 
 #[derive(Debug, Parser)]
 #[command(group(
@@ -54,9 +58,13 @@ impl SandboxSetupCommand {
     }
 }
 
-pub(crate) async fn run(cmd: SandboxSetupCommand) -> anyhow::Result<()> {
+pub(crate) async fn run(
+    cmd: SandboxSetupCommand,
+    config_profile: Option<ProfileV2Name>,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> anyhow::Result<()> {
     match cmd.setup_level()? {
-        SandboxSetupLevel::Elevated => run_elevated(cmd).await,
+        SandboxSetupLevel::Elevated => run_elevated(cmd, config_profile, cli_overrides).await,
     }
 }
 
@@ -75,12 +83,28 @@ pub(crate) fn parse_setup_command(
         .map_err(anyhow::Error::from)
 }
 
-async fn run_elevated(cmd: SandboxSetupCommand) -> anyhow::Result<()> {
+async fn run_elevated(
+    cmd: SandboxSetupCommand,
+    config_profile: Option<ProfileV2Name>,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> anyhow::Result<()> {
     let identity = resolve_sandbox_setup_identity(&cmd)?;
+    let config = ConfigBuilder::default()
+        .codex_home(identity.codex_home.clone())
+        .fallback_cwd(Some(identity.codex_home.clone()))
+        .loader_overrides(super::loader_overrides_for_profile_at_codex_home(
+            config_profile.as_ref(),
+            &identity.codex_home,
+        ))
+        .cli_overrides(cli_overrides)
+        .build()
+        .await
+        .context("failed to load target user's Codex config for sandbox provisioning")?;
 
     codex_core::windows_sandbox::run_elevated_provisioning_setup(
         identity.codex_home.as_path(),
         identity.real_user.as_str(),
+        config.permissions.network.as_ref(),
     )?;
     ConfigEditsBuilder::new(identity.codex_home.as_path())
         .set_windows_sandbox_mode("elevated")

@@ -14,6 +14,7 @@ use super::COMMAND_CWD_FLAG;
 use super::DENY_READ_PATHS_JSON_FLAG;
 use super::DENY_WRITE_PATHS_JSON_FLAG;
 use super::ENV_JSON_FLAG;
+use super::NETWORK_PROXY_RESTRICTING_SID_FLAG;
 use super::PERMISSION_PROFILE_FLAG;
 use super::PRESERVE_PROXY_SETTINGS_FLAG;
 use super::PRIVATE_DESKTOP_FLAG;
@@ -62,6 +63,7 @@ fn windows_wrapper_args_round_trip() {
         WindowsSandboxLevel::Elevated,
         /*windows_sandbox_private_desktop*/ true,
         /*proxy_enforced*/ true,
+        /*network_proxy_restricting_sid*/ Some("S-1-5-21-100-200-300-400"),
         crate::WindowsSandboxProxySettingsMode::Preserve,
         Some(read_roots_override.as_slice()),
         /*read_roots_include_platform_defaults*/ true,
@@ -80,6 +82,7 @@ fn windows_wrapper_args_round_trip() {
     assert!(args.contains(&SANDBOX_LEVEL_FLAG.to_string()));
     assert!(args.contains(&PRIVATE_DESKTOP_FLAG.to_string()));
     assert!(args.contains(&PROXY_ENFORCED_FLAG.to_string()));
+    assert!(args.contains(&NETWORK_PROXY_RESTRICTING_SID_FLAG.to_string()));
     assert!(args.contains(&PRESERVE_PROXY_SETTINGS_FLAG.to_string()));
     assert!(args.contains(&READ_ROOTS_JSON_FLAG.to_string()));
     assert!(args.contains(&READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG.to_string()));
@@ -101,6 +104,10 @@ fn windows_wrapper_args_round_trip() {
     assert_eq!(parsed.windows_sandbox_level, WindowsSandboxLevel::Elevated);
     assert_eq!(parsed.windows_sandbox_private_desktop, true);
     assert_eq!(parsed.proxy_enforced, true);
+    assert_eq!(
+        parsed.network_proxy_restricting_sid.as_deref(),
+        Some("S-1-5-21-100-200-300-400")
+    );
     assert_eq!(
         parsed.proxy_settings_mode,
         crate::WindowsSandboxProxySettingsMode::Preserve

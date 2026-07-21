@@ -10,6 +10,7 @@
 mod backends;
 
 use anyhow::Result;
+use anyhow::bail;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -31,6 +32,7 @@ pub struct WindowsSandboxSessionRequest<'a> {
     pub env_map: HashMap<String, String>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub proxy_enforced: bool,
+    pub network_proxy_restricting_sid: Option<String>,
     pub proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
     pub timeout_ms: Option<u64>,
     pub read_roots_override: Option<&'a [PathBuf]>,
@@ -57,6 +59,7 @@ pub async fn spawn_windows_sandbox_session_for_level(
             request.cwd,
             request.env_map,
             request.proxy_enforced,
+            request.network_proxy_restricting_sid,
             request.proxy_settings_mode,
             request.timeout_ms,
             request.read_roots_override,
@@ -70,6 +73,9 @@ pub async fn spawn_windows_sandbox_session_for_level(
         )
         .await
     } else {
+        if request.network_proxy_restricting_sid.is_some() {
+            bail!("network proxy restricting SID requires the elevated Windows sandbox backend");
+        }
         spawn_windows_sandbox_session_legacy(
             request.permission_profile,
             request.workspace_roots,
@@ -129,6 +135,7 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
     cwd: &Path,
     env_map: HashMap<String, String>,
     proxy_enforced: bool,
+    network_proxy_restricting_sid: Option<String>,
     timeout_ms: Option<u64>,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
@@ -147,6 +154,7 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
         cwd,
         env_map,
         proxy_enforced,
+        network_proxy_restricting_sid,
         crate::WindowsSandboxProxySettingsMode::Reconcile,
         timeout_ms,
         read_roots_override,

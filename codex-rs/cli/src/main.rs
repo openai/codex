@@ -1445,6 +1445,14 @@ async fn cli_main(
                 .await?;
         }
         Some(Subcommand::Sandbox(mut sandbox_cli)) => {
+            let config_profile = sandbox_cli
+                .config_profile
+                .as_ref()
+                .or(interactive.config_profile_v2.as_ref());
+            prepend_config_flags(
+                &mut sandbox_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
             #[cfg(target_os = "windows")]
             if let Some(setup_cli) = sandbox_setup::parse_setup_command(&sandbox_cli.command)? {
                 reject_remote_mode_for_subcommand(
@@ -1452,7 +1460,11 @@ async fn cli_main(
                     root_remote_auth_token_env.as_deref(),
                     "sandbox setup",
                 )?;
-                sandbox_setup::run(setup_cli).await?;
+                let cli_overrides = sandbox_cli
+                    .config_overrides
+                    .parse_overrides()
+                    .map_err(anyhow::Error::msg)?;
+                sandbox_setup::run(setup_cli, config_profile.cloned(), cli_overrides).await?;
                 return Ok(());
             }
             reject_remote_mode_for_subcommand(
@@ -1460,15 +1472,7 @@ async fn cli_main(
                 root_remote_auth_token_env.as_deref(),
                 "sandbox",
             )?;
-            let config_profile = sandbox_cli
-                .config_profile
-                .as_ref()
-                .or(interactive.config_profile_v2.as_ref());
             let loader_overrides = loader_overrides_for_profile(config_profile)?;
-            prepend_config_flags(
-                &mut sandbox_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
             #[cfg(target_os = "macos")]
             codex_cli::run_command_under_seatbelt(
                 sandbox_cli,
@@ -1879,13 +1883,26 @@ fn loader_overrides_for_profile(
     match profile_v2 {
         Some(profile_v2) => {
             let codex_home = find_codex_home()?;
-            Ok(LoaderOverrides {
-                user_config_path: Some(resolve_profile_v2_config_path(&codex_home, profile_v2)),
-                user_config_profile: Some(profile_v2.clone()),
-                ..Default::default()
-            })
+            Ok(loader_overrides_for_profile_at_codex_home(
+                Some(profile_v2),
+                &codex_home,
+            ))
         }
         None => Ok(LoaderOverrides::default()),
+    }
+}
+
+fn loader_overrides_for_profile_at_codex_home(
+    profile_v2: Option<&ProfileV2Name>,
+    codex_home: &std::path::Path,
+) -> LoaderOverrides {
+    match profile_v2 {
+        Some(profile_v2) => LoaderOverrides {
+            user_config_path: Some(resolve_profile_v2_config_path(codex_home, profile_v2)),
+            user_config_profile: Some(profile_v2.clone()),
+            ..Default::default()
+        },
+        None => LoaderOverrides::default(),
     }
 }
 
@@ -2704,6 +2721,22 @@ mod tests {
                 .map(std::string::ToString::to_string));
         };
         Ok(profile_v2_for_subcommand(&cli.interactive, subcommand)?.map(ToString::to_string))
+    }
+
+    #[test]
+    fn profile_loader_overrides_use_explicit_codex_home() -> anyhow::Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let profile: ProfileV2Name = "work".parse()?;
+
+        let overrides =
+            loader_overrides_for_profile_at_codex_home(Some(&profile), codex_home.path());
+
+        assert_eq!(
+            overrides.user_config_path,
+            Some(resolve_profile_v2_config_path(codex_home.path(), &profile))
+        );
+        assert_eq!(overrides.user_config_profile, Some(profile));
+        Ok(())
     }
 
     #[test]

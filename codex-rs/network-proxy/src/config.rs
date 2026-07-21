@@ -430,6 +430,26 @@ pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
     })
 }
 
+/// Returns the sorted loopback ports used by the configured managed proxy listeners.
+pub fn managed_proxy_ports(cfg: &NetworkProxyConfig) -> Result<Vec<u16>> {
+    let runtime = resolve_runtime(cfg)?;
+    if runtime.http_addr.port() == 0 {
+        bail!("network.proxy_url must use a fixed non-zero port for managed proxy provisioning");
+    }
+    let mut ports = vec![runtime.http_addr.port()];
+    if cfg.enable_socks5 {
+        if runtime.socks_addr.port() == 0 {
+            bail!(
+                "network.socks_url must use a fixed non-zero port for managed proxy provisioning"
+            );
+        }
+        ports.push(runtime.socks_addr.port());
+    }
+    ports.sort_unstable();
+    ports.dedup();
+    Ok(ports)
+}
+
 fn resolve_addr(url: &str, default_port: u16) -> Result<SocketAddr> {
     let addr_parts = parse_host_port(url, default_port)?;
     let host = if addr_parts.host.eq_ignore_ascii_case("localhost") {
@@ -603,6 +623,32 @@ mod tests {
                 mitm_hooks: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn managed_proxy_ports_reject_ephemeral_ports() {
+        let mut config = NetworkProxyConfig {
+            proxy_url: "http://127.0.0.1:0".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            managed_proxy_ports(&config).unwrap_err().to_string(),
+            "network.proxy_url must use a fixed non-zero port for managed proxy provisioning"
+        );
+
+        config.proxy_url = "http://127.0.0.1:3128".to_string();
+        config.socks_url = "socks5h://127.0.0.1:48081".to_string();
+        assert_eq!(managed_proxy_ports(&config).unwrap(), vec![3128, 48081]);
+
+        config.socks_url = "socks5h://127.0.0.1:0".to_string();
+        assert_eq!(
+            managed_proxy_ports(&config).unwrap_err().to_string(),
+            "network.socks_url must use a fixed non-zero port for managed proxy provisioning"
+        );
+
+        config.enable_socks5 = false;
+        assert_eq!(managed_proxy_ports(&config).unwrap(), vec![3128]);
     }
 
     #[test]

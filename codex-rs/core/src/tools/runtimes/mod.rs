@@ -19,7 +19,8 @@ use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
-use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
+pub(crate) use codex_network_proxy::is_managed_proxy_env_var;
+pub(crate) use codex_network_proxy::strip_managed_proxy_env;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -67,28 +68,6 @@ pub(crate) fn exec_env_for_sandbox_permissions(
         strip_managed_proxy_env(&mut env);
     }
     env
-}
-
-pub(crate) fn is_managed_proxy_env_var(key: &str, value: &str) -> bool {
-    if PROXY_ENV_KEYS.contains(&key) {
-        return true;
-    }
-    if CUSTOM_CA_ENV_KEYS.contains(&key) {
-        return is_managed_mitm_ca_trust_bundle_path(value);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        key == PROXY_GIT_SSH_COMMAND_ENV_KEY
-            && value.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
-}
-
-pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
-    env.retain(|key, value| !is_managed_proxy_env_var(key, value));
 }
 
 /// Prepends `path_entry` to `PATH`, removing duplicate and empty existing

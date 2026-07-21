@@ -9,6 +9,8 @@ use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
+#[cfg(target_os = "windows")]
+use codex_network_proxy::strip_managed_proxy_env;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
@@ -48,6 +50,7 @@ struct PreparedWindowsSandboxRequest {
     workspace_roots: Vec<AbsolutePathBuf>,
     windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     proxy_enforced: bool,
+    network_proxy_restricting_sid: Option<String>,
     filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     use_private_desktop: bool,
 }
@@ -61,6 +64,7 @@ impl PreparedExecRequest {
                 workspace_roots: &request.workspace_roots,
                 windows_sandbox_level: request.windows_sandbox_level,
                 proxy_enforced: request.proxy_enforced,
+                network_proxy_restricting_sid: request.network_proxy_restricting_sid.as_deref(),
                 proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
                 filesystem_overrides: request.filesystem_overrides.as_ref(),
                 use_private_desktop: request.use_private_desktop,
@@ -73,12 +77,24 @@ pub(crate) async fn prepare_exec_request(
     env: HashMap<String, String>,
     runtime_paths: Option<&ExecServerRuntimePaths>,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
-    let (env, managed_network, network_proxy_handle) = prepare_managed_network(
-        params.managed_network.as_ref(),
-        params.network_proxy.as_ref(),
-        env,
-    )
-    .await?;
+    #[cfg(target_os = "windows")]
+    let mut env = env;
+    #[cfg(target_os = "windows")]
+    let network_proxy = if params.sandbox.is_none() {
+        // Shared Windows ingress selects a route from the sandbox token's SID. Native launches
+        // have no route SID, so leave them direct.
+        if params.network_proxy.is_some() {
+            strip_managed_proxy_env(&mut env);
+        }
+        None
+    } else {
+        params.network_proxy.as_ref()
+    };
+    #[cfg(not(target_os = "windows"))]
+    let network_proxy = params.network_proxy.as_ref();
+
+    let (env, managed_network, network_proxy_handle, network_proxy_restricting_sid) =
+        prepare_managed_network(params.managed_network.as_ref(), network_proxy, env).await?;
     let Some(sandbox_context) = params.sandbox.as_ref() else {
         return Ok(PreparedExecRequest {
             command: params.argv.clone(),
@@ -246,6 +262,7 @@ pub(crate) async fn prepare_exec_request(
             workspace_roots: native_workspace_roots,
             windows_sandbox_level: sandbox_context.windows_sandbox_level,
             proxy_enforced,
+            network_proxy_restricting_sid,
             filesystem_overrides,
             use_private_desktop: sandbox_context.windows_sandbox_private_desktop,
         })
@@ -272,11 +289,12 @@ async fn prepare_managed_network(
         HashMap<String, String>,
         Option<ManagedNetworkSandboxContext>,
         Option<NetworkProxyHandle>,
+        Option<String>,
     ),
     JSONRPCErrorError,
 > {
     let Some(network_proxy) = network_proxy.cloned() else {
-        return Ok((env, managed_network.cloned(), None));
+        return Ok((env, managed_network.cloned(), None, None));
     };
     let state = NetworkProxyState::from_remote_launch_config(network_proxy)
         .map_err(|err| invalid_params(format!("invalid network proxy config: {err}")))?;
@@ -289,12 +307,29 @@ async fn prepare_managed_network(
         .run()
         .await
         .map_err(|err| internal_error(format!("failed to start executor network proxy: {err}")))?;
+    #[cfg(target_os = "windows")]
+    let network_proxy_restricting_sid = Some(
+        proxy
+            .network_proxy_restricting_sid(/*environment_id*/ None)
+            .ok_or_else(|| {
+                internal_error(
+                    "managed Windows proxy route is missing its restricting SID".to_string(),
+                )
+            })?,
+    );
+    #[cfg(not(target_os = "windows"))]
+    let network_proxy_restricting_sid = None;
     let prepared = proxy
         .prepare_for_optional_environment(env, /*environment_id*/ None)
         .map_err(|err| {
             internal_error(format!("failed to prepare executor network proxy: {err}"))
         })?;
-    Ok((prepared.env, Some(prepared.sandbox_context), Some(handle)))
+    Ok((
+        prepared.env,
+        Some(prepared.sandbox_context),
+        Some(handle),
+        network_proxy_restricting_sid,
+    ))
 }
 
 fn native_path(path: &PathUri, label: &str) -> Result<AbsolutePathBuf, JSONRPCErrorError> {

@@ -1031,6 +1031,35 @@ impl UnifiedExecProcessManager {
         if request.command.is_empty() {
             return Err(UnifiedExecError::MissingCommandLine);
         }
+        let network_proxy_restricting_sid = {
+            #[cfg(target_os = "windows")]
+            {
+                if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
+                    request
+                        .network
+                        .as_ref()
+                        .map(|network| {
+                            network
+                                .network_proxy_restricting_sid(
+                                    request.network_environment_id.as_deref(),
+                                )
+                                .ok_or_else(|| {
+                                    UnifiedExecError::create_process(
+                                        "managed Windows proxy route is missing its restricting SID"
+                                            .to_string(),
+                                    )
+                                })
+                        })
+                        .transpose()?
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                None::<String>
+            }
+        };
         let windows_sandbox = if request.sandbox
             == codex_sandboxing::SandboxType::WindowsRestrictedToken
         {
@@ -1039,6 +1068,7 @@ impl UnifiedExecProcessManager {
                 workspace_roots: &request.windows_sandbox_workspace_roots,
                 windows_sandbox_level: request.windows_sandbox_level,
                 proxy_enforced: request.network.is_some(),
+                network_proxy_restricting_sid: network_proxy_restricting_sid.as_deref(),
                 proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
                 filesystem_overrides: request.windows_sandbox_filesystem_overrides.as_ref(),
                 use_private_desktop: request.windows_sandbox_private_desktop,

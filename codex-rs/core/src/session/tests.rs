@@ -903,7 +903,14 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
     use tokio::io::AsyncReadExt as _;
     use tokio::io::AsyncWriteExt as _;
 
-    let mut stream = tokio::net::TcpStream::connect(started_proxy.proxy().http_addr()).await?;
+    let prepared = started_proxy
+        .proxy()
+        .prepare_for_remote_environment(std::collections::HashMap::new(), "test-bridge")?;
+    let proxy_addr = prepared.env["HTTP_PROXY"]
+        .strip_prefix("http://")
+        .expect("HTTP proxy URL")
+        .parse::<std::net::SocketAddr>()?;
+    let mut stream = tokio::net::TcpStream::connect(proxy_addr).await?;
     stream
         .write_all(
             b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",

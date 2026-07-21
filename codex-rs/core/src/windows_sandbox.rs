@@ -123,9 +123,30 @@ pub fn run_elevated_setup(
     )
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn provisioning_settings(
+    network: Option<&crate::config::NetworkProxySpec>,
+) -> std::io::Result<codex_windows_sandbox::WindowsSandboxProvisioningSettings> {
+    let Some(network) = network.filter(|network| network.enabled()) else {
+        return Ok(codex_windows_sandbox::WindowsSandboxProvisioningSettings::default());
+    };
+    Ok(codex_windows_sandbox::WindowsSandboxProvisioningSettings {
+        proxy_ports: network.configured_proxy_ports()?,
+        allow_local_binding: network.allow_local_binding(),
+    })
+}
+
 #[cfg(target_os = "windows")]
-pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> anyhow::Result<()> {
-    codex_windows_sandbox::run_elevated_provisioning_setup(codex_home, real_user)
+pub fn run_elevated_provisioning_setup(
+    codex_home: &Path,
+    real_user: &str,
+    network: Option<&crate::config::NetworkProxySpec>,
+) -> anyhow::Result<()> {
+    codex_windows_sandbox::run_elevated_provisioning_setup(
+        codex_home,
+        real_user,
+        provisioning_settings(network)?,
+    )
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -140,7 +161,11 @@ pub fn run_elevated_setup(
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn run_elevated_provisioning_setup(_codex_home: &Path, _real_user: &str) -> anyhow::Result<()> {
+pub fn run_elevated_provisioning_setup(
+    _codex_home: &Path,
+    _real_user: &str,
+    _network: Option<&crate::config::NetworkProxySpec>,
+) -> anyhow::Result<()> {
     anyhow::bail!("elevated Windows sandbox setup is only supported on Windows")
 }
 

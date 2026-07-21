@@ -705,6 +705,10 @@ const PROXY_ENV_KEYS: &[&str] = &[
     "wss_proxy",
 ];
 const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
+// Internal wire format shared with network-proxy/src/proxy.rs. The value is a comma-separated,
+// sorted list of non-zero loopback proxy ports used only when computing the Windows offline
+// sandbox setup marker.
+const WINDOWS_SANDBOX_PROXY_PORTS_ENV_KEY: &str = "CODEX_WINDOWS_SANDBOX_PROXY_PORTS";
 
 pub(crate) fn offline_proxy_settings_from_env(
     env_map: &HashMap<String, String>,
@@ -743,6 +747,14 @@ pub(crate) fn proxy_ports_from_env(env_map: &HashMap<String, String>) -> Vec<u16
         {
             ports.insert(port);
         }
+    }
+    if let Some(value) = env_map.get(WINDOWS_SANDBOX_PROXY_PORTS_ENV_KEY) {
+        ports.extend(
+            value
+                .split(',')
+                .filter_map(|port| port.trim().parse::<u16>().ok())
+                .filter(|port| *port != 0),
+        );
     }
     ports.into_iter().collect()
 }
@@ -1034,7 +1046,11 @@ fn run_elevated_setup_inner(
     run_setup_exe(&payload, needs_elevation, request.codex_home)
 }
 
-pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Result<()> {
+pub fn run_elevated_provisioning_setup(
+    codex_home: &Path,
+    real_user: &str,
+    settings: crate::WindowsSandboxProvisioningSettings,
+) -> Result<()> {
     let sbx_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
         failure(
@@ -1063,8 +1079,8 @@ pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Re
         write_roots: Vec::new(),
         deny_read_paths: Vec::new(),
         deny_write_paths: Vec::new(),
-        proxy_ports: Vec::new(),
-        allow_local_binding: false,
+        proxy_ports: settings.proxy_ports,
+        allow_local_binding: settings.allow_local_binding,
         otel: codex_otel::global_statsig_metrics_settings(),
         real_user: real_user.to_string(),
         mode: SetupMode::ProvisionOnly,
@@ -1264,6 +1280,7 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use super::WINDOWS_SANDBOX_PROXY_PORTS_ENV_KEY;
     use super::build_payload_roots;
     use super::find_setup_exe_for_current_exe;
     use super::gather_full_read_roots_for_permissions;
@@ -1599,8 +1616,12 @@ mod tests {
             "HTTPS_PROXY".to_string(),
             "https://example.com:9999".to_string(),
         );
+        env.insert(
+            WINDOWS_SANDBOX_PROXY_PORTS_ENV_KEY.to_string(),
+            "8080,43129,0,invalid, 43128,65536".to_string(),
+        );
 
-        assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
+        assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080, 43128, 43129]);
     }
 
     #[test]
