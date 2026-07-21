@@ -1,6 +1,7 @@
-use codex_http_client::build_reqwest_client_with_custom_ca;
-use reqwest::header::CONTENT_TYPE;
-use reqwest::header::HeaderMap;
+use codex_http_client::RouteAwareClientPool;
+use http::StatusCode;
+use http::header::CONTENT_TYPE;
+use http::header::HeaderMap;
 use std::collections::HashMap;
 use tracing::info;
 use tracing::warn;
@@ -16,22 +17,39 @@ struct CodeEnvironment {
     task_count: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutodetectSelection {
     pub id: String,
     pub label: Option<String>,
 }
 
 pub async fn autodetect_environment_id(
+    http: &RouteAwareClientPool,
     base_url: &str,
     headers: &HeaderMap,
     desired_label: Option<String>,
 ) -> anyhow::Result<AutodetectSelection> {
+    autodetect_environment_id_with_origins(
+        http,
+        base_url,
+        headers,
+        desired_label,
+        &get_git_origins(),
+    )
+    .await
+}
+
+async fn autodetect_environment_id_with_origins(
+    http: &impl EnvironmentHttp,
+    base_url: &str,
+    headers: &HeaderMap,
+    desired_label: Option<String>,
+    origins: &[String],
+) -> anyhow::Result<AutodetectSelection> {
     // 1) Try repo-specific environments based on local git origins (GitHub only, like VSCode)
-    let origins = get_git_origins();
     crate::append_error_log(format!("env: git origins: {origins:?}"));
     let mut by_repo_envs: Vec<CodeEnvironment> = Vec::new();
-    for origin in &origins {
+    for origin in origins {
         if let Some((owner, repo)) = parse_owner_repo(origin) {
             let url = if base_url.contains("/backend-api") {
                 format!(
@@ -45,7 +63,7 @@ pub async fn autodetect_environment_id(
                 )
             };
             crate::append_error_log(format!("env: GET {url}"));
-            match get_json::<Vec<CodeEnvironment>>(&url, headers).await {
+            match get_json::<Vec<CodeEnvironment>>(http, &url, headers).await {
                 Ok(mut list) => {
                     crate::append_error_log(format!(
                         "env: by-repo returned {} env(s) for {owner}/{repo}",
@@ -74,16 +92,10 @@ pub async fn autodetect_environment_id(
     };
     crate::append_error_log(format!("env: GET {list_url}"));
     // Fetch and log the full environments JSON for debugging
-    let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
-    let res = http.get(&list_url).headers(headers.clone()).send().await?;
-    let status = res.status();
-    let ct = res
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let body = res.text().await.unwrap_or_default();
+    let response = http.get(&list_url, headers).await?;
+    let status = response.status;
+    let ct = response.content_type;
+    let body = response.body;
     crate::append_error_log(format!("env: status={status} content-type={ct}"));
     match serde_json::from_str::<serde_json::Value>(&body) {
         Ok(v) => {
@@ -145,19 +157,14 @@ fn pick_environment_row(
 }
 
 async fn get_json<T: serde::de::DeserializeOwned>(
+    http: &impl EnvironmentHttp,
     url: &str,
     headers: &HeaderMap,
 ) -> anyhow::Result<T> {
-    let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
-    let res = http.get(url).headers(headers.clone()).send().await?;
-    let status = res.status();
-    let ct = res
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let body = res.text().await.unwrap_or_default();
+    let response = http.get(url, headers).await?;
+    let status = response.status;
+    let ct = response.content_type;
+    let body = response.body;
     crate::append_error_log(format!("env: status={status} content-type={ct}"));
     if !status.is_success() {
         anyhow::bail!("GET {url} failed: {status}; content-type={ct}; body={body}");
@@ -166,6 +173,44 @@ async fn get_json<T: serde::de::DeserializeOwned>(
         anyhow::anyhow!("Decode error for {url}: {e}; content-type={ct}; body={body}")
     })?;
     Ok(parsed)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EnvironmentResponse {
+    status: StatusCode,
+    content_type: String,
+    body: String,
+}
+
+/// HTTP boundary used by environment discovery.
+///
+/// Implementations must issue a GET for the complete `url`, forward all supplied headers, and
+/// return the response status, content type, and body for the caller to validate and decode.
+trait EnvironmentHttp: Send + Sync {
+    fn get<'a>(
+        &'a self,
+        url: &'a str,
+        headers: &'a HeaderMap,
+    ) -> impl std::future::Future<Output = anyhow::Result<EnvironmentResponse>> + Send + 'a;
+}
+
+impl EnvironmentHttp for RouteAwareClientPool {
+    async fn get(&self, url: &str, headers: &HeaderMap) -> anyhow::Result<EnvironmentResponse> {
+        let response = RouteAwareClientPool::get(self, url)
+            .headers(headers.clone())
+            .send()
+            .await?;
+        Ok(EnvironmentResponse {
+            status: response.status(),
+            content_type: response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_string(),
+            body: response.text().await.unwrap_or_default(),
+        })
+    }
 }
 
 fn get_git_origins() -> Vec<String> {
@@ -254,14 +299,23 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
 /// List environments for the current repo(s) with a fallback to the global list.
 /// Returns a de-duplicated, sorted set suitable for the TUI modal.
 pub async fn list_environments(
+    http: &RouteAwareClientPool,
     base_url: &str,
     headers: &HeaderMap,
+) -> anyhow::Result<Vec<crate::app::EnvironmentRow>> {
+    list_environments_with_origins(http, base_url, headers, &get_git_origins()).await
+}
+
+async fn list_environments_with_origins(
+    http: &impl EnvironmentHttp,
+    base_url: &str,
+    headers: &HeaderMap,
+    origins: &[String],
 ) -> anyhow::Result<Vec<crate::app::EnvironmentRow>> {
     let mut map: HashMap<String, crate::app::EnvironmentRow> = HashMap::new();
 
     // 1) By-repo lookup for each parsed GitHub origin
-    let origins = get_git_origins();
-    for origin in &origins {
+    for origin in origins {
         if let Some((owner, repo)) = parse_owner_repo(origin) {
             let url = if base_url.contains("/backend-api") {
                 format!(
@@ -274,7 +328,7 @@ pub async fn list_environments(
                     base_url, "github", owner, repo
                 )
             };
-            match get_json::<Vec<CodeEnvironment>>(&url, headers).await {
+            match get_json::<Vec<CodeEnvironment>>(http, &url, headers).await {
                 Ok(list) => {
                     info!("env_tui: by-repo {}:{} -> {} envs", owner, repo, list.len());
                     for e in list {
@@ -312,7 +366,7 @@ pub async fn list_environments(
     } else {
         format!("{base_url}/api/codex/environments")
     };
-    match get_json::<Vec<CodeEnvironment>>(&list_url, headers).await {
+    match get_json::<Vec<CodeEnvironment>>(http, &list_url, headers).await {
         Ok(list) => {
             info!("env_tui: global list -> {} envs", list.len());
             for e in list {
@@ -360,3 +414,7 @@ pub async fn list_environments(
     });
     Ok(rows)
 }
+
+#[cfg(test)]
+#[path = "env_detect_tests.rs"]
+mod tests;

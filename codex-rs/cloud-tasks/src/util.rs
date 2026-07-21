@@ -1,7 +1,7 @@
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
-use reqwest::header::HeaderMap;
+use http::header::HeaderMap;
 
 use codex_core::config::Config;
 use codex_http_client::HttpClientFactory;
@@ -70,8 +70,8 @@ pub async fn load_auth_manager(
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
 /// and optional `ChatGPT-Account-Id`.
 pub async fn build_chatgpt_headers() -> HeaderMap {
-    use reqwest::header::HeaderValue;
-    use reqwest::header::USER_AGENT;
+    use http::header::HeaderValue;
+    use http::header::USER_AGENT;
 
     set_user_agent_suffix("codex_cloud_tasks_tui");
     let ua = codex_login::default_client::get_codex_user_agent();
