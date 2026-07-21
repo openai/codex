@@ -21,6 +21,7 @@ use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
+use codex_app_server_protocol::FeedbackRequirements;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
@@ -315,6 +316,11 @@ impl ConfigRequestProcessor {
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
+    let windows_sandbox_private_desktop = requirements
+        .windows
+        .as_ref()
+        .and_then(|windows| windows.sandbox_private_desktop);
+
     ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
@@ -384,6 +390,15 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 service_tier: new_thread.service_tier,
             }),
         }),
+        sqlite_home: requirements.sqlite_home.map(Into::into),
+        log_dir: requirements.log_dir.map(Into::into),
+        model_catalog_json: requirements.model_catalog_json.map(Into::into),
+        check_for_update_on_startup: requirements.check_for_update_on_startup,
+        allow_login_shell: requirements.allow_login_shell,
+        feedback: requirements.feedback.map(|feedback| FeedbackRequirements {
+            enabled: feedback.enabled,
+        }),
+        windows_sandbox_private_desktop,
     }
 }
 
@@ -578,13 +593,17 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_app_server_protocol::FeedbackRequirements;
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
     use codex_config::ModelsRequirementsToml;
     use codex_config::NewThreadModelDefaultsToml;
     use codex_config::WindowsRequirementsToml;
+    use codex_config::types::FeedbackConfigToml;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 
@@ -694,6 +713,7 @@ mod tests {
                     codex_config::types::WindowsSandboxModeToml::Elevated,
                     codex_config::types::WindowsSandboxModeToml::Unelevated,
                 ]),
+                sandbox_private_desktop: Some(false),
             }),
             ..ConfigRequirementsToml::default()
         });
@@ -704,6 +724,44 @@ mod tests {
                 WindowsSandboxSetupMode::Elevated,
                 WindowsSandboxSetupMode::Unelevated,
             ])
+        );
+        assert_eq!(mapped.windows_sandbox_private_desktop, Some(false));
+    }
+
+    #[test]
+    fn requirements_api_includes_exact_managed_values() {
+        let sqlite_home = AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-state"))
+            .expect("managed sqlite home should be absolute");
+        let log_dir = AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-logs"))
+            .expect("managed log dir should be absolute");
+        let model_catalog_json =
+            AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-models.json"))
+                .expect("managed model catalog path should be absolute");
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            sqlite_home: Some(sqlite_home.clone()),
+            log_dir: Some(log_dir.clone()),
+            model_catalog_json: Some(model_catalog_json.clone()),
+            check_for_update_on_startup: Some(false),
+            allow_login_shell: Some(false),
+            feedback: Some(FeedbackConfigToml {
+                enabled: Some(false),
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.sqlite_home, Some(PathUri::from(sqlite_home)));
+        assert_eq!(mapped.log_dir, Some(PathUri::from(log_dir)));
+        assert_eq!(
+            mapped.model_catalog_json,
+            Some(PathUri::from(model_catalog_json))
+        );
+        assert_eq!(mapped.check_for_update_on_startup, Some(false));
+        assert_eq!(mapped.allow_login_shell, Some(false));
+        assert_eq!(
+            mapped.feedback,
+            Some(FeedbackRequirements {
+                enabled: Some(false),
+            })
         );
     }
 }

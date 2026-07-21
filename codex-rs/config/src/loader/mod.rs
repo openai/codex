@@ -157,12 +157,14 @@ pub async fn load_config_layers_state(
 
         #[cfg(target_os = "macos")]
         {
+            let managed_preferences_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
             managed_preferences_requirements_layer = macos::load_managed_admin_requirements_layer(
                 overrides
                     .macos_managed_config_requirements_base64
                     .as_deref(),
             )
-            .await?;
+            .await?
+            .map(|layer| layer.with_base_dir(managed_preferences_base_dir));
         }
         #[cfg(not(target_os = "macos"))]
         {

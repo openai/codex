@@ -14,6 +14,7 @@ use pretty_assertions::assert_eq;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
+use tempfile::tempdir;
 
 fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayerEntry {
     RequirementsLayerEntry::from_toml(
@@ -146,6 +147,45 @@ model_reasoning_effort = "high"
 service_tier = "fast"
 "#
         )
+    );
+}
+
+#[test]
+fn relative_paths_resolve_against_their_own_layer_base() {
+    let low_dir = tempdir().expect("low-priority requirements directory");
+    let high_dir = tempdir().expect("high-priority requirements directory");
+    let low_base = AbsolutePathBuf::from_absolute_path(low_dir.path()).expect("absolute low base");
+    let high_base =
+        AbsolutePathBuf::from_absolute_path(high_dir.path()).expect("absolute high base");
+
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            "sqlite_home = \"state\"\nlog_dir = \"low-logs\"",
+        )
+        .with_base_dir(low_base),
+        layer(
+            "req_high",
+            "High",
+            "log_dir = \"high-logs\"\nmodel_catalog_json = \"models.json\"",
+        )
+        .with_base_dir(high_base),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed.sqlite_home.as_deref(),
+        Some(low_dir.path().join("state").as_path())
+    );
+    assert_eq!(
+        composed.log_dir.as_deref(),
+        Some(high_dir.path().join("high-logs").as_path())
+    );
+    assert_eq!(
+        composed.model_catalog_json.as_deref(),
+        Some(high_dir.path().join("models.json").as_path())
     );
 }
 

@@ -129,6 +129,7 @@ export type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigr
 export type { ExternalAgentConfigMigrationItemType } from "./ExternalAgentConfigMigrationItemType";
 export type { ExternalAgentImportedConnectorCandidate } from "./ExternalAgentImportedConnectorCandidate";
 export type { ExternalAgentImportedConnectorSource } from "./ExternalAgentImportedConnectorSource";
+export type { FeedbackRequirements } from "./FeedbackRequirements";
 export type { FeedbackUploadParams } from "./FeedbackUploadParams";
 export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";
