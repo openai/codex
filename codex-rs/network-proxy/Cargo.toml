@@ -51,3 +51,14 @@ security-framework = "3"
 
 [target.'cfg(windows)'.dependencies]
 schannel = "0.1"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+codex-windows-sandbox = { path = "../windows-sandbox-rs" }

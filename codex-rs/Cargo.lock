@@ -3635,6 +3635,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "codex-utils-rustls-provider",
+ "codex-windows-sandbox",
  "globset",
  "pretty_assertions",
  "rama-core",
@@ -3658,6 +3659,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

@@ -8,6 +8,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -22,6 +23,7 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::fs;
 use std::time::Duration;
 use test_case::test_case;
 use tokio::net::TcpListener;
@@ -44,6 +46,12 @@ enum PushedExecScenario {
     DirectDenied,
     LegacyExit,
     ReplayGap,
+}
+
+#[derive(Debug)]
+struct PushedExecServerResult {
+    process_read_requests: usize,
+    process_start: Value,
 }
 
 async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Value {
@@ -96,11 +104,18 @@ async fn accept_initialized_exec_server(listener: TcpListener) -> WebSocketStrea
 async fn send_environment_info(websocket: &mut WebSocketStream<TcpStream>) {
     let info = read_exec_server_json(websocket).await;
     assert_eq!(info["method"], "environment/info");
+    respond_environment_info(websocket, &info["id"]).await;
+}
+
+async fn respond_environment_info(websocket: &mut WebSocketStream<TcpStream>, id: &Value) {
     send_exec_server_json(
         websocket,
         json!({
-            "id": info["id"],
-            "result": { "shell": { "name": "zsh", "path": "/bin/zsh" } }
+            "id": id,
+            "result": {
+                "shell": { "name": "zsh", "path": "/bin/zsh" },
+                "capabilities": { "networkProxyLaunch": true }
+            }
         }),
     )
     .await;
@@ -109,7 +124,7 @@ async fn send_environment_info(websocket: &mut WebSocketStream<TcpStream>) {
 async fn serve_exec_with_pushed_events(
     listener: TcpListener,
     scenario: PushedExecScenario,
-) -> usize {
+) -> PushedExecServerResult {
     let mut websocket = accept_initialized_exec_server(listener).await;
     send_environment_info(&mut websocket).await;
 
@@ -117,6 +132,9 @@ async fn serve_exec_with_pushed_events(
         let request = read_exec_server_json(&mut websocket).await;
         match request["method"].as_str() {
             Some("process/start") => break request,
+            Some("environment/info") => {
+                respond_environment_info(&mut websocket, &request["id"]).await;
+            }
             Some("fs/getMetadata") => {
                 send_exec_server_json(
                     &mut websocket,
@@ -360,20 +378,25 @@ async fn serve_exec_with_pushed_events(
                     }),
                 )
                 .await;
-                return process_read_requests;
+                return PushedExecServerResult {
+                    process_read_requests,
+                    process_start,
+                };
             }
             method => panic!("unexpected exec-server request: {method:?}"),
         }
     }
 }
 
-#[test_case(PushedExecScenario::Complete ; "complete_event_stream")]
-#[test_case(PushedExecScenario::DirectDenied ; "direct_sandbox_denial")]
-#[test_case(PushedExecScenario::LegacyExit ; "legacy_exit_metadata")]
-#[test_case(PushedExecScenario::ReplayGap ; "truncated_event_replay")]
+#[test_case(PushedExecScenario::Complete, false ; "complete_event_stream")]
+#[test_case(PushedExecScenario::DirectDenied, false ; "direct_sandbox_denial")]
+#[test_case(PushedExecScenario::LegacyExit, false ; "legacy_exit_metadata")]
+#[test_case(PushedExecScenario::ReplayGap, false ; "truncated_event_replay")]
+#[test_case(PushedExecScenario::Complete, true ; "managed_network_uses_executor_proxy_launch")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_consumes_pushed_remote_process_events(
     scenario: PushedExecScenario,
+    managed_network: bool,
 ) -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
@@ -386,7 +409,7 @@ async fn exec_command_consumes_pushed_remote_process_events(
                     CALL_ID,
                     "exec_command",
                     &json!({
-                        "cmd": "ignored by fake exec-server",
+                        "cmd": "pwd",
                         "yield_time_ms": 1_000,
                     })
                     .to_string(),
@@ -403,22 +426,46 @@ async fn exec_command_consumes_pushed_remote_process_events(
     .await;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
     let exec_server = tokio::spawn(serve_exec_with_pushed_events(listener, scenario));
-    let mut builder = test_codex()
-        .with_exec_server_url(exec_server_url)
-        .with_config(|config| {
-            config.project_doc_max_bytes = 0;
-            config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::UnifiedExec)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_exec_server_url(exec_server_url);
+    if managed_network {
+        builder = builder
+            .with_cloud_config_bundle(managed_network_requirements_loader())
+            .with_pre_build_hook(|home| {
+                fs::write(
+                    home.join("config.toml"),
+                    r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "full"
+allow_local_binding = true
+"#,
+                )
+                .expect("write managed-network test config");
+            });
+    }
+    let mut builder = builder.with_config(|config| {
+        config.project_doc_max_bytes = 0;
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
     let test = timeout(Duration::from_secs(5), builder.build(&server))
         .await
         .context("thread startup should connect to the fake exec-server")??;
 
+    let turn_permission_profile = if managed_network {
+        test.session_configured.permission_profile.clone()
+    } else {
+        PermissionProfile::Disabled
+    };
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+        turn_permission_fields(turn_permission_profile, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -445,22 +492,47 @@ async fn exec_command_consumes_pushed_remote_process_events(
         })
         .await?;
     let mut saw_exec_command_begin = false;
-    loop {
-        let event = timeout(Duration::from_secs(5), test.codex.next_event())
-            .await
-            .context("turn should complete")??
-            .msg;
-        match event {
-            EventMsg::ExecCommandBegin(event) if event.call_id == CALL_ID => {
-                saw_exec_command_begin = true;
+    if !managed_network {
+        loop {
+            let event = timeout(Duration::from_secs(5), test.codex.next_event())
+                .await
+                .context("turn should complete")??
+                .msg;
+            match event {
+                EventMsg::ExecCommandBegin(event) if event.call_id == CALL_ID => {
+                    saw_exec_command_begin = true;
+                }
+                EventMsg::TurnComplete(_) => break,
+                _ => {}
             }
-            EventMsg::TurnComplete(_) => break,
-            _ => {}
         }
     }
-    let process_read_requests = timeout(Duration::from_secs(5), exec_server)
+    let cleanup_timeout = if managed_network {
+        Duration::from_secs(15)
+    } else {
+        Duration::from_secs(5)
+    };
+    let exec_server_result = timeout(cleanup_timeout, exec_server)
         .await
         .context("fake exec-server should observe process cleanup")??;
+    if managed_network {
+        let params = &exec_server_result.process_start["params"];
+        assert_eq!(params["enforceManagedNetwork"], true);
+        assert_eq!(params["managedNetwork"], Value::Null);
+        assert_eq!(params["env"]["HTTP_PROXY"], Value::Null);
+        assert_eq!(params["networkProxy"]["proxy"]["enabled"], true);
+        assert_eq!(params["networkProxy"]["proxy"]["mode"], "full");
+        assert_eq!(params["networkProxy"]["environmentId"], "remote");
+        assert!(params["networkProxy"]["executionId"].as_str().is_some());
+        timeout(Duration::from_secs(5), async {
+            while response_mock.requests().len() < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("model should receive the remote exec output")?;
+        return Ok(());
+    }
     let request = response_mock
         .last_request()
         .context("model should receive the exec_command output")?;
@@ -468,6 +540,7 @@ async fn exec_command_consumes_pushed_remote_process_events(
         .function_call_output_content_and_success(CALL_ID)
         .context("exec_command output should be model visible")?;
     let output = output.context("exec_command output should contain text")?;
+    let process_read_requests = exec_server_result.process_read_requests;
     match scenario {
         PushedExecScenario::Complete => {
             assert_ne!(success, Some(false));

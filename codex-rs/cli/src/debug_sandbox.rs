@@ -488,6 +488,7 @@ async fn run_command_under_windows_session(
         windows_sandbox_level: WindowsSandboxLevel::from_config(config),
         proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
         proxy_enforced: false,
+        network_proxy_restricting_sid: None,
         timeout_ms: None,
         read_roots_override: None,
         read_roots_include_platform_defaults: false,

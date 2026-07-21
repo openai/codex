@@ -381,7 +381,8 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
     create_token_with_caps_from(base_token, psid_capabilities, &[])
 }
 
-/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
+/// Create a restricted token that includes all provided capability SIDs, the token user SID, and
+/// any additional restricting SIDs.
 ///
 /// This is intended for the elevated sandbox backend, where the token user is the dedicated
 /// sandbox account rather than the real signed-in user.
@@ -391,10 +392,13 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
 pub unsafe fn create_workspace_write_token_with_caps_and_user_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
+    additional_restricting_sids: &[*mut c_void],
 ) -> Result<HANDLE> {
-    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
-    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
-    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
+    create_token_with_caps_user_and_additional_restrictions_from(
+        base_token,
+        psid_capabilities,
+        additional_restricting_sids,
+    )
 }
 
 /// Create a restricted token that includes all provided capability SIDs.
@@ -408,7 +412,8 @@ pub unsafe fn create_readonly_token_with_caps_from(
     create_token_with_caps_from(base_token, psid_capabilities, &[])
 }
 
-/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
+/// Create a restricted token that includes all provided capability SIDs, the token user SID, and
+/// any additional restricting SIDs.
 ///
 /// This is intended for the elevated sandbox backend, where the token user is the dedicated
 /// sandbox account rather than the real signed-in user.
@@ -418,10 +423,26 @@ pub unsafe fn create_readonly_token_with_caps_from(
 pub unsafe fn create_readonly_token_with_caps_and_user_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
+    additional_restricting_sids: &[*mut c_void],
+) -> Result<HANDLE> {
+    create_token_with_caps_user_and_additional_restrictions_from(
+        base_token,
+        psid_capabilities,
+        additional_restricting_sids,
+    )
+}
+
+unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+    additional_restricting_sids: &[*mut c_void],
 ) -> Result<HANDLE> {
     let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
     let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
-    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
+    let mut extra_restricting_sids = Vec::with_capacity(additional_restricting_sids.len() + 1);
+    extra_restricting_sids.push(psid_user);
+    extra_restricting_sids.extend_from_slice(additional_restricting_sids);
+    create_token_with_caps_from(base_token, psid_capabilities, &extra_restricting_sids)
 }
 
 unsafe fn create_token_with_caps_from(
@@ -472,6 +493,8 @@ unsafe fn create_token_with_caps_from(
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
 
+    // Additional restricting SIDs are identity markers, not capabilities. Deliberately exclude
+    // them from the default DACL so possessing a route identity cannot grant object access.
     let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
     dacl_sids.push(psid_logon);
     dacl_sids.push(psid_everyone);
@@ -481,3 +504,7 @@ unsafe fn create_token_with_caps_from(
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
 }
+
+#[cfg(test)]
+#[path = "token_tests.rs"]
+mod tests;

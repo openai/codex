@@ -29,6 +29,7 @@ use rama_core::error::BoxError;
 use rama_core::extensions::Extensions;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
+use rama_core::service::BoxService;
 use rama_core::service::service_fn;
 use rama_net::address::HostWithPort;
 use rama_net::client::EstablishedClientConnection;
@@ -129,6 +130,23 @@ async fn run_socks5_with_listener(
         }
     }
 
+    listener
+        .serve(socks5_proxy_service(
+            state,
+            policy_decider,
+            environment_id,
+            enable_socks5_udp,
+        ))
+        .await;
+    Ok(())
+}
+
+pub(crate) fn socks5_proxy_service(
+    state: Arc<NetworkProxyState>,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    environment_id: Option<String>,
+    enable_socks5_udp: bool,
+) -> BoxService<TcpStream, (), BoxError> {
     let tcp_connector = TargetCheckedTcpConnector::new(state.clone());
     let policy_tcp_connector = service_fn({
         let policy_decider = policy_decider.clone();
@@ -163,19 +181,10 @@ async fn run_socks5_with_listener(
                 }
             }));
         let socks_acceptor = base.with_udp_associator(udp_relay);
-        listener
-            .serve(BindConnectionAttribution::new(
-                socks_acceptor,
-                state,
-                environment_id,
-            ))
-            .await;
+        BindConnectionAttribution::new(socks_acceptor, state, environment_id).boxed()
     } else {
-        listener
-            .serve(BindConnectionAttribution::new(base, state, environment_id))
-            .await;
+        BindConnectionAttribution::new(base, state, environment_id).boxed()
     }
-    Ok(())
 }
 
 async fn handle_socks5_tcp(

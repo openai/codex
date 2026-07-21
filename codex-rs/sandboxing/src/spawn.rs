@@ -19,6 +19,7 @@ pub struct WindowsSandboxSpawnRequest<'a> {
     pub workspace_roots: &'a [AbsolutePathBuf],
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub proxy_enforced: bool,
+    pub network_proxy_restricting_sid: Option<&'a str>,
     pub proxy_settings_mode: WindowsSandboxProxySettingsMode,
     pub filesystem_overrides: Option<&'a WindowsSandboxFilesystemOverrides>,
     pub use_private_desktop: bool,
@@ -60,6 +61,9 @@ pub async fn spawn_process(request: SpawnRequest<'_>) -> Result<SpawnedProcess> 
                     env_map: request.env.clone(),
                     windows_sandbox_level: windows.windows_sandbox_level,
                     proxy_enforced: windows.proxy_enforced,
+                    network_proxy_restricting_sid: windows
+                        .network_proxy_restricting_sid
+                        .map(str::to_owned),
                     proxy_settings_mode: windows.proxy_settings_mode,
                     timeout_ms: None,
                     read_roots_override: overrides

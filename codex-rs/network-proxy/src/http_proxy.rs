@@ -40,6 +40,7 @@ use rama_core::error::ErrorExt as _;
 use rama_core::error::OpaqueError;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
+use rama_core::service::BoxService;
 use rama_core::service::service_fn;
 use rama_core::stream::Stream;
 use rama_http::Body;
@@ -66,6 +67,7 @@ use rama_net::proxy::ProxyRequest;
 use rama_net::proxy::ProxyTarget;
 use rama_net::proxy::StreamForwardService;
 use rama_net::stream::SocketInfo;
+use rama_tcp::TcpStream;
 use rama_tcp::client::Request as TcpRequest;
 use rama_tcp::server::TcpListener;
 use rama_tls_rustls::client::TlsConnectorDataBuilder;
@@ -124,11 +126,24 @@ async fn run_http_proxy_with_listener(
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     environment_id: Option<String>,
 ) -> Result<()> {
-    ensure_rustls_crypto_provider();
-
     let addr = listener
         .local_addr()
         .context("read HTTP proxy listener local addr")?;
+
+    info!("HTTP proxy listening on {addr}");
+
+    listener
+        .serve(http_proxy_service(state, policy_decider, environment_id))
+        .await;
+    Ok(())
+}
+
+pub(crate) fn http_proxy_service(
+    state: Arc<NetworkProxyState>,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    environment_id: Option<String>,
+) -> BoxService<TcpStream, (), rama_core::error::BoxError> {
+    ensure_rustls_crypto_provider();
 
     // This proxy listener only needs HTTP/1 proxy semantics. Using Rama's auto builder
     // forces every accepted socket through the HTTP version sniffing pre-read path before proxy
@@ -156,16 +171,7 @@ async fn run_http_proxy_with_listener(
             })),
     );
 
-    info!("HTTP proxy listening on {addr}");
-
-    listener
-        .serve(BindConnectionAttribution::new(
-            http_service,
-            state,
-            environment_id,
-        ))
-        .await;
-    Ok(())
+    BindConnectionAttribution::new(http_service, state, environment_id).boxed()
 }
 
 async fn http_connect_accept(

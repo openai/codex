@@ -1372,6 +1372,8 @@ mod tests {
         tokio::net::TcpStream::connect(proxy_addr)
             .await
             .expect("proxy should remain available to a child holding inherited output streams");
+        #[cfg(target_os = "windows")]
+        assert!(proxy.network_proxy_restricting_sid(None).is_some());
 
         drop(process.stdout_tx);
         drop(process.stderr_tx);
@@ -1382,6 +1384,9 @@ mod tests {
         .await
         .expect("process should close");
         assert!(closed_response.closed);
+        #[cfg(target_os = "windows")]
+        assert_eq!(proxy.network_proxy_restricting_sid(None), None);
+        #[cfg(not(target_os = "windows"))]
         assert!(tokio::net::TcpStream::connect(proxy_addr).await.is_err());
         backend.shutdown().await;
     }
