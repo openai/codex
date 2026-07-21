@@ -107,6 +107,7 @@ mod tests {
     use codex_config::ThreadConfigLoader;
     use codex_config::ThreadConfigSource;
     use codex_config::types::AuthKeyringBackendKind;
+    use codex_config::types::McpServerConfig;
     use codex_core::config::ConfigOverrides;
     use codex_core::init_state_db;
     use codex_core::thread_store_from_config;
@@ -118,6 +119,8 @@ mod tests {
     use codex_protocol::protocol::SessionSource;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
@@ -174,6 +177,85 @@ mod tests {
             AuthKeyringBackendKind::Direct
         );
         assert_eq!(backend, AuthKeyringBackendKind::Secrets);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_config_preserves_thread_mcp_overrides() -> anyhow::Result<()> {
+        let (temp_dir, thread_manager, config_manager, _loader) = refresh_test_state().await?;
+        let initial_config_manager =
+            ConfigManager::without_managed_config_for_tests(temp_dir.path().to_path_buf());
+        let thread_config = initial_config_manager
+            .load_for_cwd(
+                Some(HashMap::from([
+                    (
+                        "mcp_servers.thread.command".to_string(),
+                        json!("thread-mcp"),
+                    ),
+                    ("mcp_servers.thread.enabled".to_string(), json!(false)),
+                ])),
+                ConfigOverrides::default(),
+                Some(temp_dir.path().join("good")),
+            )
+            .await?;
+        let thread = thread_manager.start_thread(thread_config).await?.thread;
+        std::fs::write(
+            temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
+            r#"
+[mcp_servers.global]
+command = "global-mcp"
+enabled = false
+"#,
+        )?;
+
+        let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
+        let mut actual =
+            serde_json::from_value::<HashMap<String, McpServerConfig>>(refresh_config.mcp_servers)?;
+        actual.remove(codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
+        let expected = serde_json::from_value::<HashMap<String, McpServerConfig>>(json!({
+            "global": {
+                "command": "global-mcp",
+                "enabled": false
+            },
+            "thread": {
+                "command": "thread-mcp",
+                "enabled": false
+            }
+        }))?;
+
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn strict_refresh_does_not_mutate_thread_config_out_of_band() -> anyhow::Result<()> {
+        let (temp_dir, thread_manager, config_manager, _loader) = refresh_test_state().await?;
+        let mut good_thread = None;
+        for thread_id in thread_manager.list_thread_ids().await {
+            let thread = thread_manager.get_thread(thread_id).await?;
+            let thread_config = thread.config().await;
+            if thread_config.cwd.ends_with("good") {
+                good_thread = Some(thread);
+            } else {
+                thread_manager.remove_thread(&thread_id).await;
+            }
+        }
+        let thread = good_thread.expect("good test thread should exist");
+        std::fs::write(
+            temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
+            r#"
+[mcp_servers.refreshed]
+command = "refreshed-mcp"
+enabled = false
+"#,
+        )?;
+
+        queue_strict_refresh(&thread_manager, &config_manager).await?;
+
+        assert_eq!(
+            thread.config().await.mcp_servers.get(),
+            &HashMap::<String, McpServerConfig>::new()
+        );
         Ok(())
     }
 
