@@ -26,9 +26,15 @@ use crate::process::exit_code_from_status;
 #[cfg(target_os = "linux")]
 use libc;
 
+#[cfg(windows)]
+enum WindowsChildTerminator {
+    Job(Arc<crate::win::JobObject>),
+    Process(u32),
+}
+
 struct PipeChildTerminator {
     #[cfg(windows)]
-    pid: u32,
+    windows: WindowsChildTerminator,
     #[cfg(unix)]
     process_group_id: u32,
 }
@@ -58,7 +64,10 @@ impl ChildTerminator for PipeChildTerminator {
 
         #[cfg(windows)]
         {
-            kill_process(self.pid)
+            match &self.windows {
+                WindowsChildTerminator::Job(job) => job.terminate(),
+                WindowsChildTerminator::Process(pid) => kill_process(*pid),
+            }
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -109,6 +118,8 @@ enum PipeStdinMode {
     Null,
 }
 
+/// On Windows, process-tree containment is best-effort because Tokio returns
+/// only after the root process starts, so job assignment cannot be atomic.
 async fn spawn_process_with_stdin_mode(
     program: &str,
     args: &[String],
@@ -165,12 +176,37 @@ async fn spawn_process_with_stdin_mode(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
+    #[cfg(windows)]
+    let job = crate::win::JobObject::create().map(Arc::new);
     let mut child = command.spawn()?;
-    let pid = child
+    #[cfg(windows)]
+    let windows_terminator = {
+        // Accept the small race: a descendant created between spawn and
+        // assignment is not guaranteed to join the job and can escape termination.
+        let pid = child
+            .id()
+            .ok_or_else(|| io::Error::other("missing child pid"))?;
+        let assigned_job = job.and_then(|job| {
+            let process_handle = child
+                .raw_handle()
+                .ok_or_else(|| io::Error::other("missing child process handle"))?;
+            job.assign_process(process_handle)?;
+            Ok(job)
+        });
+        match assigned_job {
+            Ok(job) => WindowsChildTerminator::Job(job),
+            Err(err) => {
+                log::warn!(
+                    "Windows pipe process tree containment unavailable for pid {pid}: {err}"
+                );
+                WindowsChildTerminator::Process(pid)
+            }
+        }
+    };
+    #[cfg(unix)]
+    let process_group_id = child
         .id()
         .ok_or_else(|| io::Error::other("missing child pid"))?;
-    #[cfg(unix)]
-    let process_group_id = pid;
 
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -225,9 +261,24 @@ async fn spawn_process_with_stdin_mode(
     let wait_exit_status = Arc::clone(&exit_status);
     let exit_code = Arc::new(StdMutex::new(None));
     let wait_exit_code = Arc::clone(&exit_code);
+    #[cfg(windows)]
+    let wait_job = match &windows_terminator {
+        WindowsChildTerminator::Job(job) => Some(Arc::clone(job)),
+        WindowsChildTerminator::Process(_) => None,
+    };
     let wait_handle: JoinHandle<()> = tokio::spawn(async move {
         let code = match child.wait().await {
-            Ok(status) => exit_code_from_status(status),
+            Ok(status) => {
+                #[cfg(windows)]
+                if let Some(job) = wait_job
+                    && let Err(err) = job.preserve_descendants()
+                {
+                    log::warn!(
+                        "Windows pipe failed to preserve descendants after root exit: {err}"
+                    );
+                }
+                exit_code_from_status(status)
+            }
             Err(_) => -1,
         };
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -241,7 +292,7 @@ async fn spawn_process_with_stdin_mode(
         writer_tx,
         Box::new(PipeChildTerminator {
             #[cfg(windows)]
-            pid,
+            windows: windows_terminator,
             #[cfg(unix)]
             process_group_id,
         }),
@@ -306,3 +357,7 @@ pub async fn spawn_process_no_stdin(
     )
     .await
 }
+
+#[cfg(all(test, windows))]
+#[path = "pipe_tests.rs"]
+mod tests;

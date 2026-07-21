@@ -13,12 +13,15 @@ use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::Context;
 use anyhow::Result;
+use codex_utils_pty::JobObject;
 use codex_utils_pty::PsuedoCon;
 use codex_utils_pty::RawConPty;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::IntoRawHandle;
 use std::path::Path;
+use std::sync::Arc;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -37,6 +40,7 @@ pub struct ConptyInstance {
     pseudoconsole: Option<PsuedoCon>,
     input_write: HANDLE,
     output_read: HANDLE,
+    job: Option<Arc<JobObject>>,
     _desktop: Option<LaunchDesktop>,
 }
 
@@ -68,6 +72,11 @@ impl ConptyInstance {
     pub fn take_output_read(&mut self) -> HANDLE {
         std::mem::replace(&mut self.output_read, 0)
     }
+
+    /// Returns the Job Object containing the spawned process, if this instance owns one.
+    pub fn job(&self) -> Option<Arc<JobObject>> {
+        self.job.as_ref().map(Arc::clone)
+    }
 }
 
 /// Create a ConPTY with backing pipes.
@@ -83,6 +92,7 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
         pseudoconsole: Some(pseudoconsole),
         input_write: input_write.into_raw_handle() as HANDLE,
         output_read: output_read.into_raw_handle() as HANDLE,
+        job: None,
         _desktop: None,
     })
 }
@@ -114,6 +124,7 @@ pub fn spawn_conpty_process_as_user(
     si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
+    let job = Arc::new(JobObject::create().context("create process job")?);
 
     let raw = RawConPty::new(/*cols*/ 80, /*rows*/ 24)?;
     let (pseudoconsole, input_write, output_read) = raw.into_handles();
@@ -122,10 +133,12 @@ pub fn spawn_conpty_process_as_user(
         pseudoconsole: Some(pseudoconsole),
         input_write: input_write.into_raw_handle() as HANDLE,
         output_read: output_read.into_raw_handle() as HANDLE,
+        job: Some(Arc::clone(&job)),
         _desktop: Some(desktop),
     };
-    let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
+    let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 2)?;
     attrs.set_pseudoconsole(hpc)?;
+    attrs.set_job(job.as_raw_handle() as HANDLE)?;
     si.lpAttributeList = attrs.as_mut_ptr();
 
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };

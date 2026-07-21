@@ -21,16 +21,20 @@
 use super::psuedocon::HPCON;
 use anyhow::Error;
 use anyhow::ensure;
+use std::ffi::c_void;
 use std::io::Error as IoError;
 use std::mem;
 use std::ptr;
 use winapi::shared::minwindef::DWORD;
 use winapi::um::processthreadsapi::*;
+use winapi::um::winnt::HANDLE;
 
+const PROC_THREAD_ATTRIBUTE_JOB_LIST: usize = 0x0002000D;
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
 
 pub struct ProcThreadAttributeList {
     data: Vec<u8>,
+    job_list: Vec<HANDLE>,
 }
 
 impl ProcThreadAttributeList {
@@ -56,7 +60,10 @@ impl ProcThreadAttributeList {
             "InitializeProcThreadAttributeList failed: {}",
             IoError::last_os_error()
         );
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            job_list: Vec::new(),
+        })
     }
 
     pub fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
@@ -64,13 +71,42 @@ impl ProcThreadAttributeList {
     }
 
     pub fn set_pty(&mut self, con: HPCON) -> Result<(), Error> {
+        // SAFETY: `con` is the Windows-defined value and size for this attribute.
+        unsafe {
+            self.update(
+                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                con,
+                mem::size_of::<HPCON>(),
+            )
+        }
+    }
+
+    pub fn set_job(&mut self, job: HANDLE) -> Result<(), Error> {
+        // Atomic job attachment is intentionally required for native ConPTY
+        // spawns. If Windows cannot honor the job list (for example, because a
+        // parent job forbids nesting), fail the spawn rather than briefly run
+        // an uncontained process tree.
+        self.job_list = vec![job];
+        let value = self.job_list.as_mut_ptr().cast();
+        let size = std::mem::size_of_val(self.job_list.as_slice());
+        // SAFETY: `value` points to `self.job_list`, which remains alive while
+        // the attribute list can reference it, and `size` covers that slice.
+        unsafe { self.update(PROC_THREAD_ATTRIBUTE_JOB_LIST, value, size) }
+    }
+
+    unsafe fn update(
+        &mut self,
+        attribute: usize,
+        value: *mut c_void,
+        size: usize,
+    ) -> Result<(), Error> {
         let res = unsafe {
             UpdateProcThreadAttribute(
                 self.as_mut_ptr(),
                 0,
-                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                con,
-                mem::size_of::<HPCON>(),
+                attribute,
+                value,
+                size,
                 ptr::null_mut(),
                 ptr::null_mut(),
             )
