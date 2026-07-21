@@ -17,7 +17,8 @@ impl AuthRouteConfig {
         }
     }
 
-    pub(crate) fn http_client_factory(&self) -> &HttpClientFactory {
+    /// Returns the HTTP client factory represented by this routing configuration.
+    pub fn http_client_factory(&self) -> &HttpClientFactory {
         &self.http_client_factory
     }
 }
