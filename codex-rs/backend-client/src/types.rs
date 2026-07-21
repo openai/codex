@@ -60,6 +60,16 @@ pub struct CodexWorkspaceMessagesResponse {
     pub messages: Vec<CodexWorkspaceMessage>,
 }
 
+/// Authenticated Codex user settings used by CLI runtime policy.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct CodexUserSettingsResponse {
+    /// Server-computed effective commit-attribution policy.
+    ///
+    /// Older backend responses omit this field, which safely defaults to disabled.
+    #[serde(default)]
+    pub commit_attribution_enabled: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct CodexWorkspaceMessage {
     pub message_id: String,
