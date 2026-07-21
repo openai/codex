@@ -1,13 +1,119 @@
 //! Shared outbound proxy policy tests.
 
 use super::*;
+use http::header::AUTHORIZATION;
+use http::header::COOKIE;
+use http::header::PROXY_AUTHORIZATION;
 use pretty_assertions::assert_eq;
 use std::io::Read;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::Mutex;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
+
+#[path = "outbound_proxy_redirect_coverage_tests.rs"]
+mod redirect_coverage_tests;
 
 struct MapEnv {
     values: HashMap<String, String>,
+}
+
+fn spawn_proxy_listener() -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+    spawn_http_listener(vec![
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string(),
+    ])
+}
+
+fn spawn_redirect_listener(
+    location: &str,
+) -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+    spawn_http_listener(vec![format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )])
+}
+
+fn spawn_http_listener(
+    responses: Vec<String>,
+) -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("HTTP listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("HTTP listener should have an address");
+    listener
+        .set_nonblocking(true)
+        .expect("HTTP listener should become nonblocking");
+    let thread = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for response in responses {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "HTTP listener should receive the next request"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("HTTP listener should accept: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("HTTP stream should get a read timeout");
+            requests.push(read_http_message(&mut stream));
+            stream
+                .write_all(response.as_bytes())
+                .expect("HTTP listener should write response");
+        }
+        requests
+    });
+    (address, thread)
+}
+
+fn only_request(thread: std::thread::JoinHandle<Vec<String>>, source: &str) -> String {
+    let requests = thread
+        .join()
+        .unwrap_or_else(|_| panic!("{source} thread should finish"));
+    let [request]: [String; 1] = requests.try_into().unwrap_or_else(|requests: Vec<String>| {
+        panic!(
+            "{source} should receive one request, got {}",
+            requests.len()
+        )
+    });
+    request
+}
+
+fn read_http_message(stream: &mut impl Read) -> String {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let bytes_read = stream.read(&mut chunk).expect("HTTP message should read");
+        if bytes_read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..bytes_read]);
+        if let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            let body_start = header_end + 4;
+            let headers = String::from_utf8_lossy(&buffer[..body_start]);
+            let content_length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find_map(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if buffer.len() >= body_start + content_length {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&buffer).into_owned()
 }
 
 #[test]
@@ -194,20 +300,7 @@ async fn async_resolution_uses_cached_route_before_global_permit() {
 
 #[tokio::test]
 async fn enabled_environment_proxy_routes_request_through_proxy() {
-    let listener =
-        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("local proxy listener should bind");
-    let proxy_addr = listener
-        .local_addr()
-        .expect("local proxy listener should have an address");
-    let proxy_thread = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("proxy should accept a request");
-        let mut buffer = [0_u8; 4096];
-        let size = stream.read(&mut buffer).expect("proxy should read request");
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            .expect("proxy should write response");
-        String::from_utf8_lossy(&buffer[..size]).into_owned()
-    });
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
     let env = MapEnv {
         values: HashMap::from([("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"))]),
     };
@@ -231,13 +324,95 @@ async fn enabled_environment_proxy_routes_request_through_proxy() {
         .send()
         .await
         .expect("request should use local proxy");
-    let proxy_request = proxy_thread.join().expect("proxy thread should finish");
+    let proxy_request = only_request(proxy_thread, "proxy");
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     assert_eq!(
         proxy_request.lines().next(),
         Some("GET http://enabled-proxy.test/proxy-check HTTP/1.1")
     );
+}
+
+#[tokio::test]
+async fn route_aware_pool_uses_respect_system_proxy_route_for_exact_url() {
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
+    let request_url = "http://route-aware-proxy.test/proxy-check?pac=exact";
+    cache_system_proxy_decision(
+        request_url,
+        SystemProxyDecision::Proxy {
+            url: format!("http://{proxy_addr}"),
+        },
+    );
+    let pool = crate::RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+    );
+
+    let response = tokio::time::timeout(Duration::from_secs(2), pool.get(request_url).send())
+        .await
+        .expect("proxy request should finish")
+        .expect("request should use local proxy");
+    let proxy_request = only_request(proxy_thread, "proxy");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        proxy_request.lines().next(),
+        Some("GET http://route-aware-proxy.test/proxy-check?pac=exact HTTP/1.1")
+    );
+}
+
+#[tokio::test]
+async fn route_aware_pool_logs_only_the_final_redirect_outcome() {
+    let (proxy_addr, proxy_thread) = spawn_proxy_listener();
+    let redirected_url = "http://redirect-target.test/final?token=redirect-target-secret-value";
+    let (redirect_addr, redirect_thread) = spawn_redirect_listener(redirected_url);
+    let initial_url = format!("http://{redirect_addr}/start");
+    cache_system_proxy_decision(&initial_url, SystemProxyDecision::Direct);
+    cache_system_proxy_decision(
+        redirected_url,
+        SystemProxyDecision::Proxy {
+            url: format!("http://{proxy_addr}"),
+        },
+    );
+    let pool = crate::RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        ClientRouteClass::Api,
+    );
+    let log_buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(TestLogWriter {
+                buffer: Arc::clone(&log_buffer),
+            })
+            .with_filter(
+                tracing_subscriber::filter::Targets::new()
+                    .with_target("codex_http_client", tracing::Level::TRACE),
+            ),
+    );
+    let _guard = tracing::subscriber::set_default(subscriber);
+    tracing::debug!(target: "codex_http_client", "log capture sentinel");
+
+    let response = tokio::time::timeout(Duration::from_secs(2), pool.get(&initial_url).send())
+        .await
+        .expect("redirected request should finish")
+        .expect("redirected request should use selected routes");
+    only_request(redirect_thread, "redirect");
+    only_request(proxy_thread, "proxy");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let logs = String::from_utf8(log_buffer.lock().expect("log buffer lock").clone())
+        .expect("logs should be UTF-8");
+    assert!(logs.contains("log capture sentinel"));
+    assert!(logs.contains(&initial_url));
+    assert_eq!(logs.matches("Request completed").count(), 1);
+    for secret in ["redirect-target-secret-value", redirected_url, "location"] {
+        assert!(
+            !logs
+                .to_ascii_lowercase()
+                .contains(&secret.to_ascii_lowercase())
+        );
+    }
 }
 
 #[test]
@@ -262,6 +437,40 @@ fn unavailable_system_proxy_decision_is_cached() {
     cache_system_proxy_decision(request_url, decision.clone());
 
     assert_eq!(cached_system_proxy_decision(request_url), Some(decision));
+}
+
+#[derive(Clone)]
+struct TestLogWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+struct TestLogSink {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestLogWriter {
+    type Writer = TestLogSink;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TestLogSink {
+            buffer: Arc::clone(&self.buffer),
+        }
+    }
+}
+
+impl Write for TestLogSink {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let mut log_buffer = self
+            .buffer
+            .lock()
+            .map_err(|_| io::Error::other("log buffer lock was poisoned"))?;
+        log_buffer.extend(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[test]
