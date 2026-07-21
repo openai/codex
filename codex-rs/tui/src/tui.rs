@@ -294,6 +294,7 @@ fn restore_common(
 
 /// Restore the terminal to its original state.
 /// Inverse of `set_modes`.
+#[cfg(unix)]
 pub fn restore() -> Result<()> {
     restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack)
 }
