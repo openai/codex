@@ -69,38 +69,53 @@ impl HttpClient {
 
     pub(crate) async fn execute(
         &self,
-        mut request: reqwest::Request,
+        request: reqwest::Request,
     ) -> Result<reqwest::Response, reqwest::Error> {
-        request.headers_mut().extend(trace_headers());
         let method = request.method().clone();
         let url = request.url().to_string();
 
-        match self.inner.execute(request).await {
+        match self.execute_without_request_logging(request).await {
             Ok(response) => {
-                if self.request_logging == RequestLogging::Enabled {
-                    tracing::debug!(
-                        method = %method,
-                        url = %url,
-                        status = %response.status(),
-                        headers = ?response.headers(),
-                        version = ?response.version(),
-                        "Request completed"
-                    );
-                }
+                self.log_response(&method, &url, &response);
                 Ok(response)
             }
             Err(error) => {
-                if self.request_logging == RequestLogging::Enabled {
-                    tracing::debug!(
-                        method = %method,
-                        url = %url,
-                        status = error.status().map(|status| status.as_u16()),
-                        error = %error,
-                        "Request failed"
-                    );
-                }
+                self.log_error(&method, &url, &error);
                 Err(error)
             }
+        }
+    }
+
+    pub(crate) async fn execute_without_request_logging(
+        &self,
+        mut request: reqwest::Request,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        request.headers_mut().extend(trace_headers());
+        self.inner.execute(request).await
+    }
+
+    pub(crate) fn log_response(&self, method: &Method, url: &str, response: &reqwest::Response) {
+        if self.request_logging == RequestLogging::Enabled {
+            tracing::debug!(
+                method = %method,
+                url = %url,
+                status = %response.status(),
+                headers = ?response.headers(),
+                version = ?response.version(),
+                "Request completed"
+            );
+        }
+    }
+
+    pub(crate) fn log_error(&self, method: &Method, url: &str, error: &reqwest::Error) {
+        if self.request_logging == RequestLogging::Enabled {
+            tracing::debug!(
+                method = %method,
+                url = %url,
+                status = error.status().map(|status| status.as_u16()),
+                error = %error,
+                "Request failed"
+            );
         }
     }
 }
