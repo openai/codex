@@ -364,6 +364,7 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 mod windows_impl {
     use super::WindowsSandboxCancellationToken;
     use super::logging::log_failure;
+    use super::logging::log_note;
     use super::logging::log_success;
     use super::process::ConsoleMode;
     use super::process::create_process_as_user;
@@ -383,6 +384,7 @@ mod windows_impl {
     use std::io;
     use std::path::Path;
     use std::ptr;
+    use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -603,6 +605,7 @@ mod windows_impl {
             }
         };
         let pi = created.process_info;
+        let job = Arc::clone(&created.job);
         let _desktop = created;
 
         unsafe {
@@ -666,10 +669,30 @@ mod windows_impl {
             unsafe {
                 GetExitCodeProcess(pi.hProcess, &mut exit_code_u32);
             }
-        } else {
-            unsafe {
-                windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
+        }
+        if timed_out || cancelled {
+            if let Err(job_err) = job.terminate() {
+                log_note(
+                    &format!("capture failed to terminate process tree: {job_err}"),
+                    logs_base_dir,
+                );
+                let root_result = unsafe {
+                    windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1)
+                };
+                if root_result == 0 {
+                    log_note(
+                        &format!("capture failed to terminate root process: {}", unsafe {
+                            GetLastError()
+                        }),
+                        logs_base_dir,
+                    );
+                }
             }
+        } else if let Err(err) = job.preserve_descendants() {
+            log_note(
+                &format!("capture failed to preserve descendants after root exit: {err}"),
+                logs_base_dir,
+            );
         }
 
         unsafe {
