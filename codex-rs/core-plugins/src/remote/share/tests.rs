@@ -23,9 +23,10 @@ use wiremock::matchers::query_param;
 use wiremock::matchers::query_param_is_missing;
 
 fn test_config(server: &MockServer) -> RemotePluginServiceConfig {
-    RemotePluginServiceConfig {
-        chatgpt_base_url: format!("{}/backend-api", server.uri()),
-    }
+    RemotePluginServiceConfig::new(
+        format!("{}/backend-api", server.uri()),
+        crate::test_support::test_http_client_factory(),
+    )
 }
 
 fn test_auth() -> CodexAuth {

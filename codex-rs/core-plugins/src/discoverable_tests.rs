@@ -851,9 +851,10 @@ plugins = true
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     fetch_and_cache_global_remote_plugin_catalog(
         codex_home.path(),
-        &RemotePluginServiceConfig {
-            chatgpt_base_url: plugins.chatgpt_base_url.clone(),
-        },
+        &RemotePluginServiceConfig::new(
+            plugins.chatgpt_base_url.clone(),
+            crate::test_support::test_http_client_factory(),
+        ),
         Some(&auth),
     )
     .await
