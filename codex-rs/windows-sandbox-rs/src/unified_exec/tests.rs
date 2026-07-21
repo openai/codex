@@ -1,5 +1,6 @@
 #![cfg(target_os = "windows")]
 
+use super::spawn_windows_sandbox_session_elevated_for_permission_profile;
 use super::spawn_windows_sandbox_session_legacy;
 use crate::WindowsSandboxCancellationToken;
 use crate::ipc_framed::Message;
@@ -255,6 +256,52 @@ fn legacy_non_tty_cmd_emits_output() {
         let stdout = String::from_utf8_lossy(&stdout);
         assert_eq!(exit_code, 0, "stdout={stdout:?}");
         assert!(stdout.contains("LEGACY-NONTTY-CMD"), "stdout={stdout:?}");
+    });
+}
+
+#[test]
+fn elevated_non_tty_cmd_forwards_env_output_and_exit() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let cwd = sandbox_cwd();
+        let codex_home = sandbox_home("elevated-non-tty-cmd");
+        let permission_profile = PermissionProfile::workspace_write();
+        let env_map = HashMap::from([(
+            "CODEX_ELEVATED_TEST".to_string(),
+            "ELEVATED-ENV-OK".to_string(),
+        )]);
+        let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+            &permission_profile,
+            workspace_roots_for(cwd.as_path()).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                "echo %CODEX_ELEVATED_TEST% & exit /b 23".to_string(),
+            ],
+            cwd.as_path(),
+            env_map,
+            /*proxy_enforced*/ false,
+            /*network_proxy_restricting_sid*/ None,
+            Some(5_000),
+            /*read_roots_override*/ None,
+            /*read_roots_include_platform_defaults*/ true,
+            /*write_roots_override*/ None,
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn elevated non-tty cmd session");
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(10)).await;
+        let stdout = String::from_utf8_lossy(&stdout);
+        assert_eq!(exit_code, 23, "stdout={stdout:?}");
+        assert!(stdout.contains("ELEVATED-ENV-OK"), "stdout={stdout:?}");
     });
 }
 
