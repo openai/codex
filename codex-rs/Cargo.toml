@@ -52,6 +52,7 @@ members = [
     "ext/connectors",
     "ext/extension-api",
     "ext/goal",
+    "ext/git-attribution",
     "ext/guardian",
     "ext/image-generation",
     "ext/items",

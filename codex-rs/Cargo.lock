@@ -3114,6 +3114,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-git-attribution"
+version = "0.0.0"
+dependencies = [
+ "codex-backend-client",
+ "codex-extension-api",
+ "codex-http-client",
+ "codex-login",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
