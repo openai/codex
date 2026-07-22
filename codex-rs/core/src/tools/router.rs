@@ -72,7 +72,7 @@ impl ToolRouter {
         }
     }
 
-    pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
+    pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
     }
 

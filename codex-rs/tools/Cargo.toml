@@ -26,7 +26,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "server",
 ] }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 urlencoding = { workspace = true }

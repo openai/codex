@@ -12,8 +12,10 @@ use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::value::RawValue;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
@@ -29,7 +31,7 @@ pub struct CompactionInput<'a> {
     #[serde(skip_serializing_if = "str::is_empty")]
     pub instructions: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Value>>,
+    pub tools: Option<ResponsesApiTools>,
     pub parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
@@ -212,6 +214,40 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
     }
 }
 
+/// Serialized tool definitions for Responses API requests.
+///
+/// Keeping the tool list as raw JSON avoids rebuilding a generic JSON value
+/// tree, while the shared allocation keeps request clones cheap.
+#[derive(Debug, Clone)]
+pub struct ResponsesApiTools(Arc<RawValue>);
+
+impl ResponsesApiTools {
+    pub(crate) fn as_raw_value(&self) -> &RawValue {
+        &self.0
+    }
+}
+
+impl From<Arc<RawValue>> for ResponsesApiTools {
+    fn from(value: Arc<RawValue>) -> Self {
+        Self(value)
+    }
+}
+
+impl PartialEq for ResponsesApiTools {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0.get() == other.0.get()
+    }
+}
+
+impl Serialize for ResponsesApiTools {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     pub model: String,
@@ -219,7 +255,7 @@ pub struct ResponsesApiRequest {
     pub instructions: String,
     pub input: Vec<ResponseItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<serde_json::Value>>,
+    pub tools: Option<ResponsesApiTools>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
@@ -245,7 +281,7 @@ impl<'a> From<&'a ResponsesApiRequest> for ResponseCreateWsRequest<'a> {
             instructions: &request.instructions,
             previous_response_id: None,
             input: &request.input,
-            tools: request.tools.as_deref(),
+            tools: request.tools.as_ref().map(ResponsesApiTools::as_raw_value),
             tool_choice: &request.tool_choice,
             parallel_tool_calls: request.parallel_tool_calls,
             reasoning: request.reasoning.as_ref(),
@@ -271,7 +307,7 @@ pub struct ResponseCreateWsRequest<'a> {
     pub previous_response_id: Option<String>,
     pub input: &'a [ResponseItem],
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<&'a [Value]>,
+    pub tools: Option<&'a RawValue>,
     pub tool_choice: &'a str,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<&'a Reasoning>,

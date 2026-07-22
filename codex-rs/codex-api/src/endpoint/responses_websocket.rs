@@ -907,7 +907,10 @@ mod tests {
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use serde_json::value::RawValue;
+    use serde_json::value::to_raw_value;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn direct_serialization_preserves_websocket_request_payload() {
@@ -923,11 +926,17 @@ mod tests {
                 phase: None,
                 internal_chat_message_metadata_passthrough: None,
             }],
-            tools: Some(vec![json!({
-                "type": "function",
-                "name": "lookup",
-                "parameters": {"type": "object"}
-            })]),
+            tools: Some(
+                Arc::<RawValue>::from(
+                    to_raw_value(&vec![json!({
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    })])
+                    .expect("serialize tools"),
+                )
+                .into(),
+            ),
             tool_choice: "auto".to_string(),
             parallel_tool_calls: true,
             reasoning: None,
