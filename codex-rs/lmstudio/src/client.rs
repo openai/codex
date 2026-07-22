@@ -1,15 +1,19 @@
 use codex_core::config::Config;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::RouteAwareClientPool;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct LMStudioClient {
-    client: reqwest::Client,
+    client: RouteAwareClientPool,
     base_url: String,
 }
 
 const LMSTUDIO_CONNECTION_ERROR: &str = "LM Studio is not responding. Install from https://lmstudio.ai/download and run 'lms server start'.";
+const LMSTUDIO_CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl LMStudioClient {
     pub async fn try_from_provider(config: &Config) -> std::io::Result<Self> {
@@ -29,10 +33,11 @@ impl LMStudioClient {
             )
         })?;
 
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let client = RouteAwareClientPool::with_connect_timeout(
+            config.http_client_factory(),
+            ClientRouteClass::Other,
+            LMSTUDIO_CONNECTION_TIMEOUT,
+        );
 
         let client = LMStudioClient {
             client,
@@ -188,25 +193,29 @@ impl LMStudioClient {
         tracing::info!("Successfully downloaded model '{model}'");
         Ok(())
     }
-
-    /// Low-level constructor given a raw host root, e.g. "http://localhost:1234".
-    #[cfg(test)]
-    fn from_host_root(host_root: impl Into<String>) -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Self {
-            client,
-            base_url: host_root.into(),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
+
+    fn client_from_host_root(
+        host_root: impl Into<String>,
+        connection_timeout: Duration,
+    ) -> LMStudioClient {
+        let client = RouteAwareClientPool::with_connect_timeout(
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
+            ClientRouteClass::Other,
+            connection_timeout,
+        );
+        LMStudioClient {
+            client,
+            base_url: host_root.into(),
+        }
+    }
 
     #[tokio::test]
     async fn test_fetch_models_happy_path() {
@@ -235,7 +244,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = LMStudioClient::from_host_root(server.uri());
+        let client = client_from_host_root(server.uri(), LMSTUDIO_CONNECTION_TIMEOUT);
         let models = client.fetch_models().await.expect("fetch models");
         assert!(models.contains(&"openai/gpt-oss-20b".to_string()));
     }
@@ -260,7 +269,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = LMStudioClient::from_host_root(server.uri());
+        let client = client_from_host_root(server.uri(), LMSTUDIO_CONNECTION_TIMEOUT);
         let result = client.fetch_models().await;
         assert!(result.is_err());
         assert!(
@@ -288,7 +297,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = LMStudioClient::from_host_root(server.uri());
+        let client = client_from_host_root(server.uri(), LMSTUDIO_CONNECTION_TIMEOUT);
         let result = client.fetch_models().await;
         assert!(result.is_err());
         assert!(
@@ -316,11 +325,38 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = LMStudioClient::from_host_root(server.uri());
+        let client = client_from_host_root(server.uri(), LMSTUDIO_CONNECTION_TIMEOUT);
         client
             .check_server()
             .await
             .expect("server check should pass");
+    }
+
+    #[tokio::test]
+    async fn test_check_server_allows_slow_response_after_connect() {
+        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            tracing::info!(
+                "{} is set; skipping test_check_server_allows_slow_response_after_connect",
+                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+            );
+            return;
+        }
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_delay(Duration::from_millis(250)),
+            )
+            .mount(&server)
+            .await;
+
+        let client = client_from_host_root(server.uri(), Duration::from_millis(100));
+
+        client
+            .check_server()
+            .await
+            .expect("server check should allow a slow response after connecting");
     }
 
     #[tokio::test]
@@ -340,7 +376,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = LMStudioClient::from_host_root(server.uri());
+        let client = client_from_host_root(server.uri(), LMSTUDIO_CONNECTION_TIMEOUT);
         let result = client.check_server().await;
         assert!(result.is_err());
         assert!(
@@ -384,14 +420,5 @@ mod tests {
                 assert!(e.to_string().contains("LM Studio not found"));
             }
         }
-    }
-
-    #[test]
-    fn test_from_host_root() {
-        let client = LMStudioClient::from_host_root("http://localhost:1234");
-        assert_eq!(client.base_url, "http://localhost:1234");
-
-        let client = LMStudioClient::from_host_root("https://example.com:8080/api");
-        assert_eq!(client.base_url, "https://example.com:8080/api");
     }
 }
