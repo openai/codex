@@ -167,7 +167,7 @@ pub fn run_main() -> ! {
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
     let EffectivePermissions {
         permission_profile,
-        file_system_sandbox_policy,
+        mut file_system_sandbox_policy,
         network_sandbox_policy,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
     ensure_legacy_landlock_mode_supports_policy(
@@ -218,14 +218,17 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let proxy_route_spec =
-            if allow_network_for_proxy {
-                Some(prepare_host_proxy_route_spec().unwrap_or_else(|err| {
-                    panic!("failed to prepare host proxy routing bridge: {err}")
-                }))
-            } else {
-                None
-            };
+        let proxy_route_spec = if allow_network_for_proxy {
+            let (proxy_route_spec, socket_dir) = prepare_host_proxy_route_spec()
+                .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
+            file_system_sandbox_policy = file_system_sandbox_policy.with_additional_readable_roots(
+                &sandbox_policy_cwd,
+                std::slice::from_ref(&socket_dir),
+            );
+            Some(proxy_route_spec)
+        } else {
+            None
+        };
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),

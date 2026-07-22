@@ -5,6 +5,7 @@ use std::time::Duration;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 #[cfg(windows)]
@@ -264,6 +265,10 @@ async fn native_request_handles_remote_proxy_config_for_platform() {
     let env = HashMap::from([
         ("HTTP_PROXY".to_string(), stale_proxy.clone()),
         ("TEST_ENV".to_string(), "value".to_string()),
+        (
+            PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(),
+            "foreign-token".to_string(),
+        ),
     ]);
 
     let prepared = prepare_exec_request(&params, env, /*runtime_paths*/ None)
@@ -280,6 +285,7 @@ async fn native_request_handles_remote_proxy_config_for_platform() {
     let http_proxy = prepared.env.get("HTTP_PROXY").expect("HTTP proxy env");
     assert_ne!(http_proxy, &stale_proxy);
     assert!(http_proxy.starts_with("http://127.0.0.1:"));
+    assert!(!prepared.env.contains_key(PROXY_ATTRIBUTION_TOKEN_ENV_KEY));
     let proxy_addr: SocketAddr = http_proxy
         .strip_prefix("http://")
         .expect("HTTP proxy scheme")

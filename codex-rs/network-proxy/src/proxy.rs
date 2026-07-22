@@ -902,6 +902,8 @@ impl NetworkProxy {
                 PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(),
                 execution_scope.attribution_token.clone(),
             );
+        } else {
+            env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
         }
         let expose_socks_port = self.socks_enabled;
         #[cfg(target_os = "windows")]
@@ -1712,9 +1714,23 @@ mod tests {
 
         let scoped = proxy.for_execution("remote-env", "execution-1", "token-1".to_string())?;
         let launch = scoped.remote_launch_config().await?;
+        let prepared = scoped.prepare_for_optional_environment(
+            HashMap::from([(
+                PROXY_ATTRIBUTION_TOKEN_ENV_KEY.to_string(),
+                "foreign-token".to_string(),
+            )]),
+            /*environment_id*/ None,
+        )?;
 
         assert_eq!(launch.environment_id.as_deref(), Some("remote-env"));
         assert_eq!(launch.execution_id.as_deref(), Some("execution-1"));
+        assert_eq!(
+            prepared
+                .env
+                .get(PROXY_ATTRIBUTION_TOKEN_ENV_KEY)
+                .map(String::as_str),
+            Some("token-1")
+        );
         Ok(())
     }
 
