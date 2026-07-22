@@ -5270,6 +5270,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        GitEnrichmentPolicy::Fresh,
     )
     .await;
 
@@ -5535,6 +5536,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -5657,6 +5659,7 @@ async fn make_session_with_config_and_rx(
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        GitEnrichmentPolicy::Fresh,
     )
     .await?;
 
@@ -5771,6 +5774,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        GitEnrichmentPolicy::Fresh,
     )
     .await?;
 
@@ -7694,6 +7698,7 @@ where
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         next_internal_sub_id: AtomicU64::new(0),
     });
 

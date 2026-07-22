@@ -20,6 +20,7 @@ use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -107,6 +108,25 @@ async fn create_clean_git_repo(repo_name: &str) -> (TempDir, AbsolutePathBuf) {
         .expect("git commit");
 
     (temp_dir, repo_path)
+}
+
+async fn wait_for_git_enrichment(state: &TurnMetadataState) -> Value {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let header = test_turn_metadata_header(state);
+            let json: Value = serde_json::from_str(&header).expect("json");
+            if json
+                .get("workspaces")
+                .and_then(Value::as_object)
+                .is_some_and(|workspaces| !workspaces.is_empty())
+            {
+                return json;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("git enrichment should complete")
 }
 
 #[tokio::test]
@@ -762,23 +782,7 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
     );
 
     state.spawn_git_enrichment_task();
-
-    let json = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let header = test_turn_metadata_header(&state);
-            let json: Value = serde_json::from_str(&header).expect("json");
-            if json
-                .get("workspaces")
-                .and_then(Value::as_object)
-                .is_some_and(|workspaces| !workspaces.is_empty())
-            {
-                return json;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("git enrichment should complete");
+    let json = wait_for_git_enrichment(&state).await;
 
     assert_eq!(
         json["forked_from_thread_id"].as_str(),
@@ -789,4 +793,137 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
         Some("66666666-6666-4666-8666-666666666666")
     );
     assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_metadata_state_coalesces_concurrent_git_enrichment() {
+    let (_temp_dir, repo_path) = create_clean_git_repo("repo").await;
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("git rev-parse HEAD");
+    let head = String::from_utf8(head.stdout)
+        .expect("commit hash")
+        .trim()
+        .to_string();
+    let permission_profile = PermissionProfile::read_only();
+    let state = Arc::new(TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        repo_path.clone(),
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    ));
+    let barrier = Arc::new(tokio::sync::Barrier::new(8));
+    let tasks = (0..8)
+        .map(|_| {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                state.spawn_git_enrichment_task();
+                state
+                    .enrichment_task
+                    .lock()
+                    .expect("enrichment task lock")
+                    .as_ref()
+                    .expect("enrichment task")
+                    .id()
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut task_ids = Vec::new();
+    for task in tasks {
+        task_ids.push(task.await.expect("spawn task"));
+    }
+    assert!(task_ids.iter().all(|task_id| *task_id == task_ids[0]));
+
+    let json = wait_for_git_enrichment(state.as_ref()).await;
+    assert_eq!(
+        json["workspaces"],
+        serde_json::json!({
+            repo_path.to_string_lossy().as_ref(): {
+                "latest_git_commit_hash": head,
+                "has_changes": false,
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors_stay_empty() {
+    let (_temp_dir, repo_path) = create_clean_git_repo("repo").await;
+    let permission_profile = PermissionProfile::read_only();
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        repo_path,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+    state.spawn_git_enrichment_task();
+    state.cancel_git_enrichment_task();
+    assert!(
+        state
+            .enrichment_task
+            .lock()
+            .expect("enrichment task lock")
+            .is_none()
+    );
+    assert!(state.current_workspaces().is_empty());
+
+    state.spawn_git_enrichment_task();
+    let json = wait_for_git_enrichment(&state).await;
+    assert_eq!(
+        json["workspaces"].as_object().map(serde_json::Map::len),
+        Some(1)
+    );
+
+    let invalid_repo = TempDir::new().expect("invalid repo");
+    std::fs::create_dir(invalid_repo.path().join(".git")).expect("invalid git directory");
+    let invalid_state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-b".to_string(),
+        invalid_repo.path().abs(),
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+    invalid_state.spawn_git_enrichment_task();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if invalid_state
+                .enrichment_task
+                .lock()
+                .expect("enrichment task lock")
+                .as_ref()
+                .is_some_and(tokio::task::JoinHandle::is_finished)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("failed git enrichment should complete");
+    assert!(invalid_state.current_workspaces().is_empty());
 }
