@@ -1032,6 +1032,21 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
 
+    const PRODUCTION_LENGTH_AUTH_URL: &str = concat!(
+        "https://auth.openai.com/oauth/authorize?",
+        "response_type=code&",
+        "client_id=app_EMoamEEZ73f0CkXaXp7hrann&",
+        "redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&",
+        "scope=openid%20profile%20email%20offline_access%20",
+        "api.connectors.read%20api.connectors.invoke&",
+        "code_challenge=1YM3Z8QbrLbdt9C3eX3j7UQ4GmFRmKz4OeVYwD6s5xA&",
+        "code_challenge_method=S256&",
+        "id_token_add_organizations=true&",
+        "codex_cli_simplified_flow=true&",
+        "state=8cHjQ4nVx2Yp7Lm9Rk3Wf6Ta1Bs5Du0Ei4Go7Nz2PqM&",
+        "originator=codex_cli_rs"
+    );
+
     async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
         let codex_home_path = codex_home.path().to_path_buf();
@@ -1198,24 +1213,42 @@ mod tests {
     }
 
     #[test]
-    fn continue_in_browser_renders_osc8_hyperlink() {
+    fn continue_in_browser_preserves_long_link_and_footer_at_narrow_width() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
-        let url = "https://auth.example.com/login?state=abc123";
+        widget.set_animations_suppressed(/*suppressed*/ true);
         *widget.sign_in_state.write().unwrap() =
             SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
                 login_id: "login-1".to_string(),
-                auth_url: url.to_string(),
+                auth_url: PRODUCTION_LENGTH_AUTH_URL.to_string(),
             });
 
-        // Render into a narrow buffer so the URL wraps across multiple rows.
-        let area = Rect::new(0, 0, 30, 20);
+        let width = 44;
+        let height = 30;
+        let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         widget.render_continue_in_browser(area, &mut buf);
 
-        // Every character of the URL should be present as an OSC 8 cell.
-        let found = collect_osc8_chars(&buf, area, url);
-        assert_eq!(found, url, "OSC 8 hyperlink should cover the full URL");
+        let found = collect_osc8_chars(&buf, area, PRODUCTION_LENGTH_AUTH_URL);
+        assert_eq!(
+            found, PRODUCTION_LENGTH_AUTH_URL,
+            "OSC 8 hyperlink should cover the full URL"
+        );
+
+        let mut terminal = crate::custom_terminal::Terminal::with_options(
+            crate::test_backend::VT100Backend::new(width, height),
+        )
+        .expect("terminal");
+        terminal.set_viewport_area(area);
+
+        terminal
+            .draw(|frame| widget.render_continue_in_browser(area, frame.buffer_mut()))
+            .expect("draw");
+
+        let contents = terminal.backend().to_string();
+        insta::assert_snapshot!("continue_in_browser_narrow_long_url", contents);
+        assert!(contents.contains("On a remote or headless machine?"));
+        assert!(contents.contains("Press esc to cancel"));
     }
 
     #[test]
