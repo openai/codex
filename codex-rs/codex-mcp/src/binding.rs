@@ -22,7 +22,6 @@ use tokio::sync::RwLock;
 use crate::McpConfig;
 use crate::binding_clients::McpBindingClients;
 use crate::connection_manager::McpConnectionSet;
-use crate::resource_client::McpResourceClient;
 use crate::rmcp_client::ManagedClient;
 use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
@@ -90,11 +89,6 @@ impl McpBinding {
 
     pub fn has_servers(&self) -> bool {
         self.connections.has_servers()
-    }
-
-    /// Returns resource access bound to this binding's exact connection set.
-    pub fn resource_client(&self) -> McpResourceClient {
-        McpResourceClient::for_binding(Arc::clone(&self.clients))
     }
 
     pub async fn list_resources(
