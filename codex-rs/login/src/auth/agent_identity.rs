@@ -102,7 +102,7 @@ impl AgentIdentityAuth {
     pub async fn from_record(
         mut record: AgentIdentityAuthRecord,
         agent_identity_authapi_base_url: &str,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Self> {
         public_key_ssh_from_private_key_pkcs8_base64(&record.agent_private_key)
             .map_err(std::io::Error::other)?;
@@ -125,7 +125,7 @@ impl AgentIdentityAuth {
         jwt: &str,
         chatgpt_base_url: &str,
         agent_identity_authapi_base_url: &str,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Self> {
         let record = verified_record_from_jwt(jwt, chatgpt_base_url, auth_route_config).await?;
         Self::from_record(record, agent_identity_authapi_base_url, auth_route_config).await
@@ -175,7 +175,7 @@ pub(super) async fn register_managed_chatgpt_agent_identity(
     binding: ManagedChatGptAgentIdentityBinding,
     agent_identity_authapi_base_url: &str,
     session_source: SessionSource,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<AgentIdentityAuth> {
     let key_material = generate_agent_key_material().map_err(std::io::Error::other)?;
     let registration_url = agent_registration_url(agent_identity_authapi_base_url);
@@ -222,7 +222,7 @@ pub(super) async fn register_managed_chatgpt_agent_identity(
 pub(super) async fn verified_record_from_jwt(
     jwt: &str,
     chatgpt_base_url: &str,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<AgentIdentityAuthRecord> {
     AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
     let jwks_url = agent_identity_jwks_url(chatgpt_base_url);
@@ -302,7 +302,7 @@ where
 async fn register_task_for_record_with_retries(
     record: &AgentIdentityAuthRecord,
     agent_identity_authapi_base_url: &str,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<String> {
     let task_registration_url =
         agent_task_registration_url(agent_identity_authapi_base_url, &record.agent_runtime_id);
@@ -392,7 +392,7 @@ mod tests {
         let auth = AgentIdentityAuth::from_record(
             agent_identity_record_with_generated_key(),
             &server.uri(),
-            /*auth_route_config*/ None,
+            &crate::test_support::transport_default_auth_route_config(),
         )
         .await?;
 
@@ -437,7 +437,7 @@ mod tests {
             &jwt,
             &format!("{}/backend-api", server.uri()),
             &server.uri(),
-            /*auth_route_config*/ None,
+            &crate::test_support::transport_default_auth_route_config(),
         )
         .await?;
 
@@ -480,7 +480,7 @@ mod tests {
         let auth = AgentIdentityAuth::from_record(
             agent_identity_record_with_generated_key(),
             &server.uri(),
-            /*auth_route_config*/ None,
+            &crate::test_support::transport_default_auth_route_config(),
         )
         .await?;
 

@@ -544,13 +544,20 @@ fn cached_system_proxy_decision_from_cache(
     None
 }
 
-#[cfg(test)]
 fn cache_system_proxy_decision(request_url: &str, decision: SystemProxyDecision) {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {
         let cache_key = system_proxy_cache_key(request_url);
         insert_system_proxy_cache_entry(&mut cache, &cache_key, decision, Instant::now());
     }
+}
+
+/// Primes one proxy decision for cross-crate integration tests.
+///
+/// This is public only so tests in HTTP-client consumers can exercise system-proxy routing
+/// deterministically on every supported platform.
+pub fn cache_system_proxy_route_for_test(request_url: &str, proxy_url: String) {
+    cache_system_proxy_decision(request_url, SystemProxyDecision::Proxy { url: proxy_url });
 }
 
 fn insert_system_proxy_cache_entry(

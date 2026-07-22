@@ -4,6 +4,9 @@ use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::cache_system_proxy_route_for_test;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
@@ -21,7 +24,10 @@ use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::OsString;
+use std::net::TcpListener;
+use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -31,6 +37,147 @@ use wiremock::matchers::path;
 
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
+const SYSTEM_PROXY_TEST_ENDPOINT: &str = "http://auth-proxy.invalid/oauth/token";
+const SYSTEM_PROXY_TEST_SUBPROCESS_ENV_VAR: &str = "CODEX_AUTH_SYSTEM_PROXY_TEST_SUBPROCESS";
+const SYSTEM_PROXY_TEST_PROXY_URL_ENV_VAR: &str = "CODEX_AUTH_SYSTEM_PROXY_TEST_PROXY_URL";
+const SYSTEM_PROXY_TEST_NAME: &str =
+    "suite::auth_refresh::refresh_token_honors_respect_system_proxy";
+const PROXY_ENV_KEYS: [&str; 8] = [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn refresh_token_honors_respect_system_proxy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    if std::env::var_os(SYSTEM_PROXY_TEST_SUBPROCESS_ENV_VAR).is_none() {
+        let response_body =
+            r#"{"access_token":"new-access-token","refresh_token":"new-refresh-token"}"#;
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let proxy_address = listener.local_addr()?;
+        let proxy = tiny_http::Server::from_listener(listener, None)
+            .map_err(|error| anyhow::anyhow!("failed to start auth proxy: {error}"))?;
+        let proxy_thread = std::thread::spawn(move || {
+            let mut request = proxy
+                .recv_timeout(StdDuration::from_secs(30))
+                .expect("proxy should receive an auth refresh request")
+                .expect("proxy should receive a request before the timeout");
+            let request_line = format!("{} {} HTTP/1.1", request.method(), request.url());
+            let mut request_body = String::new();
+            request
+                .as_reader()
+                .read_to_string(&mut request_body)
+                .expect("proxy should read request body");
+            let content_type = tiny_http::Header::from_bytes(
+                b"Content-Type".as_slice(),
+                b"application/json".as_slice(),
+            )
+            .expect("content type header should be valid");
+            request
+                .respond(tiny_http::Response::from_string(response_body).with_header(content_type))
+                .expect("proxy should write response");
+            (request_line, request_body)
+        });
+
+        let proxy_url = format!("http://{proxy_address}");
+        let mut command = Command::new(std::env::current_exe()?);
+        command.arg("--exact").arg(SYSTEM_PROXY_TEST_NAME);
+        for key in PROXY_ENV_KEYS {
+            command.env_remove(key);
+        }
+        command
+            .env(SYSTEM_PROXY_TEST_SUBPROCESS_ENV_VAR, "1")
+            .env(SYSTEM_PROXY_TEST_PROXY_URL_ENV_VAR, proxy_url)
+            .env(CLIENT_ID_OVERRIDE_ENV_VAR, "staging-client")
+            .env_remove(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR);
+
+        let output = command.output()?;
+        assert!(
+            output.status.success(),
+            "subprocess test `{SYSTEM_PROXY_TEST_NAME}` failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let (proxy_request_line, proxy_request_body) = proxy_thread
+            .join()
+            .expect("proxy thread should finish after the child test");
+        assert_eq!(
+            proxy_request_line,
+            "POST http://auth-proxy.invalid/oauth/token HTTP/1.1"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&proxy_request_body)?,
+            json!({
+                "client_id": "staging-client",
+                "grant_type": "refresh_token",
+                "refresh_token": INITIAL_REFRESH_TOKEN,
+            })
+        );
+        return Ok(());
+    }
+
+    let codex_home = TempDir::new()?;
+    let proxy_url = std::env::var(SYSTEM_PROXY_TEST_PROXY_URL_ENV_VAR)
+        .context("proxy URL should be set in the auth refresh test subprocess")?;
+    cache_system_proxy_route_for_test(SYSTEM_PROXY_TEST_ENDPOINT, proxy_url);
+    let _endpoint_guard = EnvGuard::set(
+        REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+        SYSTEM_PROXY_TEST_ENDPOINT.to_string(),
+    );
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/
+        codex_login::AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(
+            OutboundProxyPolicy::RespectSystemProxy,
+        )),
+    )
+    .await;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(Utc::now() - Duration::days(1)),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+    };
+    save_auth(
+        codex_home.path(),
+        &initial_auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    auth_manager.reload().await;
+
+    auth_manager
+        .refresh_token_from_authority()
+        .await
+        .context("refresh should succeed through the configured proxy")?;
+
+    let refreshed_auth = auth_manager.auth().await.context("auth should be cached")?;
+    let expected_tokens = TokenData {
+        access_token: "new-access-token".to_string(),
+        refresh_token: "new-refresh-token".to_string(),
+        ..initial_tokens
+    };
+    assert_eq!(refreshed_auth.get_token_data()?, expected_tokens);
+
+    Ok(())
+}
 
 #[serial_test::serial(auth_env)]
 #[tokio::test]
