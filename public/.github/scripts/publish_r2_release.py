@@ -9,6 +9,8 @@ versioned prefix includes every release asset plus installer-facing
 ``release.json`` metadata derived from the verified downloads. Once those
 objects are verified, the same metadata advances ``codex/channels/latest`` when
 the release is marked latest and ``codex/channels/prerelease`` for prereleases.
+Stable releases also update the mutable ``codex/install.sh`` and
+``codex/install.ps1`` bootstrap aliases from their verified versioned assets.
 """
 
 import argparse
@@ -27,6 +29,7 @@ BUCKET = "releases"
 PREFIX = "codex"
 REPOSITORY = "openai/codex"
 RELEASE_METADATA_NAME = "release.json"
+INSTALLER_NAMES = ("install.sh", "install.ps1")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+)?)?$")
 CRC64_RE = re.compile(r"^[A-Za-z0-9+/]{11}=$")
 SHA256_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
@@ -229,6 +232,25 @@ def verify_remote(
         )
 
 
+def publish_installers(endpoint: str, tag: str, assets: list[ReleaseAsset]) -> None:
+    installers = {asset.path.name: asset for asset in assets}
+    missing = sorted(set(INSTALLER_NAMES) - installers.keys())
+    if missing:
+        raise PublishError(
+            f"GitHub Release {tag} is missing installer assets: {', '.join(missing)}"
+        )
+    for name in INSTALLER_NAMES:
+        asset = installers[name]
+        installer_key = f"{PREFIX}/{name}"
+        put_object(endpoint, installer_key, asset.path, asset.sha256, extra_args=[])
+        verify_remote(endpoint, installer_key, asset.size, asset.sha256)
+        print(
+            f"published and verified s3://{BUCKET}/{installer_key} "
+            f"size={asset.size} sha256={asset.sha256}",
+            file=sys.stderr,
+        )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
@@ -327,6 +349,8 @@ def main() -> int:
                 f"size={metadata_size} sha256={metadata_sha256}",
                 file=sys.stderr,
             )
+            if args.prerelease == "false":
+                publish_installers(endpoint, args.tag, assets)
             channels = []
             if args.make_latest == "true":
                 channels.append("latest")
