@@ -1251,7 +1251,7 @@ impl AuthManagerConfig for Config {
     }
 
     fn auth_route_config(&self) -> Option<AuthRouteConfig> {
-        Config::auth_route_config(self)
+        Some(Config::auth_route_config(self))
     }
 }
 
@@ -1514,9 +1514,9 @@ impl Config {
         }
     }
 
-    pub fn auth_route_config(&self) -> Option<AuthRouteConfig> {
-        self.respect_system_proxy
-            .then(AuthRouteConfig::respect_system_proxy)
+    /// Returns auth routing resolved from the effective feature configuration.
+    pub fn auth_route_config(&self) -> AuthRouteConfig {
+        AuthRouteConfig::from_http_client_factory(self.http_client_factory())
     }
 
     /// Creates the HTTP client factory resolved from the effective feature configuration.
@@ -2899,9 +2899,15 @@ pub fn resolve_bootstrap_respect_system_proxy(
 pub fn resolve_bootstrap_auth_route_config(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
-) -> std::io::Result<Option<AuthRouteConfig>> {
-    resolve_bootstrap_respect_system_proxy(cfg, feature_requirements)
-        .map(|enabled| enabled.then(AuthRouteConfig::respect_system_proxy))
+) -> std::io::Result<AuthRouteConfig> {
+    resolve_bootstrap_respect_system_proxy(cfg, feature_requirements).map(|respect_system_proxy| {
+        let outbound_proxy_policy = if respect_system_proxy {
+            OutboundProxyPolicy::RespectSystemProxy
+        } else {
+            OutboundProxyPolicy::ReqwestDefault
+        };
+        AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(outbound_proxy_policy))
+    })
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(

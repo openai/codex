@@ -1756,7 +1756,7 @@ async fn load_exec_server_remote_auth_provider(
         let auth = CodexAuth::from_agent_identity_jwt(
             &agent_identity_jwt,
             Some(&config.chatgpt_base_url),
-            auth_route_config.as_ref(),
+            Some(&auth_route_config),
         )
         .await?;
         return Ok(codex_model_provider::auth_provider_from_auth(&auth));

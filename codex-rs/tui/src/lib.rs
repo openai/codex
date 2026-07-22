@@ -1197,7 +1197,7 @@ pub async fn run_main(
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
             chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
-            auth_route_config,
+            auth_route_config: Some(auth_route_config),
         })
         .await
         {

@@ -1040,6 +1040,7 @@ mod tests {
             .build()
             .await
             .unwrap();
+        let auth_route_config = config.auth_route_config();
         let client = InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config: Arc::new(config),
@@ -1052,7 +1053,7 @@ mod tests {
                 AuthCredentialsStoreMode::File,
                 AuthKeyringBackendKind::default(),
                 "https://chatgpt.com/backend-api/".to_string(),
-                /*auth_route_config*/ None,
+                auth_route_config,
             )
             .await,
             feedback: codex_feedback::CodexFeedback::new(),
