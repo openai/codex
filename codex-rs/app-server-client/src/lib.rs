@@ -84,6 +84,8 @@ pub mod legacy_core {
 }
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+// Covers the embedded drain, its analytics flush, and final task join.
+const IN_PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Raw app-server request result for typed in-process requests.
 ///
@@ -747,7 +749,7 @@ impl InProcessAppServerClient {
             .send(ClientCommand::Shutdown { response_tx })
             .await
             .is_ok()
-            && let Ok(command_result) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
+            && let Ok(command_result) = timeout(IN_PROCESS_SHUTDOWN_TIMEOUT, response_rx).await
         {
             command_result.map_err(|_| {
                 IoError::new(
@@ -757,7 +759,7 @@ impl InProcessAppServerClient {
             })??;
         }
 
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await {
+        if let Err(_elapsed) = timeout(IN_PROCESS_SHUTDOWN_TIMEOUT, &mut worker_handle).await {
             worker_handle.abort();
             let _ = worker_handle.await;
         }
@@ -2283,5 +2285,33 @@ mod tests {
             .await
             .expect("shutdown should not wait for the 5s fallback timeout")
             .expect("shutdown should complete");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_waits_for_in_process_drain() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::Ordering;
+
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let completed = Arc::new(AtomicBool::new(false));
+        let worker_completed = Arc::clone(&completed);
+        let worker_handle = tokio::spawn(async move {
+            let response_tx = match command_rx.recv().await {
+                Some(ClientCommand::Shutdown { response_tx }) => response_tx,
+                _ => panic!("expected shutdown command"),
+            };
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            worker_completed.store(true, Ordering::Release);
+            let _ = response_tx.send(Ok(()));
+        });
+        let client = InProcessAppServerClient {
+            command_tx,
+            event_rx,
+            worker_handle,
+        };
+
+        client.shutdown().await.expect("shutdown should complete");
+        assert!(completed.load(Ordering::Acquire));
     }
 }
