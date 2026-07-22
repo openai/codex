@@ -109,7 +109,7 @@ def _rust_argument_comment_lint_aspect_impl(target, ctx):
         attr = ctx.rule.attr,
         file = ctx.file,
         toolchain = toolchain,
-        tool_path = ctx.executable._driver.path,
+        tool_file = ctx.executable._driver,
         cc_toolchain = cc_toolchain,
         feature_configuration = feature_configuration,
         crate_info = crate_info,
@@ -142,7 +142,7 @@ def _rust_argument_comment_lint_aspect_impl(target, ctx):
     )
 
     ctx.actions.run(
-        executable = ctx.executable._process_wrapper,
+        executable = toolchain.process_wrapper,
         inputs = action_inputs,
         outputs = [success_marker],
         env = env,

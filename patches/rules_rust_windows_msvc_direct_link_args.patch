@@ -1,32 +1,32 @@
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
-@@ -501,11 +501,41 @@
+@@ -468,11 +468,25 @@
                      filtered_args.append(version)
                      # Keep library search path flags
 
 +                elif processed_arg == "-L" and i + 1 < len(link_args):
 +                    path = link_args[i + 1]
-+                    if ld_is_direct_driver and toolchain.target_os == "windows":
++                    if ld_is_direct_driver and toolchain.target_os == "windows" and toolchain.target_abi == "msvc":
 +                        skip_next = True
 +                        continue
 +                    filtered_args.extend([processed_arg, path])
 +                    skip_next = True
 +
                  elif processed_arg.startswith("-L"):
-+                    if ld_is_direct_driver and toolchain.target_os == "windows":
++                    if ld_is_direct_driver and toolchain.target_os == "windows" and toolchain.target_abi == "msvc":
 +                        continue
                      filtered_args.append(processed_arg)
                      # Keep sysroot flags (as single or two-part arguments)
  
                  elif processed_arg == "--sysroot" or processed_arg.startswith("--sysroot="):
-+                    if ld_is_direct_driver and toolchain.target_os == "windows":
++                    if ld_is_direct_driver and toolchain.target_os == "windows" and toolchain.target_abi == "msvc":
 +                        if processed_arg == "--sysroot" and i + 1 < len(link_args):
 +                            skip_next = True
 +                        continue
                      filtered_args.append(processed_arg)
                      if processed_arg == "--sysroot" and i + 1 < len(link_args):
                          # Two-part argument, keep the next arg too
-@@ -2256,8 +2256,10 @@
+@@ -2943,8 +2957,10 @@
          use_pic,
          ambiguous_libs,
          get_lib_name,
@@ -36,13 +36,24 @@
 +        flavor_msvc = False,
 +        use_direct_driver = False):
      """_summary_
- 
+
      Args:
-@@ -2310,6 +2312,11 @@
+@@ -2952,8 +2968,10 @@
+         use_pic (_type_): _description_
+         ambiguous_libs (_type_): _description_
+         get_lib_name (_type_): _description_
++        for_windows (bool, optional): _description_. Defaults to False.
+         for_darwin (bool, optional): _description_. Defaults to False.
+         flavor_msvc (bool, optional): _description_. Defaults to False.
++        use_direct_driver (bool, optional): _description_. Defaults to False.
+
+     Returns:
+         _type_: _description_
+@@ -2997,6 +3015,11 @@
          ):
              return [] if for_darwin else ["-lstatic=%s" % get_lib_name(artifact)]
  
-+        if for_windows and use_direct_driver and not artifact.basename.endswith(".lib"):
++        if for_windows and flavor_msvc and use_direct_driver and not artifact.basename.endswith(".lib"):
 +            return [
 +                "-Clink-arg={}".format(artifact.path),
 +            ]
@@ -50,7 +61,7 @@
          if flavor_msvc:
              return [
                  "-lstatic=%s" % get_lib_name(artifact),
-@@ -2346,7 +2353,7 @@
+@@ -3045,7 +3068,7 @@
                  ])
          elif include_link_flags:
              get_lib_name = get_lib_name_for_windows if flavor_msvc else get_lib_name_default
@@ -59,34 +70,26 @@
  
      # Windows toolchains can inherit POSIX defaults like -pthread from C deps,
      # which fails to link with the MinGW/LLD toolchain. Drop them here.
-@@ -2522,17 +2529,25 @@
-         else:
-             # For all other crate types we want to link C++ runtime library statically
-             # (for example libstdc++.a or libc++.a).
-+            runtime_libs = cc_toolchain.static_runtime_lib(feature_configuration = feature_configuration)
-             args.add_all(
--                cc_toolchain.static_runtime_lib(feature_configuration = feature_configuration),
-+                runtime_libs,
-                 map_each = _get_dirname,
+@@ -3257,11 +3280,18 @@
                  format_each = "-Lnative=%s",
              )
              if include_link_flags:
 -                args.add_all(
--                    cc_toolchain.static_runtime_lib(feature_configuration = feature_configuration),
+-                    runtime_libs,
 -                    map_each = get_lib_name,
--                    format_each = "-lstatic=%s",
+-                    format_each = static_runtime_link_format,
 -                )
-+                if toolchain.target_os == "windows" and use_direct_link_driver:
++                if toolchain.target_os == "windows" and toolchain.target_abi == "msvc" and use_direct_link_driver:
 +                    for runtime_lib in runtime_libs.to_list():
 +                        if runtime_lib.basename.endswith(".lib"):
-+                            args.add(get_lib_name(runtime_lib), format = "-lstatic=%s")
++                            args.add(get_lib_name(runtime_lib), format = static_runtime_link_format)
 +                        else:
 +                            args.add(runtime_lib.path, format = "--codegen=link-arg=%s")
 +                else:
 +                    args.add_all(
 +                        runtime_libs,
 +                        map_each = get_lib_name,
-+                        format_each = "-lstatic=%s",
++                        format_each = static_runtime_link_format,
 +                    )
  
  def _get_dirname(file):

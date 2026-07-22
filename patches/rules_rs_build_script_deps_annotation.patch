@@ -1,27 +1,26 @@
-# What: expose the existing unconditional build-script dependency input through
-# the `rules_rs` crate annotation API.
-# Scope: annotation plumbing only; generated dependency resolution is unchanged.
+# What: restore explicit build-script dependency annotations used by Codex.
+# Scope: rules_rs crate-universe annotation plumbing only.
 
 diff --git a/rs/extensions.bzl b/rs/extensions.bzl
 --- a/rs/extensions.bzl
 +++ b/rs/extensions.bzl
-@@ -737,7 +737,7 @@ def _generate_hub_and_spokes(
-             additive_build_file = annotation.additive_build_file,
-             additive_build_file_content = annotation.additive_build_file_content,
+@@ -321,7 +321,7 @@ def _generate_hub_and_spokes(
+         kwargs = dict(
+             hub_name = hub_name,
              gen_build_script = annotation.gen_build_script,
 -            build_script_deps = [],
 +            build_script_deps = annotation.build_script_deps,
              build_script_deps_select = _select(feature_resolutions.build_deps),
              build_script_data = annotation.build_script_data,
              build_script_data_select = annotation.build_script_data_select,
-@@ -1417,9 +1417,9 @@ _annotation = tag_class(
-         "build_script_data_select": attr.string_list_dict(
-             doc = "A list of labels to add to a crate's `cargo_build_script::data` attribute. Keys should be the platform triplet. Value should be a list of labels.",
+@@ -881,9 +881,9 @@ _annotation = tag_class(
+         "build_script_data_select": _label_list_dict(
+             doc = "Labels to add to a crate's `cargo_build_script::data` attribute, keyed by platform triplet.",
          ),
--        # "build_script_deps": _relative_label_list(
+-        # "build_script_deps": attr.label_list(
 -        #     doc = "A list of labels to add to a crate's `cargo_build_script::deps` attribute.",
 -        # ),
-+        "build_script_deps": _relative_label_list(
++        "build_script_deps": attr.string_list(
 +            doc = "A list of labels to add to a crate's `cargo_build_script::deps` attribute.",
 +        ),
          "build_script_env": attr.string_dict(
@@ -30,31 +29,30 @@ diff --git a/rs/extensions.bzl b/rs/extensions.bzl
 diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
 --- a/rs/private/annotations.bzl
 +++ b/rs/private/annotations.bzl
-@@ -5,6 +5,7 @@ def _crate_annotation(
+@@ -2,6 +2,7 @@ def _crate_annotation(
+         additive_build_file = None,
+         additive_build_file_content = "",
          gen_build_script = "auto",
++        build_script_deps = [],
          build_script_data = [],
          build_script_data_select = {},
-+        build_script_deps = [],
          build_script_env = {},
-         build_script_env_select = {},
-         build_script_tools = [],
-@@ -28,6 +29,7 @@ def _crate_annotation(
+@@ -30,6 +31,7 @@ def _crate_annotation(
+         additive_build_file = additive_build_file,
+         additive_build_file_content = additive_build_file_content,
          gen_build_script = gen_build_script,
++        build_script_deps = build_script_deps,
          build_script_data = build_script_data,
          build_script_data_select = build_script_data_select,
-+        build_script_deps = build_script_deps,
          build_script_env = build_script_env,
-         build_script_env_select = build_script_env_select,
-         build_script_tools = build_script_tools,
 diff --git a/rs/private/repository_utils.bzl b/rs/private/repository_utils.bzl
 --- a/rs/private/repository_utils.bzl
 +++ b/rs/private/repository_utils.bzl
-@@ -216,7 +216,7 @@ common_attrs = {
-     "additive_build_file": attr.label(),
-     "additive_build_file_content": attr.string(),
+@@ -298,6 +298,6 @@ rust_crate_attrs = {
+     "hub_name": attr.string(),
      "gen_build_script": attr.string(),
--    "build_script_deps": attr.label_list(default = []),
-+    "build_script_deps": attr.string_list(default = []),
-     "build_script_deps_select": attr.string_list_dict(),
-     "build_script_data": attr.label_list(default = []),
-     "build_script_data_select": attr.string_list_dict(),
+-    "build_script_deps": attr.label_list(),
++    "build_script_deps": attr.string_list(),
+     "build_script_deps_select": _label_list_dict(),
+     "build_script_data": attr.label_list(),
+     "build_script_data_select": _label_list_dict(),
