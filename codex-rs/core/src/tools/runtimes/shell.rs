@@ -95,7 +95,7 @@ pub struct ShellRuntime {
 pub(crate) struct ApprovalKey {
     environment_id: String,
     command: Vec<String>,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<AdditionalPermissionProfile>,
 }
@@ -130,7 +130,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         vec![ApprovalKey {
             environment_id: req.turn_environment.environment_id.clone(),
             command: canonicalize_command_for_approval(&req.command),
-            cwd: req.cwd.clone(),
+            cwd: PathUri::from_abs_path(&req.cwd),
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
         }]
