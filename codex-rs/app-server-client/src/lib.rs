@@ -617,20 +617,22 @@ impl InProcessAppServerClient {
     where
         T: DeserializeOwned,
     {
-        let method = request_method_name(&request);
+        let method = request.method_name();
         let response =
             self.request(request)
                 .await
                 .map_err(|source| TypedRequestError::Transport {
-                    method: method.clone(),
+                    method: method.to_string(),
                     source,
                 })?;
         let result = response.map_err(|source| TypedRequestError::Server {
-            method: method.clone(),
+            method: method.to_string(),
             source,
         })?;
-        serde_json::from_value(result)
-            .map_err(|source| TypedRequestError::Deserialize { method, source })
+        serde_json::from_value(result).map_err(|source| TypedRequestError::Deserialize {
+            method: method.to_string(),
+            source,
+        })
     }
 
     /// Sends a typed client notification.
@@ -790,20 +792,22 @@ impl InProcessAppServerRequestHandle {
     where
         T: DeserializeOwned,
     {
-        let method = request_method_name(&request);
+        let method = request.method_name();
         let response =
             self.request(request)
                 .await
                 .map_err(|source| TypedRequestError::Transport {
-                    method: method.clone(),
+                    method: method.to_string(),
                     source,
                 })?;
         let result = response.map_err(|source| TypedRequestError::Server {
-            method: method.clone(),
+            method: method.to_string(),
             source,
         })?;
-        serde_json::from_value(result)
-            .map_err(|source| TypedRequestError::Deserialize { method, source })
+        serde_json::from_value(result).map_err(|source| TypedRequestError::Deserialize {
+            method: method.to_string(),
+            source,
+        })
     }
 }
 
@@ -902,20 +906,6 @@ impl AppServerClient {
             Self::Remote(client) => AppServerRequestHandle::Remote(client.request_handle()),
         }
     }
-}
-
-/// Extracts the JSON-RPC method name for diagnostics without extending the
-/// protocol crate with in-process-only helpers.
-pub(crate) fn request_method_name(request: &ClientRequest) -> String {
-    serde_json::to_value(request)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("method")
-                .and_then(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "<unknown>".to_string())
 }
 
 #[cfg(test)]

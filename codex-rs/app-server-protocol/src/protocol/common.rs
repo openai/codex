@@ -239,10 +239,6 @@ macro_rules! client_request_definitions {
                 }
             }
 
-            pub fn method(&self) -> String {
-                self.method_name().to_string()
-            }
-
             pub fn serialization_scope(&self) -> Option<ClientRequestSerializationScope> {
                 match self {
                     $(
@@ -2671,7 +2667,6 @@ mod tests {
             params: None,
         };
         assert_eq!(request.id(), &RequestId::Integer(1));
-        assert_eq!(request.method(), "account/rateLimits/read");
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
@@ -2689,7 +2684,6 @@ mod tests {
             params: None,
         };
         assert_eq!(request.id(), &RequestId::Integer(1));
-        assert_eq!(request.method(), "account/usage/read");
         assert_eq!(
             json!({
                 "method": "account/usage/read",
@@ -2707,7 +2701,6 @@ mod tests {
             params: None,
         };
         assert_eq!(request.id(), &RequestId::Integer(1));
-        assert_eq!(request.method(), "account/workspaceMessages/read");
         assert_eq!(
             json!({
                 "method": "account/workspaceMessages/read",
