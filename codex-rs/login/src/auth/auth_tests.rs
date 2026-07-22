@@ -1108,15 +1108,12 @@ impl ExternalAuth for StaticExternalAuth {
 
 #[tokio::test]
 async fn external_auth_provider_can_install_headers() {
-    let mut headers = reqwest::header::HeaderMap::new();
+    let mut headers = http::HeaderMap::new();
     headers.insert(
-        reqwest::header::AUTHORIZATION,
-        reqwest::header::HeaderValue::from_static("Bearer external"),
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_static("Bearer external"),
     );
-    headers.insert(
-        "x-external-auth",
-        reqwest::header::HeaderValue::from_static("enabled"),
-    );
+    headers.insert("x-external-auth", http::HeaderValue::from_static("enabled"));
     let auth = CodexAuth::Headers(AuthHeaders::new(headers));
     let codex_home = tempdir().expect("tempdir");
     let manager = AuthManager::new(

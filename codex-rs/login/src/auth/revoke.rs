@@ -200,8 +200,8 @@ mod tests {
 
         let reqwest_error = error
             .get_ref()
-            .and_then(|error| error.downcast_ref::<reqwest::Error>())
-            .expect("timeout error should preserve reqwest error");
+            .and_then(|error| error.downcast_ref::<codex_http_client::HttpError>())
+            .expect("timeout error should preserve HTTP client error");
         assert!(reqwest_error.is_timeout());
     }
 }

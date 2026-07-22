@@ -1,22 +1,20 @@
 //! Default Codex HTTP client: shared `User-Agent`, `originator`, optional residency header, and
-//! reqwest/`HttpClient` construction.
+//! `HttpClient` construction.
 //!
 //! Use [`crate::default_client`] or [`codex_login::default_client`] from other crates in this
 //! workspace.
 
-use codex_http_client::BuildCustomCaTransportError;
 use codex_http_client::BuildRouteAwareHttpClientError;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClient;
+use codex_http_client::HttpClientBuilder;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 pub use codex_http_client::RequestBuilder as CodexRequestBuilder;
-use codex_http_client::build_reqwest_client_with_custom_ca;
-use codex_http_client::with_chatgpt_cloudflare_cookie_store;
 use codex_terminal_detection::user_agent;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderValue;
-use reqwest::header::USER_AGENT;
+use http::HeaderMap;
+use http::HeaderValue;
+use http::header::USER_AGENT;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -218,110 +216,84 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
 
 /// Create an HTTP client with default `originator` and `User-Agent` headers set.
 ///
-/// This supported default path preserves reqwest's existing proxy behavior and does not opt into
+/// This supported default path preserves the transport's existing proxy behavior and does not opt into
 /// Codex's route-aware system/PAC resolution.
 pub fn create_client() -> HttpClient {
-    let inner = build_reqwest_client();
-    HttpClient::new(inner)
+    build_default_client(default_http_client_builder())
 }
 
 /// Create the default HTTP client without request URL or response-header diagnostics.
 ///
-/// This preserves the default client's legacy custom-CA fallback and reqwest proxy behavior while
+/// This preserves the default client's legacy custom-CA fallback and transport proxy behavior while
 /// avoiding diagnostics that could expose credentials embedded in request URLs or headers.
 pub fn create_client_without_request_logging() -> HttpClient {
-    let inner = build_reqwest_client();
-    HttpClient::new_without_request_logging(inner)
+    build_default_client(default_http_client_builder().without_request_logging())
 }
 
-/// Builds the default reqwest client used for ordinary Codex HTTP traffic.
-///
-/// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
-/// policy, then layers in shared custom CA handling from `CODEX_CA_CERTIFICATE` /
-/// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
-/// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
-///
-/// This supported default path preserves reqwest's existing proxy behavior and does not opt into
-/// Codex's route-aware system/PAC resolution. Auth callers with route settings must use
-/// `build_default_auth_reqwest_client` or `create_default_auth_client`.
-pub fn build_reqwest_client() -> reqwest::Client {
-    try_build_reqwest_client().unwrap_or_else(|error| {
-        tracing::warn!(error = %error, "failed to build default reqwest client");
-        with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder())
-            .build()
-            .unwrap_or_else(|fallback_error| {
-                tracing::warn!(
-                    error = %fallback_error,
-                    "failed to build fallback reqwest client with ChatGPT Cloudflare cookie store"
-                );
-                reqwest::Client::new()
-            })
-    })
-}
-
-/// Tries to build the default reqwest client used for ordinary Codex HTTP traffic.
-///
-/// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
-/// this method directly.
-pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
-    build_reqwest_client_with_custom_ca(default_reqwest_client_builder())
-}
-
-/// Builds the default Codex reqwest client for a concrete outbound route.
+/// Builds the default Codex HTTP client for a concrete outbound route.
 ///
 /// When route-aware proxy handling is disabled, or the client is running inside the Codex
 /// sandbox, this preserves the default client's existing proxy behavior. Otherwise it resolves
 /// the destination through the shared system/PAC-aware routing policy.
-pub fn build_default_reqwest_client_for_route(
+pub fn create_client_for_route(
     http_client_factory: &HttpClientFactory,
     request_url: &str,
     route_class: ClientRouteClass,
-) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
     if matches!(
         http_client_factory.outbound_proxy_policy(),
         OutboundProxyPolicy::ReqwestDefault
     ) {
-        return Ok(build_reqwest_client());
+        return Ok(create_client());
     }
     if is_sandboxed() {
         // Preserve the sandbox's existing no-proxy policy; sandboxed command egress is routed
         // separately through network-proxy.
-        return Ok(build_reqwest_client());
+        return Ok(create_client());
     }
 
-    http_client_factory.build_reqwest_client(
-        default_reqwest_client_builder(),
+    default_http_client_builder().build_respecting_outbound_proxy_policy(
+        http_client_factory,
         request_url,
         route_class,
     )
 }
 
-/// Builds the default Codex reqwest client for a concrete outbound route without blocking the
+/// Builds the default Codex HTTP client for a concrete outbound route without blocking the
 /// async runtime worker that initiated the request.
-pub async fn build_default_reqwest_client_for_route_async(
+pub async fn create_client_for_route_async(
     http_client_factory: HttpClientFactory,
     request_url: String,
     route_class: ClientRouteClass,
-) -> std::io::Result<reqwest::Client> {
+) -> std::io::Result<HttpClient> {
     let permit = ROUTE_AWARE_CLIENT_BUILD_PERMIT
         .acquire()
         .await
         .map_err(std::io::Error::other)?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        build_default_reqwest_client_for_route(&http_client_factory, &request_url, route_class)
+        create_client_for_route(&http_client_factory, &request_url, route_class)
             .map_err(std::io::Error::from)
     })
     .await
     .map_err(std::io::Error::other)?
 }
 
-fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
-    let mut builder = reqwest::Client::builder().default_headers(default_headers());
+fn default_http_client_builder() -> HttpClientBuilder {
+    HttpClientBuilder::new()
+        .default_headers(default_headers())
+        .with_chatgpt_cloudflare_cookie_store()
+}
+
+// These legacy constructors intentionally preserve the infallible behavior of `create_client`.
+// New endpoint-aware call sites use `create_client_for_route` and propagate construction errors.
+#[allow(deprecated)]
+fn build_default_client(builder: HttpClientBuilder) -> HttpClient {
     if is_sandboxed() {
-        builder = builder.no_proxy();
+        builder.build_direct_with_custom_ca_fallback()
+    } else {
+        builder.build_with_transport_default_proxy_and_custom_ca_fallback()
     }
-    with_chatgpt_cloudflare_cookie_store(builder)
 }
 
 /// Builds an HTTP client for an auth endpoint without Codex default headers.
@@ -333,24 +305,16 @@ pub(crate) fn create_raw_auth_client(
         .build_client_without_request_logging(endpoint, ClientRouteClass::Auth)
 }
 
-/// Builds the default Codex reqwest client for an auth endpoint.
-pub(crate) fn build_default_auth_reqwest_client(
-    endpoint: &str,
-    auth_route_config: Option<&AuthRouteConfig>,
-) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-    build_default_reqwest_client_for_route(
-        &auth_http_client_factory(auth_route_config),
-        endpoint,
-        ClientRouteClass::Auth,
-    )
-}
-
 /// Builds the default Codex HTTP client wrapper for an auth endpoint.
 pub(crate) fn create_default_auth_client(
     endpoint: &str,
     auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
-    build_default_auth_reqwest_client(endpoint, auth_route_config).map(HttpClient::new)
+    create_client_for_route(
+        &auth_http_client_factory(auth_route_config),
+        endpoint,
+        ClientRouteClass::Auth,
+    )
 }
 
 fn auth_http_client_factory(auth_route_config: Option<&AuthRouteConfig>) -> HttpClientFactory {

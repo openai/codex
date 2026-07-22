@@ -1,6 +1,6 @@
 use std::fmt;
 
-use reqwest::header::HeaderMap;
+use http::HeaderMap;
 
 /// Request headers returned by an external auth provider.
 ///
