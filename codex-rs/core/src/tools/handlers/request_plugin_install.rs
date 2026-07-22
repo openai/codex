@@ -349,7 +349,7 @@ fn disabled_install_request(tool: &DiscoverableTool) -> ToolSuggestDisabledTool 
 async fn verify_request_plugin_install_completed(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
-    manager: &codex_mcp::McpConnectionManager,
+    manager: &codex_mcp::McpConnectionSet,
     tool: &DiscoverableTool,
     auth: Option<&codex_login::CodexAuth>,
 ) -> bool {
@@ -441,7 +441,7 @@ fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
 
 async fn refresh_missing_requested_connectors(
     turn: &crate::session::turn_context::TurnContext,
-    manager: &codex_mcp::McpConnectionManager,
+    manager: &codex_mcp::McpConnectionSet,
     auth: Option<&codex_login::CodexAuth>,
     expected_connector_ids: &[String],
     tool_id: &str,

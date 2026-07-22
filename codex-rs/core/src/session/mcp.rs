@@ -445,7 +445,7 @@ impl Session {
         let codex_apps_auth_manager =
             codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
                 .then(|| Arc::clone(&self.services.auth_manager));
-        let refreshed_manager = McpConnectionManager::new(
+        let refreshed_manager = McpConnectionSet::new(
             &mcp_servers,
             mcp_config.mcp_oauth_credentials_store_mode,
             mcp_config.auth_keyring_backend_kind,

@@ -1031,7 +1031,7 @@ impl Session {
                 )
             });
             let mcp_runtime = Arc::new(McpRuntime::new(Arc::new(
-                McpConnectionManager::new_uninitialized_with_permission_profile(
+                McpConnectionSet::new_uninitialized_with_permission_profile(
                     &config.permissions.approval_policy,
                     config.permissions.permission_profile(),
                     config.prefix_mcp_tool_names(),
@@ -1202,7 +1202,7 @@ impl Session {
             let codex_apps_auth_manager =
                 codex_mcp::host_owned_codex_apps_enabled(&mcp_projection.config, auth)
                     .then(|| Arc::clone(&sess.services.auth_manager));
-            let mcp_connection_manager = McpConnectionManager::new(
+            let mcp_connection_manager = McpConnectionSet::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
                 config.auth_keyring_backend_kind(),

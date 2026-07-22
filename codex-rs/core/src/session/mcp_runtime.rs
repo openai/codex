@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use codex_mcp::McpConfig;
-use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionSet;
 use codex_mcp::McpRuntimeContext;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
@@ -10,7 +10,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 pub struct McpRuntimeSnapshot {
     config: Arc<McpConfig>,
     plugins_available: bool,
-    manager: Arc<McpConnectionManager>,
+    manager: Arc<McpConnectionSet>,
     runtime_context: McpRuntimeContext,
     ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
 }
@@ -19,7 +19,7 @@ impl McpRuntimeSnapshot {
     pub(crate) fn new(
         config: Arc<McpConfig>,
         plugins_available: bool,
-        manager: Arc<McpConnectionManager>,
+        manager: Arc<McpConnectionSet>,
         runtime_context: McpRuntimeContext,
         ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
     ) -> Self {
@@ -40,11 +40,11 @@ impl McpRuntimeSnapshot {
         self.plugins_available
     }
 
-    pub fn manager(&self) -> &McpConnectionManager {
+    pub fn manager(&self) -> &McpConnectionSet {
         self.manager.as_ref()
     }
 
-    pub(crate) fn manager_arc(&self) -> Arc<McpConnectionManager> {
+    pub(crate) fn manager_arc(&self) -> Arc<McpConnectionSet> {
         Arc::clone(&self.manager)
     }
 
@@ -83,7 +83,7 @@ impl McpRuntimeSnapshot {
             mcp_server_catalog: ResolvedMcpCatalog::default(),
             connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
         };
-        let manager = McpConnectionManager::new_uninitialized_with_permission_profile(
+        let manager = McpConnectionSet::new_uninitialized_with_permission_profile(
             &config.permissions.approval_policy,
             config.permissions.permission_profile(),
             config.prefix_mcp_tool_names(),

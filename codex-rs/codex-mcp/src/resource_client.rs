@@ -11,7 +11,7 @@ use rmcp::model::ReadResourceRequestParams;
 use crate::McpRuntime;
 use crate::binding_clients::McpBindingClientIdentity;
 use crate::binding_clients::McpBindingClients;
-use crate::connection_manager::McpConnectionManager;
+use crate::connection_manager::McpConnectionSet;
 
 /// One page of resources returned by an MCP server.
 #[derive(Clone, Debug, PartialEq)]
@@ -41,7 +41,7 @@ pub struct McpResourceClientCacheKey(McpResourceClientCacheKeyInner);
 
 #[derive(Clone)]
 enum McpResourceClientCacheKeyInner {
-    Latest(Weak<McpConnectionManager>),
+    Latest(Weak<McpConnectionSet>),
     Exact(McpBindingClientIdentity),
 }
 

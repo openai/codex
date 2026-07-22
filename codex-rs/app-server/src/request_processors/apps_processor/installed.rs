@@ -6,7 +6,7 @@ use codex_connectors::connector_tool_is_synthetic;
 use codex_connectors::installed_connector_runtime;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionSet;
 use codex_mcp::ToolInfo;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::host_owned_codex_apps_enabled;
@@ -78,7 +78,7 @@ impl AppsRequestProcessor {
                     let codex_apps_auth_manager =
                         host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
                             .then(|| Arc::clone(&self.auth_manager));
-                    let connection_manager = McpConnectionManager::new(
+                    let connection_manager = McpConnectionSet::new(
                         &mcp_servers,
                         config.mcp_oauth_credentials_store_mode,
                         config.auth_keyring_backend_kind(),

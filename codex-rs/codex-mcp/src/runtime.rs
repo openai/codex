@@ -19,28 +19,28 @@ use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::McpConnectionManager;
+use crate::McpConnectionSet;
 
 /// Owns the currently published MCP connection set for one Codex thread.
 ///
 /// Replacements are published atomically. Callers that already hold a snapshot
 /// keep the previous connection set alive until their work completes.
 pub struct McpRuntime {
-    connections: ArcSwap<McpConnectionManager>,
+    connections: ArcSwap<McpConnectionSet>,
 }
 
 impl McpRuntime {
-    pub fn new(connections: Arc<McpConnectionManager>) -> Self {
+    pub fn new(connections: Arc<McpConnectionSet>) -> Self {
         Self {
             connections: ArcSwap::from(connections),
         }
     }
 
-    pub fn snapshot(&self) -> Arc<McpConnectionManager> {
+    pub fn snapshot(&self) -> Arc<McpConnectionSet> {
         self.connections.load_full()
     }
 
-    pub fn replace(&self, connections: McpConnectionManager) -> Arc<McpConnectionManager> {
+    pub fn replace(&self, connections: McpConnectionSet) -> Arc<McpConnectionSet> {
         let connections = Arc::new(connections);
         self.connections.store(Arc::clone(&connections));
         connections

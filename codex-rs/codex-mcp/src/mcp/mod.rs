@@ -45,7 +45,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::ResolvedMcpCatalog;
-use crate::connection_manager::McpConnectionManager;
+use crate::connection_manager::McpConnectionSet;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 use crate::tools::ToolInfo;
@@ -311,7 +311,7 @@ pub async fn read_mcp_resource(
     let mut mcp_servers = effective_mcp_servers(config, auth);
     mcp_servers.retain(|name, _| name == server);
     let cancel_token = CancellationToken::new();
-    let manager = McpConnectionManager::new(
+    let manager = McpConnectionSet::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
@@ -388,7 +388,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let server_names = mcp_servers.keys().cloned().collect();
 
     let cancel_token = CancellationToken::new();
-    let mcp_connection_manager = McpConnectionManager::new(
+    let mcp_connection_manager = McpConnectionSet::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
@@ -642,7 +642,7 @@ fn convert_mcp_resource_templates(
 }
 
 async fn collect_mcp_server_status_snapshot_from_manager(
-    mcp_connection_manager: &McpConnectionManager,
+    mcp_connection_manager: &McpConnectionSet,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
     server_names: Vec<String>,
     detail: McpSnapshotDetail,

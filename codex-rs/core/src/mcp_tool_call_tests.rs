@@ -1445,7 +1445,7 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
 async fn host_owned_codex_apps_manager(
     session: &Session,
     turn_context: &TurnContext,
-) -> Arc<codex_mcp::McpConnectionManager> {
+) -> Arc<codex_mcp::McpConnectionSet> {
     let auth = session.services.auth_manager.auth().await;
     let startup_cancellation_token = CancellationToken::new();
     startup_cancellation_token.cancel();
@@ -1457,7 +1457,7 @@ async fn host_owned_codex_apps_manager(
             Some(&turn_context.originator),
         )),
     )]);
-    let manager = codex_mcp::McpConnectionManager::new(
+    let manager = codex_mcp::McpConnectionSet::new(
         &mcp_servers,
         turn_context.config.mcp_oauth_credentials_store_mode,
         turn_context.config.auth_keyring_backend_kind(),
