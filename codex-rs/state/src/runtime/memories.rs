@@ -195,6 +195,7 @@ SELECT
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
+    threads.is_pinned,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -208,6 +209,7 @@ FROM threads
                 allowed_sources,
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 anchor: None,
                 sort_key: SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
@@ -569,6 +571,7 @@ SELECT
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
+    threads.is_pinned,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url

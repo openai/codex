@@ -78,6 +78,7 @@ async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
             model_providers: None,
             source_kinds: None,
             archived: None,
+            is_pinned: None,
             cwd: None,
             use_state_db_only: false,
             search_term: None,

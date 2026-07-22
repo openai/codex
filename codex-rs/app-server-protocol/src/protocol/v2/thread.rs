@@ -865,6 +865,9 @@ pub struct ThreadMetadataUpdateParams {
     /// provide a string to replace the stored value.
     #[ts(optional = nullable)]
     pub git_info: Option<ThreadMetadataGitInfoUpdateParams>,
+    /// Patch whether this thread is pinned. Omit to leave the stored value unchanged.
+    #[ts(optional = nullable)]
+    pub is_pinned: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1118,6 +1121,9 @@ pub struct ThreadListParams {
     /// If false or null, only non-archived threads are returned.
     #[ts(optional = nullable)]
     pub archived: Option<bool>,
+    /// Optional pinned filter; when set, only threads matching this value are returned.
+    #[ts(optional = nullable)]
+    pub is_pinned: Option<bool>,
     /// Optional cwd filter or filters; when set, only threads whose session cwd
     /// exactly matches one of these paths are returned.
     #[ts(optional = nullable, type = "string | Array<string> | null")]

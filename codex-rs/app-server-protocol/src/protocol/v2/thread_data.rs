@@ -183,6 +183,9 @@ pub struct Thread {
     pub preview: String,
     /// Whether the thread is ephemeral and should not be materialized on disk.
     pub ephemeral: bool,
+    /// Whether the thread has been pinned by the user.
+    #[serde(default)]
+    pub is_pinned: bool,
     /// Persisted thread history contract selected when this thread was created.
     #[experimental("thread.historyMode")]
     #[serde(default)]

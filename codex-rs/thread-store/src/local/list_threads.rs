@@ -97,15 +97,17 @@ pub(super) async fn list_rollout_threads(
     sort_key: codex_rollout::ThreadSortKey,
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
-    if let Some(relation_filter) = params.relation_filter {
-        let relation_filter = match relation_filter {
-            ThreadRelationFilter::DirectChildrenOf(parent_thread_id) => {
-                codex_state::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)
-            }
-            ThreadRelationFilter::DescendantsOf(ancestor_thread_id) => {
-                codex_state::ThreadRelationFilter::DescendantsOf(ancestor_thread_id)
-            }
-        };
+    if params.relation_filter.is_some() || params.is_pinned.is_some() {
+        let relation_filter = params
+            .relation_filter
+            .map(|relation_filter| match relation_filter {
+                ThreadRelationFilter::DirectChildrenOf(parent_thread_id) => {
+                    codex_state::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)
+                }
+                ThreadRelationFilter::DescendantsOf(ancestor_thread_id) => {
+                    codex_state::ThreadRelationFilter::DescendantsOf(ancestor_thread_id)
+                }
+            });
         let page = codex_rollout::state_db::list_threads_db(
             state_db.as_deref(),
             config.codex_home.as_path(),
@@ -116,13 +118,14 @@ pub(super) async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            Some(relation_filter),
+            relation_filter,
             params.archived,
+            params.is_pinned,
             params.search_term.as_deref(),
         )
         .await
         .ok_or_else(|| ThreadStoreError::Internal {
-            message: "state DB unavailable for relationship-filtered thread listing".to_string(),
+            message: "state DB unavailable for filtered thread listing".to_string(),
         })?;
         return Ok(page.into());
     }
@@ -236,6 +239,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 archived: false,
                 search_term: None,
                 relation_filter: None,
@@ -296,6 +300,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 archived: false,
                 search_term: Some("needle".to_string()),
                 relation_filter: None,
@@ -368,6 +373,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 archived: false,
                 search_term: Some("canonical".to_string()),
                 relation_filter: None,
@@ -404,6 +410,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 archived: false,
                 search_term: None,
                 relation_filter: None,
@@ -420,6 +427,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 archived: true,
                 search_term: None,
                 relation_filter: None,
@@ -472,6 +480,7 @@ mod tests {
                 allowed_sources: vec![SessionSource::Cli],
                 model_providers: Some(vec!["test-provider".to_string()]),
                 cwd_filters: None,
+                is_pinned: None,
                 archived: false,
                 search_term: None,
                 relation_filter: None,
@@ -509,6 +518,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 archived: false,
                 search_term: None,
                 relation_filter: None,

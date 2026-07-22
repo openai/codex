@@ -141,6 +141,7 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
             cwd_filters: None,
             relation_filter: None,
             archived: false,
+            is_pinned: None,
             search_term: None,
             use_state_db_only: false,
         })

@@ -27,6 +27,9 @@ preview: string, /**
  * Whether the thread is ephemeral and should not be materialized on disk.
  */
 ephemeral: boolean, /**
+ * Whether the thread has been pinned by the user.
+ */
+isPinned: boolean, /**
  * Model provider used for this thread (for example, 'openai').
  */
 modelProvider: string, /**

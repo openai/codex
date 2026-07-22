@@ -1,13 +1,12 @@
 use codex_rollout::find_archived_thread_path_by_id_str;
-use codex_rollout::read_thread_item_from_rollout;
 use codex_rollout::rollout_date_parts;
 
 use super::LocalThreadStore;
 use super::helpers::matching_rollout_file_name;
 use super::helpers::scoped_rollout_path;
-use super::helpers::stored_thread_from_rollout_item;
 use super::helpers::touch_modified_time;
 use crate::ArchiveThreadParams;
+use crate::ReadThreadParams;
 use crate::StoredThread;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -79,25 +78,15 @@ pub(super) async fn unarchive_thread(
             .await;
     }
 
-    let item = read_thread_item_from_rollout(restored_path.clone())
-        .await
-        .ok_or_else(|| ThreadStoreError::Internal {
-            message: format!(
-                "failed to read unarchived thread {}",
-                restored_path.display()
-            ),
-        })?;
-    stored_thread_from_rollout_item(
-        item,
-        /*archived*/ false,
-        store.config.default_model_provider_id.as_str(),
+    super::read_thread::read_thread(
+        store,
+        ReadThreadParams {
+            thread_id,
+            include_archived: false,
+            include_history: false,
+        },
     )
-    .ok_or_else(|| ThreadStoreError::Internal {
-        message: format!(
-            "failed to read unarchived thread id from {}",
-            restored_path.display()
-        ),
-    })
+    .await
 }
 
 #[cfg(test)]
@@ -175,15 +164,17 @@ mod tests {
         builder.cli_version = Some("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.archived_at = Some(metadata.updated_at);
+        metadata.is_pinned = true;
         runtime
             .upsert_thread(&metadata)
             .await
             .expect("state db upsert should succeed");
 
-        store
+        let unarchived = store
             .unarchive_thread(ArchiveThreadParams { thread_id })
             .await
             .expect("unarchive thread");
+        assert!(unarchived.is_pinned);
 
         let restored_path = home
             .path()
@@ -197,5 +188,6 @@ mod tests {
         assert_eq!(updated.rollout_path, restored_path);
         assert_eq!(updated.archived_at, None);
         assert_eq!(updated.recency_at, metadata.recency_at);
+        assert!(updated.is_pinned);
     }
 }

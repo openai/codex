@@ -13,6 +13,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -95,6 +97,18 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     )
     .await??;
 
+    let pin_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread.id.clone(),
+            git_info: None,
+            is_pinned: Some(true),
+        })
+        .await?;
+    let ThreadMetadataUpdateResponse {
+        thread: pinned_thread,
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(pin_id)).await??;
+    assert!(pinned_thread.is_pinned);
+
     let found_rollout_path =
         find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
             .await?
@@ -152,6 +166,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     )
     .await??;
     assert_eq!(unarchived_notification.thread_id, thread.id);
+    assert!(unarchived_thread.is_pinned);
     assert!(
         unarchived_thread.updated_at > old_timestamp,
         "expected updated_at to be bumped on unarchive"
@@ -164,6 +179,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         .and_then(Value::as_object)
         .expect("thread/unarchive result.thread must be an object");
     assert_eq!(unarchived_thread.name, None);
+    assert_eq!(thread_json.get("isPinned"), Some(&Value::Bool(true)));
     assert_eq!(
         thread_json.get("name"),
         Some(&Value::Null),

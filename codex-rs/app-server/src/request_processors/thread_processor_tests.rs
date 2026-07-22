@@ -480,6 +480,7 @@ mod thread_processor_behavior_tests {
             updated_at: updated_at.with_timezone(&Utc),
             recency_at: updated_at.with_timezone(&Utc),
             archived_at: None,
+            is_pinned: false,
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,

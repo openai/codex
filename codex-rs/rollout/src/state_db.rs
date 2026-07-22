@@ -372,6 +372,7 @@ pub async fn list_threads_db(
     cwd_filters: Option<&[PathBuf]>,
     relation_filter: Option<codex_state::ThreadRelationFilter>,
     archived: bool,
+    is_pinned: Option<bool>,
     search_term: Option<&str>,
 ) -> Option<codex_state::ThreadsPage> {
     let ctx = context?;
@@ -401,6 +402,7 @@ pub async fn list_threads_db(
     });
     let filters = codex_state::ThreadFilterOptions {
         archived_only: archived,
+        is_pinned,
         allowed_sources: allowed_sources.as_slice(),
         model_providers: model_providers.as_deref(),
         cwd_filters: normalized_cwd_filters.as_deref(),
