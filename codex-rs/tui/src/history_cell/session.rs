@@ -1,6 +1,7 @@
 //! Session headers, onboarding guidance, and transcript cards.
 
 use super::*;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
@@ -390,6 +391,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
             ]));
         }
 
+        let lines = lines
+            .into_iter()
+            .map(|line| truncate_line_with_ellipsis_if_overflow(line, inner_width))
+            .collect();
         with_border(lines)
     }
 
