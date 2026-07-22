@@ -37,6 +37,7 @@ use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
+use core_test_support::TestTargetOs;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -56,6 +57,7 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
@@ -1583,6 +1585,63 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_turn_diff_emits_portable_paths_for_remote_cwd() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let harness = apply_patch_harness().await?;
+    let test = harness.test();
+    let codex = test.codex.clone();
+
+    let call_id = "apply-foreign-windows-diff";
+    let file = "nested/foreign.txt";
+    let patch = format!("*** Begin Patch\n*** Add File: {file}\n+hello\n*** End Patch");
+    mount_apply_patch(&harness, call_id, &patch, "ok").await;
+
+    submit_without_wait(&harness, "emit diff for a foreign Windows cwd").await?;
+
+    let mut last_diff = None;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TurnDiff(ev) => {
+            last_diff = Some(ev.unified_diff.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    let cwd = &test.executor_environment().selection().cwd;
+    let file_uri = cwd.join(file)?;
+    let expected_relative_path = match test_target_os() {
+        TestTargetOs::Linux | TestTargetOs::MacOs => "nested/foreign.txt",
+        TestTargetOs::Windows => r"nested\foreign.txt",
+    };
+    assert_eq!(
+        file_uri.relative_path_from(cwd).as_deref(),
+        Some(expected_relative_path)
+    );
+    assert_eq!(
+        test.fs()
+            .read_file_text(&file_uri, /*sandbox*/ None)
+            .await?,
+        "hello\n"
+    );
+    assert_eq!(
+        last_diff.expect("expected TurnDiff event"),
+        r#"diff --git a/nested/foreign.txt b/nested/foreign.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..ce013625030ba8dba906f756967f9e9ca394464a
+--- /dev/null
++++ b/nested/foreign.txt
+@@ -0,0 +1 @@
++hello
+"#
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Result<()> {
     // TODO(anp): Remove after shared-cwd helpers use target-native paths.
     skip_if_target_windows!(
@@ -1789,8 +1848,8 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
     .await;
 
     let diff = last_diff.expect("expected TurnDiff after two patches");
-    assert!(diff.contains("agg/a.txt"), "diff missing a.txt");
-    assert!(diff.contains("agg/b.txt"), "diff missing b.txt");
+    assert!(diff.contains("agg/a.txt"), "diff missing agg/a.txt: {diff}");
+    assert!(diff.contains("agg/b.txt"), "diff missing agg/b.txt: {diff}");
     // Final content reflects v2 for a.txt
     assert!(diff.contains("+v2\n") || diff.contains("v2\n"));
     Ok(())

@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use sha1::digest::Output;
@@ -9,6 +7,7 @@ use sha1::digest::Output;
 use codex_apply_patch::AppliedPatchChange;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::AppliedPatchFileChange;
+use codex_utils_path_uri::PathUri;
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 const DEV_NULL: &str = "/dev/null";
@@ -25,14 +24,14 @@ struct TrackedContent {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct TrackedPath {
     environment_id: String,
-    path: PathBuf,
+    path: PathUri,
 }
 
 impl TrackedPath {
-    fn new(environment_id: &str, path: &Path) -> Self {
+    fn new(environment_id: &str, path: &PathUri) -> Self {
         Self {
             environment_id: environment_id.to_string(),
-            path: path.to_path_buf(),
+            path: path.clone(),
         }
     }
 }
@@ -49,7 +48,7 @@ struct DiffCacheKey {
 /// mutations, without rereading the workspace filesystem.
 pub struct TurnDiffTracker {
     valid: bool,
-    display_roots_by_environment: HashMap<String, PathBuf>,
+    display_roots_by_environment: HashMap<String, PathUri>,
     baseline_by_path: HashMap<TrackedPath, TrackedContent>,
     current_by_path: HashMap<TrackedPath, TrackedContent>,
     origin_by_current_path: HashMap<TrackedPath, TrackedPath>,
@@ -83,7 +82,7 @@ impl TurnDiffTracker {
     }
 
     pub fn with_environment_display_roots(
-        display_roots: impl IntoIterator<Item = (String, PathBuf)>,
+        display_roots: impl IntoIterator<Item = (String, PathUri)>,
     ) -> Self {
         let mut tracker = Self::new();
         tracker.display_roots_by_environment = display_roots.into_iter().collect();
@@ -183,7 +182,7 @@ impl TurnDiffTracker {
     }
 
     fn apply_change(&mut self, environment_id: &str, change: &AppliedPatchChange) {
-        let source_path = TrackedPath::new(environment_id, change.path.as_path());
+        let source_path = TrackedPath::new(environment_id, &change.path);
         match &change.change {
             AppliedPatchFileChange::Add {
                 content,
@@ -197,7 +196,7 @@ impl TurnDiffTracker {
                 new_content,
             } => {
                 let move_path = move_path
-                    .as_deref()
+                    .as_ref()
                     .map(|path| TrackedPath::new(environment_id, path));
                 self.apply_update(
                     source_path,
@@ -321,8 +320,9 @@ impl TurnDiffTracker {
         self.rendered_diff_count
             .set(self.rendered_diff_count.get() + 1);
 
-        let left_display = self.display_path(left_path);
-        let right_display = self.display_path(right_path);
+        // Git diff paths always use `/`, even when the displayed target path is Windows-native.
+        let left_display = self.display_path(left_path).replace('\\', "/");
+        let right_display = self.display_path(right_path).replace('\\', "/");
         let left_oid = left_content.map_or_else(
             || ZERO_OID.to_string(),
             |content| git_blob_oid(content.as_bytes()),
@@ -374,9 +374,8 @@ impl TurnDiffTracker {
         let display = self
             .display_roots_by_environment
             .get(&path.environment_id)
-            .and_then(|root| path.path.strip_prefix(root).ok())
-            .unwrap_or(path.path.as_path());
-        let display = display.display().to_string().replace('\\', "/");
+            .and_then(|root| path.path.relative_path_from(root))
+            .unwrap_or_else(|| path.path.inferred_native_path_string());
         if self.display_roots_by_environment.len() > 1 && !path.environment_id.is_empty() {
             format!("{}/{display}", path.environment_id)
         } else {
