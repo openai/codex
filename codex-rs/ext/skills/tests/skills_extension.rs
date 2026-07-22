@@ -434,13 +434,14 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
             session_source: &session_source,
             persistent_thread_state_available: true,
             environments: &[],
+            mcp_resource_client: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
         .await;
 
     let fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert_eq!(1, fragments.len());
     let rendered = fragments[0].text();
@@ -515,13 +516,14 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
             session_source: &session_source,
             persistent_thread_state_available: true,
             environments: &[],
+            mcp_resource_client: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
         .await;
 
     let fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
+        .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert_eq!(1, fragments.len());
     let rendered = fragments[0].text();
