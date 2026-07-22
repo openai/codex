@@ -1,6 +1,9 @@
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
+use crate::session::McpRuntimeSnapshot;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -58,11 +61,19 @@ pub(crate) struct ToolSuggestCandidates {
 
 impl ToolRouter {
     pub(crate) fn from_context(
-        step_context: &StepContext,
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+        mcp: &McpRuntimeSnapshot,
         params: ToolRouterParams<'_>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {
-        build_tool_router(step_context, params, tool_search_handler_cache)
+        build_tool_router(
+            turn_context,
+            environments,
+            mcp,
+            params,
+            tool_search_handler_cache,
+        )
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {

@@ -2920,7 +2920,8 @@ impl Session {
     pub(crate) async fn capture_step_context(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-    ) -> Arc<StepContext> {
+        cancellation_token: &CancellationToken,
+    ) -> CodexResult<Arc<StepContext>> {
         // Keep selections fixed for the turn while allowing their startup work to finish.
         let environments = turn_context.environments.refresh_readiness();
         self.services
@@ -2947,14 +2948,24 @@ impl Session {
                 executor_capability_discovery.as_deref(),
             )
             .await;
-        Arc::new(StepContext::new(
-            turn_context,
+        let (mcp_tools, tool_router) = turn::built_tools(
+            self.as_ref(),
+            turn_context.as_ref(),
+            &environments,
+            mcp.as_ref(),
+            cancellation_token,
+        )
+        .await?;
+        Ok(Arc::new(StepContext {
+            turn: turn_context,
             environments,
             selected_capability_roots,
             executor_capability_discovery,
             mcp,
+            mcp_tools,
+            tool_router,
             loaded_agents_md,
-        ))
+        }))
     }
 
     pub(crate) async fn record_inter_agent_communication(

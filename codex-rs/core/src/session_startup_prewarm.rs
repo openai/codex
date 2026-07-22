@@ -17,7 +17,6 @@ use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::session::Session;
 use crate::session::turn::build_prompt;
-use crate::session::turn::built_tools;
 use codex_otel::STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC;
 use codex_otel::STARTUP_PREWARM_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
@@ -278,14 +277,12 @@ async fn schedule_startup_prewarm_inner(
     let built_tools_started_at = Instant::now();
     // Startup prewarm runs before run_turn and needs its own tool-building snapshot.
     let step_context = session
-        .capture_step_context(Arc::clone(&startup_turn_context))
-        .await;
-    let startup_router = built_tools(
-        session.as_ref(),
-        step_context.as_ref(),
-        &startup_cancellation_token,
-    )
-    .await?;
+        .capture_step_context(
+            Arc::clone(&startup_turn_context),
+            &startup_cancellation_token,
+        )
+        .await?;
+    let startup_router = Arc::clone(&step_context.tool_router);
     startup_turn_context.session_telemetry.record_startup_phase(
         "startup_prewarm_build_tools",
         built_tools_started_at.elapsed(),
