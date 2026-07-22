@@ -167,7 +167,7 @@ fn merge_persisted_resume_metadata(
 }
 
 fn merge_persisted_approvals_reviewer(
-    thread_history: &InitialHistory,
+    history: &[RolloutItem],
     request_overrides: Option<&HashMap<String, serde_json::Value>>,
     typesafe_overrides: &mut ConfigOverrides,
 ) {
@@ -177,21 +177,13 @@ fn merge_persisted_approvals_reviewer(
         return;
     }
 
-    let InitialHistory::Resumed(resumed_history) = thread_history else {
-        return;
-    };
-    typesafe_overrides.approvals_reviewer =
-        resumed_history
-            .history
-            .iter()
-            .rev()
-            .find_map(|item| match item {
-                RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
-                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
-                    Some(event.thread_settings.approvals_reviewer)
-                }
-                _ => None,
-            });
+    typesafe_overrides.approvals_reviewer = history.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
+        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+            Some(event.thread_settings.approvals_reviewer)
+        }
+        _ => None,
+    });
 }
 
 fn normalize_thread_list_cwd_filters(
@@ -3406,14 +3398,14 @@ impl ThreadRequestProcessor {
         request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: &mut ConfigOverrides,
     ) -> Option<ThreadMetadata> {
-        merge_persisted_approvals_reviewer(
-            thread_history,
-            request_overrides.as_ref(),
-            typesafe_overrides,
-        );
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
+        merge_persisted_approvals_reviewer(
+            &resumed_history.history,
+            request_overrides.as_ref(),
+            typesafe_overrides,
+        );
         let state_db_ctx = self.state_db.clone()?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
@@ -4022,7 +4014,7 @@ impl ThreadRequestProcessor {
             .name
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);
-        let history_items = source_thread
+        let source_history_items = source_thread
             .history
             .take()
             .map(|history| history.items)
@@ -4031,16 +4023,17 @@ impl ThreadRequestProcessor {
                     "thread {source_thread_id} did not include persisted history"
                 ))
             })?;
+        let source_history_items = Arc::new(source_history_items);
         let history_items = match (last_turn_id.as_deref(), before_turn_id.as_deref()) {
             (Some(last_turn_id), None) => Arc::new(
-                truncate_rollout_after_turn_id(&history_items, last_turn_id)
+                truncate_rollout_after_turn_id(&source_history_items, last_turn_id)
                     .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
             ),
             (None, Some(before_turn_id)) => Arc::new(
-                truncate_rollout_before_turn_id(&history_items, before_turn_id)
+                truncate_rollout_before_turn_id(&source_history_items, before_turn_id)
                     .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
             ),
-            (None, None) => Arc::new(history_items),
+            (None, None) => Arc::clone(&source_history_items),
             (Some(_), Some(_)) => unreachable!("fork boundaries are mutually exclusive"),
         };
         let history_cwd = Some(source_thread.cwd.clone());
@@ -4067,6 +4060,11 @@ impl ThreadRequestProcessor {
         } else {
             Some(cli_overrides)
         };
+        let thread_history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: source_thread_id,
+            history: Arc::clone(&history_items),
+            rollout_path: source_thread.rollout_path.clone(),
+        });
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -4083,6 +4081,11 @@ impl ThreadRequestProcessor {
             /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
+        merge_persisted_approvals_reviewer(
+            &source_history_items,
+            request_overrides.as_ref(),
+            &mut typesafe_overrides,
+        );
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self
             .config_manager
@@ -4103,11 +4106,7 @@ impl ThreadRequestProcessor {
             .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
                 config,
-                InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: source_thread_id,
-                    history: Arc::clone(&history_items),
-                    rollout_path: source_thread.rollout_path.clone(),
-                }),
+                thread_history,
                 thread_source.map(Into::into),
                 self.request_trace_context(&request_id).await,
                 supports_openai_form_elicitation,
