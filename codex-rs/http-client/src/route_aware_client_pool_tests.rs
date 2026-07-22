@@ -32,24 +32,18 @@ fn request_builder_debug_redacts_url_secrets() {
         concat!(
             "RouteAwareRequestBuilder { pool: RouteAwareClientPool { ",
             "http_client_factory: HttpClientFactory { outbound_proxy_policy: ReqwestDefault }, ",
-            "route_class: Api, request_logging: Enabled, .. }, method: Some(GET), ",
+            "route_class: Api, .. }, method: Some(GET), ",
             "url: Some(\"<redacted>\"), .. }"
         )
     );
 }
 
 #[tokio::test]
-async fn forwards_exact_urls_and_reuses_clients_by_resolved_route() {
-    let builder_count = Arc::new(AtomicUsize::new(0));
-    let observed_builder_count = Arc::clone(&builder_count);
-    let pool = RouteAwareClientPool::with_builder_factory(
+async fn forwards_exact_urls_and_caches_clients_by_resolved_route() {
+    let pool = RouteAwareClientPool::with_builder(
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         ClientRouteClass::Api,
-        move || {
-            observed_builder_count.fetch_add(1, Ordering::SeqCst);
-            reqwest::Client::builder()
-        },
-        PoolRequestLogging::Enabled,
+        HttpClientBuilder::new(),
     );
 
     let direct_url = "https://example.com/first?target=direct";
@@ -77,7 +71,7 @@ async fn forwards_exact_urls_and_reuses_clients_by_resolved_route() {
         .await
         .expect("proxy client should build separately");
 
-    assert_eq!(builder_count.load(Ordering::SeqCst), 2);
+    assert_eq!(pool.clients.lock().expect("client cache lock").len(), 2);
     assert_eq!(
         resolver.observed_urls(),
         vec![
@@ -135,17 +129,19 @@ async fn reqwest_default_route_preserves_transport_redirects() {
         }
         request_lines
     });
-    let pool = RouteAwareClientPool::with_builder_factory(
+    let pool = RouteAwareClientPool::with_builder(
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         ClientRouteClass::Api,
-        || reqwest::Client::builder().no_proxy(),
-        PoolRequestLogging::Enabled,
+        HttpClientBuilder::new(),
     );
     let initial_url = format!("http://{address}/start");
+    let request = reqwest::Request::new(
+        Method::GET,
+        reqwest::Url::parse(&initial_url).expect("request URL should parse"),
+    );
 
     let response = pool
-        .get(initial_url)
-        .send()
+        .send_with_resolver(request, |_| async { Ok(OutboundProxyRoute::Direct) })
         .await
         .expect("default-routed request should follow redirect");
 
@@ -162,16 +158,10 @@ async fn reqwest_default_route_preserves_transport_redirects() {
 
 #[tokio::test]
 async fn bounds_cached_routes_and_rebuilds_an_evicted_route() {
-    let builder_count = Arc::new(AtomicUsize::new(0));
-    let observed_builder_count = Arc::clone(&builder_count);
-    let pool = RouteAwareClientPool::with_builder_factory(
+    let pool = RouteAwareClientPool::with_builder(
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         ClientRouteClass::Api,
-        move || {
-            observed_builder_count.fetch_add(1, Ordering::SeqCst);
-            reqwest::Client::builder()
-        },
-        PoolRequestLogging::Enabled,
+        HttpClientBuilder::new(),
     );
     let routes = (0..=MAX_CACHED_ROUTES)
         .map(|index| {
@@ -205,11 +195,9 @@ async fn bounds_cached_routes_and_rebuilds_an_evicted_route() {
         .await
         .expect("evicted client should rebuild");
 
-    assert_eq!(builder_count.load(Ordering::SeqCst), MAX_CACHED_ROUTES + 2);
-    assert_eq!(
-        pool.clients.lock().expect("client cache lock").len(),
-        MAX_CACHED_ROUTES
-    );
+    let clients = pool.clients.lock().expect("client cache lock");
+    assert_eq!(clients.len(), MAX_CACHED_ROUTES);
+    assert!(clients.contains_key(&routes[&evicted_route]));
 }
 
 #[tokio::test]
@@ -342,11 +330,10 @@ async fn disabled_pool_logging_does_not_expose_request_or_response_data() {
         "HTTP/1.1 200 OK\r\nx-sensitive-response: response-secret-value\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
             .to_string(),
     ]);
-    let pool = RouteAwareClientPool::with_builder_factory(
+    let pool = RouteAwareClientPool::with_builder(
         HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
         ClientRouteClass::Api,
-        || reqwest::Client::builder().no_proxy(),
-        PoolRequestLogging::Disabled,
+        HttpClientBuilder::new().without_request_logging(),
     );
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(
@@ -467,11 +454,10 @@ async fn resolve_with(
 }
 
 fn manual_redirect_pool() -> RouteAwareClientPool {
-    RouteAwareClientPool::with_builder_factory(
+    RouteAwareClientPool::with_builder(
         HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
         ClientRouteClass::Api,
-        || reqwest::Client::builder().no_proxy(),
-        PoolRequestLogging::Enabled,
+        HttpClientBuilder::new(),
     )
 }
 

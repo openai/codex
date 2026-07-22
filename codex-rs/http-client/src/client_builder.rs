@@ -6,12 +6,14 @@
 //! paths.
 
 use http::HeaderMap;
+use std::time::Duration;
 
 use crate::BuildCustomCaTransportError;
 use crate::BuildRouteAwareHttpClientError;
 use crate::ClientRouteClass;
 use crate::HttpClient;
 use crate::HttpClientFactory;
+use crate::OutboundProxyRoute;
 use crate::client::RequestLogging;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
 use crate::with_chatgpt_cloudflare_cookie_store;
@@ -25,6 +27,7 @@ use crate::with_chatgpt_cloudflare_cookie_store;
 pub struct HttpClientBuilder {
     default_headers: Option<HeaderMap>,
     follow_redirects: bool,
+    connect_timeout: Option<Duration>,
     chatgpt_cloudflare_cookie_store: bool,
     request_logging: RequestLogging,
 }
@@ -75,6 +78,12 @@ impl HttpClientBuilder {
         self
     }
 
+    /// Limits only connection establishment, not the request as a whole.
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
+
     pub fn with_chatgpt_cloudflare_cookie_store(mut self) -> Self {
         self.chatgpt_cloudflare_cookie_store = true;
         self
@@ -99,6 +108,22 @@ impl HttpClientBuilder {
     ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
         let (builder, request_logging) = self.into_reqwest_parts();
         let inner = http_client_factory.build_reqwest_client(builder, request_url, route_class)?;
+        Ok(HttpClient::from_parts(inner, request_logging))
+    }
+
+    /// Builds a client for a route that was already resolved by a route-aware caller.
+    pub(crate) fn build_for_resolved_route(
+        self,
+        http_client_factory: &HttpClientFactory,
+        route_class: ClientRouteClass,
+        route: &OutboundProxyRoute,
+    ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+        let (builder, request_logging) = self.into_reqwest_parts();
+        let inner = http_client_factory.build_reqwest_client_for_resolved_route(
+            builder,
+            route_class,
+            route,
+        )?;
         Ok(HttpClient::from_parts(inner, request_logging))
     }
 
@@ -219,6 +244,9 @@ impl HttpClientBuilder {
         if !self.follow_redirects {
             builder = builder.redirect(reqwest::redirect::Policy::none());
         }
+        if let Some(connect_timeout) = self.connect_timeout {
+            builder = builder.connect_timeout(connect_timeout);
+        }
         if self.chatgpt_cloudflare_cookie_store {
             builder = with_chatgpt_cloudflare_cookie_store(builder);
         }
@@ -231,6 +259,7 @@ impl Default for HttpClientBuilder {
         Self {
             default_headers: None,
             follow_redirects: true,
+            connect_timeout: None,
             chatgpt_cloudflare_cookie_store: false,
             request_logging: RequestLogging::Enabled,
         }

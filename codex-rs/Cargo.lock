@@ -3308,8 +3308,8 @@ name = "codex-lmstudio"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-http-client",
  "codex-model-provider-info",
- "reqwest 0.12.28",
  "serde_json",
  "tokio",
  "tracing",
