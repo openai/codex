@@ -474,6 +474,7 @@ fn materialize_git_subdir_uses_sparse_checkout() {
     run_git(&["config", "user.name", "Test User"], Some(repo.path())).expect("configure git name");
     run_git(&["add", "."], Some(repo.path())).expect("stage git repo");
     run_git(&["commit", "-m", "init"], Some(repo.path())).expect("commit git repo");
+    let sha = run_git_output(&["rev-parse", "HEAD"], Some(repo.path())).expect("resolve commit");
 
     let materialized = materialize_marketplace_plugin_source(
         codex_home.path(),
@@ -481,7 +482,7 @@ fn materialize_git_subdir_uses_sparse_checkout() {
             url: repo.path().display().to_string(),
             path: Some("plugins/toolkit".to_string()),
             ref_name: None,
-            sha: None,
+            sha: Some(sha),
         },
     )
     .expect("materialize git source");
@@ -499,4 +500,47 @@ fn materialize_git_subdir_uses_sparse_checkout() {
         .expect("materialized path should be nested under checkout root");
     assert!(!checkout_root.join("root.txt").exists());
     assert!(!checkout_root.join("plugins/other/marker.txt").exists());
+}
+
+#[test]
+fn materialize_git_source_rejects_sha_that_resolves_to_hostile_default_branch() {
+    let codex_home = tempfile::tempdir().expect("create codex home");
+    let repo = tempfile::tempdir().expect("create git repo");
+    run_git(&["init"], Some(repo.path())).expect("init git repo");
+    run_git(
+        &["config", "user.email", "test@example.com"],
+        Some(repo.path()),
+    )
+    .expect("configure git email");
+    run_git(&["config", "user.name", "Test User"], Some(repo.path())).expect("configure git name");
+
+    fs::write(repo.path().join("marker.txt"), "benign").expect("write benign marker");
+    run_git(&["add", "."], Some(repo.path())).expect("stage git repo");
+    run_git(&["commit", "-m", "benign"], Some(repo.path())).expect("commit benign revision");
+    let benign_sha =
+        run_git_output(&["rev-parse", "HEAD"], Some(repo.path())).expect("resolve commit A");
+
+    fs::write(repo.path().join("marker.txt"), "malicious").expect("write malicious marker");
+    run_git(&["add", "."], Some(repo.path())).expect("stage malicious revision");
+    run_git(&["commit", "-m", "malicious"], Some(repo.path())).expect("commit malicious revision");
+    let malicious_sha =
+        run_git_output(&["rev-parse", "HEAD"], Some(repo.path())).expect("resolve commit B");
+    run_git(&["branch", "-m", &benign_sha], Some(repo.path()))
+        .expect("name default branch after commit A");
+
+    let err = materialize_marketplace_plugin_source(
+        codex_home.path(),
+        &MarketplacePluginSource::Git {
+            url: repo.path().display().to_string(),
+            path: None,
+            ref_name: None,
+            sha: Some(benign_sha.clone()),
+        },
+    )
+    .expect_err("hostile default branch must not satisfy SHA pinning");
+
+    assert_eq!(
+        err,
+        format!("checked out Git SHA {malicious_sha} does not match requested SHA {benign_sha}")
+    );
 }
