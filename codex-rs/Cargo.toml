@@ -20,6 +20,7 @@ members = [
     "features",
     "install-context",
     "internal-extra-config", # copybara:strip-for-public
+    "internal-history-notes-extension", # copybara:strip-for-public
     "internal-persistent-mode", # copybara:strip-for-public
     "codex-backend-openapi-models",
     "code-mode",
@@ -198,6 +199,7 @@ codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-internal-extra-config = { path = "internal-extra-config" } # copybara:strip-for-public
+codex-internal-history-notes-extension = { path = "internal-history-notes-extension" } # copybara:strip-for-public
 codex-internal-persistent-mode = { path = "internal-persistent-mode" } # copybara:strip-for-public
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }

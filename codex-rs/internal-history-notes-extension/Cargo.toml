@@ -1,0 +1,34 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-internal-history-notes-extension"
+version.workspace = true
+
+[lib]
+name = "codex_internal_history_notes_extension"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-api = { workspace = true }
+codex-client = { workspace = true }
+codex-core = { workspace = true }
+codex-extension-api = { workspace = true }
+codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
+codex-protocol = { workspace = true }
+codex-tools = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+http = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+codex-config = { workspace = true }
+codex-model-provider-info = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+wiremock = { workspace = true }
