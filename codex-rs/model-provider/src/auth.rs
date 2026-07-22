@@ -355,7 +355,7 @@ mod tests {
                 task_id: Some("task-run-1".to_string()),
             },
             "https://auth.openai.com/api/accounts",
-            /*auth_route_config*/ None,
+            &codex_login::test_support::transport_default_auth_route_config(),
         )
         .await
         .expect("agent identity auth record should include task id")

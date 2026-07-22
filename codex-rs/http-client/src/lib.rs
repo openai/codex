@@ -36,6 +36,8 @@ pub use crate::outbound_proxy::HttpClientFactory;
 pub use crate::outbound_proxy::OutboundProxyPolicy;
 pub use crate::outbound_proxy::OutboundProxyRoute;
 pub use crate::outbound_proxy::RouteFailureClass;
+#[doc(hidden)]
+pub use crate::outbound_proxy::cache_system_proxy_route_for_test;
 pub use crate::request::EncodedJsonBody;
 pub use crate::request::PreparedRequestBody;
 pub use crate::request::Request;

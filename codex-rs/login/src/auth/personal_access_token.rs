@@ -39,7 +39,7 @@ impl fmt::Debug for PersonalAccessTokenAuth {
 impl PersonalAccessTokenAuth {
     pub(super) async fn load(
         access_token: &str,
-        auth_route_config: Option<&AuthRouteConfig>,
+        auth_route_config: &AuthRouteConfig,
     ) -> std::io::Result<Self> {
         let authapi_base_url = env::var(CODEX_AUTHAPI_BASE_URL_ENV_VAR)
             .ok()

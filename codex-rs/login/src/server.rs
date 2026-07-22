@@ -77,7 +77,7 @@ pub struct ServerOptions {
     pub login_success_page: LoginSuccessPage,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub auth_keyring_backend_kind: AuthKeyringBackendKind,
-    pub auth_route_config: Option<AuthRouteConfig>,
+    pub auth_route_config: AuthRouteConfig,
 }
 
 impl ServerOptions {
@@ -88,7 +88,7 @@ impl ServerOptions {
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
         auth_keyring_backend_kind: AuthKeyringBackendKind,
-        auth_route_config: Option<AuthRouteConfig>,
+        auth_route_config: AuthRouteConfig,
     ) -> Self {
         Self {
             codex_home,
@@ -387,7 +387,7 @@ async fn process_request(
                 redirect_uri,
                 pkce,
                 &code,
-                opts.auth_route_config.as_ref(),
+                &opts.auth_route_config,
             )
             .await
             {
@@ -409,7 +409,7 @@ async fn process_request(
                         &opts.issuer,
                         &opts.client_id,
                         &tokens.id_token,
-                        opts.auth_route_config.as_ref(),
+                        &opts.auth_route_config,
                     )
                     .await
                     .ok();
@@ -789,7 +789,7 @@ pub(crate) async fn exchange_code_for_tokens(
     redirect_uri: &str,
     pkce: &PkceCodes,
     code: &str,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> io::Result<ExchangedTokens> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
@@ -1114,7 +1114,7 @@ pub(crate) async fn obtain_api_key(
     issuer: &str,
     client_id: &str,
     id_token: &str,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]

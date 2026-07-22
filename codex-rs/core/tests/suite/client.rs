@@ -1715,7 +1715,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
-        /*auth_route_config*/ None,
+        &codex_login::test_support::transport_default_auth_route_config(),
     )
     .await
     .expect("Failed to load CodexAuth")

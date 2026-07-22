@@ -54,7 +54,7 @@ struct RevokeTokenRequest<'a> {
 
 pub(super) async fn revoke_auth_tokens(
     auth_dot_json: Option<&AuthDotJson>,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> Result<(), std::io::Error> {
     let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
         return Ok(());

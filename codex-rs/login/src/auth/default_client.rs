@@ -299,28 +299,22 @@ fn build_default_client(builder: HttpClientBuilder) -> HttpClient {
 /// Builds an HTTP client for an auth endpoint without Codex default headers.
 pub(crate) fn create_raw_auth_client(
     endpoint: &str,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
-    auth_http_client_factory(auth_route_config)
+    auth_route_config
+        .http_client_factory()
         .build_client_without_request_logging(endpoint, ClientRouteClass::Auth)
 }
 
 /// Builds the default Codex HTTP client wrapper for an auth endpoint.
 pub(crate) fn create_default_auth_client(
     endpoint: &str,
-    auth_route_config: Option<&AuthRouteConfig>,
+    auth_route_config: &AuthRouteConfig,
 ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
     create_client_for_route(
-        &auth_http_client_factory(auth_route_config),
+        auth_route_config.http_client_factory(),
         endpoint,
         ClientRouteClass::Auth,
-    )
-}
-
-fn auth_http_client_factory(auth_route_config: Option<&AuthRouteConfig>) -> HttpClientFactory {
-    auth_route_config.map_or_else(
-        || HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        |config| config.http_client_factory().clone(),
     )
 }
 
