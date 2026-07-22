@@ -61,6 +61,7 @@ use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -367,6 +368,7 @@ impl RealtimeE2eHarness {
                     .unwrap_or(false)
                     .then(|| RESPONSE_ITEM_PREFIX.to_string()),
                 codex_response_handoff_mode,
+                codex_response_handoff_channel_prefixes: None,
                 codex_responses_as_items,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -424,6 +426,7 @@ impl RealtimeE2eHarness {
                     .unwrap_or(false)
                     .then(|| RESPONSE_ITEM_PREFIX.to_string()),
                 codex_response_handoff_mode: None,
+                codex_response_handoff_channel_prefixes: None,
                 codex_responses_as_items,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -446,6 +449,7 @@ impl RealtimeE2eHarness {
     async fn start_frameless_bidi_realtime(
         &mut self,
         codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
+        codex_response_handoff_channel_prefixes: Option<BTreeMap<String, Vec<String>>>,
         initial_items: Option<Vec<ThreadRealtimeInitialItem>>,
     ) -> Result<ThreadRealtimeStartedNotification> {
         let start_request_id = self
@@ -456,6 +460,7 @@ impl RealtimeE2eHarness {
                 flush_transcript_tail_on_session_end: None,
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode,
+                codex_response_handoff_channel_prefixes,
                 codex_responses_as_items: None,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -704,6 +709,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
             thread_id: thread_start.thread.id.clone(),
             model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
@@ -982,6 +988,7 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1076,6 +1083,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Text,
@@ -1251,6 +1259,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1347,6 +1356,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
             thread_id: thread_id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2120,6 +2130,7 @@ async fn websocket_v3_passes_initial_items_through_session_start() -> Result<()>
     let started = harness
         .start_frameless_bidi_realtime(
             /*codex_response_handoff_mode*/ None,
+            /*codex_response_handoff_channel_prefixes*/ None,
             Some(vec![
                 ThreadRealtimeInitialItem {
                     role: ConversationTextRole::Developer,
@@ -2158,10 +2169,27 @@ async fn websocket_v3_passes_initial_items_through_session_start() -> Result<()>
 async fn websocket_v3_routes_handoffs_by_session_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for (mode, expected_channels) in [
-        (None, [None, None, None, None]),
+    for (mode, channel_prefixes, texts, expected_channels) in [
+        (
+            None,
+            None,
+            [
+                "[ANALYSIS]silent context",
+                "[COMMENTARY]still working",
+                "[FINAL]finished",
+                "unparsable BEM output",
+            ],
+            [None, None, None, None],
+        ),
         (
             Some(CodexResponseHandoffMode::Commentary),
+            None,
+            [
+                "[ANALYSIS]silent context",
+                "[COMMENTARY]still working",
+                "[FINAL]finished",
+                "unparsable BEM output",
+            ],
             [
                 Some("commentary"),
                 Some("commentary"),
@@ -2171,6 +2199,36 @@ async fn websocket_v3_routes_handoffs_by_session_mode() -> Result<()> {
         ),
         (
             Some(CodexResponseHandoffMode::BemTags),
+            None,
+            [
+                "[ANALYSIS]silent context",
+                "[COMMENTARY]still working",
+                "[FINAL]finished",
+                "unparsable BEM output",
+            ],
+            [
+                Some("commentary"),
+                Some("commentary"),
+                Some("speakable"),
+                Some("speakable"),
+            ],
+        ),
+        (
+            Some(CodexResponseHandoffMode::BemTags),
+            Some(BTreeMap::from([
+                ("analysis".to_string(), vec!["[THOUGHT]".to_string()]),
+                (
+                    "commentary".to_string(),
+                    vec!["[PROGRESS]".to_string(), "[UPDATE]".to_string()],
+                ),
+                ("final".to_string(), vec!["[DONE]".to_string()]),
+            ])),
+            [
+                "[THOUGHT]silent context",
+                "[UPDATE]still working",
+                "[DONE]finished",
+                "unparsable BEM output",
+            ],
             [
                 Some("commentary"),
                 Some("commentary"),
@@ -2179,11 +2237,7 @@ async fn websocket_v3_routes_handoffs_by_session_mode() -> Result<()> {
             ],
         ),
     ] {
-        let analysis_text = "<|start|>assistant<|channel|>analysis<|message|>silent context<|end|>";
-        let commentary_text =
-            "<|start|>assistant<|channel|>commentary<|message|>still working<|end|>";
-        let final_text = "<|start|>assistant<|channel|>final<|message|>finished<|end|>";
-        let fallback_text = "unparsable BEM output";
+        let [analysis_text, commentary_text, final_text, fallback_text] = texts;
         let analysis = responses::ev_assistant_message("msg-analysis", analysis_text);
         let commentary = responses::ev_assistant_message("msg-commentary", commentary_text);
         let final_answer = responses::ev_assistant_message("msg-final", final_text);
@@ -2225,7 +2279,7 @@ async fn websocket_v3_routes_handoffs_by_session_mode() -> Result<()> {
         .await?;
 
         let started = harness
-            .start_frameless_bidi_realtime(mode, /*initial_items*/ None)
+            .start_frameless_bidi_realtime(mode, channel_prefixes, /*initial_items*/ None)
             .await?;
         assert_eq!(started.version, RealtimeConversationVersion::V3);
         let _ = harness
@@ -2937,6 +2991,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
             thread_id: thread_start.thread.id,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2999,6 +3054,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,

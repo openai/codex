@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use ts_rs::TS;
 
 /// EXPERIMENTAL - thread realtime audio chunk.
@@ -87,6 +88,10 @@ pub struct ThreadRealtimeStartParams {
     /// default to `thinking`. Realtime V1 and V2 ignore this setting.
     #[ts(optional = nullable)]
     pub codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
+    /// Overrides BEM channel prefixes by `analysis`, `commentary`, or `final`.
+    /// Omitted channels retain their default uppercase bracketed prefixes.
+    #[ts(optional = nullable)]
+    pub codex_response_handoff_channel_prefixes: Option<BTreeMap<String, Vec<String>>>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,

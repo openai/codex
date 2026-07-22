@@ -4462,3 +4462,28 @@ fn realtime_start_omitted_initial_items_remain_none() {
 
     assert_eq!(params.initial_items, None);
 }
+#[test]
+fn realtime_start_deserializes_client_handoff_channel_prefixes() {
+    let params = serde_json::from_value::<ThreadRealtimeStartParams>(json!({
+        "threadId": "thread_123",
+        "outputModality": "audio",
+        "codexResponseHandoffChannelPrefixes": {
+            "analysis": ["[THINKING]"],
+            "commentary": ["[PROGRESS]", "[UPDATE]"],
+            "final": ["[DONE]"]
+        }
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.codex_response_handoff_channel_prefixes,
+        Some(BTreeMap::from([
+            ("analysis".to_string(), vec!["[THINKING]".to_string()]),
+            (
+                "commentary".to_string(),
+                vec!["[PROGRESS]".to_string(), "[UPDATE]".to_string()],
+            ),
+            ("final".to_string(), vec!["[DONE]".to_string()]),
+        ]))
+    );
+}
