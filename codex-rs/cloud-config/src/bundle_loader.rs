@@ -74,7 +74,7 @@ pub async fn cloud_config_bundle_loader_for_storage(
         /*forced_chatgpt_workspace_id*/ None,
         Some(chatgpt_base_url.clone()),
         keyring_backend_kind,
-        Some(auth_route_config),
+        auth_route_config,
     )
     .await;
     cloud_config_bundle_loader(

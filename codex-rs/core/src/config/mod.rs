@@ -1250,8 +1250,8 @@ impl AuthManagerConfig for Config {
         self.chatgpt_base_url.clone()
     }
 
-    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
-        Some(Config::auth_route_config(self))
+    fn auth_route_config(&self) -> AuthRouteConfig {
+        Config::auth_route_config(self)
     }
 }
 

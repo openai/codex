@@ -65,7 +65,7 @@ pub async fn load_auth_manager(
         config.forced_chatgpt_workspace_id.clone(),
         chatgpt_base_url.or(Some(config.chatgpt_base_url.clone())),
         config.auth_keyring_backend_kind(),
-        Some(config.auth_route_config()),
+        config.auth_route_config(),
     )
     .await;
     (Some(auth_manager), http_client_factory)

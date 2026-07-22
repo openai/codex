@@ -58,6 +58,8 @@ use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_http_client::HttpClient;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
@@ -1045,7 +1047,7 @@ pub struct AuthConfig {
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub chatgpt_base_url: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
-    pub auth_route_config: Option<AuthRouteConfig>,
+    pub auth_route_config: AuthRouteConfig,
 }
 
 /// Enforces configured login restrictions using auth-owned HTTP settings.
@@ -1071,7 +1073,7 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
         config.chatgpt_base_url.as_deref(),
         config.keyring_backend_kind,
         agent_identity_authapi_base_url,
-        config.auth_route_config.as_ref(),
+        Some(&config.auth_route_config),
     )
     .await?
     else {
@@ -1778,7 +1780,7 @@ pub struct AuthManager {
     agent_identity_lock: Semaphore,
     agent_identity_bootstrap_cooldown: Mutex<AgentIdentityBootstrapCooldown>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
-    auth_route_config: Option<AuthRouteConfig>,
+    auth_route_config: AuthRouteConfig,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -1804,7 +1806,7 @@ pub trait AuthManagerConfig {
     fn chatgpt_base_url(&self) -> String;
 
     /// Returns route-selection settings for auth-owned clients.
-    fn auth_route_config(&self) -> Option<AuthRouteConfig>;
+    fn auth_route_config(&self) -> AuthRouteConfig;
 }
 
 impl Debug for AuthManager {
@@ -1845,7 +1847,7 @@ impl AuthManager {
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         chatgpt_base_url: Option<String>,
         keyring_backend_kind: AuthKeyringBackendKind,
-        auth_route_config: Option<AuthRouteConfig>,
+        auth_route_config: AuthRouteConfig,
     ) -> Self {
         let agent_identity_authapi_base_url =
             agent_identity_authapi_base_url(chatgpt_base_url.as_deref()).ok();
@@ -1857,7 +1859,7 @@ impl AuthManager {
             chatgpt_base_url.as_deref(),
             keyring_backend_kind,
             agent_identity_authapi_base_url.as_deref(),
-            auth_route_config.as_ref(),
+            Some(&auth_route_config),
         )
         .await
         .ok()
@@ -1906,7 +1908,7 @@ impl AuthManager {
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
-            auth_route_config: None,
+            auth_route_config: crate::test_support::transport_default_auth_route_config(),
         })
     }
 
@@ -1931,7 +1933,7 @@ impl AuthManager {
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
-            auth_route_config: None,
+            auth_route_config: crate::test_support::transport_default_auth_route_config(),
         })
     }
 
@@ -1964,7 +1966,7 @@ impl AuthManager {
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
-            auth_route_config: None,
+            auth_route_config: crate::test_support::transport_default_auth_route_config(),
         })
     }
 
@@ -1989,7 +1991,11 @@ impl AuthManager {
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
-            auth_route_config: None,
+            // External bearer auth refreshes by running the provider's command and never makes
+            // auth-owned HTTP requests, so this route is intentionally inert.
+            auth_route_config: AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(
+                OutboundProxyPolicy::ReqwestDefault,
+            )),
         })
     }
 
@@ -2074,7 +2080,7 @@ impl AuthManager {
                     policy,
                     self.agent_identity_authapi_base_url.as_deref(),
                     forced_chatgpt_workspace_id,
-                    self.auth_route_config.as_ref(),
+                    Some(&self.auth_route_config),
                     session_source,
                 )
                 .await;
@@ -2093,7 +2099,7 @@ impl AuthManager {
             policy,
             self.agent_identity_authapi_base_url.as_deref(),
             self.forced_chatgpt_workspace_id(),
-            self.auth_route_config.as_ref(),
+            Some(&self.auth_route_config),
             session_source,
         )
         .await
@@ -2212,7 +2218,7 @@ impl AuthManager {
             self.chatgpt_base_url.as_deref(),
             self.keyring_backend_kind,
             self.agent_identity_authapi_base_url.as_deref(),
-            self.auth_route_config.as_ref(),
+            Some(&self.auth_route_config),
         )
         .await
         .ok()
@@ -2295,7 +2301,7 @@ impl AuthManager {
         forced_chatgpt_workspace_id: Option<Vec<String>>,
         chatgpt_base_url: Option<String>,
         keyring_backend_kind: AuthKeyringBackendKind,
-        auth_route_config: Option<AuthRouteConfig>,
+        auth_route_config: AuthRouteConfig,
     ) -> Arc<Self> {
         Arc::new(
             Self::new(
@@ -2473,7 +2479,7 @@ impl AuthManager {
             .auth_cached()
             .and_then(|auth| auth.get_current_auth_json());
         if let Err(err) =
-            revoke_auth_tokens(auth_dot_json.as_ref(), self.auth_route_config.as_ref()).await
+            revoke_auth_tokens(auth_dot_json.as_ref(), Some(&self.auth_route_config)).await
         {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
