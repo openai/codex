@@ -157,6 +157,9 @@ const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str = "websocket_connection_limit_reached";
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE: &str = "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.";
+const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
+const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
+    "Previous response was not found. Retrying the full request.";
 const RESPONSES_WEBSOCKET_TIMING_KIND: &str = "responsesapi.websocket_timing";
 const RESPONSES_WEBSOCKET_TIMING_EVENT_TARGET: &str = "codex_api::responses_websocket_timing";
 const SESSION_ID_CLIENT_METADATA_KEY: &str = "session_id";
@@ -615,13 +618,19 @@ fn map_wrapped_websocket_error_event(
 
     if let Some(error) = error.as_ref()
         && let Some(code) = error.code.as_deref()
-        && code == WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE
+        && let Some(fallback_message) = match code {
+            WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE => {
+                Some(WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE)
+            }
+            PREVIOUS_RESPONSE_NOT_FOUND_CODE => Some(PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE),
+            _ => None,
+        }
     {
         return Some(ApiError::Retryable {
             message: error
                 .message
                 .clone()
-                .unwrap_or_else(|| WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE.to_string()),
+                .unwrap_or_else(|| fallback_message.to_string()),
             delay: None,
         });
     }
