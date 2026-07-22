@@ -2,15 +2,13 @@ diff --git a/build.rs b/build.rs
 index 9843ad8aa..573075489 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -346,7 +346,29 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
+@@ -346,7 +346,28 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
      // we want to optimize for minimizing the build tools required: No Perl,
      // no nasm, etc.
      let generated_dir = if !is_git {
 -        c_root_dir.join(PREGENERATED)
 +        let pregenerated_dir = c_root_dir.join(PREGENERATED);
-+        if target.os == WINDOWS
-+            && target.env == "msvc"
-+            && env::var_os("RULES_RUST_BAZEL_BUILD_SCRIPT_RUNNER").is_some()
++        if target.os == WINDOWS && target.env == "msvc"
 +        {
 +            let mut pending = vec![(pregenerated_dir.clone(), out_dir.clone())];
 +            while let Some((src_dir, dst_dir)) = pending.pop() {

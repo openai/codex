@@ -2,7 +2,7 @@ module(name = "codex")
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "llvm", version = "0.7.9")
+bazel_dep(name = "llvm", version = "0.8.11")
 
 # Patch hermetic LLVM for Codex's custom libc++ and Windows gnullvm runtime
 # needs that have not landed upstream.
@@ -89,45 +89,39 @@ single_version_override(
 )
 
 bazel_dep(name = "rules_platform", version = "0.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.58")
-
-# `rules_rs` still does not model `windows-gnullvm` as a distinct Windows exec
-# platform, so patch it until upstream grows that support for both x86_64 and
-# aarch64.
+bazel_dep(name = "aws-lc", version = "5.1.0.bcr.1")
+bazel_dep(name = "rules_rs", version = "0.0.96")
 single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_build_script_deps_annotation.patch",
-        "//patches:rules_rs_windows_gnullvm_exec.patch",
-        "//patches:rules_rs_windows_exec_linker.patch",
     ],
-    version = "0.0.58",
+    version = "0.0.96",
 )
 
-rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
-
-# Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++
-# toolchain. On `windows-gnullvm`, llvm-mingw does not ship
-# `libssp_nonshared`, so strip the forwarded stack-protector flags there.
+rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
 rules_rust.patch(
     patches = [
-        "//patches:rules_rust_windows_gnullvm_build_script.patch",
-        "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
-        "//patches:rules_rust_windows_bootstrap_process_wrapper_linker.patch",
-        "//patches:rules_rust_windows_build_script_runner_paths.patch",
+        # Carry the OpenAI setup fix that makes build-script tools available
+        # through their runfiles after the rules_rs upgrade.
+        "//patches:rules_rust_build_script_tools_transition.patch",
+        # Keep direct Windows/MSVC links compatible with hermetic LLVM's
+        # non-.lib runtime artifacts.
         "//patches:rules_rust_windows_msvc_direct_link_args.patch",
+        # Skip transient native-Windows linker outputs while consolidating
+        # dependency search paths.
         "//patches:rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
-        "//patches:rules_rust_windows_exec_bin_target.patch",
-        "//patches:rules_rust_windows_exec_std.patch",
-        "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
     ],
     strip = 1,
 )
 use_repo(rules_rust, "rules_rust")
 
+# argument-comment-lint uses rustc_private and needs nightly rustc-dev
+# components. Keep that rules_rust-reexported toolchain separate from the
+# default rules_rs toolchains below, which do not expose dev_components.
 nightly_rust = use_extension(
-    "@rules_rs//rs/experimental:rules_rust_reexported_extensions.bzl",
+    "@rules_rs//rs:rules_rust_reexported_extensions.bzl",
     "rust",
 )
 nightly_rust.toolchain(
@@ -136,8 +130,8 @@ nightly_rust.toolchain(
     versions = ["nightly/2025-09-18"],
 )
 
-# Keep Windows exec tools on MSVC so Bazel helper binaries link correctly, but
-# lint crate targets as `windows-gnullvm` to preserve the repo's actual cfgs.
+# Keep the reexported extension's default Windows set constrained to MSVC so
+# it cannot also match the gnullvm host platform.
 nightly_rust.repository_set(
     name = "rust_windows_x86_64",
     dev_components = True,
@@ -145,29 +139,55 @@ nightly_rust.repository_set(
     exec_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
-        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+        "@llvm//constraints/windows/abi:msvc",
     ],
     exec_triple = "x86_64-pc-windows-msvc",
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
-        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+        "@llvm//constraints/windows/abi:msvc",
     ],
     target_triple = "x86_64-pc-windows-msvc",
     versions = ["nightly/2025-09-18"],
 )
+
+# Also let that MSVC-exec set target gnullvm for existing cross lanes.
 nightly_rust.repository_set(
     name = "rust_windows_x86_64",
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
-        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+        "@llvm//constraints/windows/abi:gnullvm",
+        "@llvm//constraints/windows/crt:msvcrt",
     ],
     target_triple = "x86_64-pc-windows-gnullvm",
 )
+
+# Give Windows lint a native gnullvm exec set so proc-macros link against the
+# same ABI as hermetic LLVM and BCR AWS-LC.
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64_gnullvm",
+    dev_components = True,
+    edition = "2024",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:gnullvm",
+        "@llvm//constraints/windows/crt:msvcrt",
+    ],
+    exec_triple = "x86_64-pc-windows-gnullvm",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:gnullvm",
+        "@llvm//constraints/windows/crt:msvcrt",
+    ],
+    target_triple = "x86_64-pc-windows-gnullvm",
+    versions = ["nightly/2025-09-18"],
+)
 use_repo(nightly_rust, "rust_toolchains")
 
-toolchains = use_extension("@rules_rs//rs/experimental/toolchains:module_extension.bzl", "toolchains")
+toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
     edition = "2024",
     version = "1.95.0",
@@ -177,6 +197,14 @@ use_repo(toolchains, "default_rust_toolchains")
 register_toolchains("@default_rust_toolchains//:all")
 
 register_toolchains("@rust_toolchains//:all")
+
+rules_rust_bindgen = use_extension(
+    "@rules_rs//rs:rules_rust_bindgen.bzl",
+    "rules_rust_bindgen",
+)
+use_repo(rules_rust_bindgen, "rules_rust_bindgen")
+
+register_toolchains("@rules_rust_bindgen//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
@@ -197,7 +225,6 @@ crate.from_cargo(
         "x86_64-pc-windows-msvc",
         "x86_64-pc-windows-gnullvm",
     ],
-    use_experimental_platforms = True,
 )
 crate.from_cargo(
     name = "argument_comment_lint_crates",
@@ -215,7 +242,6 @@ crate.from_cargo(
         "x86_64-pc-windows-msvc",
         "x86_64-pc-windows-gnullvm",
     ],
-    use_experimental_platforms = True,
 )
 
 bazel_dep(name = "zstd", version = "1.5.7")
@@ -243,22 +269,26 @@ crate.annotation(
     ],
 )
 crate.annotation(
-    build_script_env = {
-        "AWS_LC_SYS_NO_JITTER_ENTROPY": "1",
-    },
+    additive_build_file = "@rules_rs//3rd_party/aws-lc-sys:additive.BUILD.bazel",
     crate = "aws-lc-sys",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:aws-lc-sys_memcmp_check.patch",
-        "//patches:aws-lc-sys_windows_msvc_prebuilt_nasm.patch",
-        "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
-    ],
+    extra_aliased_targets = {"aws_lc_sys_build_info": "aws_lc_sys_build_info"},
+    gen_build_script = "off",
+    repositories = ["crates"],
+    rustc_flags = ["--cfg=use_bindgen_pregenerated"],
+    deps = ["@crates//:aws_lc_sys_build_info"],
+)
+crate.annotation(
+    crate = "aws-lc-rs",
+    gen_build_script = "off",
+    repositories = ["crates"],
 )
 crate.annotation(
     # The build script only validates embedded source/version metadata.
     crate = "rustc_apfloat",
     gen_build_script = "off",
 )
+
+inject_repo(crate, "aws-lc")
 
 inject_repo(crate, "zstd")
 
