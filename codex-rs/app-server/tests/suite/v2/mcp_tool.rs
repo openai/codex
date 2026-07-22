@@ -1,20 +1,18 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::to_response;
-use app_test_support::write_mock_responses_config_toml;
 use axum::Router;
 use codex_app_server_protocol::CapabilityRootLocation;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::EnvironmentAddResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -72,6 +70,8 @@ use super::exec_server_test_support::accept_exec_server_environment;
 use super::exec_server_test_support::read_exec_server_json;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const AUTO_COMPACT_LIMIT: i64 = 1024;
+const LARGE_OUTPUT_AUTO_COMPACT_LIMIT: i64 = 1_000_000;
 const TEST_SERVER_NAME: &str = "tool_server";
 const TEST_TOOL_NAME: &str = "echo_tool";
 const LARGE_RESPONSE_MESSAGE: &str = "large";
@@ -87,65 +87,36 @@ async fn mcp_server_tool_call_returns_tool_result() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &responses_server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
-        r#"
-[mcp_servers.{TEST_SERVER_NAME}]
-url = "{mcp_server_url}/mcp"
-"#
-    ));
-    std::fs::write(config_path, config_toml)?;
+    mcp_tool_config(&responses_server.uri(), &mcp_server_url, AUTO_COMPACT_LIMIT)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let thread_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
     let thread_id = thread.id.clone();
-
-    let tool_call_request_id = mcp
-        .send_mcp_server_tool_call_request(McpServerToolCallParams {
-            thread_id: thread_id.clone(),
-            server: TEST_SERVER_NAME.to_string(),
-            tool: TEST_TOOL_NAME.to_string(),
-            arguments: Some(json!({
-                "message": "hello from app",
-            })),
-            meta: Some(json!({
-                "source": "mcp-app",
-            })),
+    let response: McpServerToolCallResponse = mcp
+        .request(|request_id| ClientRequest::McpServerToolCall {
+            request_id,
+            params: McpServerToolCallParams {
+                thread_id: thread_id.clone(),
+                server: TEST_SERVER_NAME.to_string(),
+                tool: TEST_TOOL_NAME.to_string(),
+                arguments: Some(json!({
+                    "message": "hello from app",
+                })),
+                meta: Some(json!({
+                    "source": "mcp-app",
+                })),
+            },
         })
         .await?;
-    let tool_call_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
-    )
-    .await??;
-    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
 
     assert_eq!(response.content.len(), 1);
     assert_eq!(response.content[0].get("type"), Some(&json!("text")));
@@ -180,9 +151,8 @@ async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
@@ -212,45 +182,20 @@ async fn mcp_server_tool_call_round_trips_elicitation() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &responses_server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
-        r#"
-[mcp_servers.{TEST_SERVER_NAME}]
-url = "{mcp_server_url}/mcp"
-"#
-    ));
-    std::fs::write(config_path, config_toml)?;
+    mcp_tool_config(&responses_server.uri(), &mcp_server_url, AUTO_COMPACT_LIMIT)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             ..Default::default()
         })
         .await?;
-    let thread_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
 
     let tool_call_request_id = mcp
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
@@ -304,12 +249,11 @@ url = "{mcp_server_url}/mcp"
     )
     .await?;
 
-    let tool_call_response: JSONRPCResponse = timeout(
+    let response: McpServerToolCallResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
+        mcp.read_response(tool_call_request_id),
     )
     .await??;
-    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
     assert_eq!(response.content.len(), 1);
     assert_eq!(response.content[0].get("type"), Some(&json!("text")));
     assert_eq!(response.content[0].get("text"), Some(&json!("accepted")));
@@ -327,32 +271,16 @@ async fn mcp_server_elicitation_survives_environment_runtime_refresh() -> Result
     let exec_listener = TcpListener::bind("127.0.0.1:0").await?;
     let exec_server_url = format!("ws://{}", exec_listener.local_addr()?);
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &responses_server.uri(),
-        &BTreeMap::from([(Feature::DeferredExecutor, true)]),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
-        r#"
-[mcp_servers.{TEST_SERVER_NAME}]
-url = "{mcp_server_url}/mcp"
-"#
-    ));
-    std::fs::write(config_path, config_toml)?;
+    mcp_tool_config(&responses_server.uri(), &mcp_server_url, AUTO_COMPACT_LIMIT)
+        .enable_feature(Feature::DeferredExecutor)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         // This test adds and refreshes an explicitly selected runtime environment.
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let add_environment_id = mcp
         .send_raw_request(
             "environment/add",
@@ -363,12 +291,8 @@ url = "{mcp_server_url}/mcp"
             })),
         )
         .await?;
-    let add_environment_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(add_environment_id)),
-    )
-    .await??;
-    let _: EnvironmentAddResponse = to_response(add_environment_response)?;
+    let _: EnvironmentAddResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(add_environment_id)).await??;
 
     let capability_root = TempDir::new()?;
     let thread_start_id = mcp
@@ -393,12 +317,8 @@ url = "{mcp_server_url}/mcp"
             ..Default::default()
         })
         .await?;
-    let thread_start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_start_id)).await??;
 
     let tool_call_request_id = mcp
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
@@ -450,12 +370,11 @@ url = "{mcp_server_url}/mcp"
         })?,
     )
     .await?;
-    let tool_call_response = timeout(
+    let response: McpServerToolCallResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
+        mcp.read_response(tool_call_request_id),
     )
     .await??;
-    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
     assert_eq!(response.content[0].get("text"), Some(&json!("accepted")));
 
     let _ = shutdown_tx.send(());
@@ -470,45 +389,20 @@ async fn mcp_server_tool_call_forwards_url_elicitation() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &responses_server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
-        r#"
-[mcp_servers.{TEST_SERVER_NAME}]
-url = "{mcp_server_url}/mcp"
-"#
-    ));
-    std::fs::write(config_path, config_toml)?;
+    mcp_tool_config(&responses_server.uri(), &mcp_server_url, AUTO_COMPACT_LIMIT)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             ..Default::default()
         })
         .await?;
-    let thread_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
 
     let tool_call_request_id = mcp
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
@@ -555,12 +449,11 @@ url = "{mcp_server_url}/mcp"
     )
     .await?;
 
-    let tool_call_response: JSONRPCResponse = timeout(
+    let response: McpServerToolCallResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
+        mcp.read_response(tool_call_request_id),
     )
     .await??;
-    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
     assert_eq!(response.content.len(), 1);
     assert_eq!(response.content[0].get("type"), Some(&json!("text")));
     assert_eq!(response.content[0].get("text"), Some(&json!("accepted")));
@@ -593,62 +486,37 @@ async fn mcp_tool_call_completion_notification_contains_truncated_large_result()
     let responses_server = create_mock_responses_server_sequence(responses).await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
+    mcp_tool_config(
         &responses_server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1_000_000,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
-        r#"
-[mcp_servers.{TEST_SERVER_NAME}]
-url = "{mcp_server_url}/mcp"
-"#
-    ));
-    std::fs::write(config_path, config_toml)?;
+        &mcp_server_url,
+        LARGE_OUTPUT_AUTO_COMPACT_LIMIT,
+    )
+    .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let thread_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
-
-    let turn_start_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
-            client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Call the large MCP tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
+    let TurnStartResponse { turn, .. } = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id,
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "Call the large MCP tool".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
         })
         .await?;
-    let turn_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn, .. } = to_response(turn_start_resp)?;
 
     let completed = wait_for_mcp_tool_call_completed(&mut mcp, call_id).await?;
     assert_eq!(completed.turn_id, turn.id);
@@ -901,17 +769,28 @@ async fn wait_for_mcp_tool_call_completed(
     call_id: &str,
 ) -> Result<ItemCompletedNotification> {
     loop {
-        let notification = timeout(
+        let completed: ItemCompletedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/completed"),
+            mcp.read_notification("item/completed"),
         )
         .await??;
-        let Some(params) = notification.params else {
-            continue;
-        };
-        let completed: ItemCompletedNotification = serde_json::from_value(params)?;
         if matches!(&completed.item, ThreadItem::McpToolCall { id, .. } if id == call_id) {
             return Ok(completed);
         }
     }
+}
+
+fn mcp_tool_config(
+    server_uri: &str,
+    mcp_server_url: &str,
+    auto_compact_limit: i64,
+) -> MockResponsesConfig {
+    MockResponsesConfig::new(server_uri)
+        .with_root_config(&format!(
+            "compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = {auto_compact_limit}"
+        ))
+        .with_provider_config("supports_websockets = false")
+        .with_extra_config(&format!(
+            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_server_url}/mcp\""
+        ))
 }

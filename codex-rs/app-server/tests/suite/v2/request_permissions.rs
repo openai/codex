@@ -1,14 +1,13 @@
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_request_permissions_sse_response;
-use app_test_support::to_response;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadStartParams;
@@ -16,6 +15,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_features::Feature;
 use core_test_support::skip_if_wine_exec;
 use tokio::time::timeout;
 
@@ -35,45 +35,38 @@ async fn request_permissions_round_trip() -> Result<()> {
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri())
+        .with_approval_policy("untrusted")
+        .enable_feature(Feature::RequestPermissionsTool)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let thread_start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let thread_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
 
-    let turn_start_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "pick a directory".to_string(),
-                text_elements: Vec::new(),
-            }],
-            model: Some("mock-model".to_string()),
-            ..Default::default()
+    let TurnStartResponse { turn, .. } = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "pick a directory".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            },
         })
         .await?;
-    let turn_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn, .. } = to_response(turn_start_resp)?;
 
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -162,30 +155,4 @@ async fn request_permissions_round_trip() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "untrusted"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-
-[features]
-request_permissions_tool = true
-"#
-        ),
-    )
 }

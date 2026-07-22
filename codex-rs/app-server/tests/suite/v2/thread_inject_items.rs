@@ -1,14 +1,13 @@
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::RolloutRecorder;
 use codex_protocol::models::ContentItem;
@@ -19,7 +18,6 @@ use core_test_support::responses;
 use core_test_support::responses::strip_response_item_id;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use serde_json::Value;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -36,13 +34,12 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
     let response_mock = responses::mount_sse_once(&server, body).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -50,12 +47,8 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let injected_text = "Injected assistant context";
     let injected_item = ResponseItem::Message {
@@ -74,13 +67,8 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
             items: vec![serde_json::to_value(&injected_item)?],
         })
         .await?;
-    let inject_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(inject_req)),
-    )
-    .await??;
     let _response: ThreadInjectItemsResponse =
-        to_response::<ThreadInjectItemsResponse>(inject_resp)?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(inject_req)).await??;
 
     let rollout_path = thread.path.as_ref().context("thread path missing")?;
     let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
@@ -106,11 +94,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
             ..Default::default()
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
+    let _: TurnStartResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -161,13 +145,12 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
     let response_mock = responses::mount_sse_sequence(&server, vec![first_body, second_body]).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -175,12 +158,8 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let first_turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -193,11 +172,8 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
             ..Default::default()
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_req)),
-    )
-    .await??;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(first_turn_req)).await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -221,13 +197,8 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
             items: vec![injected_value.clone()],
         })
         .await?;
-    let inject_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(inject_req)),
-    )
-    .await??;
     let _response: ThreadInjectItemsResponse =
-        to_response::<ThreadInjectItemsResponse>(inject_resp)?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(inject_req)).await??;
 
     let second_turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -240,11 +211,8 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
             ..Default::default()
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(second_turn_req)),
-    )
-    .await??;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(second_turn_req)).await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -271,29 +239,6 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
     );
 
     Ok(())
-}
-
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
 }
 
 fn response_item_text_position(items: &[Value], needle: &str) -> Option<usize> {

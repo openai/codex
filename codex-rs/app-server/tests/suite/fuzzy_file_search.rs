@@ -46,13 +46,11 @@ shell_snapshot = false
 
 async fn initialized_mcp(codex_home: &TempDir) -> Result<TestAppServer> {
     create_config_toml(codex_home.path())?;
-    let mut mcp = TestAppServer::builder()
+    TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
-        .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    Ok(mcp)
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await
 }
 
 async fn wait_for_session_updated(
@@ -243,9 +241,8 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();
     // Send fuzzyFileSearch request.
@@ -313,9 +310,8 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();
     let request_id = mcp

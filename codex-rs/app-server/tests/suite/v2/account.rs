@@ -185,26 +185,18 @@ async fn read_account(mcp: &mut TestAppServer) -> Result<GetAccountResponse> {
             refresh_token: false,
         })
         .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    to_response(response)
+    timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await?
 }
 
 async fn assert_account_updated(
     mcp: &mut TestAppServer,
     auth_mode: Option<AuthMode>,
 ) -> Result<()> {
-    let notification = timeout(
+    let payload: AccountUpdatedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/updated"),
+        mcp.read_notification("account/updated"),
     )
     .await??;
-    let ServerNotification::AccountUpdated(payload) = notification.try_into()? else {
-        bail!("unexpected notification")
-    };
     assert_eq!(
         payload,
         AccountUpdatedNotification {
@@ -284,17 +276,11 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let id = mcp.send_logout_account_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(id)),
-    )
-    .await??;
-    let _ok: LogoutAccountResponse = to_response(resp)?;
+    let _ok: LogoutAccountResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(id)).await??;
 
     let note = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -321,12 +307,8 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
             refresh_token: false,
         })
         .await?;
-    let get_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
-    )
-    .await??;
-    let account: GetAccountResponse = to_response(get_resp)?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(get_id)).await??;
     assert_eq!(account.account, None);
     Ok(())
 }
@@ -346,9 +328,8 @@ async fn logout_account_succeeds_when_config_reload_fails() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
 
@@ -393,9 +374,8 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
@@ -404,12 +384,8 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
             Some("pro".to_string()),
         )
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
-    )
-    .await??;
-    let response: LoginAccountResponse = to_response(set_resp)?;
+    let response: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
 
     let note = timeout(
@@ -429,12 +405,8 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
             refresh_token: false,
         })
         .await?;
-    let get_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
-    )
-    .await??;
-    let account: GetAccountResponse = to_response(get_resp)?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(get_id)).await??;
     assert_eq!(
         account,
         GetAccountResponse {
@@ -447,24 +419,16 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     );
 
     let logout_id = mcp.send_logout_account_request().await?;
-    let logout_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(logout_id)),
-    )
-    .await??;
-    let _: LogoutAccountResponse = to_response(logout_resp)?;
+    let _: LogoutAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(logout_id)).await??;
 
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
         })
         .await?;
-    let get_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
-    )
-    .await??;
-    let account: GetAccountResponse = to_response(get_resp)?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(get_id)).await??;
     assert_eq!(account.account, None);
 
     Ok(())
@@ -493,9 +457,8 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
@@ -504,12 +467,8 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
             Some("pro".to_string()),
         )
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
-    )
-    .await??;
-    let response: LoginAccountResponse = to_response(set_resp)?;
+    let response: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     let _updated = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -522,12 +481,8 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
             refresh_token: true,
         })
         .await?;
-    let get_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
-    )
-    .await??;
-    let account: GetAccountResponse = to_response(get_resp)?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(get_id)).await??;
     assert_eq!(
         account,
         GetAccountResponse {
@@ -622,9 +577,8 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
@@ -633,12 +587,8 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
             Some("pro".to_string()),
         )
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
-    )
-    .await??;
-    let response: LoginAccountResponse = to_response(set_resp)?;
+    let response: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     let _updated = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -652,12 +602,8 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let thread = to_response::<codex_app_server_protocol::ThreadStartResponse>(thread_resp)?;
+    let thread: codex_app_server_protocol::ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
@@ -677,11 +623,8 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
         Some("pro"),
     )
     .await?;
-    let _turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
+    let _: codex_app_server_protocol::TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
     let _turn_completed = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -733,9 +676,8 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
@@ -744,12 +686,8 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
             Some("pro".to_string()),
         )
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
-    )
-    .await??;
-    let response: LoginAccountResponse = to_response(set_resp)?;
+    let response: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     let _updated = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -763,12 +701,8 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let thread = to_response::<codex_app_server_protocol::ThreadStartResponse>(thread_resp)?;
+    let thread: codex_app_server_protocol::ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
@@ -801,11 +735,8 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     )
     .await?;
 
-    let _turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
+    let _: codex_app_server_protocol::TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
     let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -860,9 +791,8 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
@@ -871,12 +801,8 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
             Some("pro".to_string()),
         )
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
-    )
-    .await??;
-    let response: LoginAccountResponse = to_response(set_resp)?;
+    let response: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     let _updated = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -890,12 +816,8 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let thread = to_response::<codex_app_server_protocol::ThreadStartResponse>(thread_resp)?;
+    let thread: codex_app_server_protocol::ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
@@ -928,11 +850,8 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     )
     .await?;
 
-    let _turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
+    let _: codex_app_server_protocol::TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
     let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -980,9 +899,8 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
@@ -991,12 +909,8 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
             Some("pro".to_string()),
         )
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
-    )
-    .await??;
-    let response: LoginAccountResponse = to_response(set_resp)?;
+    let response: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     let _updated = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -1010,12 +924,8 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let thread = to_response::<codex_app_server_protocol::ThreadStartResponse>(thread_resp)?;
+    let thread: codex_app_server_protocol::ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
@@ -1048,11 +958,8 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     )
     .await?;
 
-    let _turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
+    let _: codex_app_server_protocol::TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
     let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -1077,19 +984,14 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
         .send_login_account_api_key_request("sk-test-key")
         .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(req_id)).await??;
     assert_eq!(login, LoginAccountResponse::ApiKey {});
 
     let note = timeout(
@@ -1135,9 +1037,8 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> R
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let mut expected_config = read_config_toml(codex_home.path())?;
     expected_config
         .as_table_mut()
@@ -1216,9 +1117,8 @@ async fn login_amazon_bedrock_rejects_non_bedrock_provider_override_without_chan
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .with_args(&["-c", "model_provider=\"mock_provider\""])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
@@ -1275,9 +1175,8 @@ async fn login_amazon_bedrock_allows_bedrock_provider_override() -> Result<()> {
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .with_args(&["-c", "model_provider=\"amazon-bedrock\""])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
@@ -1331,9 +1230,8 @@ async fn logout_managed_bedrock_restores_default_account() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
         .await?;
@@ -1402,9 +1300,8 @@ async fn logout_aws_managed_bedrock_errors_without_changing_auth_or_config() -> 
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp.send_logout_account_request().await?;
     let error = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -1529,9 +1426,8 @@ async fn login_managed_bedrock_updates_active_bedrock_account() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
         .await?;
@@ -1573,9 +1469,8 @@ async fn login_account_amazon_bedrock_rejects_invalid_credentials_without_change
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let expected_config = read_config_toml(codex_home.path())?;
 
     let request_id = mcp
@@ -1623,9 +1518,8 @@ async fn login_account_amazon_bedrock_rejected_when_forced_chatgpt() -> Result<(
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
         .await?;
@@ -1657,9 +1551,8 @@ async fn login_account_amazon_bedrock_rejected_with_external_chatgpt_auth() -> R
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             access_token,
@@ -1712,9 +1605,8 @@ async fn login_account_api_key_rejected_when_forced_chatgpt() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_login_account_api_key_request("sk-test-key")
@@ -1746,9 +1638,8 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
     let err: JSONRPCError = timeout(
@@ -1787,9 +1678,8 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
     let err: JSONRPCError = timeout(
@@ -1853,17 +1743,12 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::ChatgptDeviceCode {
         login_id,
         verification_url,
@@ -1931,17 +1816,12 @@ async fn login_account_chatgpt_device_code_failure_notifies_without_account_upda
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2007,17 +1887,12 @@ async fn login_account_chatgpt_device_code_can_be_cancelled() -> Result<()> {
             ("OPENAI_API_KEY", None),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2027,12 +1902,8 @@ async fn login_account_chatgpt_device_code_can_be_cancelled() -> Result<()> {
             login_id: login_id.clone(),
         })
         .await?;
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await??;
-    let cancel: CancelLoginAccountResponse = to_response(cancel_resp)?;
+    let cancel: CancelLoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(cancel_id)).await??;
     assert_eq!(cancel.status, CancelLoginAccountStatus::Canceled);
 
     let note = timeout(
@@ -2077,18 +1948,12 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::Chatgpt { login_id, auth_url } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2102,12 +1967,8 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
             login_id: login_id.clone(),
         })
         .await?;
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await??;
-    let _ok: CancelLoginAccountResponse = to_response(cancel_resp)?;
+    let _ok: CancelLoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(cancel_id)).await??;
 
     let note = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -2151,18 +2012,12 @@ async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
             (CLIENT_ID_OVERRIDE_ENV_VAR, Some("staging-client")),
             (LOGIN_ISSUER_ENV_VAR, Some("https://auth.example.com")),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::Chatgpt { login_id, auth_url } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2181,12 +2036,8 @@ async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
     let cancel_id = mcp
         .send_cancel_login_account_request(CancelLoginAccountParams { login_id })
         .await?;
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await??;
-    let _: CancelLoginAccountResponse = to_response(cancel_resp)?;
+    let _: CancelLoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(cancel_id)).await??;
     Ok(())
 }
 
@@ -2216,9 +2067,8 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
                 Some("http://localhost:3000/codex/open-app"),
             ),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_login_account_request(json!({
@@ -2227,12 +2077,8 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
             "useHostedLoginSuccessPage": true,
         }))
         .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2272,19 +2118,13 @@ async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Initiate the ChatGPT login flow
     let request_id = mcp.send_login_account_chatgpt_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::Chatgpt { login_id, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2304,12 +2144,8 @@ async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
             Some("pro".to_string()),
         )
         .await?;
-    let set_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
-    )
-    .await??;
-    let response: LoginAccountResponse = to_response(set_resp)?;
+    let response: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(set_id)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     let _updated = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -2324,12 +2160,8 @@ async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
             login_id: login_id.clone(),
         })
         .await?;
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await??;
-    let cancel: CancelLoginAccountResponse = to_response(cancel_resp)?;
+    let cancel: CancelLoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(cancel_id)).await??;
     assert_eq!(cancel.status, CancelLoginAccountStatus::NotFound);
 
     Ok(())
@@ -2351,18 +2183,12 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2392,18 +2218,12 @@ async fn login_account_chatgpt_includes_forced_workspace_allowlist_query_param()
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let login: LoginAccountResponse = to_response(resp)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
@@ -2436,21 +2256,16 @@ async fn get_account_no_auth() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
         refresh_token: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let account: GetAccountResponse = to_response(resp)?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(account.account, None, "expected no account");
     assert_eq!(account.requires_openai_auth, true);
@@ -2471,31 +2286,22 @@ async fn get_account_with_api_key() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
         .send_login_account_api_key_request("sk-test-key")
         .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-    let _login_ok = to_response::<LoginAccountResponse>(resp)?;
+    let _login_ok: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(req_id)).await??;
 
     let params = GetAccountParams {
         refresh_token: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let expected = GetAccountResponse {
         account: Some(Account::ApiKey {}),
@@ -2519,21 +2325,16 @@ async fn get_account_when_auth_not_required() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
         refresh_token: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let expected = GetAccountResponse {
         account: None,
@@ -2564,21 +2365,16 @@ region = "us-west-2"
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
         refresh_token: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let expected = GetAccountResponse {
         account: Some(Account::AmazonBedrock {
@@ -2613,9 +2409,8 @@ command = "print-token"
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     assert_eq!(
         read_account(&mut mcp).await?,
@@ -2650,9 +2445,8 @@ region = "us-west-2"
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
 
@@ -2710,21 +2504,16 @@ async fn get_account_with_managed_bedrock_provider() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
         })
         .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         received,
@@ -2760,21 +2549,16 @@ async fn get_account_with_chatgpt() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
         refresh_token: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let expected = GetAccountResponse {
         account: Some(Account::Chatgpt {
@@ -2807,21 +2591,16 @@ async fn get_account_with_chatgpt_without_email() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(response)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         received,
@@ -2880,9 +2659,8 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
                 Some(refresh_url.as_str()),
             ),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let auth_status_request_id = mcp
         .send_get_auth_status_request(GetAuthStatusParams {
@@ -2890,12 +2668,11 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
             refresh_token: Some(true),
         })
         .await?;
-    let auth_status_resp: JSONRPCResponse = timeout(
+    let _: GetAuthStatusResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(auth_status_request_id)),
+        mcp.read_response(auth_status_request_id),
     )
     .await??;
-    let _: GetAuthStatusResponse = to_response(auth_status_resp)?;
 
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -2903,12 +2680,8 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
         })
         .await?;
 
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         received,
@@ -2941,21 +2714,16 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let params = GetAccountParams {
         refresh_token: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let expected = GetAccountResponse {
         account: Some(Account::Chatgpt {

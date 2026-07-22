@@ -4,11 +4,10 @@ use anyhow::Error;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
@@ -99,29 +98,21 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(100),
-            cursor: None,
-            include_hidden: None,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
     let ModelListResponse {
         data: items,
         next_cursor,
-    } = to_response::<ModelListResponse>(response)?;
+    } = mcp
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                limit: Some(100),
+                cursor: None,
+                include_hidden: None,
+            },
+        })
+        .await?;
 
     let expected_models = expected_visible_models();
 
@@ -137,29 +128,21 @@ async fn list_models_includes_hidden_models() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(100),
-            cursor: None,
-            include_hidden: Some(true),
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
     let ModelListResponse {
         data: items,
         next_cursor,
-    } = to_response::<ModelListResponse>(response)?;
+    } = mcp
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                limit: Some(100),
+                cursor: None,
+                include_hidden: Some(true),
+            },
+        })
+        .await?;
 
     assert!(items.iter().any(|item| item.hidden));
     assert!(next_cursor.is_none());
@@ -227,28 +210,21 @@ openai_base_url = "{server_uri}/v1"
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(100),
-            cursor: None,
-            include_hidden: None,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
     let ModelListResponse {
         data: items,
         next_cursor,
-    } = to_response::<ModelListResponse>(response)?;
+    } = mcp
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                limit: Some(100),
+                cursor: None,
+                include_hidden: None,
+            },
+        })
+        .await?;
     let mut expected_presets: Vec<ModelPreset> = vec![remote_model.into()];
     ModelPreset::mark_default_by_picker_visibility(&mut expected_presets);
     let mut expected_items = expected_presets
@@ -287,34 +263,27 @@ async fn list_models_pagination_works() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let expected_models = expected_visible_models();
     let mut cursor = None;
     let mut items = Vec::new();
 
     for _ in 0..expected_models.len() {
-        let request_id = mcp
-            .send_list_models_request(ModelListParams {
-                limit: Some(1),
-                cursor: cursor.clone(),
-                include_hidden: None,
-            })
-            .await?;
-
-        let response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-
         let ModelListResponse {
             data: page_items,
             next_cursor,
-        } = to_response::<ModelListResponse>(response)?;
+        } = mcp
+            .request(|request_id| ClientRequest::ModelList {
+                request_id,
+                params: ModelListParams {
+                    limit: Some(1),
+                    cursor: cursor.clone(),
+                    include_hidden: None,
+                },
+            })
+            .await?;
 
         assert_eq!(page_items.len(), 1);
         items.extend(page_items);
@@ -340,10 +309,8 @@ async fn list_models_rejects_invalid_cursor() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_list_models_request(ModelListParams {

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
@@ -19,6 +20,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
+use codex_features::Feature;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as RolloutGitInfo;
@@ -39,7 +41,7 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -137,7 +139,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
 async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -186,7 +188,7 @@ async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
 async fn thread_metadata_update_rejects_ephemeral_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -240,7 +242,7 @@ async fn thread_metadata_update_rejects_ephemeral_thread() -> Result<()> {
 async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
     let _state_db = init_state_db(codex_home.path()).await?;
 
     let preview = "Stored thread preview";
@@ -297,7 +299,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -
 async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
     let state_db = init_state_db(codex_home.path()).await?;
 
     let preview = "Loaded thread preview";
@@ -381,7 +383,7 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
 async fn thread_metadata_update_repairs_missing_sqlite_row_for_archived_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
     let _state_db = init_state_db(codex_home.path()).await?;
 
     let preview = "Archived thread preview";
@@ -448,7 +450,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_archived_thread()
 async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
 
     let thread_id = create_fake_rollout(
         codex_home.path(),
@@ -518,29 +520,8 @@ async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
     Ok(state_db)
 }
 
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-suppress_unstable_features_warning = true
-
-[features]
-sqlite = true
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
+fn mock_responses_config(server_uri: &str) -> MockResponsesConfig {
+    MockResponsesConfig::new(server_uri)
+        .with_root_config("suppress_unstable_features_warning = true")
+        .enable_feature(Feature::Sqlite)
 }

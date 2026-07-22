@@ -1,10 +1,9 @@
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
 use chrono::Utc;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MemoryResetResponse;
-use codex_app_server_protocol::RequestId;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_state::Stage1JobClaimOutcome;
@@ -22,7 +21,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test]
 async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    MockResponsesConfig::new("http://127.0.0.1:9")
+        .with_root_config("suppress_unstable_features_warning = true")
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
     let state_db = init_state_db(codex_home.path()).await?;
 
     let memory_root = codex_home.path().join("memories");
@@ -39,19 +41,14 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_raw_request("memory/reset", /*params*/ None)
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let _: MemoryResetResponse = to_response::<MemoryResetResponse>(response)?;
+    let _: MemoryResetResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let stage1_outputs = state_db
         .memories()
@@ -128,28 +125,4 @@ async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
     Ok(state_db)
-}
-
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-model_provider = "mock_provider"
-suppress_unstable_features_warning = true
-
-[features]
-sqlite = true
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "http://127.0.0.1:9/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#,
-    )
 }

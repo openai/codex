@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
@@ -15,7 +15,6 @@ use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -53,10 +52,8 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
@@ -142,9 +139,8 @@ async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .without_managed_config()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
@@ -173,28 +169,12 @@ async fn experimental_feature_list_resolves_thread_project_config() -> Result<()
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
-    let server_uri = server.uri();
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        format!(
-            r#"model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-model_provider = "mock_provider"
-
-[projects."{workspace_key}"]
-trust_level = "trusted"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )?;
+    MockResponsesConfig::new(&server.uri())
+        .with_extra_config(&format!(
+            "[projects.\"{workspace_key}\"]\ntrust_level = \"trusted\""
+        ))
+        .write(codex_home.path())?;
     let project_config_dir = workspace.path().join(".codex");
     std::fs::create_dir_all(&project_config_dir)?;
     std::fs::write(
@@ -207,9 +187,8 @@ memories = true
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_managed_config()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -245,9 +224,8 @@ async fn experimental_feature_list_rejects_unknown_thread_id() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_experimental_feature_list_request(ExperimentalFeatureListParams {
@@ -284,9 +262,8 @@ async fn experimental_feature_enablement_set_applies_to_global_and_thread_config
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual = set_experimental_feature_enablement(
         &mut mcp,
@@ -325,9 +302,8 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual = set_experimental_feature_enablement(
         &mut mcp,
@@ -360,9 +336,8 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     set_experimental_feature_enablement(
         &mut mcp,
@@ -439,9 +414,8 @@ async fn experimental_feature_enablement_set_allows_remote_control() -> Result<(
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let remote_control_enabled = false;
     let enablement = BTreeMap::from([("remote_control".to_string(), remote_control_enabled)]);
 
@@ -461,9 +435,8 @@ async fn experimental_feature_enablement_set_empty_map_is_no_op() -> Result<()> 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     set_experimental_feature_enablement(
         &mut mcp,
@@ -498,9 +471,8 @@ async fn experimental_feature_enablement_set_ignores_invalid_features() -> Resul
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual = set_experimental_feature_enablement(
         &mut mcp,
@@ -549,10 +521,5 @@ async fn read_config(mcp: &mut TestAppServer, cwd: Option<String>) -> Result<Con
 }
 
 async fn read_response<T: DeserializeOwned>(mcp: &mut TestAppServer, request_id: i64) -> Result<T> {
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    to_response(response)
+    timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await?
 }

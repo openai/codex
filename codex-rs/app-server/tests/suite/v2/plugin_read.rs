@@ -63,9 +63,8 @@ async fn plugin_read_rejects_missing_read_source() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -96,9 +95,8 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -275,9 +273,8 @@ apps = true
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -287,12 +284,8 @@ apps = true
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
     assert_eq!(
@@ -454,9 +447,8 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     for remote_marketplace_name in [
         "workspace-shared-with-me-private",
@@ -470,12 +462,8 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
             })
             .await?;
 
-        let response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-        let response: PluginReadResponse = to_response(response)?;
+        let response: PluginReadResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
         assert_eq!(response.plugin.marketplace_name, "workspace-shared-with-me");
         assert_eq!(
@@ -666,9 +654,8 @@ async fn plugin_read_includes_share_url_for_admin_disabled_remote_plugin() -> Re
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -678,12 +665,8 @@ async fn plugin_read_includes_share_url_for_admin_disabled_remote_plugin() -> Re
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
     assert_eq!(response.plugin.marketplace_path, None);
@@ -803,9 +786,8 @@ async fn plugin_skill_read_reads_remote_skill_contents_when_remote_plugin_enable
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_skill_read_request(PluginSkillReadParams {
@@ -815,12 +797,8 @@ async fn plugin_skill_read_reads_remote_skill_contents_when_remote_plugin_enable
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginSkillReadResponse = to_response(response)?;
+    let response: PluginSkillReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -859,9 +837,8 @@ async fn plugin_read_maps_missing_remote_plugin_to_invalid_request() -> Result<(
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -915,9 +892,8 @@ remote_plugin = true
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -949,9 +925,8 @@ async fn plugin_read_rejects_invalid_remote_plugin_name() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1011,9 +986,8 @@ enabled = true
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
@@ -1120,9 +1094,8 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1134,12 +1107,8 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.plugin.summary.remote_plugin_id, None);
     assert_eq!(
@@ -1254,9 +1223,8 @@ async fn plugin_read_keeps_remote_version_when_share_principals_are_missing() ->
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1268,12 +1236,8 @@ async fn plugin_read_keeps_remote_version_when_share_principals_are_missing() ->
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.plugin.summary.remote_plugin_id, None);
     assert_eq!(
@@ -1314,9 +1278,8 @@ async fn plugin_read_falls_back_to_local_share_context_without_remote_auth() -> 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1328,12 +1291,8 @@ async fn plugin_read_falls_back_to_local_share_context_without_remote_auth() -> 
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.plugin.summary.remote_plugin_id, None);
     assert_eq!(response.plugin.summary.local_version, None);
@@ -1376,9 +1335,8 @@ async fn plugin_read_fails_on_malformed_share_mapping() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1574,9 +1532,8 @@ enabled = false
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
@@ -1588,12 +1545,8 @@ enabled = false
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.plugin.marketplace_name, "codex-curated");
     assert_eq!(response.plugin.marketplace_path, Some(marketplace_path));
@@ -1780,9 +1733,8 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1792,12 +1744,8 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response
@@ -1878,9 +1826,8 @@ async fn plugin_read_hides_apps_for_api_key_auth() -> Result<()> {
             ("CODEX_API_KEY", None),
             ("OPENAI_API_KEY", None),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1890,12 +1837,8 @@ async fn plugin_read_hides_apps_for_api_key_auth() -> Result<()> {
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert!(response.plugin.apps.is_empty());
     assert_eq!(response.plugin.mcp_servers, vec!["alpha".to_string()]);
@@ -1942,9 +1885,8 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1956,12 +1898,8 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response
@@ -2008,9 +1946,8 @@ async fn plugin_read_describes_uninstalled_git_source_without_cloning() -> Resul
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -2022,12 +1959,8 @@ async fn plugin_read_describes_uninstalled_git_source_without_cloning() -> Resul
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let expected_description = format!(
         "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {missing_remote_repo_url}, path `plugins/toolkit`."
@@ -2075,9 +2008,8 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -2132,9 +2064,8 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {

@@ -11,7 +11,6 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
 use app_test_support::start_analytics_events_server;
-use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
 use axum::Router;
@@ -25,7 +24,6 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallParams;
@@ -75,9 +73,8 @@ async fn plugin_install_rejects_relative_marketplace_paths() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_raw_request(
@@ -106,9 +103,8 @@ async fn plugin_install_rejects_missing_install_source() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -139,9 +135,8 @@ async fn plugin_install_rejects_multiple_install_sources() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -180,9 +175,8 @@ plugins = false
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -251,17 +245,12 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -339,17 +328,12 @@ async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -391,9 +375,8 @@ async fn plugin_install_rejects_missing_remote_bundle_url() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
     let err = timeout(
@@ -436,9 +419,8 @@ async fn plugin_install_rejects_plain_http_remote_bundle_url() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
     let err = timeout(
@@ -486,9 +468,8 @@ async fn plugin_install_rejects_invalid_remote_release_version() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
     let err = timeout(
@@ -522,9 +503,8 @@ async fn plugin_install_rejects_invalid_remote_plugin_name() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -556,9 +536,8 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
     let err = timeout(
@@ -613,9 +592,8 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
     let err = timeout(
@@ -666,9 +644,8 @@ async fn plugin_install_rejects_remote_plugin_not_available() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
     let err = timeout(
@@ -733,9 +710,8 @@ async fn plugin_install_rejects_when_workspace_codex_plugins_disabled() -> Resul
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -766,9 +742,8 @@ async fn plugin_install_returns_invalid_request_for_missing_marketplace_file() -
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -811,9 +786,8 @@ async fn plugin_install_returns_invalid_request_for_not_available_plugin() -> Re
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -865,9 +839,8 @@ async fn plugin_install_returns_invalid_request_for_disallowed_product_plugin() 
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_args(&["--session-source", "atlas"])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -918,9 +891,8 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -929,12 +901,8 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
 
     let payload = wait_for_plugin_analytics_payload(&analytics_server).await?;
@@ -988,9 +956,8 @@ async fn plugin_install_failure_tracks_analytics_event() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -1045,17 +1012,12 @@ async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
 
     let payload = wait_for_plugin_analytics_payload(&server).await?;
@@ -1097,9 +1059,8 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
     let err = timeout(
@@ -1226,9 +1187,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let directory_requests_before_install = server_control.directory_request_count();
 
     let request_id = mcp
@@ -1239,12 +1199,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -1317,9 +1273,8 @@ async fn plugin_install_skips_mcp_oauth_for_chatgpt_dual_surface_plugin() -> Res
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -1328,12 +1283,8 @@ async fn plugin_install_skips_mcp_oauth_for_chatgpt_dual_surface_plugin() -> Res
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.auth_policy, PluginAuthPolicy::OnInstall);
     assert_eq!(oauth_discovery_request_count(&oauth_server).await, 0);
@@ -1381,9 +1332,8 @@ async fn plugin_install_starts_mcp_oauth_with_formerly_disallowed_plugin_app() -
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -1392,12 +1342,8 @@ async fn plugin_install_starts_mcp_oauth_with_formerly_disallowed_plugin_app() -
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -1482,9 +1428,8 @@ async fn plugin_install_starts_mcp_oauth_through_protected_resource_metadata() -
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -1493,12 +1438,8 @@ async fn plugin_install_starts_mcp_oauth_through_protected_resource_metadata() -
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let _: PluginInstallResponse = to_response(response)?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     wait_for_remote_plugin_request_count(
         &authorization_server,
         "POST",
@@ -1550,9 +1491,8 @@ connectors = true
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", Some("test-api-key"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -1561,12 +1501,8 @@ connectors = true
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(response.auth_policy, PluginAuthPolicy::OnInstall);
     assert!(oauth_discovery_request_count(&oauth_server).await > 0);
@@ -1593,17 +1529,12 @@ async fn plugin_install_starts_remote_mcp_oauth_for_install_response_only_app() 
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -1646,17 +1577,12 @@ async fn plugin_install_skips_remote_mcp_oauth_for_bundled_same_name_app() -> Re
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -1728,9 +1654,8 @@ async fn plugin_install_includes_formerly_disallowed_apps_needing_auth() -> Resu
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let directory_requests_before_install =
         warm_app_directory_cache(&mut mcp, &server_control, "Alpha").await?;
 
@@ -1742,12 +1667,8 @@ async fn plugin_install_includes_formerly_disallowed_apps_needing_auth() -> Resu
         })
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -1815,9 +1736,8 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -1826,12 +1746,8 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
+    let response: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config.contains("[mcp_servers.sample-mcp]"));
@@ -1887,12 +1803,8 @@ async fn warm_app_directory_cache(
             ..Default::default()
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(app_list_request_id)),
-    )
-    .await??;
-    let response: AppsListResponse = to_response(response)?;
+    let response: AppsListResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(app_list_request_id)).await??;
     assert!(
         response
             .data

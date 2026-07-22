@@ -1,4 +1,5 @@
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
@@ -7,19 +8,18 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -32,7 +32,9 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -71,7 +73,9 @@ async fn initialize_probe_does_not_override_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -102,7 +106,9 @@ async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -134,7 +140,9 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -177,7 +185,9 @@ async fn initialize_rejects_invalid_client_name() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -213,7 +223,9 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build()
@@ -289,16 +301,14 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let notify_file_str = notify_file
         .to_str()
         .expect("notify file path should be valid UTF-8");
-    create_config_toml_with_extra(
-        codex_home.path(),
-        &server.uri(),
-        "never",
-        &format!(
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!(
             "notify = [{}, {}]",
             toml_basic_string(notify_capture),
             toml_basic_string(notify_file_str)
-        ),
-    )?;
+        ))
+        .disable_feature(Feature::ShellSnapshot)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -317,12 +327,8 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -335,12 +341,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
             ..Default::default()
         })
         .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response(turn_resp)?;
+    let _: TurnStartResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -354,48 +355,6 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     assert_eq!(payload["client"], "xcode");
 
     Ok(())
-}
-
-// Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(
-    codex_home: &Path,
-    server_uri: &str,
-    approval_policy: &str,
-) -> std::io::Result<()> {
-    create_config_toml_with_extra(codex_home, server_uri, approval_policy, "")
-}
-
-fn create_config_toml_with_extra(
-    codex_home: &Path,
-    server_uri: &str,
-    approval_policy: &str,
-    extra: &str,
-) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "{approval_policy}"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-{extra}
-
-[features]
-shell_snapshot = false
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
 }
 
 fn toml_basic_string(value: &str) -> String {
