@@ -1,0 +1,25 @@
+---
+source: tui/src/onboarding/auth.rs
+expression: contents
+---
+  Finish signing in via your browser
+
+  If the link doesn't open automatically,
+open the following link to authenticate:
+
+  https://auth.openai.com/oauth/authorize?re
+sponse_type=code&client_id=app_EMoamEEZ73f0C
+kXaXp7hrann&redirect_uri=http%3A%2F%2Flocalh
+ost%3A1455%2Fauth%2Fcallback&scope=openid%20
+profile%20email%20offline_access%20api.conne
+ctors.read%20api.connectors.invoke&code_chal
+lenge=1YM3Z8QbrLbdt9C3eX3j7UQ4GmFRmKz4OeVYwD
+6s5xA&code_challenge_method=S256&id_token_ad
+d_organizations=true&codex_cli_simplified_fl
+ow=true&state=8cHjQ4nVx2Yp7Lm9Rk3Wf6Ta1Bs5Du
+0Ei4Go7Nz2PqM&originator=codex_cli_rs
+
+  On a remote or headless machine? Press esc
+and choose Sign in with Device Code.
+
+  Press esc to cancel
