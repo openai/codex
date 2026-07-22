@@ -43,6 +43,7 @@ use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
+use crate::session::GitEnrichmentPolicy;
 use crate::session::SessionIo;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -678,6 +679,7 @@ async fn spawn_guardian_review_session(
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
+        GitEnrichmentPolicy::Skip,
     ))
     .await?;
 

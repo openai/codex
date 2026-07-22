@@ -44,6 +44,7 @@ pub(crate) struct Session {
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    pub(super) git_enrichment_policy: GitEnrichmentPolicy,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -501,6 +502,7 @@ impl Session {
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
+        git_enrichment_policy: GitEnrichmentPolicy,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1148,6 +1150,7 @@ impl Session {
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
+                git_enrichment_policy,
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {
