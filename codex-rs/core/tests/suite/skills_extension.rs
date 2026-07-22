@@ -141,6 +141,9 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             .count();
 
         assert!(catalog_text.contains("additional skills omitted"));
+        assert!(!catalog_text.contains(
+            "A description long enough to keep the catalog under sustained budget pressure."
+        ));
         assert!(metadata_cost <= expected_budget);
         included_counts.push(included_count);
     }
