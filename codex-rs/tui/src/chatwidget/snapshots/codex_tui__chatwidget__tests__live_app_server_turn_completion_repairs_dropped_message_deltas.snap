@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: source
+---
+The transport kept this.
+And dropped this.
+
+- Finding — /tmp/file.rs:1
+  Keep ::git-stage{cwd=/tmp} literal.

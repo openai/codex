@@ -9,6 +9,7 @@ pub(super) struct TranscriptState {
     pub(super) active_cell_revision: u64,
     /// Raw markdown of the most recently completed agent response.
     pub(super) last_agent_markdown: Option<String>,
+    pub(super) last_completed_agent_message: Option<(String, String)>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
     /// Whether this turn already produced a copyable response.
@@ -56,6 +57,7 @@ impl TranscriptState {
 
     pub(super) fn reset_turn_flags(&mut self) {
         self.saw_copy_source_this_turn = false;
+        self.last_completed_agent_message = None;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.had_work_activity = false;
