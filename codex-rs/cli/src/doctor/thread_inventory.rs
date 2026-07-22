@@ -91,9 +91,15 @@ impl RolloutScan {
 }
 
 pub(super) async fn thread_inventory_check(config: &Config) -> DoctorCheck {
+    let sqlite = codex_state::SqliteConfig::from_sqlite_home(
+        codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
+            &config.sqlite_home,
+            &config.codex_home,
+        ),
+    );
     thread_inventory_check_for_roots(
         config.codex_home.as_path(),
-        config.sqlite_home.as_path(),
+        &sqlite,
         config.model_provider_id.as_str(),
     )
     .await
@@ -101,11 +107,11 @@ pub(super) async fn thread_inventory_check(config: &Config) -> DoctorCheck {
 
 async fn thread_inventory_check_for_roots(
     codex_home: &Path,
-    sqlite_home: &Path,
+    sqlite: &codex_state::SqliteConfig,
     default_provider: &str,
 ) -> DoctorCheck {
     let scan = scan_rollout_files(codex_home).await;
-    let state_db_path = codex_state::state_db_path(sqlite_home);
+    let state_db_path = sqlite.state_db_path();
 
     let mut details = vec![
         format!("default model provider: {default_provider}"),
@@ -779,7 +785,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -826,7 +832,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -876,7 +882,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -902,7 +908,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -932,7 +938,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -959,7 +965,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -1013,7 +1019,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -1045,7 +1051,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -1067,7 +1073,7 @@ mod tests {
 
         let check = thread_inventory_check_for_roots(
             fixture.codex_home.path(),
-            fixture.sqlite_home.path(),
+            &fixture.sqlite(),
             "test-provider",
         )
         .await;
@@ -1315,6 +1321,10 @@ mod tests {
             }
         }
 
+        fn sqlite(&self) -> codex_state::SqliteConfig {
+            codex_state::SqliteConfig::new_for_testing(self.sqlite_home.path().abs())
+        }
+
         fn write_rollout(&self, archived: bool, timestamp: &str, thread_id: &str) -> PathBuf {
             let root = if archived {
                 self.codex_home.path().join("archived_sessions")
@@ -1348,8 +1358,9 @@ mod tests {
         }
 
         async fn insert_thread_row(&self, id: &str, rollout_path: &Path, archived: bool) {
-            let state_db_path = codex_state::state_db_path(self.sqlite_home.path());
-            let pool = codex_state::SqliteConfig::new_for_testing(self.sqlite_home.path().abs())
+            let sqlite = self.sqlite();
+            let state_db_path = sqlite.state_db_path();
+            let pool = sqlite
                 .open_read_write_pool(&state_db_path)
                 .await
                 .expect("sqlite pool");

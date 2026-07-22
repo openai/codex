@@ -1,12 +1,14 @@
 use super::*;
 use crate::runtime::test_support::unique_temp_dir;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn backup_moves_only_requested_runtime_db_files_to_backup_folder() -> std::io::Result<()> {
     let sqlite_home = unique_temp_dir();
     tokio::fs::create_dir_all(sqlite_home.as_path()).await?;
-    let runtime_paths = super::super::runtime_db_paths(sqlite_home.as_path());
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let runtime_paths = sqlite.runtime_db_paths();
     let mut expected_paths = Vec::new();
     for db_path in runtime_paths.iter().map(|db| db.path.as_path()) {
         for path in sqlite_paths(db_path) {
@@ -14,7 +16,7 @@ async fn backup_moves_only_requested_runtime_db_files_to_backup_folder() -> std:
             expected_paths.push(path);
         }
     }
-    let failed_db_path = super::super::logs_db_path(sqlite_home.as_path());
+    let failed_db_path = sqlite.logs_db_path();
     let failed_paths = sqlite_paths(failed_db_path.as_path());
 
     let backups = backup_runtime_db_for_fresh_start(failed_db_path.as_path()).await?;
@@ -48,7 +50,9 @@ async fn backup_replaces_blocking_sqlite_home_file() -> std::io::Result<()> {
     tokio::fs::write(sqlite_home.as_path(), b"not-a-directory").await?;
 
     let backups = backup_runtime_db_for_fresh_start(
-        super::super::state_db_path(sqlite_home.as_path()).as_path(),
+        crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs())
+            .state_db_path()
+            .as_path(),
     )
     .await?;
 
@@ -79,7 +83,7 @@ async fn runtime_db_path_for_corruption_error_returns_failed_database_path() -> 
 {
     let sqlite_home = unique_temp_dir();
     tokio::fs::create_dir_all(sqlite_home.as_path()).await?;
-    let path = super::super::state_db_path(sqlite_home.as_path());
+    let path = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs()).state_db_path();
     tokio::fs::write(path.as_path(), b"not sqlite").await?;
 
     let err = match super::super::StateRuntime::init(sqlite_home, "openai".to_string()).await {

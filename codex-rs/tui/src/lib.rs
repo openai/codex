@@ -290,7 +290,15 @@ async fn init_state_db_for_app_server_target(
     match app_server_target {
         AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
             let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
-                .unwrap_or_else(|| codex_state::state_db_path(config.sqlite_home.as_path()));
+                .unwrap_or_else(|| {
+                    codex_state::SqliteConfig::from_sqlite_home(
+                        AbsolutePathBuf::resolve_path_against_base(
+                            &config.sqlite_home,
+                            &config.codex_home,
+                        ),
+                    )
+                    .state_db_path()
+                });
             std::io::Error::other(LocalStateDbStartupError::new(
                 database_path,
                 format!("{err:#}"),
@@ -2027,6 +2035,7 @@ mod tests {
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
@@ -3114,7 +3123,9 @@ mod tests {
 
         assert_eq!(
             startup_error.state_db_path(),
-            codex_state::state_db_path(occupied_sqlite_home.as_path()).as_path()
+            codex_state::SqliteConfig::new_for_testing(config.sqlite_home.as_path().abs())
+                .state_db_path()
+                .as_path()
         );
         assert!(
             startup_error
@@ -3132,7 +3143,8 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         let sqlite_home = temp_dir.path().join("sqlite-home");
         std::fs::create_dir_all(&sqlite_home)?;
-        let logs_db_path = codex_state::logs_db_path(&sqlite_home);
+        let logs_db_path =
+            codex_state::SqliteConfig::new_for_testing(sqlite_home.as_path().abs()).logs_db_path();
         std::fs::write(&logs_db_path, "not a sqlite database")?;
         config.sqlite_home = sqlite_home;
 

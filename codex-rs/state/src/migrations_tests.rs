@@ -7,7 +7,6 @@ use std::borrow::Cow;
 
 use super::STATE_MIGRATOR;
 use super::repair_legacy_recency_migration_version;
-use crate::state_db_path;
 
 fn migrator_through(version: i64) -> Migrator {
     Migrator {
@@ -37,8 +36,9 @@ async fn agent_job_tables_are_dropped_when_upgrading() {
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
     let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let state_path = sqlite.state_db_path();
     let pool = sqlite
-        .open_read_write_pool(&state_db_path(&sqlite_home))
+        .open_read_write_pool(&state_path)
         .await
         .expect("sqlite database should open");
     migrator_through(/*version*/ 15)
@@ -130,8 +130,9 @@ async fn recency_migration_backfills_and_seeds_old_binary_inserts() {
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
     let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let state_path = sqlite.state_db_path();
     let pool = sqlite
-        .open_read_write_pool(&state_db_path(&sqlite_home))
+        .open_read_write_pool(&state_path)
         .await
         .expect("sqlite database should open");
     migrator_through(/*version*/ 37)
@@ -243,8 +244,9 @@ async fn repairs_recency_migration_that_was_applied_as_version_38() {
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
     let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let state_path = sqlite.state_db_path();
     let pool = sqlite
-        .open_read_write_pool(&state_db_path(&sqlite_home))
+        .open_read_write_pool(&state_path)
         .await
         .expect("sqlite database should open");
     migrator_through(/*version*/ 37)
@@ -319,7 +321,7 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
     let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
-    let state_path = state_db_path(&sqlite_home);
+    let state_path = sqlite.state_db_path();
     let pool = sqlite
         .open_read_write_pool(&state_path)
         .await

@@ -32,7 +32,7 @@ pub(super) async fn next_rollout_byte_offset(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<u64> {
-    let db_path = codex_state::thread_history_db_path(store.config.sqlite_home.as_path());
+    let db_path = store.config.sqlite.thread_history_db_path();
     if !tokio::fs::try_exists(db_path.as_path())
         .await
         .map_err(thread_history_error)?
@@ -140,7 +140,7 @@ pub(super) async fn delete_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    let db_path = codex_state::thread_history_db_path(store.config.sqlite_home.as_path());
+    let db_path = store.config.sqlite.thread_history_db_path();
     if !tokio::fs::try_exists(db_path.as_path())
         .await
         .map_err(thread_history_delete_error)?
