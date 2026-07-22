@@ -180,7 +180,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        config.auth_route_config(),
+        Some(config.auth_route_config()),
     )
     .await
     {
@@ -246,7 +246,7 @@ pub async fn run_login_with_access_token(
         config.forced_chatgpt_workspace_id.as_deref(),
         Some(&config.chatgpt_base_url),
         config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
+        Some(&auth_route_config),
     )
     .await
     {
@@ -320,7 +320,7 @@ pub async fn run_login_with_device_code(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
+        Some(&auth_route_config),
     )
     .await;
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
@@ -330,7 +330,7 @@ pub async fn run_login_with_device_code(
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        auth_route_config,
+        Some(auth_route_config),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -368,7 +368,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
+        Some(&auth_route_config),
     )
     .await;
 
@@ -379,7 +379,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        auth_route_config,
+        Some(auth_route_config),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -430,7 +430,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
         config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
+        Some(&auth_route_config),
     )
     .await
     {
@@ -484,7 +484,7 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
+        Some(&auth_route_config),
     )
     .await
     {

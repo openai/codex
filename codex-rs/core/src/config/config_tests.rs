@@ -1713,6 +1713,13 @@ respect_system_proxy = true
         codex_http_client::OutboundProxyPolicy::RespectSystemProxy
     );
     assert_eq!(
+        config
+            .auth_route_config()
+            .http_client_factory()
+            .outbound_proxy_policy(),
+        codex_http_client::OutboundProxyPolicy::RespectSystemProxy
+    );
+    assert_eq!(
         config.plugins_config_input().remote_plugin_service_config(),
         codex_core_plugins::remote::RemotePluginServiceConfig::new(
             config.chatgpt_base_url,
@@ -1747,6 +1754,12 @@ respect_system_proxy = true
         &configured,
         Some(&disabled)
     )?);
+    assert_eq!(
+        resolve_bootstrap_auth_route_config(&configured, Some(&disabled))?
+            .http_client_factory()
+            .outbound_proxy_policy(),
+        codex_http_client::OutboundProxyPolicy::ReqwestDefault
+    );
 
     let configured = ConfigToml::default();
     let enabled = Sourced::new(
@@ -1759,6 +1772,12 @@ respect_system_proxy = true
         &configured,
         Some(&enabled)
     )?);
+    assert_eq!(
+        resolve_bootstrap_auth_route_config(&configured, Some(&enabled))?
+            .http_client_factory()
+            .outbound_proxy_policy(),
+        codex_http_client::OutboundProxyPolicy::RespectSystemProxy
+    );
     Ok(())
 }
 

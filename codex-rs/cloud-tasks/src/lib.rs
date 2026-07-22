@@ -58,11 +58,12 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     #[cfg(debug_assertions)]
     if use_mock {
+        let http_client_factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
         return Ok(BackendContext {
             backend: Arc::new(codex_cloud_tasks_mock_client::MockClient),
             base_url,
             environment_http: RouteAwareClientPool::new_without_request_logging(
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                http_client_factory,
                 ClientRouteClass::Api,
             ),
         });
