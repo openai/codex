@@ -21,7 +21,6 @@ impl ContextContributor for StyleContributor {
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             contribution_counts(session_store).record_style();
@@ -42,7 +41,6 @@ impl ContextContributor for UsageContributor {
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             contribution_counts(session_store).record_usage();

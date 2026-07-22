@@ -24,7 +24,6 @@ async fn process_compacted_history_with_test_session(
             &turn_context,
             world_state.as_ref(),
             step_context.mcp.as_ref(),
-            &step_context.extension_data,
         )
         .await;
     let initial_context_injection = InitialContextInjection::BeforeLastUserMessage {

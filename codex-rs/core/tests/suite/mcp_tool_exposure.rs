@@ -51,9 +51,9 @@ impl ThreadLifecycleContributor<Config> for McpResourceClientCapture {
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let client = input
-                .session_store
-                .get::<McpResourceClient>()
-                .expect("session store should contain an MCP resource client");
+                .mcp_resource_client
+                .as_ref()
+                .expect("host should supply an MCP resource client");
             *self
                 .client
                 .lock()

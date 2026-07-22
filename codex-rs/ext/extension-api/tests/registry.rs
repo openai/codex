@@ -41,7 +41,6 @@ impl ContextContributor for AllContributors {
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(Vec::new()))
     }
@@ -64,7 +63,6 @@ impl TurnInputContributor for AllContributors {
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
         _turn_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
         Box::pin(async move {
             let _self = self;
@@ -79,7 +77,6 @@ impl ToolContributor for AllContributors {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
         Vec::new()
     }
@@ -161,7 +158,6 @@ impl ContextContributor for NamedContextContributor {
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(vec![PromptFragment::developer_policy(
             self.0,
@@ -223,13 +219,12 @@ async fn contributors_preserve_registration_order() {
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
     let turn_store = ExtensionData::new("turn");
-    let step_store = ExtensionData::new("step");
 
     let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
         fragments.extend(
             contributor
-                .contribute_thread_context(&session_store, &thread_store, &step_store)
+                .contribute_thread_context(&session_store, &thread_store)
                 .await,
         );
     }
@@ -242,7 +237,6 @@ async fn contributors_preserve_registration_order() {
                     session_store: &session_store,
                     thread_store: &thread_store,
                     turn_store: &turn_store,
-                    step_store: &step_store,
                     model_context_window: Some(123),
                 })
                 .await,

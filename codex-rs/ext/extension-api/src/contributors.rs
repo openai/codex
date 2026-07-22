@@ -78,18 +78,16 @@ pub trait McpServerContributor<C: Sync>: Send + Sync {
 /// fragment: thread/session context for stable inputs, and turn context for
 /// fragments that depend on turn-local host state.
 pub trait ContextContributor: Send + Sync {
-    /// Returns thread-scoped context using capabilities from the current sampling step.
+    /// Returns thread-scoped context using the supplied extension state.
     fn contribute_thread_context<'a>(
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-        step_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(async move {
             let _self = self;
             let _session_store = session_store;
             let _thread_store = thread_store;
-            let _step_store = step_store;
             Vec::new()
         })
     }
@@ -120,8 +118,8 @@ pub trait ContextContributor: Send + Sync {
 /// Contributor for host-owned thread lifecycle gates.
 ///
 /// Implementations should use these callbacks to seed, rehydrate, or flush
-/// extension-private thread state. Heavy dependencies belong on the extension
-/// value created by the host, not in these inputs.
+/// extension-private thread state and retain any session capabilities supplied
+/// by the host. Other heavy dependencies belong on the extension value.
 pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
     /// Called after host startup has initialized the thread-scoped store.
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
@@ -208,16 +206,12 @@ pub trait TurnLifecycleContributor: Send + Sync {
 /// host, not in this input.
 pub trait TurnInputContributor: Send + Sync {
     /// Returns additional contextual fragments for one submitted turn.
-    ///
-    /// `step_store` contains host capabilities bound to the sampling step that
-    /// will consume these fragments.
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
-        step_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>>;
 }
 
@@ -277,12 +271,11 @@ pub trait SkillInvocationContributor: Send + Sync {
 
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
-    /// Returns native tools bound to the supplied sampling-step capabilities.
+    /// Returns native tools bound to the supplied extension state.
     fn tools(
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        step_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>;
 }
 

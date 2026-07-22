@@ -114,7 +114,6 @@ impl codex_extension_api::ContextContributor for GuardianMemoryContextProbe {
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
-        _step_store: &'a codex_extension_api::ExtensionData,
     ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::PromptFragment>> {
         Box::pin(async move {
             if thread_store
