@@ -545,7 +545,6 @@ mod tests {
     use super::test_support::unique_temp_dir;
     use crate::LogEntry;
     use crate::LogQuery;
-    use crate::logs_db_path;
     use crate::migrations::LOGS_MIGRATOR;
     use chrono::Utc;
     use codex_utils_absolute_path::test_support::PathExt;
@@ -596,7 +595,9 @@ mod tests {
             .await
             .expect("insert test logs");
 
-        let logs_count = log_row_count(logs_db_path(codex_home.as_path()).as_path()).await;
+        let logs_path =
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()).logs_db_path();
+        let logs_count = log_row_count(logs_path.as_path()).await;
 
         assert_eq!(logs_count, 1);
 
@@ -609,7 +610,8 @@ mod tests {
         tokio::fs::create_dir_all(&codex_home)
             .await
             .expect("create codex home");
-        let logs_path = logs_db_path(codex_home.as_path());
+        let logs_path =
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()).logs_db_path();
         let old_logs_migrator = Migrator {
             migrations: Cow::Owned(vec![LOGS_MIGRATOR.migrations[0].clone()]),
             ignore_missing: false,
@@ -706,7 +708,9 @@ mod tests {
             .await
             .expect("initialize runtime");
 
-        let pool = open_db_pool(logs_db_path(codex_home.as_path()).as_path()).await;
+        let logs_path =
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()).logs_db_path();
+        let pool = open_db_pool(logs_path.as_path()).await;
         let auto_vacuum = sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
             .fetch_one(&pool)
             .await

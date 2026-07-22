@@ -2165,7 +2165,13 @@ async fn state_check(config: &Config) -> DoctorCheck {
     path_readiness(&mut details, "log dir", &config.log_dir);
     path_readiness(&mut details, "sqlite home", &config.sqlite_home);
     let mut integrity_failures = Vec::new();
-    for db in codex_state::runtime_db_paths(&config.sqlite_home) {
+    let sqlite = codex_state::SqliteConfig::from_sqlite_home(
+        codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
+            &config.sqlite_home,
+            &config.codex_home,
+        ),
+    );
+    for db in sqlite.runtime_db_paths() {
         path_readiness(&mut details, db.label, &db.path);
         sqlite_integrity_detail(&mut details, &mut integrity_failures, db.label, &db.path).await;
     }

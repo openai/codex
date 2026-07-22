@@ -14,6 +14,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 pub use codex_state::LogEntry;
 use codex_state::ThreadMetadataBuilder;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
 use std::path::Path;
@@ -216,7 +217,8 @@ fn emit_startup_warning(message: &str) {
 /// Unlike [`init`], this helper does not run rollout backfill. It is for
 /// optional local reads from non-owning contexts such as remote app-server mode.
 pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
-    let state_path = codex_state::state_db_path(config.sqlite_home());
+    let sqlite_home = AbsolutePathBuf::try_from(config.sqlite_home()).ok()?;
+    let state_path = codex_state::SqliteConfig::from_sqlite_home(sqlite_home).state_db_path();
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         codex_state::record_fallback(
             "get_state_db",

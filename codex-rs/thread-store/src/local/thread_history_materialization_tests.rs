@@ -21,6 +21,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout::RolloutRecorder;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -456,7 +457,7 @@ async fn summary_items_use_final_answers_and_ignore_commentary() {
     let config = test_config(home.path());
     let thread_id = ThreadId::default();
     let runtime = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
+        config.sqlite.home().to_path_buf(),
         config.default_model_provider_id.clone(),
     )
     .await
@@ -832,7 +833,11 @@ async fn jsonl_failure_does_not_create_projection_database() {
         .await
         .expect_err("JSONL append should fail");
 
-    assert!(!codex_state::thread_history_db_path(home.path()).exists());
+    assert!(
+        !codex_state::SqliteConfig::new_for_testing(home.path().abs())
+            .thread_history_db_path()
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -866,7 +871,7 @@ async fn sqlite_failure_does_not_fail_durable_jsonl_write() {
     let sqlite_home = home.path().join("not-a-directory");
     fs::write(sqlite_home.as_path(), "not a directory").expect("block sqlite home");
     let mut config = test_config(home.path());
-    config.sqlite_home = sqlite_home;
+    config.sqlite = codex_state::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
     let store = LocalThreadStore::new(config, /*state_db*/ None);
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;

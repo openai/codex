@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_utils_absolute_path::test_support::PathExt;
 use uuid::Uuid;
 
 use super::LocalThreadStoreConfig;
@@ -12,7 +13,7 @@ use super::LocalThreadStoreConfig;
 pub(super) fn test_config(codex_home: &Path) -> LocalThreadStoreConfig {
     LocalThreadStoreConfig {
         codex_home: codex_home.to_path_buf(),
-        sqlite_home: codex_home.to_path_buf(),
+        sqlite: codex_state::SqliteConfig::new_for_testing(codex_home.abs()),
         default_model_provider_id: "test-provider".to_string(),
     }
 }

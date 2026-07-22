@@ -96,6 +96,7 @@ fn backup_folder(backups: &[RuntimeDbBackup]) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -103,8 +104,9 @@ mod tests {
     #[tokio::test]
     async fn backup_backs_up_only_failed_database_file() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let state_path = codex_state::state_db_path(temp_dir.path());
-        let failed_db_path = codex_state::logs_db_path(temp_dir.path());
+        let sqlite = codex_state::SqliteConfig::new_for_testing(temp_dir.path().abs());
+        let state_path = sqlite.state_db_path();
+        let failed_db_path = sqlite.logs_db_path();
         tokio::fs::write(state_path.as_path(), b"state").await?;
         tokio::fs::write(failed_db_path.as_path(), b"logs").await?;
 
@@ -130,10 +132,9 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let sqlite_home = temp_dir.path().join("sqlite-home");
         tokio::fs::write(sqlite_home.as_path(), b"not-a-directory").await?;
-        let startup_error = LocalStateDbStartupError::new(
-            codex_state::state_db_path(sqlite_home.as_path()),
-            "File exists".to_string(),
-        );
+        let sqlite = codex_state::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+        let startup_error =
+            LocalStateDbStartupError::new(sqlite.state_db_path(), "File exists".to_string());
 
         assert!(is_auto_backup_recoverable(&startup_error));
         let backups = backup_files_for_fresh_start(&startup_error).await?;

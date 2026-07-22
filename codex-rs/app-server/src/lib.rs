@@ -1196,8 +1196,16 @@ async fn init_sqlite_state_db_with_fresh_start_on_corruption(
             }
             Err(err) => err,
         };
-        let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
-            .unwrap_or_else(|| codex_state::state_db_path(config.sqlite_home.as_path()));
+        let database_path =
+            codex_state::runtime_db_path_for_corruption_error(&err).unwrap_or_else(|| {
+                codex_state::SqliteConfig::from_sqlite_home(
+                    codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
+                        config.sqlite_home.clone(),
+                        &config.codex_home,
+                    ),
+                )
+                .state_db_path()
+            });
         if !codex_state::is_sqlite_corruption_error(&err)
             && !sqlite_home_is_blocking_file(database_path.as_path())
         {

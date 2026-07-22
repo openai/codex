@@ -175,8 +175,9 @@ mod tests {
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
-        let write_pool = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs())
-            .open_read_write_pool(&crate::state_db_path(codex_home.as_path()))
+        let sqlite = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs());
+        let write_pool = sqlite
+            .open_read_write_pool(&sqlite.state_db_path())
             .await
             .expect("open write pool");
         let mut write_connection = write_pool.acquire().await.expect("open write connection");

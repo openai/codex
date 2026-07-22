@@ -1095,7 +1095,7 @@ mod tests {
         let path =
             write_session_file(home.path(), "2025-01-03T18-30-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
+            config.sqlite.home().to_path_buf(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -1200,7 +1200,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
+            config.sqlite.home().to_path_buf(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -1243,7 +1243,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
+            config.sqlite.home().to_path_buf(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -1298,7 +1298,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
+            config.sqlite.home().to_path_buf(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -1356,7 +1356,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
+            config.sqlite.home().to_path_buf(),
             config.default_model_provider_id.clone(),
         )
         .await

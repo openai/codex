@@ -437,7 +437,7 @@ impl ThreadManager {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let installation_id = uuid::Uuid::new_v4().to_string();
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+        let absolute_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
             Ok(codex_home) => codex_home,
             Err(err) => panic!("test codex_home should be absolute: {err}"),
         };
@@ -450,7 +450,7 @@ impl ThreadManager {
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_service = Arc::new(SkillsService::new_with_restriction_product(
-            skills_codex_home,
+            absolute_codex_home.clone(),
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
@@ -459,7 +459,7 @@ impl ThreadManager {
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
             LocalThreadStoreConfig {
                 codex_home: codex_home.clone(),
-                sqlite_home: codex_home.clone(),
+                sqlite: codex_state::SqliteConfig::new_for_testing(absolute_codex_home),
                 default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
             },
             state_db.clone(),

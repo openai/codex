@@ -2,8 +2,6 @@ use std::path::Path;
 
 use anyhow::Result;
 use codex_state::StateRuntime;
-use codex_state::memories_db_path;
-use codex_state::state_db_path;
 use codex_utils_absolute_path::test_support::PathExt;
 use predicates::str::contains;
 use tempfile::TempDir;
@@ -23,9 +21,9 @@ async fn debug_clear_memories_resets_state_and_removes_memory_dir() -> Result<()
     drop(runtime);
 
     let thread_id = "00000000-0000-0000-0000-000000000123";
-    let db_path = state_db_path(codex_home.path());
+    let db_path = sqlite.state_db_path();
     let pool = sqlite.open_read_write_pool(&db_path).await?;
-    let memories_db_path = memories_db_path(codex_home.path());
+    let memories_db_path = sqlite.memories_db_path();
     let memories_pool = sqlite.open_read_write_pool(&memories_db_path).await?;
 
     sqlx::query(
@@ -145,8 +143,8 @@ async fn debug_clear_memories_resets_memories_db_without_state_db() -> Result<()
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
     runtime.close().await;
 
-    let db_path = state_db_path(codex_home.path());
-    let memories_db_path = memories_db_path(codex_home.path());
+    let db_path = sqlite.state_db_path();
+    let memories_db_path = sqlite.memories_db_path();
     let memories_pool = sqlite.open_read_write_pool(&memories_db_path).await?;
 
     sqlx::query(

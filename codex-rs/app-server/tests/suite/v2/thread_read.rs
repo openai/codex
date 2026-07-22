@@ -80,6 +80,7 @@ use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::UpdateThreadMetadataParams;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -467,15 +468,14 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
     let thread_id = codex_protocol::ThreadId::default();
-    let state_db = codex_state::StateRuntime::init(
-        codex_home.path().to_path_buf(),
-        "mock_provider".to_string(),
-    )
-    .await?;
+    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
+    let state_db =
+        codex_state::StateRuntime::init(sqlite.home().to_path_buf(), "mock_provider".to_string())
+            .await?;
     let store = LocalThreadStore::new(
         LocalThreadStoreConfig {
             codex_home: codex_home.path().to_path_buf(),
-            sqlite_home: codex_home.path().to_path_buf(),
+            sqlite,
             default_model_provider_id: "mock_provider".to_string(),
         },
         Some(state_db),
@@ -1445,15 +1445,14 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
     let thread_id = codex_protocol::ThreadId::default();
-    let state_db = codex_state::StateRuntime::init(
-        codex_home.path().to_path_buf(),
-        "mock_provider".to_string(),
-    )
-    .await?;
+    let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
+    let state_db =
+        codex_state::StateRuntime::init(sqlite.home().to_path_buf(), "mock_provider".to_string())
+            .await?;
     let store = LocalThreadStore::new(
         LocalThreadStoreConfig {
             codex_home: codex_home.path().to_path_buf(),
-            sqlite_home: codex_home.path().to_path_buf(),
+            sqlite,
             default_model_provider_id: "mock_provider".to_string(),
         },
         Some(state_db),

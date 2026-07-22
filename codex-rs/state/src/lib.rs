@@ -63,26 +63,15 @@ pub use runtime::GoalUpdate;
 pub use runtime::MemoryStore;
 pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::RuntimeDbBackup;
-pub use runtime::RuntimeDbPath;
 pub use runtime::ThreadFilterOptions;
 pub use runtime::backup_runtime_db_for_fresh_start;
-pub use runtime::goals_db_filename;
-pub use runtime::goals_db_path;
 pub use runtime::is_sqlite_corruption_error;
-pub use runtime::logs_db_filename;
-pub use runtime::logs_db_path;
-pub use runtime::memories_db_filename;
-pub use runtime::memories_db_path;
 pub use runtime::open_thread_history_db;
 pub use runtime::runtime_db_path_for_corruption_error;
-pub use runtime::runtime_db_paths;
 pub use runtime::sqlite_error_detail_is_corruption;
 pub use runtime::sqlite_error_detail_is_lock;
 pub use runtime::sqlite_integrity_check;
-pub use runtime::state_db_filename;
-pub use runtime::state_db_path;
-pub use runtime::thread_history_db_filename;
-pub use runtime::thread_history_db_path;
+pub use sqlite::RuntimeDbPath;
 pub use telemetry::DbTelemetry;
 pub use telemetry::DbTelemetryHandle;
 pub use telemetry::install_process_db_telemetry;
@@ -91,12 +80,6 @@ pub use telemetry::record_fallback;
 
 /// Environment variable for overriding the SQLite state database home directory.
 pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
-
-pub const LOGS_DB_FILENAME: &str = "logs_2.sqlite";
-pub const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
-pub const MEMORIES_DB_FILENAME: &str = "memories_1.sqlite";
-pub const STATE_DB_FILENAME: &str = "state_5.sqlite";
-pub const THREAD_HISTORY_DB_FILENAME: &str = "thread_history_1.sqlite";
 
 /// Errors encountered during DB operations. Tags: [stage]
 pub const DB_ERROR_METRIC: &str = "codex.db.error";

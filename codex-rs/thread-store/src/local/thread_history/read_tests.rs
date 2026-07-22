@@ -507,7 +507,7 @@ async fn store_with_mode(history_mode: ThreadHistoryMode) -> (TempDir, LocalThre
         );
     }
     let runtime = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
+        config.sqlite.home().to_path_buf(),
         config.default_model_provider_id.clone(),
     )
     .await
