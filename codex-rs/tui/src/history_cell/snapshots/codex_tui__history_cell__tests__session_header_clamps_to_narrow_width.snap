@@ -1,0 +1,11 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&lines).join(\"\\n\")"
+---
+╭──────────────────────────────────────────╮
+│ >_ OpenAI Codex (vtest)                  │
+│                                          │
+│ model:       gpt-5.6-sol xhigh   fast  … │
+│ directory:   project                     │
+│ permissions: YOLO mode                   │
+╰──────────────────────────────────────────╯

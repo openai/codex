@@ -6,6 +6,7 @@ use crate::exec_cell::ExecCall;
 use crate::exec_cell::ExecCell;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
+use crate::line_truncation::line_width;
 use crate::session_state::ThreadSessionState;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
@@ -1566,6 +1567,25 @@ fn session_header_hides_fast_status_when_disabled() {
 
     assert!(model_line.contains("gpt-4o high"));
     assert!(!model_line.contains("fast"));
+}
+
+#[test]
+fn session_header_clamps_to_narrow_width() {
+    const WIDTH: u16 = 44;
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-5.6-sol".to_string(),
+        Some(ReasoningEffortConfig::XHigh),
+        /*show_fast_status*/ true,
+        PathBuf::from("project"),
+        "test",
+    )
+    .with_yolo_mode(/*yolo_mode*/ true);
+
+    let lines = cell.display_lines(WIDTH);
+    let widths = lines.iter().map(line_width).collect::<Vec<_>>();
+
+    assert_eq!(widths, vec![usize::from(WIDTH); lines.len()]);
+    insta::assert_snapshot!(render_lines(&lines).join("\n"));
 }
 
 #[test]
