@@ -63,6 +63,13 @@ impl SkillCatalogRenderPolicy {
             Self::ExtensionCompatible => {}
         }
     }
+
+    fn includes_omission_notice(self) -> bool {
+        match self {
+            Self::CoreCompatible => false,
+            Self::ExtensionCompatible => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,7 +444,7 @@ pub(crate) fn render_available_skills(
         used.saturating_add(metadata_line_cost(budget, &rendered.line))
     });
 
-    if omitted > 0 {
+    if omitted > 0 && policy.includes_omission_notice() {
         loop {
             let marker = omission_marker(omitted);
             if total_cost.saturating_add(metadata_line_cost(budget, &marker)) <= budget.limit() {
