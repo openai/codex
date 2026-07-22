@@ -7,6 +7,7 @@ use crate::exec_cell::ExecCell;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::line_truncation::line_width;
+use crate::render::highlight::MAX_HIGHLIGHT_LINE_BYTES;
 use crate::session_state::ThreadSessionState;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
@@ -1858,6 +1859,30 @@ fn single_line_command_wraps_with_four_space_continuation() {
     cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
     let lines = cell.display_lines(/*width*/ 24);
     let rendered = render_lines(&lines).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn single_line_command_over_highlight_limit_uses_plain_text_fallback() {
+    let call_id = "c1".to_string();
+    let base64_like = "A".repeat(MAX_HIGHLIGHT_LINE_BYTES + 1);
+    let mut cell = ExecCell::new(
+        ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), base64_like],
+            parsed: Vec::new(),
+            output: None,
+            source: ExecCommandSource::Agent,
+            start_time: Some(Instant::now()),
+            duration: None,
+            interaction_input: None,
+        },
+        /*animations_enabled*/ true,
+    );
+    cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
+
+    let rendered = render_lines(&cell.display_lines(/*width*/ 24)).join("\n");
+
     insta::assert_snapshot!(rendered);
 }
 
