@@ -398,12 +398,12 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let thread_1 = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start first thread")
         .thread_id;
     let thread_2 = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start second thread")
         .thread_id;
@@ -435,11 +435,11 @@ async fn code_mode_session_provider_is_shared_across_threads() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let first = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start first thread");
     let second = manager
-        .start_thread(config)
+        .start_thread(StartThreadOptions::new(config))
         .await
         .expect("start second thread");
 
@@ -491,21 +491,12 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let thread = manager
-        .start_thread_with_options(StartThreadOptions {
-            config,
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
+        .start_thread(StartThreadOptions {
             session_source: Some(SessionSource::Internal(
                 InternalSessionSource::MemoryConsolidation,
             )),
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(config)
         })
         .await
         .expect("internal thread should start");
@@ -644,36 +635,19 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     };
 
     let first_thread = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
+        .start_thread(StartThreadOptions {
             metrics_service_name: Some("codex_work_desktop".to_string()),
-            parent_trace: None,
-            environments: Vec::new(),
+            environments: Some(Vec::new()),
             thread_extension_init: selected_root_init("selected-a", "env-a"),
-            supports_openai_form_elicitation: false,
+            ..StartThreadOptions::new(config.clone())
         })
         .await
         .expect("start first thread");
     let second_thread = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
+        .start_thread(StartThreadOptions {
+            environments: Some(Vec::new()),
             thread_extension_init: selected_root_init("selected-b", "env-b"),
-            supports_openai_form_elicitation: false,
+            ..StartThreadOptions::new(config.clone())
         })
         .await
         .expect("start second thread");
@@ -783,9 +757,7 @@ async fn selected_capability_roots_round_trip_through_fork() {
         },
     }];
     let inherited = manager
-        .start_thread_with_options(StartThreadOptions {
-            config,
-            allow_provider_model_fallback: false,
+        .start_thread(StartThreadOptions {
             initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
                 SessionMetaLine {
                     meta: SessionMeta {
@@ -795,15 +767,8 @@ async fn selected_capability_roots_round_trip_through_fork() {
                     git: None,
                 },
             )]),
-            history_mode: None,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(config)
         })
         .await
         .expect("start inherited fork");
@@ -866,19 +831,9 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let mut source_config = config.clone();
     source_config.cwd = selected_cwd.clone();
     let source = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: source_config,
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: environments.clone(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+        .start_thread(StartThreadOptions {
+            environments: Some(environments.clone()),
+            ..StartThreadOptions::new(source_config)
         })
         .await
         .expect("start source thread");
@@ -999,7 +954,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
     );
 
     let thread = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start thread with explicit installation id");
 
@@ -1042,7 +997,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
     );
 
     let source = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start source thread");
     source.thread.ensure_rollout_materialized().await;
@@ -1104,7 +1059,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
     );
 
     let source = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start source thread");
     source.thread.ensure_rollout_materialized().await;
@@ -1173,19 +1128,10 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
     );
 
     let source = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
+        .start_thread(StartThreadOptions {
             thread_source: Some(ThreadSource::User),
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(config.clone())
         })
         .await
         .expect("start source thread");
@@ -1314,7 +1260,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
     );
 
     let source = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start source thread");
     source

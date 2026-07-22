@@ -4,6 +4,7 @@ use codex_core::ModelClient;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
+use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
@@ -1741,7 +1742,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         /*external_time_provider*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("create new conversation");
 

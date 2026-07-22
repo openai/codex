@@ -10,7 +10,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -797,19 +796,10 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
     // because the SubagentStop hook above intentionally matches all agent types.
     let internal_thread = test
         .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: test.config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
+        .start_thread(StartThreadOptions {
             session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(test.config.clone())
         })
         .await?;
 

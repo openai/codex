@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ExtraConfig;
@@ -95,7 +96,7 @@ async fn stores_config_and_starts_configured_turn_after_idle() {
         )
     });
     let codex = thread_manager
-        .start_thread(config)
+        .start_thread(StartThreadOptions::new(config))
         .await
         .expect("start persistent-mode test thread")
         .thread;

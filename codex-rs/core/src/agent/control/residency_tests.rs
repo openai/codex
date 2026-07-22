@@ -1,3 +1,4 @@
+use crate::StartThreadOptions;
 use crate::ThreadManager;
 use crate::agent::AgentControl;
 use crate::codex_thread::CodexThread;
@@ -33,7 +34,7 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let root = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start root thread");
     let control = manager.agent_control();
@@ -79,7 +80,7 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let root = manager
-        .start_thread(config.clone())
+        .start_thread(StartThreadOptions::new(config.clone()))
         .await
         .expect("start root thread");
     let control = manager.agent_control();

@@ -198,7 +198,10 @@ mod tests {
                 Some(temp_dir.path().join("good")),
             )
             .await?;
-        let thread = thread_manager.start_thread(thread_config).await?.thread;
+        let thread = thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(thread_config))
+            .await?
+            .thread;
         std::fs::write(
             temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
             r#"
@@ -337,8 +340,12 @@ enabled = false
                 /*external_time_provider*/ None,
             )
         });
-        thread_manager.start_thread(good_config).await?;
-        thread_manager.start_thread(bad_config).await?;
+        thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(good_config))
+            .await?;
+        thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(bad_config))
+            .await?;
 
         let loader = Arc::new(CountingThreadConfigLoader {
             good_cwd: AbsolutePathBuf::try_from(good_cwd)?,

@@ -11,7 +11,6 @@ use codex_protocol::config_types::ApprovalsReviewer;
 #[cfg(not(target_os = "windows"))]
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
@@ -257,24 +256,11 @@ async fn ephemeral_system_thread_prewarm_skips_and_turn_observes_fresh_state() -
 
     let mut config = test.config.clone();
     config.ephemeral = true;
-    let environments = test
-        .thread_manager
-        .default_environment_selections(&config.cwd, &config.workspace_roots);
     let system_thread = test
         .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config,
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
+        .start_thread(StartThreadOptions {
             thread_source: Some(ThreadSource::Feature("system".to_string())),
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments,
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            ..StartThreadOptions::new(config)
         })
         .await?;
     let prewarm = tokio::time::timeout(
@@ -386,47 +372,21 @@ async fn concurrent_turns_keep_distinct_worktree_and_repository_metadata() -> Re
 
     let mut worktree_config = test.config.clone();
     worktree_config.cwd = worktree.abs();
-    let worktree_environments = test
-        .thread_manager
-        .default_environment_selections(&worktree_config.cwd, &worktree_config.workspace_roots);
     let worktree_thread = test
         .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: worktree_config,
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
+        .start_thread(StartThreadOptions {
             thread_source: Some(ThreadSource::User),
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: worktree_environments,
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            ..StartThreadOptions::new(worktree_config)
         })
         .await?;
 
     let mut other_config = test.config.clone();
     other_config.cwd = other_repo.path().to_path_buf().abs();
-    let other_environments = test
-        .thread_manager
-        .default_environment_selections(&other_config.cwd, &other_config.workspace_roots);
     let other_thread = test
         .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: other_config,
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
+        .start_thread(StartThreadOptions {
             thread_source: Some(ThreadSource::User),
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: other_environments,
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            ..StartThreadOptions::new(other_config)
         })
         .await?;
 
