@@ -41,6 +41,12 @@ In the codex-rs folder where the rust code lives:
 - If you change Rust dependencies (`Cargo.toml` or `Cargo.lock`), run `just bazel-lock-update` from the
   repo root to refresh `MODULE.bazel.lock`, and include that lockfile update in the same change. CI
   verifies lockfile drift.
+- Do not use `reqwest` directly outside `codex-rs/http-client`. The shared client centralizes
+  outbound proxy and custom CA policy, connection pooling, and request diagnostics. The crates
+  listed as `reqwest` wrappers in `codex-rs/deny.toml` are temporary migration or third-party
+  exceptions; do not add another wrapper as an expedient. See
+  [codex-rs/http-client/README.md](codex-rs/http-client/README.md) for the supported construction
+  paths and examples.
 - Bazel does not automatically make source-tree files available to compile-time Rust file access. If
   you add `include_str!`, `include_bytes!`, `sqlx::migrate!`, or similar build-time file or
   directory reads, update the crate's `BUILD.bazel` (`compile_data`, `build_script_data`, or test
