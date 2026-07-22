@@ -219,8 +219,8 @@ fn render_skill_lines(
     let mut used = 0usize;
     let mut omitted = 0usize;
     for line in skill_lines {
-        let rendered = line.render_full();
-        let next_used = used.saturating_add(metadata_line_cost(budget, &rendered));
+        let rendered = line.render_minimum();
+        let next_used = used.saturating_add(line.minimum_cost(budget));
         if next_used <= budget.limit() {
             used = next_used;
             included.push(rendered);

@@ -478,6 +478,68 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
 }
 
 #[tokio::test]
+async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() -> TestResult {
+    let entries = (0..200)
+        .map(|index| {
+            let package_id = format!("orchestrator/skill-{index:03}");
+            let mut entry = test_entry(
+                SkillSourceKind::Orchestrator,
+                "codex_apps",
+                &package_id,
+                &format!("skill://{package_id}/SKILL.md"),
+            );
+            entry.description = format!("description-{index:03}");
+            entry
+        })
+        .collect();
+    let providers =
+        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries,
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }));
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let fragments = registry.context_contributors()[0]
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
+        .await;
+    assert_eq!(1, fragments.len());
+    let rendered = fragments[0].text();
+    let included_count = rendered
+        .lines()
+        .filter(|line| line.starts_with("- skill-"))
+        .count();
+    assert!(included_count > 0);
+    assert!(included_count < 200);
+    assert!(rendered.contains("- skill-000: (orchestrator resource:"));
+    assert!(!rendered.contains("- skill-199:"));
+    assert!(!rendered.contains("description-"));
+    assert!(rendered.contains("additional skills omitted from this bounded skills list"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResult {
     let description = "x".repeat(1_025);
     let mut entry = test_entry(
