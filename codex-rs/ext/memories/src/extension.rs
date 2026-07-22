@@ -52,7 +52,6 @@ impl ContextContributor for MemoriesExtension {
         &'a self,
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
@@ -101,7 +100,6 @@ impl ToolContributor for MemoriesExtension {
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
         let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
             return Vec::new();

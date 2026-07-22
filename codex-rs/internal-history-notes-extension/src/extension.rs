@@ -72,7 +72,6 @@ impl ToolContributor for HistoryNotesExtension {
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
         let Some(config) = thread_store.get::<HistoryNotesExtensionConfig>() else {
             return Vec::new();

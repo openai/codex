@@ -44,7 +44,6 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
         vec![Arc::new(ExtensionEchoExecutor)]
     }
@@ -392,7 +391,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         ToolRouterParams {
             tool_suggest_candidates: None,
             tool_runtimes: Vec::new(),
-            extension_tool_executors: extension_tool_executors(&session, step_context.as_ref()),
+            extension_tool_executors: extension_tool_executors(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
         &Default::default(),

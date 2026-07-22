@@ -1134,6 +1134,7 @@ async fn installed_tools_with_start(
                 session_source: &session_source,
                 persistent_thread_state_available,
                 environments: &[],
+                mcp_resource_client: None,
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -1143,9 +1144,7 @@ async fn installed_tools_with_start(
     registry
         .tool_contributors()
         .iter()
-        .flat_map(|contributor| {
-            contributor.tools(&session_store, &thread_store, &ExtensionData::new("step"))
-        })
+        .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
         .collect()
 }
 
@@ -1189,6 +1188,7 @@ impl GoalExtensionHarness {
                     session_source: &session_source,
                     persistent_thread_state_available: true,
                     environments: &[],
+                    mcp_resource_client: None,
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })
@@ -1207,13 +1207,7 @@ impl GoalExtensionHarness {
         self.registry
             .tool_contributors()
             .iter()
-            .flat_map(|contributor| {
-                contributor.tools(
-                    &self.session_store,
-                    &self.thread_store,
-                    &ExtensionData::new("step"),
-                )
-            })
+            .flat_map(|contributor| contributor.tools(&self.session_store, &self.thread_store))
             .collect()
     }
 

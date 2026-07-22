@@ -24,7 +24,6 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
-use codex_mcp::McpResourceClient;
 use codex_otel::MetricsClient;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::Event;
@@ -51,6 +50,7 @@ use crate::selection::collect_explicit_skill_mentions;
 use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
 use crate::state::ExecutorSkillsStepState;
+use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 use crate::tools::skill_tools;
@@ -70,6 +70,9 @@ where
 {
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
+            input.session_store.insert(SkillsSessionState {
+                mcp_resources: input.mcp_resource_client.clone(),
+            });
             let orchestrator_skills_available = !input
                 .environments
                 .iter()
@@ -114,7 +117,6 @@ where
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
@@ -133,7 +135,9 @@ where
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
                         include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
-                        mcp_resources: session_store.get::<McpResourceClient>(),
+                        mcp_resources: session_store
+                            .get::<SkillsSessionState>()
+                            .and_then(|state| state.mcp_resources.clone()),
                         executor_capability_discovery: None,
                     },
                     &thread_state,
@@ -176,7 +180,10 @@ where
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
                         include_orchestrator_skills: false,
-                        mcp_resources: input.session_store.get::<McpResourceClient>(),
+                        mcp_resources: input
+                            .session_store
+                            .get::<SkillsSessionState>()
+                            .and_then(|state| state.mcp_resources.clone()),
                         executor_capability_discovery: input.executor_capability_discovery.cloned(),
                     },
                 )
@@ -222,7 +229,6 @@ where
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
         let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
             return Vec::new();
@@ -235,7 +241,9 @@ where
 
         skill_tools(
             self.providers.clone(),
-            session_store.get::<McpResourceClient>(),
+            session_store
+                .get::<SkillsSessionState>()
+                .and_then(|state| state.mcp_resources.clone()),
             thread_state,
             Arc::clone(&self.shadow_selection),
         )
@@ -278,7 +286,6 @@ where
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
-        _step_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
         Box::pin(async move {
             let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
@@ -286,6 +293,9 @@ where
             };
 
             let config = thread_state.config();
+            let mcp_resources = session_store
+                .get::<SkillsSessionState>()
+                .and_then(|state| state.mcp_resources.clone());
             let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
             let host_catalog_in_world_state =
                 turn_store.get::<HostSkillsCatalogInWorldState>().is_some();
@@ -296,7 +306,7 @@ where
                 include_host_skills: !host_catalog_in_world_state,
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
-                mcp_resources: session_store.get::<McpResourceClient>(),
+                mcp_resources,
                 executor_capability_discovery: None,
             };
             let host_query = query.clone();
@@ -467,7 +477,9 @@ impl<C> SkillsExtension<C> {
                     package: entry.id.clone(),
                     resource: entry.main_prompt.clone(),
                     host_snapshot,
-                    mcp_resources: session_store.get::<McpResourceClient>(),
+                    mcp_resources: session_store
+                        .get::<SkillsSessionState>()
+                        .and_then(|state| state.mcp_resources.clone()),
                 },
             )
             .await

@@ -97,7 +97,6 @@ pub(crate) async fn build_compaction_initial_context(
                     step_context.turn.as_ref(),
                     world_state.as_ref(),
                     step_context.mcp.as_ref(),
-                    &step_context.extension_data,
                 )
                 .await;
             (items, Some(Arc::clone(world_state)))

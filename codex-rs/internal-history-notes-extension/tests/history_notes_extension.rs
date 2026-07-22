@@ -79,6 +79,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
                 session_source: &SessionSource::Cli,
                 persistent_thread_state_available: true,
                 environments: &[],
+                mcp_resource_client: None,
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -153,9 +154,7 @@ fn exposed_tools(
     registry
         .tool_contributors()
         .iter()
-        .flat_map(|contributor| {
-            contributor.tools(session_store, thread_store, &ExtensionData::new("step"))
-        })
+        .flat_map(|contributor| contributor.tools(session_store, thread_store))
         .collect()
 }
 

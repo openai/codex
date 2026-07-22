@@ -8370,7 +8370,6 @@ impl codex_extension_api::ContextContributor for PromptExtensionTestContributor 
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
-        _step_store: &'a codex_extension_api::ExtensionData,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Vec<codex_extension_api::PromptFragment>> + Send + 'a>,
     > {
