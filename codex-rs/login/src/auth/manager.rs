@@ -1,5 +1,5 @@
 use chrono::Utc;
-use reqwest::StatusCode;
+use http::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 #[cfg(test)]

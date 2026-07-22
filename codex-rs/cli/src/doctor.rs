@@ -49,7 +49,7 @@ use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::create_client_without_request_logging;
 use codex_login::default_client::default_headers;
 use codex_login::load_auth_dot_json;
 use codex_model_provider::create_model_provider;
@@ -2885,7 +2885,7 @@ async fn mcp_http_probe_url_with_timeout(url: &str, timeout: Duration) -> Result
 }
 
 async fn http_probe_url_with_timeout(url: &str, timeout: Duration) -> Result<String, String> {
-    let response = build_reqwest_client()
+    let response = create_client_without_request_logging()
         .head(url)
         .timeout(timeout)
         .send()
@@ -2911,7 +2911,7 @@ async fn http_get_probe_url_with_timeout(url: &str, timeout: Duration) -> Result
 }
 
 async fn http_get_probe_status_with_timeout(url: &str, timeout: Duration) -> Result<u16, String> {
-    let response = build_reqwest_client()
+    let response = create_client_without_request_logging()
         .get(url)
         .timeout(timeout)
         .send()

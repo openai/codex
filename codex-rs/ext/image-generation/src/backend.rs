@@ -4,7 +4,7 @@ use codex_api::ImageResponse;
 use codex_api::ImagesClient;
 use codex_api::ReqwestTransport;
 use codex_login::default_client::add_originator_header;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::create_client;
 use codex_model_provider::SharedModelProvider;
 use http::HeaderMap;
 
@@ -36,7 +36,7 @@ impl CodexImagesBackend {
             .await
             .map_err(|err| err.to_string())?;
         Ok(ImagesClient::new(
-            ReqwestTransport::new(build_reqwest_client()),
+            ReqwestTransport::from_http_client(create_client()),
             provider,
             auth,
         ))

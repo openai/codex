@@ -19,7 +19,7 @@ use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
-use codex_login::default_client::build_default_reqwest_client_for_route_async;
+use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
@@ -169,13 +169,9 @@ impl ModelsTransportBuilder for RouteAwareModelsTransportBuilder {
         request_url: String,
     ) -> ModelsTransportFuture<'_> {
         Box::pin(async move {
-            build_default_reqwest_client_for_route_async(
-                http_client_factory,
-                request_url,
-                ClientRouteClass::Api,
-            )
-            .await
-            .map(ReqwestTransport::new)
+            create_client_for_route_async(http_client_factory, request_url, ClientRouteClass::Api)
+                .await
+                .map(ReqwestTransport::from_http_client)
         })
     }
 }
@@ -284,7 +280,7 @@ mod tests {
 
     use super::*;
     use codex_http_client::OutboundProxyPolicy;
-    use codex_login::default_client::build_reqwest_client;
+    use codex_login::default_client::create_client;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
@@ -312,7 +308,7 @@ mod tests {
                     .lock()
                     .expect("observed request lock should not be poisoned") =
                     Some((http_client_factory.outbound_proxy_policy(), request_url));
-                Ok(ReqwestTransport::new(build_reqwest_client()))
+                Ok(ReqwestTransport::from_http_client(create_client()))
             })
         }
     }

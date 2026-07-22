@@ -7,7 +7,7 @@ use super::protocol::StartRemoteControlPairingResponse;
 use axum::http::HeaderMap;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlPairingStatusResponse;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::create_client_without_request_logging;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use std::io;
@@ -59,7 +59,7 @@ impl RemoteControlEnrollment {
             .as_deref()
             .ok_or_else(pairing_unavailable_error)?;
 
-        let response = build_reqwest_client()
+        let response = create_client_without_request_logging()
             .post(&self.remote_control_target.pair_url)
             .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
             .bearer_auth(remote_control_token)
@@ -154,7 +154,7 @@ impl RemoteControlEnrollment {
             .as_deref()
             .ok_or_else(pairing_unavailable_error)?;
 
-        let response = build_reqwest_client()
+        let response = create_client_without_request_logging()
             .post(&self.remote_control_target.pair_status_url)
             .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
             .bearer_auth(remote_control_token)

@@ -116,6 +116,8 @@ mod request_plugin_install;
 mod request_user_input;
 mod responses_api_proxy_headers;
 mod responses_lite;
+#[cfg(target_os = "linux")]
+mod responses_system_proxy;
 mod resume;
 mod resume_warning;
 mod review;

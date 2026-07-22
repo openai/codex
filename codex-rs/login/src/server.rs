@@ -754,8 +754,10 @@ fn redact_sensitive_url_parts(url: &mut url::Url) {
     url.set_query(Some(&redacted_query));
 }
 
-/// Redacts any URL attached to a reqwest transport error before it is logged or returned.
-fn redact_sensitive_error_url(mut err: reqwest::Error) -> reqwest::Error {
+/// Redacts any URL attached to an HTTP transport error before it is logged or returned.
+fn redact_sensitive_error_url(
+    mut err: codex_http_client::HttpError,
+) -> codex_http_client::HttpError {
     if let Some(url) = err.url_mut() {
         redact_sensitive_url_parts(url);
     }

@@ -12,7 +12,7 @@ use codex_app_server_protocol::RemoteControlClientsListResponse;
 use codex_app_server_protocol::RemoteControlClientsRevokeParams;
 use codex_app_server_protocol::RemoteControlClientsRevokeResponse;
 use codex_login::AuthManager;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::create_client_without_request_logging;
 use serde::Deserialize;
 use std::io;
 use std::io::ErrorKind;
@@ -186,7 +186,7 @@ async fn send_client_management_request_once(
     request: &ClientManagementRequest<'_>,
     action: &str,
 ) -> io::Result<ClientManagementResponse> {
-    let client = build_reqwest_client();
+    let client = create_client_without_request_logging();
     let auth_headers = auth.request_headers()?;
     let request = match request {
         ClientManagementRequest::List { url, params } => {

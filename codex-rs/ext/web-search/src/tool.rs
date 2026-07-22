@@ -19,7 +19,7 @@ use codex_extension_items::ExtensionItem;
 use codex_extension_items::web_search::WebSearchAction;
 use codex_extension_items::web_search::WebSearchItem;
 use codex_login::default_client::add_originator_header;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::create_client;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
 use codex_protocol::protocol::EventMsg;
@@ -103,7 +103,7 @@ impl WebSearchTool {
             .await
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
         let client = SearchClient::new(
-            ReqwestTransport::new(build_reqwest_client()),
+            ReqwestTransport::from_http_client(create_client()),
             provider,
             auth,
         );
