@@ -17966,6 +17966,11 @@
             "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
             "type": "string"
           },
+          "isPinned": {
+            "default": false,
+            "description": "Whether the thread has been pinned by the user.",
+            "type": "boolean"
+          },
           "modelProvider": {
             "description": "Model provider used for this thread (for example, 'openai').",
             "type": "string"
@@ -19410,6 +19415,13 @@
             ],
             "description": "Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
           },
+          "isPinned": {
+            "description": "Optional pinned filter; when set, only threads matching this value are returned.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
             "format": "uint32",
@@ -19599,6 +19611,13 @@
               }
             ],
             "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
+          },
+          "isPinned": {
+            "description": "Patch whether this thread is pinned. Omit to leave the stored value unchanged.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"

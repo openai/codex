@@ -93,6 +93,7 @@ pub(super) async fn search_threads(
         allowed_sources: params.allowed_sources.clone(),
         model_providers: None,
         cwd_filters: None,
+        is_pinned: None,
         archived: params.archived,
         search_term: None,
         relation_filter: None,

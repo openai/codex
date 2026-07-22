@@ -27,6 +27,79 @@ fn migrator_through(version: i64) -> Migrator {
 }
 
 #[tokio::test]
+async fn pinned_threads_migration_defaults_existing_and_legacy_rows_to_unpinned() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let pool = sqlite
+        .open_read_write_pool(&state_db_path(&sqlite_home))
+        .await
+        .expect("sqlite database should open");
+    migrator_through(/*version*/ 42)
+        .run(&pool)
+        .await
+        .expect("pre-pin migrations should apply");
+
+    for thread_id in [
+        "00000000-0000-0000-0000-000000000043",
+        "00000000-0000-0000-0000-000000000044",
+    ] {
+        if thread_id.ends_with("44") {
+            STATE_MIGRATOR
+                .run(&pool)
+                .await
+                .expect("pin migration should apply");
+        }
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    created_at_ms,
+    updated_at_ms,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id)
+        .bind("/tmp/legacy.jsonl")
+        .bind(1_700_000_000_i64)
+        .bind(1_700_000_000_i64)
+        .bind(1_700_000_000_000_i64)
+        .bind(1_700_000_000_000_i64)
+        .bind("cli")
+        .bind("openai")
+        .bind("/tmp")
+        .bind("")
+        .bind("read-only")
+        .bind("on-request")
+        .execute(&pool)
+        .await
+        .expect("legacy thread insert should succeed");
+    }
+
+    let pinned_values = sqlx::query_scalar::<_, bool>("SELECT is_pinned FROM threads ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .expect("pin states should load");
+    assert_eq!(pinned_values, vec![false, false]);
+
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn agent_job_tables_are_dropped_when_upgrading() {
     let sqlite_home = crate::runtime::test_support::unique_temp_dir();
     tokio::fs::create_dir_all(&sqlite_home)

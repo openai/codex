@@ -901,6 +901,11 @@
           "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
           "type": "string"
         },
+        "isPinned": {
+          "default": false,
+          "description": "Whether the thread has been pinned by the user.",
+          "type": "boolean"
+        },
         "modelProvider": {
           "description": "Model provider used for this thread (for example, 'openai').",
           "type": "string"

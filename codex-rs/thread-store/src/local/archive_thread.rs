@@ -108,6 +108,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
+                is_pinned: None,
                 archived: true,
                 search_term: None,
                 relation_filter: None,
