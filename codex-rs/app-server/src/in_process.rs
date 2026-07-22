@@ -97,6 +97,8 @@ use tracing::warn;
 
 const IN_PROCESS_CONNECTION_ID: ConnectionId = ConnectionId(0);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+// Covers both bounded runtime drains plus the analytics client's 25-second best-effort flush.
+const SHUTDOWN_ACK_TIMEOUT: Duration = Duration::from_secs(35);
 /// Default bounded channel capacity for in-process runtime queues.
 pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
@@ -330,7 +332,7 @@ impl InProcessClientHandle {
             .await
             .is_ok()
         {
-            let _ = timeout(SHUTDOWN_TIMEOUT, done_rx).await;
+            let _ = timeout(SHUTDOWN_ACK_TIMEOUT, done_rx).await;
         }
 
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut runtime_handle).await {
@@ -394,6 +396,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 .await;
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
+        let analytics_events_flush_client = analytics_events_client.clone();
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -723,6 +726,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             let _ = outbound_handle.await;
         }
 
+        analytics_events_flush_client.flush().await;
+
         if let Some(done_tx) = shutdown_ack {
             let _ = done_tx.send(());
         }
@@ -888,6 +893,35 @@ mod tests {
             .shutdown()
             .await
             .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_process_shutdown_waits_for_analytics_flush_budget() {
+        let (client_tx, mut client_rx) = mpsc::channel(/*buffer*/ 1);
+        let (_event_tx, event_rx) = mpsc::channel(/*buffer*/ 1);
+        let completed = Arc::new(AtomicBool::new(false));
+        let runtime_completed = Arc::clone(&completed);
+        let runtime_handle = tokio::spawn(async move {
+            let done_tx = match client_rx.recv().await {
+                Some(InProcessClientMessage::Shutdown { done_tx }) => done_tx,
+                _ => panic!("expected in-process shutdown request"),
+            };
+            tokio::time::sleep(SHUTDOWN_TIMEOUT + SHUTDOWN_TIMEOUT + Duration::from_secs(24)).await;
+            runtime_completed.store(true, Ordering::Release);
+            let _ = done_tx.send(());
+        });
+        let client = InProcessClientHandle {
+            client: InProcessClientSender { client_tx },
+            event_rx,
+            runtime_handle,
+            _test_codex_home: None,
+        };
+
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+        assert!(completed.load(Ordering::Acquire));
     }
 
     #[test]

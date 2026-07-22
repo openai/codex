@@ -1,6 +1,7 @@
 use super::AnalyticsEventsClient;
 use super::AnalyticsEventsDestination;
 use super::AnalyticsEventsQueue;
+use super::AnalyticsEventsQueueMessage;
 #[cfg(debug_assertions)]
 use super::capture_track_events_request;
 #[cfg(debug_assertions)]
@@ -57,6 +58,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+#[cfg(debug_assertions)]
+use codex_login::AuthManager;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use std::collections::HashSet;
@@ -70,6 +73,18 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
+
+#[cfg(debug_assertions)]
+impl AnalyticsEventsClient {
+    pub(crate) fn new_for_capture_file(auth_manager: Arc<AuthManager>, path: PathBuf) -> Self {
+        Self {
+            queue: Some(AnalyticsEventsQueue::new(
+                auth_manager,
+                AnalyticsEventsDestination::CaptureFile { path },
+            )),
+        }
+    }
+}
 
 fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest {
     TrackEventRequest::AcceptedLineFingerprints(Box::new(
@@ -197,7 +212,10 @@ fn unique_capture_path(name: &str) -> PathBuf {
     ))
 }
 
-fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFact>) {
+fn client_with_receiver() -> (
+    AnalyticsEventsClient,
+    mpsc::Receiver<AnalyticsEventsQueueMessage>,
+) {
     let (sender, receiver) = mpsc::channel(8);
     let queue = AnalyticsEventsQueue {
         sender,
@@ -569,7 +587,8 @@ fn track_request_only_enqueues_analytics_relevant_requests() {
         client.track_request(/*connection_id*/ 7, request_id, &request);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(AnalyticsFact::ClientRequest { .. })
+            Ok(AnalyticsEventsQueueMessage::Fact(input))
+                if matches!(*input, AnalyticsFact::ClientRequest { .. })
         ));
     }
 
@@ -596,7 +615,8 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         client.track_response(/*connection_id*/ 7, request_id, response);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(AnalyticsFact::ClientResponse { .. })
+            Ok(AnalyticsEventsQueueMessage::Fact(input))
+                if matches!(*input, AnalyticsFact::ClientResponse { .. })
         ));
     }
 
@@ -606,6 +626,36 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[tokio::test]
+async fn flush_waits_for_preceding_fact_delivery() {
+    let (client, mut receiver) = client_with_receiver();
+    client.track_request(
+        /*connection_id*/ 7,
+        RequestId::Integer(1),
+        &sample_turn_start_request(),
+    );
+
+    let flush = tokio::spawn(async move { client.flush().await });
+    assert!(matches!(
+        receiver.recv().await,
+        Some(AnalyticsEventsQueueMessage::Fact(input))
+            if matches!(*input, AnalyticsFact::ClientRequest { .. })
+    ));
+    let done_tx = match receiver.recv().await {
+        Some(AnalyticsEventsQueueMessage::Flush(done_tx)) => done_tx,
+        _ => panic!("expected analytics flush barrier"),
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    assert!(!flush.is_finished());
+    done_tx.send(()).expect("flush receiver should remain open");
+    flush.await.expect("flush task should complete");
+}
+
+#[tokio::test]
+async fn flush_is_noop_when_analytics_is_disabled() {
+    AnalyticsEventsClient::disabled().flush().await;
 }
 
 #[test]
