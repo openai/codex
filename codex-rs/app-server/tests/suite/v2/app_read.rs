@@ -497,7 +497,6 @@ fn app_response(id: &str, name: &str, icon_url: Option<&str>) -> Value {
             "version": "1.0.0",
             "version_id": "version-1",
             "version_notes": "Initial release",
-            "first_party_type": "must-not-escape",
             "first_party_requires_install": true,
             "show_in_composer_when_unlinked": true,
             "subtitle": "must-not-escape",
