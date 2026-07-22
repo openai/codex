@@ -45,6 +45,7 @@ use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::unified_exec::WriteStdinInteractionEvent;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
@@ -61,7 +62,9 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
@@ -350,7 +353,7 @@ fn terminate_process_on_network_denial(
     process: Arc<UnifiedExecProcess>,
     session: std::sync::Weak<crate::session::session::Session>,
     deferred: DeferredNetworkApproval,
-) {
+) -> tokio::task::JoinHandle<()> {
     let network_cancelled = deferred.cancellation_token();
     let process_exited = process.cancellation_token();
     tokio::spawn(async move {
@@ -366,7 +369,7 @@ fn terminate_process_on_network_denial(
         let session = session.upgrade();
         let message = network_denial_message_for_session(session.as_ref(), Some(deferred)).await;
         process.fail_and_terminate(message);
-    });
+    })
 }
 
 impl UnifiedExecProcessManager {
@@ -426,13 +429,13 @@ impl UnifiedExecProcessManager {
                 return Err(err);
             }
         };
-        if let Some(deferred) = deferred_network_approval.as_ref() {
+        let network_denial_monitor = deferred_network_approval.as_ref().map(|deferred| {
             terminate_process_on_network_denial(
                 Arc::clone(&process),
                 Arc::downgrade(&context.session),
                 deferred.clone(),
-            );
-        }
+            )
+        });
 
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
@@ -466,6 +469,7 @@ impl UnifiedExecProcessManager {
                 request.process_id,
                 request.tty,
                 deferred_network_approval.clone(),
+                network_denial_monitor,
                 Arc::clone(&transcript),
                 Arc::clone(&initial_exec_command_active),
             )
@@ -826,6 +830,23 @@ impl UnifiedExecProcessManager {
             hook_command: Some(hook_command),
         };
 
+        let should_emit_interaction = !request.input.is_empty() || response.process_id.is_some();
+        if should_emit_interaction
+            && let Some(WriteStdinInteractionEvent { session, turn }) = request.interaction_event
+        {
+            let interaction = TerminalInteractionEvent {
+                call_id: response.event_call_id.clone(),
+                process_id: response
+                    .process_id
+                    .unwrap_or(request.process_id)
+                    .to_string(),
+                stdin: request.input.to_string(),
+            };
+            session
+                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                .await;
+        }
+
         Ok(response)
     }
 
@@ -911,6 +932,7 @@ impl UnifiedExecProcessManager {
         process_id: i32,
         tty: bool,
         network_approval: Option<DeferredNetworkApproval>,
+        network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
         initial_exec_command_active: Arc<AtomicBool>,
     ) {
@@ -949,6 +971,7 @@ impl UnifiedExecProcessManager {
             process_id,
             transcript,
             started_at,
+            network_denial_monitor,
         );
     }
 
@@ -1330,17 +1353,34 @@ impl UnifiedExecProcessManager {
             .iter()
             .map(|(id, entry)| (*id, entry.last_used, entry.process.has_exited()))
             .collect();
+        let mut found_locked_exited_process = false;
 
         while let Some(process_id) = Self::process_id_to_prune_from_meta(&meta) {
-            // Do not prune processes being held by write_stdin.
-            if let Some(interaction_lock) = store
+            let candidate_process = store
                 .processes
                 .get(&process_id)
-                .map(|entry| entry.process.interaction_lock())
+                .map(|entry| Arc::clone(&entry.process));
+            let candidate_has_exited = candidate_process
+                .as_ref()
+                .is_some_and(|process| process.has_exited());
+            if found_locked_exited_process && !candidate_has_exited {
+                // The store may temporarily exceed its soft cap while an exited
+                // process is publishing its terminal event. Do not evict a live
+                // process just because that exited process is briefly locked.
+                return None;
+            }
+
+            // Do not prune processes while write_stdin or terminal event
+            // publication holds their interaction lock.
+            if let Some(interaction_lock) = candidate_process
+                .as_ref()
+                .map(|process| process.interaction_lock())
                 && let Ok(_interaction_guard) = interaction_lock.try_lock_owned()
             {
                 return store.remove(process_id);
             }
+            found_locked_exited_process |= candidate_has_exited
+                || candidate_process.is_some_and(|process| process.has_exited());
             meta.retain(|(id, _, _)| *id != process_id);
         }
 

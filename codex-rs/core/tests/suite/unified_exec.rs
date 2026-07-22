@@ -1950,10 +1950,36 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     )
     .await?;
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let mut exit_lifecycle_order = Vec::new();
+    let mut turn_completed = false;
+    loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::TerminalInteraction(event)
+                if event.call_id == start_call_id
+                    && event.stdin
+                        == exit_args
+                            .get("chars")
+                            .and_then(Value::as_str)
+                            .expect("exit chars") =>
+            {
+                exit_lifecycle_order.push("terminal_interaction");
+            }
+            EventMsg::ExecCommandEnd(event) if event.call_id == start_call_id => {
+                exit_lifecycle_order.push("exec_command_end");
+            }
+            EventMsg::TurnComplete(_) => turn_completed = true,
+            _ => {}
+        }
+        if turn_completed && exit_lifecycle_order.len() == 2 {
+            break;
+        }
+    }
+    assert_eq!(
+        exit_lifecycle_order,
+        ["terminal_interaction", "exec_command_end"],
+        "the interaction that exits a process must precede command completion"
+    );
 
     let requests = request_log.requests();
     assert!(!requests.is_empty(), "expected at least one POST request");
@@ -3391,6 +3417,14 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     let request_log = mount_sse_sequence(&server, responses).await;
 
     submit_unified_exec_turn(&test, "summarize large output", PermissionProfile::Disabled).await?;
+
+    let end_event = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::ExecCommandEnd(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+    assert_regex_match(".*hello crossplat.*", &end_event.aggregated_output);
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

@@ -487,3 +487,66 @@ fn pruning_protects_recent_processes_even_if_exited() {
     // (10) is exited but among the last 8; we should drop the LRU outside that set.
     assert_eq!(candidate, Some(1));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing() {
+    let exited_process = Arc::new(
+        crate::unified_exec::process_tests::remote_process(
+            codex_exec_server::WriteStatus::Accepted,
+            /*terminate_error*/ None,
+        )
+        .await,
+    );
+    exited_process
+        .terminate_confirmed()
+        .await
+        .expect("exited process should terminate");
+    let live_process = Arc::new(
+        crate::unified_exec::process_tests::remote_process(
+            codex_exec_server::WriteStatus::Accepted,
+            /*terminate_error*/ None,
+        )
+        .await,
+    );
+    let _interaction_guard = exited_process.interaction_lock().lock_owned().await;
+    let now = Instant::now();
+    let cwd = PathUri::parse("file:///tmp").expect("test cwd should be valid");
+    let mut store = ProcessStore::default();
+    let max_process_id =
+        i32::try_from(MAX_UNIFIED_EXEC_PROCESSES).expect("process cap should fit in i32");
+
+    for process_id in 1..=max_process_id {
+        let is_exited = process_id == 1;
+        store.processes.insert(
+            process_id,
+            ProcessEntry {
+                process: if is_exited {
+                    Arc::clone(&exited_process)
+                } else {
+                    Arc::clone(&live_process)
+                },
+                call_id: format!("call-{process_id}"),
+                process_id,
+                cwd: cwd.clone(),
+                initial_exec_command_active: Arc::new(AtomicBool::new(false)),
+                hook_command: format!("command-{process_id}"),
+                tty: false,
+                network_approval: None,
+                session: std::sync::Weak::new(),
+                last_used: if is_exited {
+                    now - Duration::from_secs(1)
+                } else {
+                    now
+                },
+            },
+        );
+    }
+
+    let pruned = UnifiedExecProcessManager::prune_processes_if_needed(&mut store);
+
+    assert_eq!(
+        (pruned.map(|entry| entry.process_id), store.processes.len()),
+        (None, MAX_UNIFIED_EXEC_PROCESSES)
+    );
+}

@@ -85,7 +85,7 @@ impl ExecProcess for MockExecProcess {
     }
 }
 
-async fn remote_process(
+pub(super) async fn remote_process(
     write_status: WriteStatus,
     terminate_error: Option<String>,
 ) -> UnifiedExecProcess {
