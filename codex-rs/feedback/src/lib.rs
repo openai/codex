@@ -213,7 +213,8 @@ impl CodexFeedback {
             .with_filter(
                 Targets::new()
                     .with_default(Level::TRACE)
-                    .with_target("codex_api::responses_websocket_timing", LevelFilter::OFF),
+                    .with_target("codex_api::responses_websocket_timing", LevelFilter::OFF)
+                    .with_target("codex_core::post_sampling_token_estimate", LevelFilter::OFF),
             )
     }
 
