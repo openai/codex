@@ -12,8 +12,9 @@
  * created by [`Self::from_abs_path`] are opaque to these lexical operations.
  *
  * `file:` paths retain their URI spelling so they can be parsed independently
- * of the current host. A local POSIX `file:` URI can also retain
- * percent-encoded non-UTF-8 bytes for lossless native round trips.
+ * of the current host, except that Windows drive letters are canonicalized to
+ * uppercase. A local POSIX `file:` URI can also retain percent-encoded non-UTF-8
+ * bytes for lossless native round trips.
  *
  * Like [VS Code resources], path operations use `/` URI separators on every
  * host. Lexical path operations preserve a URL authority without interpreting
