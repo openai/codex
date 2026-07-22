@@ -42,30 +42,6 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
 }
 
-/// Return the repository root for `cwd` using the provided filesystem.
-///
-/// This mirrors [`get_git_repo_root`] for local paths, but works when `cwd`
-/// only exists inside a selected remote environment.
-pub async fn get_git_repo_root_with_fs(
-    fs: &dyn ExecutorFileSystem,
-    cwd: &AbsolutePathBuf,
-) -> Option<AbsolutePathBuf> {
-    let cwd_uri = PathUri::from_abs_path(cwd);
-    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
-        Ok(metadata) if metadata.is_directory => cwd.clone(),
-        _ => cwd.parent()?,
-    };
-    find_nearest_native_ancestor_with_markers(
-        fs,
-        &base,
-        vec![".git".to_string()],
-        FindUpErrorPolicy::Ignore,
-        /*sandbox*/ None,
-    )
-    .await
-    .ok()?
-}
-
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
@@ -817,7 +793,20 @@ pub async fn resolve_root_git_project_for_trust(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let repo_root = get_git_repo_root_with_fs(fs, cwd).await?;
+    let cwd_uri = PathUri::from_abs_path(cwd);
+    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => cwd.clone(),
+        _ => cwd.parent()?,
+    };
+    let repo_root = find_nearest_native_ancestor_with_markers(
+        fs,
+        &base,
+        vec![".git".to_string()],
+        FindUpErrorPolicy::Ignore,
+        /*sandbox*/ None,
+    )
+    .await
+    .ok()??;
     let dot_git = repo_root.join(".git");
     let dot_git_uri = PathUri::from_abs_path(&dot_git);
     if fs

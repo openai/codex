@@ -135,7 +135,7 @@ const RENDER_CASES: &[RenderCase] = &[
     RenderCase::round_trips(
         "file:///d:/snowman/%E2%98%83",
         PathConvention::Windows,
-        r"d:\snowman\☃",
+        r"D:\snowman\☃",
     ),
     RenderCase::round_trips("file:///C:/tmp/", PathConvention::Windows, "C:\\tmp\\"),
     RenderCase::round_trips(
