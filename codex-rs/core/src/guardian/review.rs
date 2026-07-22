@@ -730,13 +730,17 @@ pub(super) async fn guardian_review_session_config(
             &turn.config.to_models_manager_config(),
         )
         .await;
-    let spawn_config = build_guardian_review_session_config(
+    let mut spawn_config = build_guardian_review_session_config(
         turn.config.as_ref(),
         live_network_config,
         guardian_model.as_str(),
         guardian_reasoning_effort.clone(),
         guardian_model_info.model_messages.as_ref(),
     )?;
+    if guardian_model != turn.model_info.slug {
+        spawn_config.model_context_window = None;
+        spawn_config.model_auto_compact_token_limit = None;
+    }
     Ok(GuardianReviewSessionConfig {
         spawn_config,
         model: guardian_model,

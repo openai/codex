@@ -9,6 +9,8 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
@@ -69,6 +71,16 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         ]],
         vec![vec![
             ev_response_created("guardian-review"),
+            ev_assistant_message(
+                "guardian-assessment",
+                &json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "The command is safe to execute.",
+                })
+                .to_string(),
+            ),
             ev_completed("guardian-review"),
         ]],
     ])
@@ -77,6 +89,8 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         config.model_catalog = Some(ModelsResponse {
             models: vec![review_model],
         });
+        config.model_context_window = Some(900_000);
+        config.model_auto_compact_token_limit = Some(600_000);
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     });
@@ -133,7 +147,23 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
     );
     assert_eq!(guardian_review.get("generate"), None);
 
+    let guardian_rollout_path = test
+        .codex
+        .guardian_trunk_rollout_path()
+        .await
+        .expect("guardian trunk rollout path");
     test.codex.shutdown_and_wait().await?;
+    let guardian_context_windows = fs::read_to_string(guardian_rollout_path)?
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<serde_json::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.model_context_window),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(guardian_context_windows, vec![Some(258_400)]);
     server.shutdown().await;
     Ok(())
 }
