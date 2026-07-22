@@ -539,6 +539,19 @@ impl ExecServerClient {
                     return;
                 };
                 match event {
+                    RpcClientEvent::Request(request) => {
+                        let error = crate::rpc::method_not_found(format!(
+                            "exec-server client does not implement `{}` yet",
+                            request.method
+                        ));
+                        if rpc_client.respond_error(request.id, error).await.is_err() {
+                            inner.request_recovery(
+                                rpc_client,
+                                disconnected_message(/*reason*/ None),
+                            );
+                            return;
+                        }
+                    }
                     RpcClientEvent::Notification(notification) => {
                         if let Err(error) = handle_server_notification(&inner, notification).await {
                             rpc_client.close_transport().await;

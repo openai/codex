@@ -10,6 +10,7 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::rpc::RpcCallError;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
@@ -84,6 +85,7 @@ async fn run_connection(
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
+    let requests = notifications.request_sender();
     let handler = Arc::new(ExecServerHandler::new(
         session_registry,
         notifications,
@@ -208,18 +210,23 @@ async fn run_connection(
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Response(response) => {
-                    warn!(
-                        "closing exec-server connection after unexpected client response: {:?}",
-                        response.id
-                    );
-                    break;
+                    if !requests.complete(response.id.clone(), Ok(response.result)) {
+                        warn!(
+                            "closing exec-server connection after unexpected client response: {:?}",
+                            response.id
+                        );
+                        break;
+                    }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Error(error) => {
-                    warn!(
-                        "closing exec-server connection after unexpected client error: {:?}",
-                        error.id
-                    );
-                    break;
+                    if !requests.complete(error.id.clone(), Err(RpcCallError::Server(error.error)))
+                    {
+                        warn!(
+                            "closing exec-server connection after unexpected client error: {:?}",
+                            error.id
+                        );
+                        break;
+                    }
                 }
             },
             JsonRpcConnectionEvent::Disconnected { reason } => {
@@ -231,8 +238,10 @@ async fn run_connection(
         }
     }
 
+    requests.close();
     handler.shutdown().await;
     drop(handler);
+    drop(requests);
     drop(outgoing_tx);
     for task in connection_tasks {
         task.abort();
@@ -265,7 +274,9 @@ fn request_result(message: &Option<RpcServerOutboundMessage>) -> &'static str {
     match message {
         Some(RpcServerOutboundMessage::Error { .. }) => "error",
         Some(
-            RpcServerOutboundMessage::Response { .. } | RpcServerOutboundMessage::Notification(_),
+            RpcServerOutboundMessage::Request(_)
+            | RpcServerOutboundMessage::Response { .. }
+            | RpcServerOutboundMessage::Notification(_),
         )
         | None => "success",
     }
