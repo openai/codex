@@ -149,13 +149,15 @@ fn character_fallback_counts_multibyte_metadata_by_characters() {
 }
 
 #[test]
-fn catalog_emits_omission_marker_when_every_skill_exceeds_budget() {
+fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() {
+    let oversized = entry(
+        "oversized",
+        &"x".repeat(MAX_CATALOG_SKILL_DESCRIPTION_CHARS),
+        /*short_description*/ None,
+    )
+    .with_display_path(format!("skill://{}", "x".repeat(512)));
     let catalog = SkillCatalog {
-        entries: vec![entry(
-            "oversized",
-            &"x".repeat(MAX_CATALOG_SKILL_DESCRIPTION_CHARS),
-            /*short_description*/ None,
-        )],
+        entries: vec![oversized],
         warnings: Vec::new(),
     };
 

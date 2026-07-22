@@ -28,6 +28,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 
 struct StaticSkillProvider {
     catalog: SkillCatalog,
@@ -146,6 +147,88 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
 
     assert!(included_counts[0] > 0);
     assert!(included_counts[0] < included_counts[1]);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let source_kind = SkillSourceKind::Custom("test".to_string());
+    let description = "x".repeat(1_025);
+    let catalog = SkillCatalog {
+        entries: (0..10)
+            .map(|index| {
+                let name = format!("skill-{index:02}");
+                SkillCatalogEntry::new(
+                    SkillPackageId(format!("test/{name}")),
+                    SkillAuthority::new(source_kind.clone(), "test"),
+                    name.clone(),
+                    description.clone(),
+                    SkillResourceId::new(format!("{name}/SKILL.md")),
+                )
+                .with_display_path(format!("skill://test/{name}/SKILL.md"))
+            })
+            .collect(),
+        warnings: Vec::new(),
+    };
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new().with_provider(SkillProviderSource::new(
+            source_kind,
+            "test",
+            Arc::new(StaticSkillProvider { catalog }),
+        )),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: false,
+            orchestrator_skills_enabled: false,
+            shadow_selection_enabled: false,
+        },
+    );
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.context_window = Some(100_000);
+            model_info.max_context_window = None;
+        })
+        .with_config(|config| {
+            config.include_skill_instructions = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("Inspect the available skills.").await?;
+    let developer_texts = response.single_request().message_input_texts("developer");
+    let catalog_text = developer_texts
+        .iter()
+        .find(|text| text.contains("skill://test/"))
+        .unwrap_or_else(|| {
+            panic!(
+                "production request should include the extension skill catalog, got {developer_texts:?}"
+            )
+        });
+    let description_lengths = catalog_text
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("- skill-")
+                .and_then(|line| line.split_once(": "))
+                .and_then(|(_, line)| line.split_once(" (custom resource:"))
+                .map(|(description, _)| description.chars().count())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(10, description_lengths.len());
+    assert!(
+        description_lengths
+            .iter()
+            .all(|length| *length > 0 && *length < 1_024)
+    );
+    assert!(!catalog_text.contains("additional skills omitted"));
 
     Ok(())
 }

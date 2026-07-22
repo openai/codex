@@ -14,6 +14,7 @@ const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 const MAX_CATALOG_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
+const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
@@ -73,6 +74,208 @@ fn metadata_line_cost(budget: SkillMetadataBudget, line: &str) -> usize {
     }
 }
 
+impl SkillMetadataBudget {
+    fn limit(self) -> usize {
+        match self {
+            Self::Tokens(limit) | Self::Characters(limit) => limit,
+        }
+    }
+
+    fn cost_from_counts(self, chars: usize, bytes: usize) -> usize {
+        match self {
+            Self::Tokens(_) => {
+                bytes.saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1))
+                    / APPROX_BYTES_PER_TOKEN
+            }
+            Self::Characters(_) => chars,
+        }
+    }
+}
+
+struct SkillLine<'a> {
+    name: &'a str,
+    description: Cow<'a, str>,
+    locator: String,
+    locator_kind: &'static str,
+}
+
+impl<'a> SkillLine<'a> {
+    fn new(entry: &'a SkillCatalogEntry, policy: SkillCatalogRenderPolicy) -> Self {
+        let description = policy.description(entry);
+        Self {
+            name: entry.name.as_str(),
+            description: truncate_catalog_skill_description(description),
+            locator: entry.rendered_path().to_string(),
+            locator_kind: match &entry.authority.kind {
+                SkillSourceKind::Host => "file",
+                SkillSourceKind::Executor => "environment resource",
+                SkillSourceKind::Orchestrator => "orchestrator resource",
+                SkillSourceKind::Custom(_) => "custom resource",
+            },
+        }
+    }
+
+    fn full_cost(&self, budget: SkillMetadataBudget) -> usize {
+        metadata_line_cost(budget, &self.render_full())
+    }
+
+    fn minimum_cost(&self, budget: SkillMetadataBudget) -> usize {
+        metadata_line_cost(budget, &self.render_minimum())
+    }
+
+    fn render_full(&self) -> String {
+        self.render_with_description(self.description.as_ref())
+    }
+
+    fn render_minimum(&self) -> String {
+        self.render_with_description("")
+    }
+
+    fn render_with_description_chars(&self, description_chars: usize) -> String {
+        let end = self
+            .description
+            .char_indices()
+            .nth(description_chars)
+            .map_or(self.description.len(), |(index, _)| index);
+        self.render_with_description(&self.description[..end])
+    }
+
+    fn render_with_description(&self, description: &str) -> String {
+        let name = self.name;
+        let locator = self.locator.as_str();
+        let locator_kind = self.locator_kind;
+        if description.is_empty() {
+            format!("- {name}: ({locator_kind}: {locator})")
+        } else {
+            format!("- {name}: {description} ({locator_kind}: {locator})")
+        }
+    }
+}
+
+struct DescriptionBudgetLine<'a> {
+    line: &'a SkillLine<'a>,
+    description_char_count: usize,
+    extra_costs: Vec<usize>,
+}
+
+impl<'a> DescriptionBudgetLine<'a> {
+    fn new(line: &'a SkillLine<'a>, budget: SkillMetadataBudget) -> Self {
+        let minimum_line = line.render_minimum();
+        let minimum_chars = minimum_line.chars().count().saturating_add(1);
+        let minimum_bytes = minimum_line.len().saturating_add(1);
+        let minimum_cost = budget.cost_from_counts(minimum_chars, minimum_bytes);
+
+        let description_char_count = line.description.chars().count();
+        let mut extra_costs = Vec::with_capacity(description_char_count.saturating_add(1));
+        extra_costs.push(0);
+
+        let mut prefix_chars = 0usize;
+        let mut prefix_bytes = 0usize;
+        for ch in line.description.chars() {
+            prefix_chars = prefix_chars.saturating_add(1);
+            prefix_bytes = prefix_bytes.saturating_add(ch.len_utf8());
+            let rendered_chars = minimum_chars.saturating_add(prefix_chars).saturating_add(1);
+            let rendered_bytes = minimum_bytes.saturating_add(prefix_bytes).saturating_add(1);
+            let cost = budget
+                .cost_from_counts(rendered_chars, rendered_bytes)
+                .saturating_sub(minimum_cost);
+            extra_costs.push(cost);
+        }
+
+        Self {
+            line,
+            description_char_count,
+            extra_costs,
+        }
+    }
+}
+
+fn render_skill_lines(
+    skill_lines: Vec<SkillLine<'_>>,
+    budget: SkillMetadataBudget,
+) -> (Vec<String>, usize) {
+    let full_cost = skill_lines.iter().fold(0usize, |used, line| {
+        used.saturating_add(line.full_cost(budget))
+    });
+    if full_cost <= budget.limit() {
+        return (skill_lines.iter().map(SkillLine::render_full).collect(), 0);
+    }
+
+    let minimum_cost = skill_lines.iter().fold(0usize, |used, line| {
+        used.saturating_add(line.minimum_cost(budget))
+    });
+    if minimum_cost <= budget.limit() {
+        return (
+            render_lines_with_description_budget(
+                budget,
+                &skill_lines,
+                budget.limit().saturating_sub(minimum_cost),
+            ),
+            0,
+        );
+    }
+
+    let mut included = Vec::new();
+    let mut used = 0usize;
+    let mut omitted = 0usize;
+    for line in skill_lines {
+        let rendered = line.render_full();
+        let next_used = used.saturating_add(metadata_line_cost(budget, &rendered));
+        if next_used <= budget.limit() {
+            used = next_used;
+            included.push(rendered);
+        } else {
+            omitted = omitted.saturating_add(1);
+        }
+    }
+    (included, omitted)
+}
+
+fn render_lines_with_description_budget(
+    budget: SkillMetadataBudget,
+    skill_lines: &[SkillLine<'_>],
+    limit: usize,
+) -> Vec<String> {
+    let budget_lines = skill_lines
+        .iter()
+        .map(|line| DescriptionBudgetLine::new(line, budget))
+        .collect::<Vec<_>>();
+    let mut char_allocations = vec![0usize; budget_lines.len()];
+    let mut current_extra_costs = vec![0usize; budget_lines.len()];
+    let mut remaining = limit;
+
+    // Distribute description space round-robin so no skill monopolizes the
+    // remaining budget.
+    loop {
+        let mut changed = false;
+        for (index, line) in budget_lines.iter().enumerate() {
+            if char_allocations[index] >= line.description_char_count {
+                continue;
+            }
+
+            let next_chars = char_allocations[index].saturating_add(1);
+            let next_cost = line.extra_costs[next_chars];
+            let delta = next_cost.saturating_sub(current_extra_costs[index]);
+            if delta <= remaining {
+                char_allocations[index] = next_chars;
+                current_extra_costs[index] = next_cost;
+                remaining = remaining.saturating_sub(delta);
+                changed = true;
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    budget_lines
+        .iter()
+        .zip(char_allocations)
+        .map(|(line, description_chars)| line.line.render_with_description_chars(description_chars))
+        .collect()
+}
+
 #[tracing::instrument(
     level = "trace",
     skip_all,
@@ -84,34 +287,21 @@ pub(crate) fn available_skills_fragment(
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
 ) -> Option<AvailableSkillsInstructions> {
-    let budget_limit = match budget {
-        SkillMetadataBudget::Tokens(limit) | SkillMetadataBudget::Characters(limit) => limit,
-    };
-    let mut total_cost = 0usize;
-    let mut omitted = 0usize;
-    let mut skill_lines = Vec::new();
-
-    for entry in catalog
+    let skill_lines = catalog
         .entries
         .iter()
         .filter(|entry| entry.enabled && entry.prompt_visible)
-    {
-        let description = policy.description(entry);
-        let description = truncate_catalog_skill_description(description);
-        let line = render_skill_line(entry, description.as_ref());
-        let next_cost = total_cost.saturating_add(metadata_line_cost(budget, &line));
-        if next_cost > budget_limit {
-            omitted = omitted.saturating_add(1);
-            continue;
-        }
-        total_cost = next_cost;
-        skill_lines.push(line);
-    }
+        .map(|entry| SkillLine::new(entry, policy))
+        .collect();
+    let (mut skill_lines, mut omitted) = render_skill_lines(skill_lines, budget);
+    let mut total_cost = skill_lines.iter().fold(0usize, |used, line| {
+        used.saturating_add(metadata_line_cost(budget, line))
+    });
 
     if omitted > 0 {
         loop {
             let marker = omission_marker(omitted);
-            if total_cost.saturating_add(metadata_line_cost(budget, &marker)) <= budget_limit {
+            if total_cost.saturating_add(metadata_line_cost(budget, &marker)) <= budget.limit() {
                 skill_lines.push(marker);
                 break;
             }
@@ -152,22 +342,6 @@ pub(crate) fn truncate_catalog_skill_description(description: &str) -> Cow<'_, s
     let mut truncated = description[..prefix_end].to_string();
     truncated.push_str(TRUNCATED_SKILL_DESCRIPTION_SUFFIX);
     Cow::Owned(truncated)
-}
-
-fn render_skill_line(entry: &SkillCatalogEntry, description: &str) -> String {
-    let locator_kind = match &entry.authority.kind {
-        SkillSourceKind::Host => "file",
-        SkillSourceKind::Executor => "environment resource",
-        SkillSourceKind::Orchestrator => "orchestrator resource",
-        SkillSourceKind::Custom(_) => "custom resource",
-    };
-    let name = entry.name.as_str();
-    let path = entry.rendered_path();
-    if description.is_empty() {
-        format!("- {name}: ({locator_kind}: {path})")
-    } else {
-        format!("- {name}: {description} ({locator_kind}: {path})")
-    }
 }
 
 pub(crate) fn truncate_main_prompt_contents(contents: &str) -> (String, bool) {
