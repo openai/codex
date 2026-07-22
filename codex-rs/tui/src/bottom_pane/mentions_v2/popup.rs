@@ -76,7 +76,8 @@ impl Popup {
     }
 
     pub(crate) fn calculate_required_height(&self, _width: u16) -> u16 {
-        (MAX_POPUP_ROWS as u16).saturating_add(2)
+        let visible = self.rows().len().clamp(1, MAX_POPUP_ROWS);
+        (visible as u16).saturating_add(2)
     }
 
     fn clamp_selection(&mut self) {
