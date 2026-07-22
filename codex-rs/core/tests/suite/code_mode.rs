@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::StartThreadOptions;
 use codex_core::config::Config;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -3628,9 +3629,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
         .thread_manager
-        .start_thread_with_tools(
-            base_test.config.clone(),
-            vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
                 name: "codex_app".to_string(),
                 description: "Codex app tools.".to_string(),
                 tools: vec![DynamicToolNamespaceTool::Function(
@@ -3649,7 +3649,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
                     },
                 )],
             })],
-        )
+            ..StartThreadOptions::new(base_test.config.clone())
+        })
         .await?;
     let mut test = base_test;
     test.codex = new_thread.thread;
@@ -3797,9 +3798,8 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
         .thread_manager
-        .start_thread_with_tools(
-            base_test.config.clone(),
-            vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
                 name: "excluded".to_string(),
                 description: "Excluded tools.".to_string(),
                 tools: vec![DynamicToolNamespaceTool::Function(
@@ -3815,7 +3815,8 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
                     },
                 )],
             })],
-        )
+            ..StartThreadOptions::new(base_test.config.clone())
+        })
         .await?;
     let mut test = base_test;
     test.codex = new_thread.thread;

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use codex_core::NewThread;
+use codex_core::StartThreadOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::PermissionProfile;
@@ -183,7 +184,7 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
         ..
     } = fixture
         .thread_manager
-        .start_thread(fixture.config.clone())
+        .start_thread(StartThreadOptions::new(fixture.config.clone()))
         .await?;
     let second_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&first_pid)).await?;
     let second_process = process_label(&second_pid);

@@ -1228,8 +1228,7 @@ impl ThreadRequestProcessor {
             ..
         } = listener_task_context
             .thread_manager
-            .start_thread_with_options(StartThreadOptions {
-                config,
+            .start_thread(StartThreadOptions {
                 allow_provider_model_fallback,
                 initial_history: match session_start_source
                     .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
@@ -1238,14 +1237,14 @@ impl ThreadRequestProcessor {
                     codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
                 },
                 history_mode,
-                session_source: None,
                 thread_source,
                 dynamic_tools,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
-                environments,
+                environments: Some(environments),
                 thread_extension_init,
                 supports_openai_form_elicitation,
+                ..StartThreadOptions::new(config)
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",

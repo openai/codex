@@ -1,6 +1,7 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_core::StartThreadOptions;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
@@ -94,7 +95,10 @@ async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<(
     });
     let new_thread = base_test
         .thread_manager
-        .start_thread_with_tools(base_test.config.clone(), vec![dynamic_tool])
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![dynamic_tool],
+            ..StartThreadOptions::new(base_test.config.clone())
+        })
         .await?;
     let mut test = base_test;
     test.codex = new_thread.thread;

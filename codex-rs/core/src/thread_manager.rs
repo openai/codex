@@ -198,9 +198,28 @@ pub struct StartThreadOptions {
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
-    pub environments: Vec<TurnEnvironmentSelection>,
+    pub environments: Option<Vec<TurnEnvironmentSelection>>,
     pub thread_extension_init: ExtensionDataInit,
     pub supports_openai_form_elicitation: bool,
+}
+
+impl StartThreadOptions {
+    pub fn new(config: Config) -> Self {
+        Self {
+            config,
+            allow_provider_model_fallback: false,
+            initial_history: InitialHistory::New,
+            history_mode: None,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: None,
+            thread_extension_init: ExtensionDataInit::default(),
+            supports_openai_form_elicitation: false,
+        }
+    }
 }
 
 fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
@@ -662,52 +681,22 @@ impl ThreadManager {
         Ok(subtree_thread_ids)
     }
 
-    pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
-        // Box delegated thread-spawn futures so these convenience wrappers do
-        // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_tools(config, Vec::new())).await
+    pub async fn start_thread(&self, options: StartThreadOptions) -> CodexResult<NewThread> {
+        Box::pin(self.start_thread_inner(options, /*forked_from_thread_id*/ None)).await
     }
 
-    pub async fn start_thread_with_tools(
-        &self,
-        config: Config,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-    ) -> CodexResult<NewThread> {
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-            &config.workspace_roots,
-        );
-        Box::pin(self.start_thread_with_options(StartThreadOptions {
-            config,
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools,
-            metrics_service_name: None,
-            parent_trace: None,
-            environments,
-            thread_extension_init: ExtensionDataInit::default(),
-            supports_openai_form_elicitation: false,
-        }))
-        .await
-    }
-
-    pub async fn start_thread_with_options(
-        &self,
-        options: StartThreadOptions,
-    ) -> CodexResult<NewThread> {
-        self.start_thread_with_options_and_fork_source(options, /*forked_from_thread_id*/ None)
-            .await
-    }
-
-    async fn start_thread_with_options_and_fork_source(
+    async fn start_thread_inner(
         &self,
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
+        let environments = options.environments.unwrap_or_else(|| {
+            default_thread_environment_selections(
+                self.state.environment_manager.as_ref(),
+                &options.config.cwd,
+                &options.config.workspace_roots,
+            )
+        });
         let agent_control = self.agent_control_for_config(&options.config);
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
@@ -731,7 +720,7 @@ impl ThreadManager {
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             options.parent_trace,
-            options.environments,
+            environments,
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
@@ -772,7 +761,7 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
+        self.start_thread_inner(options, Some(forked_from_thread_id))
             .await
     }
 

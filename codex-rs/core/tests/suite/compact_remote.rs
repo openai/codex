@@ -4,6 +4,7 @@ use std::fs;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_core::StartThreadOptions;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -1287,7 +1288,10 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
     })];
     let new_thread = test
         .thread_manager
-        .start_thread_with_tools(test.config.clone(), dynamic_tools)
+        .start_thread(StartThreadOptions {
+            dynamic_tools,
+            ..StartThreadOptions::new(test.config.clone())
+        })
         .await?;
     test.codex = new_thread.thread;
     test.session_configured = new_thread.session_configured;
@@ -1403,7 +1407,10 @@ async fn remote_compact_does_not_charge_inline_audio_payload_as_text() -> Result
     });
     let new_thread = test
         .thread_manager
-        .start_thread_with_tools(test.config.clone(), vec![dynamic_tool])
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![dynamic_tool],
+            ..StartThreadOptions::new(test.config.clone())
+        })
         .await?;
     test.codex = new_thread.thread;
     test.session_configured = new_thread.session_configured;
@@ -2045,7 +2052,10 @@ async fn remote_compact_trims_tool_search_output_to_empty_tools_array() -> Resul
     let mut test = builder.build(&server).await?;
     let new_thread = test
         .thread_manager
-        .start_thread_with_tools(test.config.clone(), vec![dynamic_tool])
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![dynamic_tool],
+            ..StartThreadOptions::new(test.config.clone())
+        })
         .await?;
     test.codex = new_thread.thread;
     test.session_configured = new_thread.session_configured;

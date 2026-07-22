@@ -8,7 +8,6 @@ use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -484,19 +483,9 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
 
     let no_environment_thread = test
         .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: test.config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+        .start_thread(StartThreadOptions {
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(test.config.clone())
         })
         .await?;
     assert_eq!(provider.load_count(), 2);
@@ -691,17 +680,8 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
     let remote_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
     let thread = test
         .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: test.config.clone(),
-            allow_provider_model_fallback: false,
-            initial_history: InitialHistory::New,
-            history_mode: None,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: vec![
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     cwd: PathUri::from_abs_path(&test.config.cwd),
@@ -712,9 +692,8 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
                     cwd: PathUri::from_host_native_path(local_root.path())?,
                     workspace_roots: vec![PathUri::from_host_native_path(local_root.path())?],
                 },
-            ],
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
+            ]),
+            ..StartThreadOptions::new(test.config.clone())
         })
         .await?;
     assert_eq!(provider.load_count(), 2);

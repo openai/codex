@@ -45,6 +45,7 @@ use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
+use codex_core_api::StartThreadOptions;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
@@ -152,7 +153,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config)
+        .start_thread(StartThreadOptions::new(config))
         .await
         .context("start Codex thread")?;
 

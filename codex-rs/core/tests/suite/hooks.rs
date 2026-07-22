@@ -19,7 +19,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -1415,19 +1414,10 @@ async fn session_end_skips_subagents() -> Result<()> {
     ] {
         let subagent = test
             .thread_manager
-            .start_thread_with_options(StartThreadOptions {
-                config: test.config.clone(),
-                allow_provider_model_fallback: false,
-                initial_history: InitialHistory::New,
-                history_mode: None,
+            .start_thread(StartThreadOptions {
                 session_source: Some(SessionSource::SubAgent(source)),
-                thread_source: None,
-                dynamic_tools: Vec::new(),
-                metrics_service_name: None,
-                parent_trace: None,
-                environments: Vec::new(),
-                thread_extension_init: Default::default(),
-                supports_openai_form_elicitation: false,
+                environments: Some(Vec::new()),
+                ..StartThreadOptions::new(test.config.clone())
             })
             .await?;
 

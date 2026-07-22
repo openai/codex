@@ -17,6 +17,7 @@ use crate::session::session::Session;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
 use crate::state_db_bridge::StateDbHandle;
+use crate::thread_manager::StartThreadOptions;
 use crate::thread_manager::ThreadManager;
 use crate::thread_manager::thread_store_from_config;
 use codex_extension_api::empty_extension_registry;
@@ -64,7 +65,9 @@ pub async fn build_prompt_input(
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
-    let thread = thread_manager.start_thread(config).await?;
+    let thread = thread_manager
+        .start_thread(StartThreadOptions::new(config))
+        .await?;
 
     let output = build_prompt_input_from_session(&thread.thread.session, input).await;
     let shutdown = thread.thread.shutdown_and_wait().await;

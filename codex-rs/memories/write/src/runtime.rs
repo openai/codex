@@ -25,7 +25,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -321,28 +320,16 @@ impl MemoryStartupContext {
         config: Config,
         prompt: Vec<UserInput>,
     ) -> anyhow::Result<SpawnedConsolidationAgent> {
-        let environments = self
-            .thread_manager
-            .default_environment_selections(&config.cwd, &config.workspace_roots);
         let NewThread {
             thread_id, thread, ..
         } = self
             .thread_manager
-            .start_thread_with_options(StartThreadOptions {
-                config,
-                allow_provider_model_fallback: false,
-                initial_history: InitialHistory::New,
-                history_mode: None,
+            .start_thread(StartThreadOptions {
                 session_source: Some(SessionSource::Internal(
                     InternalSessionSource::MemoryConsolidation,
                 )),
                 thread_source: Some(ThreadSource::MemoryConsolidation),
-                dynamic_tools: Vec::new(),
-                metrics_service_name: None,
-                parent_trace: None,
-                environments,
-                thread_extension_init: Default::default(),
-                supports_openai_form_elicitation: false,
+                ..StartThreadOptions::new(config)
             })
             .await?;
 
