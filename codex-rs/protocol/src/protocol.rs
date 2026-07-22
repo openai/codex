@@ -2686,28 +2686,6 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_latest_effective_multi_agent_mode(&self) -> Option<MultiAgentMode> {
-        let items = match self {
-            InitialHistory::New | InitialHistory::Cleared => return None,
-            InitialHistory::Resumed(resumed) => &resumed.history,
-            InitialHistory::Forked(items) => items,
-        };
-        items
-            .iter()
-            .rev()
-            .find_map(|item| match item {
-                RolloutItem::TurnContext(turn_context) => Some(turn_context),
-                RolloutItem::SessionMeta(_)
-                | RolloutItem::ResponseItem(_)
-                | RolloutItem::InterAgentCommunication(_)
-                | RolloutItem::InterAgentCommunicationMetadata { .. }
-                | RolloutItem::Compacted(_)
-                | RolloutItem::WorldState(_)
-                | RolloutItem::EventMsg(_) => None,
-            })
-            .and_then(|turn_context| turn_context.multi_agent_mode.clone())
-    }
-
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
         let meta = self.get_resumed_session_meta()?;
         Some((meta.source.clone(), meta.thread_source.clone()))
@@ -3318,7 +3296,7 @@ pub struct TurnContextItem {
     pub collaboration_mode: Option<CollaborationMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
-    /// Effective model-visible mode used as the durable context-diff baseline.
+    /// Legacy effective model-visible mode retained to deserialize older rollouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6058,50 +6036,6 @@ mod tests {
                 Some(thread_id),
             ),
             Some(MultiAgentVersion::V2)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn latest_effective_multi_agent_mode_uses_latest_turn_context_even_when_unset() -> Result<()> {
-        let turn_context_item = |multi_agent_mode| -> Result<RolloutItem> {
-            let mut value = json!({
-                "cwd": test_path_buf("/tmp"),
-                "approval_policy": "never",
-                "sandbox_policy": { "type": "danger-full-access" },
-                "model": "gpt-5",
-                "summary": "auto",
-            });
-            value["multi_agent_mode"] = serde_json::to_value(multi_agent_mode)?;
-            Ok(RolloutItem::TurnContext(serde_json::from_value(value)?))
-        };
-
-        assert_eq!(
-            InitialHistory::Forked(vec![
-                turn_context_item(Some(MultiAgentMode::Proactive))?,
-                turn_context_item(/*multi_agent_mode*/ None)?,
-            ])
-            .get_latest_effective_multi_agent_mode(),
-            None
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn latest_effective_multi_agent_mode_maps_legacy_none_to_empty_custom() -> Result<()> {
-        let value = json!({
-            "cwd": test_path_buf("/tmp"),
-            "approval_policy": "never",
-            "sandbox_policy": { "type": "danger-full-access" },
-            "model": "gpt-5",
-            "multi_agent_mode": "none",
-            "summary": "auto",
-        });
-        let item = RolloutItem::TurnContext(serde_json::from_value(value)?);
-
-        assert_eq!(
-            InitialHistory::Forked(vec![item]).get_latest_effective_multi_agent_mode(),
-            Some(MultiAgentMode::Custom(String::new()))
         );
         Ok(())
     }

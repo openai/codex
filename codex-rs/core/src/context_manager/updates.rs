@@ -1,36 +1,13 @@
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
-use crate::context::MultiAgentModeInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::session::PreviousTurnSettings;
 use crate::session::turn_context::TurnContext;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
-
-fn build_multi_agent_mode_update_item(
-    previous: Option<&TurnContextItem>,
-    next: &TurnContext,
-) -> Option<String> {
-    let effective_multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(next);
-    let previous = previous?;
-    if previous.multi_agent_mode == effective_multi_agent_mode {
-        return None;
-    }
-
-    match effective_multi_agent_mode {
-        Some(multi_agent_mode) => MultiAgentModeInstructions::from_mode(multi_agent_mode)
-            .map(|instructions| instructions.render()),
-        None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => {
-            MultiAgentModeInstructions::from_mode(MultiAgentMode::ExplicitRequestOnly)
-                .map(|instructions| instructions.render())
-        }
-        None => None,
-    }
-}
 
 fn build_personality_update_item(
     previous: Option<&TurnContextItem>,
@@ -145,7 +122,6 @@ pub(crate) fn build_settings_update_items(
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
         build_model_instructions_update_item(previous_turn_settings, next),
-        build_multi_agent_mode_update_item(previous, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
     ]
     .into_iter()

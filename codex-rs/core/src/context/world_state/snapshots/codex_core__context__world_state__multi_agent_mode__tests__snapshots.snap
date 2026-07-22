@@ -1,0 +1,36 @@
+---
+source: core/src/context/world_state/multi_agent_mode_tests.rs
+expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&inactive)),\n(Absent, Known(&explicit)), (Known(&explicit), Known(&explicit)),\n(Known(&explicit), Known(&proactive)), (Known(&proactive), Known(&inactive)),\n(Known(&explicit), Known(&inactive)), (Known(&explicit), Known(&custom)),\n(Known(&custom), Known(&empty)), (Unknown, Known(&explicit)),\n(Unknown, Known(&inactive)),])"
+---
+Absent -> Absent
+None
+
+Absent -> {}
+None
+
+Absent -> {"mode":"explicitRequestOnly"} (role - developer)
+<multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.</multi_agent_mode>
+
+{"mode":"explicitRequestOnly"} -> {"mode":"explicitRequestOnly"}
+None
+
+{"mode":"explicitRequestOnly"} -> {"mode":"proactive"} (role - developer)
+<multi_agent_mode>Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it.</multi_agent_mode>
+
+{"mode":"proactive"} -> {} (role - developer)
+<multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.</multi_agent_mode>
+
+{"mode":"explicitRequestOnly"} -> {}
+None
+
+{"mode":"explicitRequestOnly"} -> {"mode":{"custom":"use a custom policy"}} (role - developer)
+<multi_agent_mode>use a custom policy</multi_agent_mode>
+
+{"mode":{"custom":"use a custom policy"}} -> {"mode":{"custom":""}}
+None
+
+Unknown -> {"mode":"explicitRequestOnly"} (role - developer)
+<multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.</multi_agent_mode>
+
+Unknown -> {} (role - developer)
+<multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.</multi_agent_mode>
