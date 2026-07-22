@@ -1,11 +1,10 @@
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CurrentTimeReadResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SleepItem;
 use codex_app_server_protocol::ThreadItem;
@@ -16,7 +15,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
-use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -55,44 +53,42 @@ async fn external_sleep_polls_current_time_and_emits_items() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri())
+        .with_extra_config(
+            r#"[features.current_time_reminder]
+enabled = true
+sleep_tool = true
+clock_source = "external"
+"#,
+        )
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let thread_start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
 
-    let turn_start_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Sleep briefly".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
+    let TurnStartResponse { turn, .. } = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "Sleep briefly".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
         })
         .await?;
-    let turn_start_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn, .. } = to_response(turn_start_response)?;
 
     // Read once for the initial reminder, then once to establish the sleep deadline.
     respond_to_current_time_read(&mut mcp, &thread.id, CURRENT_TIME_AT).await?;
@@ -145,13 +141,8 @@ async fn wait_for_sleep_started(
     call_id: &str,
 ) -> Result<ItemStartedNotification> {
     loop {
-        let notification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/started"),
-        )
-        .await??;
         let started: ItemStartedNotification =
-            serde_json::from_value(notification.params.expect("item/started params"))?;
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("item/started")).await??;
         if matches!(&started.item, ThreadItem::Sleep(item) if item.id == call_id) {
             return Ok(started);
         }
@@ -163,13 +154,11 @@ async fn wait_for_sleep_completed(
     call_id: &str,
 ) -> Result<ItemCompletedNotification> {
     loop {
-        let notification = timeout(
+        let completed: ItemCompletedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/completed"),
+            mcp.read_notification("item/completed"),
         )
         .await??;
-        let completed: ItemCompletedNotification =
-            serde_json::from_value(notification.params.expect("item/completed params"))?;
         if matches!(&completed.item, ThreadItem::Sleep(item) if item.id == call_id) {
             return Ok(completed);
         }
@@ -196,30 +185,4 @@ async fn respond_to_current_time_read(
     )
     .await?;
     Ok(())
-}
-
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    std::fs::write(
-        codex_home.join("config.toml"),
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-
-[features.current_time_reminder]
-enabled = true
-sleep_tool = true
-clock_source = "external"
-"#
-        ),
-    )
 }

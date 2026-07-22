@@ -1,16 +1,13 @@
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::app_server_json_shutdown_event;
 use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::to_response;
-use app_test_support::write_mock_responses_config_toml;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
@@ -19,7 +16,6 @@ use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -58,52 +54,39 @@ async fn app_server_emits_structured_tool_call_timing_event() -> Result<()> {
     ])
     .await;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::from([(Feature::UnifiedExec, true)]),
-        /*auto_compact_limit*/ 100_000,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::UnifiedExec)
+        .with_root_config("compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 100000")
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home.path())?;
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_json_logging("warn,codex_core::tools::parallel=info")
-        .build()
+        .build_initialized()
         .await?;
-    timeout(READ_TIMEOUT, app_server.initialize()).await??;
 
-    let thread_start_id = app_server
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let thread = app_server
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
-        .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+        .await?
+        .thread;
 
-    let turn_start_id = app_server
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "run a command".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
+    let TurnStartResponse { turn } = app_server
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "run a command".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
         })
         .await?;
-    let turn_start_response: JSONRPCResponse = timeout(
-        READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn } = to_response(turn_start_response)?;
 
     timeout(
         READ_TIMEOUT,

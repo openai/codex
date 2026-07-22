@@ -1,7 +1,6 @@
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
-use app_test_support::write_mock_responses_config_toml;
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
@@ -19,6 +18,7 @@ use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
@@ -40,7 +40,6 @@ use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -114,15 +113,10 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
         let _ = axum::serve(http_listener, http_router).await;
     });
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &responses_server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_root_config("compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 1024")
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home.path())?;
     let codex_bin = toml::Value::String(
         codex_utils_cargo_bin::cargo_bin("codex")?
             .to_string_lossy()
@@ -180,9 +174,8 @@ HTTP_PROXY = {http_proxy}
         .with_codex_home(codex_home.path())
         // This suite owns environments.toml to exercise explicit executor selection.
         .without_auto_env()
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let selected_thread = start_thread(
         &mut app_server,
@@ -226,12 +219,8 @@ startup_timeout_sec = 10
             })),
         )
         .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: McpServerOauthLoginResponse = to_response(response)?;
+    let response: McpServerOauthLoginResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
     assert!(
         response
             .authorization_url
@@ -269,13 +258,11 @@ startup_timeout_sec = 10
     assert!(token_request.contains("grant_type=authorization_code"));
     assert!(token_request.contains("code=executor-test-code"));
     assert!(token_request.contains("code_verifier="));
-    let notification = timeout(
+    let completed: McpServerOauthLoginCompletedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_notification_message("mcpServer/oauthLogin/completed"),
+        app_server.read_notification("mcpServer/oauthLogin/completed"),
     )
     .await??;
-    let completed: McpServerOauthLoginCompletedNotification =
-        serde_json::from_value(notification.params.expect("notification params"))?;
     assert_eq!(
         completed,
         McpServerOauthLoginCompletedNotification {
@@ -322,11 +309,8 @@ startup_timeout_sec = 10
             ..Default::default()
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.read_stream_until_notification_message("turn/completed"),
@@ -353,12 +337,8 @@ startup_timeout_sec = 10
             meta: None,
         })
         .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: McpServerToolCallResponse = to_response(response)?;
+    let response: McpServerToolCallResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
     assert_eq!(
         response.structured_content,
         Some(json!({"echo": "ECHOING: hello over executor HTTP"}))
@@ -373,12 +353,8 @@ startup_timeout_sec = 10
             meta: None,
         })
         .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: McpServerToolCallResponse = to_response(response)?;
+    let response: McpServerToolCallResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
     assert_eq!(
         response
             .structured_content
@@ -479,12 +455,8 @@ async fn mcp_server_names(
             thread_id: Some(thread_id),
         })
         .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: ListMcpServerStatusResponse = to_response(response)?;
+    let response: ListMcpServerStatusResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
     Ok(response
         .data
         .into_iter()
@@ -503,11 +475,7 @@ async fn start_thread(
             ..Default::default()
         })
         .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(response)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
     Ok(thread.id)
 }

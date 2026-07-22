@@ -3,19 +3,16 @@ use std::path::Path;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditOutcome;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
-use serde::de::DeserializeOwned;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -151,7 +148,11 @@ async fn consume_account_rate_limit_reset_credit_forwards_selected_credit_id() -
         .await?;
 
     assert_eq!(
-        read_response::<ConsumeAccountRateLimitResetCreditResponse>(&mut mcp, request_id).await?,
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_response::<ConsumeAccountRateLimitResetCreditResponse>(request_id),
+        )
+        .await??,
         ConsumeAccountRateLimitResetCreditResponse {
             outcome: ConsumeAccountRateLimitResetCreditOutcome::Reset,
         }
@@ -244,9 +245,8 @@ async fn consume_timeout_releases_account_auth_queue() -> Result<()> {
             ("OPENAI_API_KEY", None),
             (RATE_LIMIT_RESET_REQUEST_TIMEOUT_ENV_VAR, Some("100")),
         ])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let consume_id = send_consume_reset_credit(&mut mcp, "request-timeout").await?;
     let account_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -288,14 +288,12 @@ async fn chatgpt_test_context() -> Result<(TempDir, MockServer)> {
 }
 
 async fn initialized_app_server(codex_home: &Path) -> Result<TestAppServer> {
-    let mut mcp = TestAppServer::builder()
+    TestAppServer::builder()
         .with_codex_home(codex_home)
         .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    Ok(mcp)
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await
 }
 
 async fn consume_reset_credit(
@@ -303,7 +301,7 @@ async fn consume_reset_credit(
     idempotency_key: &str,
 ) -> Result<ConsumeAccountRateLimitResetCreditResponse> {
     let request_id = send_consume_reset_credit(mcp, idempotency_key).await?;
-    read_response(mcp, request_id).await
+    timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await?
 }
 
 async fn send_consume_reset_credit(mcp: &mut TestAppServer, idempotency_key: &str) -> Result<i64> {
@@ -314,18 +312,6 @@ async fn send_consume_reset_credit(mcp: &mut TestAppServer, idempotency_key: &st
         },
     )
     .await
-}
-
-async fn read_response<T>(mcp: &mut TestAppServer, request_id: i64) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    to_response(response)
 }
 
 async fn read_error_response(mcp: &mut TestAppServer, request_id: i64) -> Result<JSONRPCError> {
@@ -340,7 +326,11 @@ async fn read_error_response(mcp: &mut TestAppServer, request_id: i64) -> Result
 async fn login_with_api_key(mcp: &mut TestAppServer, api_key: &str) -> Result<()> {
     let request_id = mcp.send_login_account_api_key_request(api_key).await?;
     assert_eq!(
-        read_response::<LoginAccountResponse>(mcp, request_id).await?,
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_response::<LoginAccountResponse>(request_id),
+        )
+        .await??,
         LoginAccountResponse::ApiKey {}
     );
     Ok(())

@@ -7,20 +7,18 @@
 // network access are required the first time the artifact is fetched.
 
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
-use app_test_support::to_response;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
@@ -30,7 +28,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_features::FEATURES;
 use codex_features::Feature;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -104,7 +101,6 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -113,12 +109,8 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -137,12 +129,8 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let TurnStartResponse { turn } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
 
     let started_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -228,7 +216,6 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -237,12 +224,8 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -256,11 +239,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
+    let _: TurnStartResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
 
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -366,7 +345,6 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -375,12 +353,8 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -394,11 +368,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
+    let _: TurnStartResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
 
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -530,7 +500,6 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -539,12 +508,8 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             ..Default::default()
         })
         .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -567,12 +532,8 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             ..Default::default()
         })
         .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let TurnStartResponse { turn } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
 
     let mut approved_subcommand_strings = Vec::new();
     let mut approved_subcommand_ids = Vec::new();
@@ -771,7 +732,7 @@ async fn create_zsh_test_mcp_process(
         .with_codex_home(codex_home)
         .with_program(&app_server)
         .with_env_overrides(&[("ZDOTDIR", Some(zdotdir.as_str()))])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await
 }
 
@@ -820,45 +781,11 @@ fn create_config_toml(
     approval_policy: &str,
     feature_flags: &BTreeMap<Feature, bool>,
 ) -> std::io::Result<()> {
-    let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
-    for (feature, enabled) in feature_flags {
-        features.insert(*feature, *enabled);
-    }
-    let feature_entries = features
-        .into_iter()
-        .map(|(feature, enabled)| {
-            let key = FEATURES
-                .iter()
-                .find(|spec| spec.id == feature)
-                .map(|spec| spec.key)
-                .expect("feature should have a config key");
-            format!("{key} = {enabled}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "{approval_policy}"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[features]
-{feature_entries}
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
+    MockResponsesConfig::new(server_uri)
+        .with_approval_policy(approval_policy)
+        .disable_feature(Feature::RemoteModels)
+        .with_features(feature_flags)
+        .write(codex_home)
 }
 
 fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {

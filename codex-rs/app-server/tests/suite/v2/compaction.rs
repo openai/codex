@@ -7,18 +7,14 @@
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
-use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RawResponseCompletedNotification;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -36,7 +32,6 @@ use codex_protocol::models::ResponseItem;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -74,21 +69,12 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
     responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::default(),
-        AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        COMPACT_PROMPT,
-    )?;
+    compaction_config(&server.uri(), AUTO_COMPACT_LIMIT).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
     for message in ["first", "second", "third"] {
@@ -155,15 +141,11 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     .await;
 
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::from([(Feature::RemoteCompactionV2, false)]),
-        REMOTE_AUTO_COMPACT_LIMIT,
-        Some(true),
-        "mock_provider",
-        COMPACT_PROMPT,
-    )?;
+    compaction_config(&server.uri(), REMOTE_AUTO_COMPACT_LIMIT)
+        .disable_feature(Feature::RemoteCompactionV2)
+        .with_provider_name("OpenAI")
+        .with_provider_config("requires_openai_auth = true")
+        .write(codex_home.path())?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt").plan_type("pro"),
@@ -173,9 +155,8 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
     for message in ["first", "second", "third"] {
@@ -270,21 +251,12 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     responses::mount_sse_sequence(&server, vec![sse]).await;
 
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::default(),
-        AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        COMPACT_PROMPT,
-    )?;
+    compaction_config(&server.uri(), AUTO_COMPACT_LIMIT).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -293,36 +265,23 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
     let thread_id = thread.id;
     let compact_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: thread_id.clone(),
         })
         .await?;
-    let compact_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(compact_id)),
-    )
-    .await??;
-    let _compact: ThreadCompactStartResponse =
-        to_response::<ThreadCompactStartResponse>(compact_resp)?;
+    let _: ThreadCompactStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(compact_id)).await??;
 
     let started = wait_for_context_compaction_started(&mut mcp).await?;
-    let raw_completed = timeout(
+    let raw_completed: RawResponseCompletedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("rawResponse/completed"),
+        mcp.read_notification("rawResponse/completed"),
     )
     .await??;
-    let raw_completed: ServerNotification = raw_completed.try_into()?;
-    let ServerNotification::RawResponseCompleted(raw_completed) = raw_completed else {
-        anyhow::bail!("expected rawResponse/completed notification");
-    };
     let completed = wait_for_context_compaction_completed(&mut mcp).await?;
 
     let ThreadItem::ContextCompaction { id: started_id } = started.item else {
@@ -361,21 +320,12 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::default(),
-        AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        COMPACT_PROMPT,
-    )?;
+    compaction_config(&server.uri(), AUTO_COMPACT_LIMIT).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
@@ -400,21 +350,12 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::default(),
-        AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        COMPACT_PROMPT,
-    )?;
+    compaction_config(&server.uri(), AUTO_COMPACT_LIMIT).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
@@ -440,12 +381,8 @@ async fn start_thread(mcp: &mut TestAppServer) -> Result<String> {
             ..Default::default()
         })
         .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_id)).await??;
     Ok(thread.id)
 }
 
@@ -465,25 +402,19 @@ async fn send_turn_and_wait(
             ..Default::default()
         })
         .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let TurnStartResponse { turn } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
     wait_for_turn_completed(mcp, &turn.id).await?;
     Ok(turn.id)
 }
 
 async fn wait_for_turn_completed(mcp: &mut TestAppServer, turn_id: &str) -> Result<()> {
     loop {
-        let notification: JSONRPCNotification = timeout(
+        let completed: TurnCompletedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("turn/completed"),
+            mcp.read_notification("turn/completed"),
         )
         .await??;
-        let completed: TurnCompletedNotification =
-            serde_json::from_value(notification.params.clone().expect("turn/completed params"))?;
         if completed.turn.id == turn_id {
             return Ok(());
         }
@@ -494,13 +425,8 @@ async fn wait_for_context_compaction_started(
     mcp: &mut TestAppServer,
 ) -> Result<ItemStartedNotification> {
     loop {
-        let notification: JSONRPCNotification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/started"),
-        )
-        .await??;
         let started: ItemStartedNotification =
-            serde_json::from_value(notification.params.clone().expect("item/started params"))?;
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("item/started")).await??;
         if let ThreadItem::ContextCompaction { .. } = started.item {
             return Ok(started);
         }
@@ -511,13 +437,11 @@ async fn wait_for_context_compaction_completed(
     mcp: &mut TestAppServer,
 ) -> Result<ItemCompletedNotification> {
     loop {
-        let notification: JSONRPCNotification = timeout(
+        let completed: ItemCompletedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/completed"),
+            mcp.read_notification("item/completed"),
         )
         .await??;
-        let completed: ItemCompletedNotification =
-            serde_json::from_value(notification.params.clone().expect("item/completed params"))?;
         if let ThreadItem::ContextCompaction { .. } = completed.item {
             return Ok(completed);
         }
@@ -526,4 +450,12 @@ async fn wait_for_context_compaction_completed(
 
 fn parse_json_header(value: &str) -> serde_json::Value {
     serde_json::from_str(value).expect("turn metadata should be JSON")
+}
+
+fn compaction_config(server_uri: &str, auto_compact_limit: i64) -> MockResponsesConfig {
+    MockResponsesConfig::new(server_uri)
+        .with_root_config(&format!(
+            "compact_prompt = \"{COMPACT_PROMPT}\"\nmodel_auto_compact_token_limit = {auto_compact_limit}"
+        ))
+        .with_provider_config("supports_websockets = false")
 }

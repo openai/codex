@@ -1,14 +1,11 @@
-use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::PathBufExt;
 use app_test_support::TestAppServer;
-use app_test_support::to_response;
-use app_test_support::write_mock_responses_config_toml;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -20,6 +17,13 @@ use tokio::time::timeout;
 
 const AGENTS_INSTRUCTIONS: &str = "selected environment workspace instructions";
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn write_mock_config(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    MockResponsesConfig::new(server_uri)
+        .with_root_config("compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 100000")
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home)
+}
 
 fn text_turn_params(thread_id: String, prompt: &str) -> TurnStartParams {
     TurnStartParams {
@@ -36,20 +40,11 @@ fn text_turn_params(thread_id: String, prompt: &str) -> TurnStartParams {
 async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 100_000,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    write_mock_config(codex_home.path(), &server.uri())?;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
     let selected_workspace_roots = app_server
         .auto_env()?
         .selection()
@@ -58,20 +53,14 @@ async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
         .filter_map(|root| root.to_abs_path().ok())
         .collect::<Vec<_>>();
 
-    let request_id = app_server
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
     let ThreadStartResponse {
         cwd,
         runtime_workspace_roots,
         active_permission_profile,
         ..
-    } = to_response(response)?;
+    } = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
     let host_cwd = codex_home.path().to_path_buf().abs().canonicalize()?;
     let cwd = cwd.canonicalize()?;
     assert_eq!(
@@ -101,20 +90,11 @@ async fn thread_start_reports_selected_environment_instruction_source() -> Resul
     )
     .await;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 100_000,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    write_mock_config(codex_home.path(), &server.uri())?;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let (agents_source, environment_cwd) = {
         let auto_env = app_server.auto_env()?;
@@ -132,15 +112,9 @@ async fn thread_start_reports_selected_environment_instruction_source() -> Resul
         (agents_source, environment_cwd)
     };
 
-    let request_id = app_server
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+    let response = app_server
+        .start_thread(ThreadStartParams::default())
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: ThreadStartResponse = to_response(response)?;
 
     assert_eq!(response.instruction_sources, vec![agents_source.into()]);
     timeout(
@@ -179,20 +153,11 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
     )
     .await;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 100_000,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    write_mock_config(codex_home.path(), &server.uri())?;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
     let (environment_cwd, environment_shell) = {
         let auto_env = app_server.auto_env()?;
         (
@@ -201,15 +166,10 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
         )
     };
 
-    let request_id = app_server
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(response)?;
+    let thread = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread;
     timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.start_turn_and_wait_for_completion(text_turn_params(

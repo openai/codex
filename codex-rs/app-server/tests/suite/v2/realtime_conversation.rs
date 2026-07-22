@@ -1,15 +1,14 @@
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
-use app_test_support::to_response;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
@@ -43,7 +42,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::CodexResponseHandoffMode;
 use codex_protocol::protocol::ConversationTextRole;
@@ -304,20 +302,15 @@ impl RealtimeE2eHarness {
 
         let mut mcp = TestAppServer::builder()
             .with_codex_home(codex_home.path())
-            .build()
+            .build_initialized_with_timeout(DEFAULT_TIMEOUT)
             .await?;
-        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
         login_with_api_key(&mut mcp, "sk-test-key").await?;
 
         let thread_start_request_id = mcp
             .send_thread_start_request_with_auto_env(ThreadStartParams::default())
             .await?;
-        let thread_start_response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-        )
-        .await??;
-        let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+        let thread_start: ThreadStartResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
         Ok(Self {
             mcp,
@@ -388,13 +381,8 @@ impl RealtimeE2eHarness {
                 voice: None,
             })
             .await?;
-        let start_response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            self.mcp
-                .read_stream_until_response_message(RequestId::Integer(start_request_id)),
-        )
-        .await??;
-        let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+        let _: ThreadRealtimeStartResponse =
+            timeout(DEFAULT_TIMEOUT, self.mcp.read_response(start_request_id)).await??;
 
         let started = self
             .read_notification::<ThreadRealtimeStartedNotification>("thread/realtime/started")
@@ -448,13 +436,8 @@ impl RealtimeE2eHarness {
                 voice: None,
             })
             .await?;
-        let start_response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            self.mcp
-                .read_stream_until_response_message(RequestId::Integer(start_request_id)),
-        )
-        .await??;
-        let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+        let _: ThreadRealtimeStartResponse =
+            timeout(DEFAULT_TIMEOUT, self.mcp.read_response(start_request_id)).await??;
 
         self.read_notification::<ThreadRealtimeStartedNotification>("thread/realtime/started")
             .await
@@ -485,13 +468,8 @@ impl RealtimeE2eHarness {
                 voice: None,
             })
             .await?;
-        let start_response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            self.mcp
-                .read_stream_until_response_message(RequestId::Integer(start_request_id)),
-        )
-        .await??;
-        let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+        let _: ThreadRealtimeStartResponse =
+            timeout(DEFAULT_TIMEOUT, self.mcp.read_response(start_request_id)).await??;
 
         self.read_notification::<ThreadRealtimeStartedNotification>("thread/realtime/started")
             .await
@@ -528,13 +506,8 @@ impl RealtimeE2eHarness {
                 },
             })
             .await?;
-        let response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            self.mcp
-                .read_stream_until_response_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-        let _: ThreadRealtimeAppendAudioResponse = to_response(response)?;
+        let _: ThreadRealtimeAppendAudioResponse =
+            timeout(DEFAULT_TIMEOUT, self.mcp.read_response(request_id)).await??;
         Ok(())
     }
 
@@ -547,13 +520,8 @@ impl RealtimeE2eHarness {
                 role: ConversationTextRole::User,
             })
             .await?;
-        let response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            self.mcp
-                .read_stream_until_response_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-        let _: ThreadRealtimeAppendTextResponse = to_response(response)?;
+        let _: ThreadRealtimeAppendTextResponse =
+            timeout(DEFAULT_TIMEOUT, self.mcp.read_response(request_id)).await??;
         Ok(())
     }
 
@@ -565,13 +533,8 @@ impl RealtimeE2eHarness {
                 text: text.to_string(),
             })
             .await?;
-        let response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            self.mcp
-                .read_stream_until_response_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-        let _: ThreadRealtimeAppendSpeechResponse = to_response(response)?;
+        let _: ThreadRealtimeAppendSpeechResponse =
+            timeout(DEFAULT_TIMEOUT, self.mcp.read_response(request_id)).await??;
         Ok(())
     }
 
@@ -724,20 +687,15 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-    )
-    .await??;
-    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+    let thread_start: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -758,12 +716,8 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             voice: Some(RealtimeVoice::Cedar),
         })
         .await?;
-    let start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(start_request_id)).await??;
 
     let started =
         read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
@@ -811,12 +765,8 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             },
         })
         .await?;
-    let audio_append_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(audio_append_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeAppendAudioResponse = to_response(audio_append_response)?;
+    let _: ThreadRealtimeAppendAudioResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(audio_append_request_id)).await??;
 
     let text_append_request_id = mcp
         .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
@@ -825,12 +775,8 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             role: ConversationTextRole::Developer,
         })
         .await?;
-    let text_append_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(text_append_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeAppendTextResponse = to_response(text_append_response)?;
+    let _: ThreadRealtimeAppendTextResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(text_append_request_id)).await??;
 
     let assistant_append_request_id = mcp
         .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
@@ -839,12 +785,11 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             role: ConversationTextRole::Assistant,
         })
         .await?;
-    let assistant_append_response: JSONRPCResponse = timeout(
+    let _: ThreadRealtimeAppendTextResponse = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(assistant_append_request_id)),
+        mcp.read_response(assistant_append_request_id),
     )
     .await??;
-    let _: ThreadRealtimeAppendTextResponse = to_response(assistant_append_response)?;
 
     let output_audio = read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
         &mut mcp,
@@ -1020,20 +965,15 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-    )
-    .await??;
-    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+    let thread_start: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -1054,12 +994,8 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
             voice: None,
         })
         .await?;
-    let start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(start_request_id)).await??;
 
     read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
         .await?;
@@ -1123,20 +1059,15 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-    )
-    .await??;
-    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+    let thread_start: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -1157,12 +1088,8 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             voice: None,
         })
         .await?;
-    let start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(start_request_id)).await??;
 
     let session_update = realtime_server
         .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
@@ -1237,19 +1164,14 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_thread_realtime_list_voices_request(ThreadRealtimeListVoicesParams {})
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: ThreadRealtimeListVoicesResponse = to_response(response)?;
+    let response: ThreadRealtimeListVoicesResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
         response,
@@ -1312,20 +1234,15 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-    )
-    .await??;
-    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+    let thread_start: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -1346,12 +1263,8 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             voice: None,
         })
         .await?;
-    let start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(start_request_id)).await??;
 
     let started =
         read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
@@ -1362,12 +1275,8 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             thread_id: started.thread_id.clone(),
         })
         .await?;
-    let stop_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(stop_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStopResponse = to_response(stop_response)?;
+    let _: ThreadRealtimeStopResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(stop_request_id)).await??;
 
     let closed =
         read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
@@ -1420,20 +1329,15 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-    )
-    .await??;
-    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+    let thread_start: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
     let thread_id = thread_start.thread.id;
     let start_request_id = mcp
@@ -1457,12 +1361,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             voice: None,
         })
         .await?;
-    let start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(start_request_id)).await??;
 
     let started =
         read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
@@ -1503,12 +1403,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             thread_id: thread_id.clone(),
         })
         .await?;
-    let stop_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(stop_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStopResponse = to_response(stop_response)?;
+    let _: ThreadRealtimeStopResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(stop_request_id)).await??;
 
     let closed_notification =
         read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
@@ -1722,14 +1618,8 @@ async fn webrtc_v1_default_automatic_output_uses_handoff_append() -> Result<()> 
             ..Default::default()
         })
         .await?;
-    let turn_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        harness
-            .mcp
-            .read_stream_until_response_message(RequestId::Integer(turn_request_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response(turn_response)?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(turn_request_id)).await??;
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -1786,14 +1676,8 @@ async fn webrtc_v1_client_managed_handoffs_disable_automatic_output() -> Result<
             ..Default::default()
         })
         .await?;
-    let turn_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        harness
-            .mcp
-            .read_stream_until_response_message(RequestId::Integer(turn_request_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response(turn_response)?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(turn_request_id)).await??;
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -2037,14 +1921,8 @@ async fn realtime_automatic_standalone_output_is_item_and_append_speaks() -> Res
             ..Default::default()
         })
         .await?;
-    let turn_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        harness
-            .mcp
-            .read_stream_until_response_message(RequestId::Integer(turn_request_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response(turn_response)?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(turn_request_id)).await??;
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -2199,14 +2077,8 @@ async fn websocket_v2_assistant_output_without_handoff_reaches_realtime_context(
             ..Default::default()
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        harness
-            .mcp
-            .read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response(response)?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(request_id)).await??;
     let _ = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -3047,21 +2919,16 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     // Phase 2: start a normal app-server thread and request realtime over WebRTC.
     let thread_start_request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-    )
-    .await??;
-    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+    let thread_start: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -3084,12 +2951,8 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             voice: None,
         })
         .await?;
-    let start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
-    )
-    .await??;
-    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(start_request_id)).await??;
 
     // Phase 3: the JSON-RPC start request returns, and the realtime failure is delivered as the
     // typed realtime error notification.
@@ -3120,19 +2983,14 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
-    let thread_start_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
-    )
-    .await??;
-    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+    let thread_start: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -3182,25 +3040,13 @@ async fn read_notification_with_timeout<T: DeserializeOwned>(
     method: &str,
     timeout_duration: Duration,
 ) -> Result<T> {
-    let notification = timeout(
-        timeout_duration,
-        mcp.read_stream_until_notification_message(method),
-    )
-    .await??;
-    let params = notification
-        .params
-        .context("expected notification params to be present")?;
-    Ok(serde_json::from_value(params)?)
+    timeout(timeout_duration, mcp.read_notification(method)).await?
 }
 
 async fn login_with_api_key(mcp: &mut TestAppServer, api_key: &str) -> Result<()> {
     let request_id = mcp.send_login_account_api_key_request(api_key).await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let login: LoginAccountResponse = to_response(response)?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(login, LoginAccountResponse::ApiKey {});
 
     Ok(())
@@ -3466,48 +3312,28 @@ fn create_config_toml_with_realtime_version(
     realtime_version: RealtimeTestVersion,
     sandbox: RealtimeTestSandbox,
 ) -> std::io::Result<()> {
-    let realtime_feature_key = FEATURES
-        .iter()
-        .find(|spec| spec.id == Feature::RealtimeConversation)
-        .map(|spec| spec.key)
-        .unwrap_or("realtime_conversation");
-    let realtime_version = realtime_version.config_value();
-    let sandbox = sandbox.config_value();
-    let startup_context = match startup_context {
-        StartupContextConfig::Generated => String::new(),
-        StartupContextConfig::Override(context) => {
-            format!("experimental_realtime_ws_startup_context = {context:?}\n")
-        }
+    let mut config = MockResponsesConfig::new(responses_server_uri)
+        .with_sandbox_mode(sandbox.config_value())
+        .with_root_config(&format!(
+            "experimental_realtime_ws_base_url = \"{realtime_server_uri}\"\n\
+             experimental_realtime_ws_backend_prompt = \"backend prompt\""
+        ))
+        .with_extra_config(&format!(
+            "[realtime]\nversion = \"{}\"\ntype = \"conversational\"",
+            realtime_version.config_value()
+        ));
+
+    if let StartupContextConfig::Override(context) = startup_context {
+        config = config.with_root_config(&format!(
+            "experimental_realtime_ws_startup_context = {context:?}"
+        ));
+    }
+    config = if realtime_enabled {
+        config.enable_feature(Feature::RealtimeConversation)
+    } else {
+        config.disable_feature(Feature::RealtimeConversation)
     };
-
-    std::fs::write(
-        codex_home.join("config.toml"),
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "{sandbox}"
-model_provider = "mock_provider"
-experimental_realtime_ws_base_url = "{realtime_server_uri}"
-experimental_realtime_ws_backend_prompt = "backend prompt"
-{startup_context}
-
-[realtime]
-version = "{realtime_version}"
-type = "conversational"
-
-[features]
-{realtime_feature_key} = {realtime_enabled}
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{responses_server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
+    config.write(codex_home)
 }
 
 fn assert_invalid_request(error: JSONRPCError, message: String) {

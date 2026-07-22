@@ -1,10 +1,10 @@
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::to_response;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -36,27 +36,20 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
-    let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
     assert!(!thread.id.is_empty());
 
     let rollout_path = thread.path.clone().expect("thread path");
@@ -93,23 +86,20 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     );
 
     // Materialize rollout via a real user turn and confirm archive succeeds.
-    let turn_start_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "materialize".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
+    let _: TurnStartResponse = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![UserInput::Text {
+                    text: "materialize".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
         })
         .await?;
-    let turn_start_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_start_response)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -128,27 +118,19 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
             .expect("expected rollout path for thread id to exist after materialization");
     assert_paths_match_on_disk(&discovered_path, &rollout_path)?;
 
-    let archive_id = mcp
-        .send_thread_archive_request(ThreadArchiveParams {
-            thread_id: thread.id.clone(),
+    let _: ThreadArchiveResponse = mcp
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: thread.id.clone(),
+            },
         })
         .await?;
-    let archive_resp: JSONRPCResponse = timeout(
+    let archived_notification: ThreadArchivedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
+        mcp.read_notification("thread/archived"),
     )
     .await??;
-    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
-    let archive_notification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/archived"),
-    )
-    .await??;
-    let archived_notification: ThreadArchivedNotification = serde_json::from_value(
-        archive_notification
-            .params
-            .expect("thread/archived notification params"),
-    )?;
     assert_eq!(archived_notification.thread_id, thread.id);
 
     // Verify file moved.
@@ -174,7 +156,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
 async fn thread_archive_archives_spawned_descendants() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let parent_id = create_fake_rollout(
         codex_home.path(),
@@ -227,34 +209,25 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let archive_id = mcp
-        .send_thread_archive_request(ThreadArchiveParams {
-            thread_id: parent_id.clone(),
+    let _: ThreadArchiveResponse = mcp
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: parent_id.clone(),
+            },
         })
         .await?;
-    let archive_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
-    )
-    .await??;
-    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
 
     let mut archived_ids = Vec::new();
     for _ in 0..3 {
-        let notification = timeout(
+        let archived_notification: ThreadArchivedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("thread/archived"),
+            mcp.read_notification("thread/archived"),
         )
         .await??;
-        let archived_notification: ThreadArchivedNotification = serde_json::from_value(
-            notification
-                .params
-                .expect("thread/archived notification params"),
-        )?;
         archived_ids.push(archived_notification.thread_id);
     }
     assert_eq!(archived_ids, vec![parent_id, grandchild_id, child_id]);
@@ -289,7 +262,7 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
 async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let parent_id = create_fake_rollout(
         codex_home.path(),
@@ -352,34 +325,25 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let archive_id = mcp
-        .send_thread_archive_request(ThreadArchiveParams {
-            thread_id: parent_id.clone(),
+    let _: ThreadArchiveResponse = mcp
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: parent_id.clone(),
+            },
         })
         .await?;
-    let archive_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
-    )
-    .await??;
-    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
 
     let mut archived_ids = Vec::new();
     for _ in 0..2 {
-        let notification = timeout(
+        let archived_notification: ThreadArchivedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("thread/archived"),
+            mcp.read_notification("thread/archived"),
         )
         .await??;
-        let archived_notification: ThreadArchivedNotification = serde_json::from_value(
-            notification
-                .params
-                .expect("thread/archived notification params"),
-        )?;
         archived_ids.push(archived_notification.thread_id);
     }
     assert_eq!(archived_ids, vec![parent_id, grandchild_id]);
@@ -431,7 +395,7 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
 async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let parent_id = create_fake_rollout(
         codex_home.path(),
@@ -460,32 +424,23 @@ async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let archive_id = mcp
-        .send_thread_archive_request(ThreadArchiveParams {
-            thread_id: parent_id.clone(),
+    let _: ThreadArchiveResponse = mcp
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: parent_id.clone(),
+            },
         })
         .await?;
-    let archive_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
-    )
-    .await??;
-    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
 
-    let notification = timeout(
+    let archived_notification: ThreadArchivedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/archived"),
+        mcp.read_notification("thread/archived"),
     )
     .await??;
-    let archived_notification: ThreadArchivedNotification = serde_json::from_value(
-        notification
-            .params
-            .expect("thread/archived notification params"),
-    )?;
     assert_eq!(archived_notification.thread_id, parent_id);
 
     assert!(
@@ -512,44 +467,34 @@ async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<
 async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
 
-    let start_id = primary
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = primary
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let turn_start_id = primary
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "materialize".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
+    let _: TurnStartResponse = primary
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![UserInput::Text {
+                    text: "materialize".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
         })
         .await?;
-    let turn_start_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_start_response)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/completed"),
@@ -559,38 +504,31 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
 
     let mut secondary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build()
+        .build_initialized()
         .await?;
-    timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
 
-    let archive_id = primary
-        .send_thread_archive_request(ThreadArchiveParams {
-            thread_id: thread.id.clone(),
+    let _: ThreadArchiveResponse = primary
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: thread.id.clone(),
+            },
         })
         .await?;
-    let archive_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(archive_id)),
-    )
-    .await??;
-    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("thread/archived"),
     )
     .await??;
 
-    let unarchive_id = primary
-        .send_thread_unarchive_request(ThreadUnarchiveParams {
-            thread_id: thread.id.clone(),
+    let _: ThreadUnarchiveResponse = primary
+        .request(|request_id| ClientRequest::ThreadUnarchive {
+            request_id,
+            params: ThreadUnarchiveParams {
+                thread_id: thread.id.clone(),
+            },
         })
         .await?;
-    let unarchive_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(unarchive_id)),
-    )
-    .await??;
-    let _: ThreadUnarchiveResponse = to_response::<ThreadUnarchiveResponse>(unarchive_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("thread/unarchived"),
@@ -598,39 +536,33 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
     .await??;
     primary.clear_message_buffer();
 
-    let resume_id = secondary
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id.clone(),
-            ..Default::default()
+    let resume: ThreadResumeResponse = secondary
+        .request(|request_id| ClientRequest::ThreadResume {
+            request_id,
+            params: ThreadResumeParams {
+                thread_id: thread.id.clone(),
+                ..Default::default()
+            },
         })
         .await?;
-    let resume_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(resume_id)),
-    )
-    .await??;
-    let resume: ThreadResumeResponse = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(resume.thread.status, ThreadStatus::Idle);
     primary.clear_message_buffer();
     secondary.clear_message_buffer();
 
-    let resumed_turn_id = secondary
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
-            client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "secondary turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
+    let _: TurnStartResponse = secondary
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id,
+                client_user_message_id: None,
+                input: vec![UserInput::Text {
+                    text: "secondary turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
         })
         .await?;
-    let resumed_turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(resumed_turn_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response::<TurnStartResponse>(resumed_turn_resp)?;
 
     assert!(
         timeout(
@@ -648,29 +580,6 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
     .await??;
 
     Ok(())
-}
-
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(config_toml, config_contents(server_uri))
-}
-
-fn config_contents(server_uri: &str) -> String {
-    format!(
-        r#"model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-    )
 }
 
 fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result<()> {
