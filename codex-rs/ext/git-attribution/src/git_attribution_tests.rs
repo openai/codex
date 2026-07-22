@@ -38,7 +38,6 @@ async fn contribute(
 ) -> WorldStateSectionContribution {
     let session_store = ExtensionData::new("session");
     let turn_store = ExtensionData::new("turn");
-    let step_store = ExtensionData::new("step");
     registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
             thread_id: ThreadId::new(),
@@ -49,7 +48,6 @@ async fn contribute(
             session_store: &session_store,
             thread_store,
             turn_store: &turn_store,
-            step_store: &step_store,
         })
         .await
         .remove(0)
