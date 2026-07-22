@@ -31,7 +31,7 @@ use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
 use codex_mcp::McpConfig;
-use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionSet;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
 use codex_models_manager::manager::SharedModelsManager;
@@ -110,7 +110,7 @@ impl SessionServices {
         plugins_available: bool,
         runtime_context: McpRuntimeContext,
         ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
-        connections: McpConnectionManager,
+        connections: McpConnectionSet,
     ) -> Result<()> {
         let runtime = self.publish_mcp_runtime(
             config,
@@ -128,7 +128,7 @@ impl SessionServices {
         plugins_available: bool,
         runtime_context: McpRuntimeContext,
         ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
-        connections: McpConnectionManager,
+        connections: McpConnectionSet,
     ) -> Arc<McpRuntimeSnapshot> {
         let connections = self.mcp_runtime.replace(connections);
         let runtime = Arc::new(McpRuntimeSnapshot::new(

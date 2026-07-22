@@ -34,7 +34,7 @@ use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionSet;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
 use codex_mcp::auth_elicitation_completed_result;
@@ -627,7 +627,7 @@ async fn execute_mcp_tool_call(
 async fn maybe_request_codex_apps_auth_elicitation(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     call_id: &str,
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
@@ -698,7 +698,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
 async fn refresh_codex_apps_after_connector_auth(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
 ) {
     let mcp_tools_result = manager.hard_refresh_codex_apps_tools_cache().await;
 
@@ -719,7 +719,7 @@ async fn refresh_codex_apps_after_connector_auth(
 
 async fn augment_mcp_tool_request_meta_with_sandbox_state(
     step_context: &StepContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     mut meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
@@ -787,7 +787,7 @@ fn sandbox_cwd_for_mcp_server(step_context: &StepContext, environment_id: &str) 
 async fn maybe_mark_thread_memory_mode_polluted(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
 ) {
     if !turn_context.config.memories.disable_on_external_context {
@@ -971,7 +971,7 @@ struct McpAppUsageMetadata {
 async fn maybe_track_codex_app_used(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     tool_name: &str,
 ) {
@@ -1481,7 +1481,7 @@ fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpTool
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
@@ -1597,7 +1597,7 @@ fn get_mcp_app_resource_uri(
 }
 
 async fn lookup_mcp_app_usage_metadata(
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     tool_name: &str,
 ) -> Option<McpAppUsageMetadata> {

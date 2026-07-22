@@ -4,10 +4,10 @@ use codex_protocol::protocol::McpStartupFailure;
 use tracing::Instrument;
 use tracing::info_span;
 
-use super::McpConnectionManager;
+use super::McpConnectionSet;
 use crate::rmcp_client::StartupOutcomeError;
 
-impl McpConnectionManager {
+impl McpConnectionSet {
     /// Waits for every required server and reports their startup failures together.
     ///
     /// Callers must make the manager reachable to request handlers before awaiting this method,

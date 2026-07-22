@@ -1,6 +1,6 @@
 //! Aggregates MCP server connections for Codex.
 //!
-//! [`McpConnectionManager`] owns the set of running async RMCP clients keyed by
+//! [`McpConnectionSet`] owns the set of running async RMCP clients keyed by
 //! MCP server name. It coordinates startup status events, keeps server origin
 //! metadata, aggregates tools/resources/templates across servers, routes tool
 //! calls to the right client, and exposes the public manager API used by
@@ -107,7 +107,7 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
-pub struct McpConnectionManager {
+pub struct McpConnectionSet {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
     required_servers: Vec<String>,
@@ -120,7 +120,7 @@ pub struct McpConnectionManager {
     startup_cancellation_token: CancellationToken,
 }
 
-impl McpConnectionManager {
+impl McpConnectionSet {
     /// Creates an MCP connection manager. Threadless callers can pass no `tx_event`; startup
     /// notifications are then skipped and interactive elicitations are declined.
     #[allow(clippy::too_many_arguments)]
@@ -725,7 +725,7 @@ impl McpConnectionManager {
     }
 }
 
-impl Drop for McpConnectionManager {
+impl Drop for McpConnectionSet {
     fn drop(&mut self) {
         self.startup_cancellation_token.cancel();
         self.clients.clear();

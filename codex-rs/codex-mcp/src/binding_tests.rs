@@ -21,7 +21,7 @@ use tokio::sync::Notify;
 use super::McpBinding;
 use super::PreparedMcpCall;
 use crate::binding_clients::McpBindingClients;
-use crate::connection_manager::McpConnectionManager;
+use crate::connection_manager::McpConnectionSet;
 use crate::rmcp_client::ManagedClient;
 use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
@@ -97,13 +97,11 @@ async fn test_step(
         SERVER_NAME.to_string(),
         Arc::clone(&managed_client),
     )])));
-    let connections = Arc::new(
-        McpConnectionManager::new_uninitialized_with_permission_profile(
-            &Constrained::allow_any(AskForApproval::OnRequest),
-            &PermissionProfile::default(),
-            /*prefix_mcp_tool_names*/ true,
-        ),
-    );
+    let connections = Arc::new(McpConnectionSet::new_uninitialized_with_permission_profile(
+        &Constrained::allow_any(AskForApproval::OnRequest),
+        &PermissionProfile::default(),
+        /*prefix_mcp_tool_names*/ true,
+    ));
     let tool_catalog_revision = Arc::new(tokio::sync::RwLock::new(0));
     let prepared = PreparedMcpCall::new(
         Arc::clone(&connections),
