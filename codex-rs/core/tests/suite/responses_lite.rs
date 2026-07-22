@@ -9,6 +9,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_image_generation_extension::install as install_image_generation_extension;
 use codex_login::CodexAuth;
+use codex_login::auth::BedrockApiKeyAuth;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::InputModality;
@@ -286,6 +287,140 @@ async fn responses_lite_exposes_standalone_tools_for_actor_authorized_provider()
     let tools = additional_tools(&body)?;
     assert!(has_namespaced_tool(tools, "web", "run"));
     assert!(has_namespaced_tool(tools, "image_gen", "imagegen"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_exposes_standalone_web_search_for_opted_in_custom_provider() -> Result<()> {
+    assert_responses_lite_custom_provider_web_search(
+        WebSearchMode::Live,
+        /*supports_standalone_web_search*/ true,
+        /*expect_web_run*/ true,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_does_not_expose_standalone_web_search_for_custom_provider_by_default()
+-> Result<()> {
+    assert_responses_lite_custom_provider_web_search(
+        WebSearchMode::Live,
+        /*supports_standalone_web_search*/ false,
+        /*expect_web_run*/ false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_does_not_expose_disabled_standalone_web_search_for_opted_in_provider()
+-> Result<()> {
+    assert_responses_lite_custom_provider_web_search(
+        WebSearchMode::Disabled,
+        /*supports_standalone_web_search*/ true,
+        /*expect_web_run*/ false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_does_not_expose_standalone_web_search_for_opted_in_bedrock_provider()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+        api_key: "dummy".to_string(),
+        region: "us-east-1".to_string(),
+    });
+    let extensions = responses_extensions(&auth);
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(|config| {
+            configure_responses_tools(config);
+            config.model_provider.name = "Amazon Bedrock".to_string();
+            config.model_provider.requires_openai_auth = false;
+            config.model_provider.http_headers = None;
+            config.model_provider.supports_standalone_web_search = true;
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Use standalone web search").await?;
+
+    let request = response_mock.single_request();
+    assert_eq!(
+        request.header(RESPONSES_LITE_HEADER).as_deref(),
+        Some("true")
+    );
+    let body = request.body_json();
+    assert!(body.get("tools").is_none());
+    let tools = additional_tools(&body)?;
+    assert!(!has_namespaced_tool(tools, "web", "run"));
+    assert!(!has_hosted_tool(tools, "web_search"));
+
+    Ok(())
+}
+
+async fn assert_responses_lite_custom_provider_web_search(
+    web_search_mode: WebSearchMode,
+    supports_standalone_web_search: bool,
+    expect_web_run: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let auth = CodexAuth::from_api_key("dummy");
+    let extensions = responses_extensions(&auth);
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(move |config| {
+            configure_responses_tools(config);
+            assert!(config.web_search_mode.set(web_search_mode).is_ok());
+            config.model_provider.name = "custom-responses".to_string();
+            config.model_provider.requires_openai_auth = false;
+            config.model_provider.http_headers = None;
+            config.model_provider.supports_standalone_web_search = supports_standalone_web_search;
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Use standalone web search").await?;
+
+    let request = response_mock.single_request();
+    assert_eq!(
+        request.header(RESPONSES_LITE_HEADER).as_deref(),
+        Some("true")
+    );
+    let body = request.body_json();
+    assert!(body.get("tools").is_none());
+    let tools = additional_tools(&body)?;
+    assert_eq!(has_namespaced_tool(tools, "web", "run"), expect_web_run);
+    assert!(!has_hosted_tool(tools, "web_search"));
 
     Ok(())
 }
