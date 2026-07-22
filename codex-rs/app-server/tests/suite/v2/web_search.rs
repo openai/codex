@@ -43,6 +43,23 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
 async fn standalone_web_search_round_trips_output() -> Result<()> {
+    assert_standalone_web_search_round_trips_output(WebSearchProvider::ChatGpt).await
+}
+
+#[tokio::test]
+async fn standalone_web_search_round_trips_output_for_custom_provider() -> Result<()> {
+    assert_standalone_web_search_round_trips_output(WebSearchProvider::CustomResponses).await
+}
+
+#[derive(Clone, Copy)]
+enum WebSearchProvider {
+    ChatGpt,
+    CustomResponses,
+}
+
+async fn assert_standalone_web_search_round_trips_output(
+    provider: WebSearchProvider,
+) -> Result<()> {
     let call_id = "web-run-1";
     let expected_model_id = "model-id-from-search-context";
     let search_context = json!({
@@ -57,7 +74,11 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         json!({ "openai/search_context": search_context }).to_string(),
     )]);
     let server = responses::start_mock_server().await;
-    mount_search_response(&server).await;
+    let search_path = match provider {
+        WebSearchProvider::ChatGpt => "/api/codex/alpha/search",
+        WebSearchProvider::CustomResponses => "/v1/alpha/search",
+    };
+    mount_search_response(&server, search_path).await;
 
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -84,24 +105,47 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .with_model_provider("openai-custom")
-        .with_provider_name("OpenAI")
-        .with_provider_base_url(&format!("{}/api/codex", server.uri()))
+    let config = MockResponsesConfig::new(&server.uri())
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .enable_feature(Feature::StandaloneWebSearch)
-        .with_provider_config("supports_websockets = false")
-        .with_provider_config("requires_openai_auth = true")
-        .write(codex_home.path())?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("access-chatgpt"),
-        AuthCredentialsStoreMode::File,
-    )?;
+        .with_provider_config("supports_websockets = false");
+    let config = match provider {
+        WebSearchProvider::ChatGpt => config
+            .with_model_provider("openai-custom")
+            .with_provider_name("OpenAI")
+            .with_provider_base_url(&format!("{}/api/codex", server.uri()))
+            .with_provider_config("requires_openai_auth = true"),
+        WebSearchProvider::CustomResponses => config
+            .with_model_provider("custom-responses")
+            .with_provider_name("Custom Responses")
+            .with_provider_base_url(&format!("{}/v1", server.uri()))
+            .with_provider_config("env_key = \"CUSTOM_RESPONSES_API_KEY\"")
+            .with_provider_config("supports_standalone_web_search = true")
+            .with_provider_config("requires_openai_auth = false"),
+    };
+    config.write(codex_home.path())?;
+
+    if matches!(provider, WebSearchProvider::ChatGpt) {
+        write_chatgpt_auth(
+            codex_home.path(),
+            ChatGptAuthFixture::new("access-chatgpt"),
+            AuthCredentialsStoreMode::File,
+        )?;
+    }
+
+    let env_overrides = match provider {
+        WebSearchProvider::ChatGpt => {
+            vec![("OPENAI_API_KEY", None), ("CUSTOM_RESPONSES_API_KEY", None)]
+        }
+        WebSearchProvider::CustomResponses => vec![
+            ("OPENAI_API_KEY", None),
+            ("CUSTOM_RESPONSES_API_KEY", Some("test-api-key")),
+        ],
+    };
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .with_env_overrides(&env_overrides)
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
 
@@ -159,7 +203,28 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         "standalone web search should replace hosted web search"
     );
 
-    let search_request = search_request(&server).await?;
+    let search_request = search_request(&server, search_path).await?;
+    let expected_authorization = match provider {
+        WebSearchProvider::ChatGpt => "Bearer access-chatgpt",
+        WebSearchProvider::CustomResponses => "Bearer test-api-key",
+    };
+    assert_eq!(
+        search_request
+            .headers
+            .get("authorization")
+            .context("standalone search should include provider authorization")?
+            .to_str()
+            .context("standalone search authorization should be valid ASCII")?,
+        expected_authorization
+    );
+    if matches!(provider, WebSearchProvider::CustomResponses) {
+        assert!(
+            search_request
+                .headers
+                .get("x-openai-actor-authorization")
+                .is_none()
+        );
+    }
     assert_eq!(
         search_request
             .headers
@@ -268,7 +333,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     drop(mcp);
     let mut reloaded_mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .with_env_overrides(&env_overrides)
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
     let read_req = reloaded_mcp
@@ -310,9 +375,9 @@ async fn wait_for_web_search_completed(
     }
 }
 
-async fn mount_search_response(server: &MockServer) {
+async fn mount_search_response(server: &MockServer, search_path: &str) {
     Mock::given(method("POST"))
-        .and(path("/api/codex/alpha/search"))
+        .and(path(search_path))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "encrypted_output": "ciphertext",
             "output": "Search result",
@@ -340,13 +405,13 @@ fn has_hosted_web_search(body: &Value) -> bool {
         })
 }
 
-async fn search_request(server: &MockServer) -> Result<wiremock::Request> {
+async fn search_request(server: &MockServer, search_path: &str) -> Result<wiremock::Request> {
     let requests = server
         .received_requests()
         .await
         .context("failed to fetch received requests")?;
     requests
         .into_iter()
-        .find(|request| request.url.path() == "/api/codex/alpha/search")
+        .find(|request| request.url.path() == search_path)
         .context("expected standalone search request")
 }
