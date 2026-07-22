@@ -108,6 +108,7 @@ pub struct TurnTokenUsageFact {
 pub struct TurnProfile {
     pub before_first_sampling_ms: u64,
     pub sampling_ms: u64,
+    pub compaction_ms: u64,
     pub between_sampling_overhead_ms: u64,
     pub tool_blocking_ms: u64,
     pub after_last_sampling_ms: u64,

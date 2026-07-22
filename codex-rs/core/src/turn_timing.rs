@@ -61,6 +61,7 @@ struct TurnProfileState {
     seen_sampling: bool,
     before_first_sampling: Duration,
     sampling: Duration,
+    compaction: Duration,
     between_sampling_overhead: Duration,
     tool_blocking: Duration,
     pending_idle_after_sampling: Duration,
@@ -72,6 +73,7 @@ struct TurnProfileState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TurnProfilePhase {
     Sampling,
+    Compaction,
     ToolBlocking,
 }
 
@@ -98,13 +100,22 @@ impl TurnTimingState {
         self.state.lock().await.started_at_unix_secs
     }
 
-    pub(crate) async fn completed_at_and_duration_ms(&self) -> (Option<i64>, Option<i64>) {
+    pub(crate) async fn complete_profile_and_duration_ms(
+        &self,
+    ) -> (Option<i64>, Option<i64>, TurnProfile) {
+        let completed_at_instant = Instant::now();
         let state = self.state.lock().await;
         let completed_at = Some(now_unix_timestamp_secs());
-        let duration_ms = state
-            .started_at
-            .map(|started_at| i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX));
-        (completed_at, duration_ms)
+        let duration_ms = state.started_at.map(|started_at| {
+            i64::try_from(
+                completed_at_instant
+                    .saturating_duration_since(started_at)
+                    .as_millis(),
+            )
+            .unwrap_or(i64::MAX)
+        });
+        let profile = self.profile_state().complete(completed_at_instant);
+        (completed_at, duration_ms, profile)
     }
 
     pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
@@ -112,10 +123,6 @@ impl TurnTimingState {
         state
             .time_to_first_token()
             .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
-    }
-
-    pub(crate) fn complete_profile(&self) -> TurnProfile {
-        self.profile_state().complete(Instant::now())
     }
 
     pub(crate) fn begin_sampling(self: &Arc<Self>) -> TurnProfileTimingGuard {
@@ -129,6 +136,15 @@ impl TurnTimingState {
 
     pub(crate) fn record_sampling_retry(&self) {
         self.profile_state().record_sampling_retry();
+    }
+
+    pub(crate) fn begin_compaction(self: &Arc<Self>) -> TurnProfileTimingGuard {
+        let active = self.profile_state().begin_compaction(Instant::now());
+        TurnProfileTimingGuard {
+            timing: Arc::clone(self),
+            phase: TurnProfilePhase::Compaction,
+            active,
+        }
     }
 
     pub(crate) fn begin_tool_blocking(self: &Arc<Self>) -> TurnProfileTimingGuard {
@@ -235,6 +251,18 @@ impl TurnProfileState {
         true
     }
 
+    fn begin_compaction(&mut self, now: Instant) -> bool {
+        if self.completed_profile.is_some()
+            || self.started_at.is_none()
+            || self.active_phase.is_some()
+        {
+            return false;
+        }
+        self.advance(now);
+        self.active_phase = Some(TurnProfilePhase::Compaction);
+        true
+    }
+
     fn end_phase(&mut self, now: Instant, phase: TurnProfilePhase) {
         if self.completed_profile.is_some() || self.active_phase != Some(phase) {
             return;
@@ -250,6 +278,7 @@ impl TurnProfileState {
         let elapsed = now.saturating_duration_since(previous);
         match self.active_phase {
             Some(TurnProfilePhase::Sampling) => self.sampling += elapsed,
+            Some(TurnProfilePhase::Compaction) => self.compaction += elapsed,
             Some(TurnProfilePhase::ToolBlocking) => self.tool_blocking += elapsed,
             None if self.seen_sampling => self.pending_idle_after_sampling += elapsed,
             None => self.before_first_sampling += elapsed,
@@ -272,6 +301,7 @@ impl TurnProfileState {
         let mut profile = TurnProfile {
             before_first_sampling_ms: duration_to_u64_ms(self.before_first_sampling),
             sampling_ms: duration_to_u64_ms(self.sampling),
+            compaction_ms: duration_to_u64_ms(self.compaction),
             between_sampling_overhead_ms: duration_to_u64_ms(self.between_sampling_overhead),
             tool_blocking_ms: duration_to_u64_ms(self.tool_blocking),
             after_last_sampling_ms: duration_to_u64_ms(after_last_sampling),
@@ -285,12 +315,14 @@ impl TurnProfileState {
         let classified_ms = profile
             .before_first_sampling_ms
             .saturating_add(profile.sampling_ms)
+            .saturating_add(profile.compaction_ms)
             .saturating_add(profile.between_sampling_overhead_ms)
             .saturating_add(profile.tool_blocking_ms)
             .saturating_add(profile.after_last_sampling_ms);
         let rounding_ms = total_ms.saturating_sub(classified_ms);
         match final_phase {
             Some(TurnProfilePhase::Sampling) => profile.sampling_ms += rounding_ms,
+            Some(TurnProfilePhase::Compaction) => profile.compaction_ms += rounding_ms,
             Some(TurnProfilePhase::ToolBlocking) => profile.tool_blocking_ms += rounding_ms,
             None if self.seen_sampling => profile.after_last_sampling_ms += rounding_ms,
             None => profile.before_first_sampling_ms += rounding_ms,
