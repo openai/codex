@@ -1,10 +1,11 @@
 use super::*;
 use codex_exec_server::Environment;
 use codex_utils_path_uri::PathUri;
+use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn approval_key_includes_environment_id() {
+async fn approval_key_uses_path_uri_and_includes_environment_id() {
     let cwd = AbsolutePathBuf::try_from(std::env::current_dir().expect("read current dir"))
         .expect("current dir is absolute");
     let mut request = ShellRequest {
@@ -36,6 +37,16 @@ async fn approval_key_includes_environment_id() {
     };
     let runtime = ShellRuntime::for_shell_command(ShellRuntimeBackend::ShellCommandClassic);
     let original_key = runtime.approval_keys(&request);
+    assert_eq!(
+        original_key,
+        vec![ApprovalKey {
+            environment_id: "remote".to_string(),
+            command: request.command.clone(),
+            cwd: PathUri::from_abs_path(&cwd),
+            sandbox_permissions: request.sandbox_permissions,
+            additional_permissions: request.additional_permissions.clone(),
+        }]
+    );
     request.turn_environment.environment_id = "other".to_string();
     let other_key = runtime.approval_keys(&request);
 
