@@ -107,20 +107,9 @@ impl ChatWidget {
         from_replay: bool,
     ) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
-        // Use `last_agent_message` from the turn-complete notification as the copy
-        // source only when no earlier item-level event (AgentMessageItem, plan
-        // commit, review output) already recorded markdown for this turn. This
-        // prevents the final summary from overwriting a more specific source.
         let sanitized_last_agent_message = last_agent_message.as_deref().map(|message| {
             parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown
         });
-        if let Some(message) = sanitized_last_agent_message
-            .as_ref()
-            .filter(|message| !message.is_empty())
-            && !self.transcript.saw_copy_source_this_turn
-        {
-            self.record_agent_markdown(message);
-        }
         // For desktop notifications: prefer the notification payload, fall back to
         // the item-level copy source if present, otherwise send an empty string.
         let notification_response = sanitized_last_agent_message

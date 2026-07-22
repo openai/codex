@@ -243,12 +243,43 @@ impl ChatWidget {
         self.last_rendered_user_message_display = None;
         match notification.turn.status {
             TurnStatus::Completed => {
+                let last_agent_message =
+                    notification
+                        .turn
+                        .items
+                        .iter()
+                        .rev()
+                        .find_map(|item| match item {
+                            ThreadItem::AgentMessage {
+                                id,
+                                text,
+                                phase: Some(MessagePhase::FinalAnswer) | None,
+                                ..
+                            } => Some((item.clone(), id.clone(), text.clone())),
+                            _ => None,
+                        });
+                if let Some((item, id, _)) = &last_agent_message
+                    && self
+                        .transcript
+                        .last_completed_agent_message
+                        .as_ref()
+                        .is_none_or(|(turn_id, item_id)| {
+                            turn_id != &notification.turn.id || item_id != id
+                        })
+                {
+                    self.handle_thread_item(
+                        item.clone(),
+                        notification.turn.id.clone(),
+                        replay_kind
+                            .map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                    );
+                }
                 self.last_non_retry_error = None;
                 self.on_task_complete(
-                    /*last_agent_message*/ None,
+                    last_agent_message.map(|(_, _, text)| text),
                     notification.turn.duration_ms,
                     replay_kind.is_some(),
-                )
+                );
             }
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;

@@ -1249,6 +1249,7 @@ async fn handle_turn_plan_update(
 struct TurnCompletionMetadata {
     status: TurnStatus,
     error: Option<TurnError>,
+    last_agent_message: Option<ThreadItem>,
     started_at: Option<i64>,
     completed_at: Option<i64>,
     duration_ms: Option<i64>,
@@ -1260,12 +1261,16 @@ async fn emit_turn_completed_with_status(
     turn_completion_metadata: TurnCompletionMetadata,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    let (items, items_view) = match turn_completion_metadata.last_agent_message {
+        Some(item) => (vec![item], TurnItemsView::Summary),
+        None => (Vec::new(), TurnItemsView::NotLoaded),
+    };
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
             id: event_turn_id,
-            items: vec![],
-            items_view: TurnItemsView::NotLoaded,
+            items,
+            items_view,
             error: turn_completion_metadata.error,
             status: turn_completion_metadata.status,
             started_at: turn_completion_metadata.started_at,
@@ -1448,9 +1453,9 @@ async fn handle_turn_complete(
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
 
-    let (status, error) = match turn_summary.last_error {
-        Some(error) => (TurnStatus::Failed, Some(error)),
-        None => (TurnStatus::Completed, None),
+    let (status, error, last_agent_message) = match turn_summary.last_error {
+        Some(error) => (TurnStatus::Failed, Some(error), None),
+        None => (TurnStatus::Completed, None, turn_summary.last_agent_message),
     };
 
     emit_turn_completed_with_status(
@@ -1459,6 +1464,7 @@ async fn handle_turn_complete(
         TurnCompletionMetadata {
             status,
             error,
+            last_agent_message,
             started_at: turn_summary.started_at,
             completed_at: turn_complete_event.completed_at,
             duration_ms: turn_complete_event.duration_ms,
@@ -1483,6 +1489,7 @@ async fn handle_turn_interrupted(
         TurnCompletionMetadata {
             status: TurnStatus::Interrupted,
             error: None,
+            last_agent_message: None,
             started_at: turn_summary.started_at,
             completed_at: turn_aborted_event.completed_at,
             duration_ms: turn_aborted_event.duration_ms,
@@ -2090,6 +2097,8 @@ mod tests {
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::CodexAuth;
     use codex_protocol::AgentPath;
+    use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+    use codex_protocol::items::AgentMessageItem as CoreAgentMessageItem;
     use codex_protocol::items::DynamicToolCallItem;
     use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
     use codex_protocol::items::SubAgentActivityItem;
@@ -3493,6 +3502,7 @@ mod tests {
             ThreadId::new(),
         );
         let thread_state = new_thread_state();
+        let event = turn_complete_event(&event_turn_id);
         {
             let mut state = thread_state.lock().await;
             state.track_current_turn_event(
@@ -3507,14 +3517,48 @@ mod tests {
             );
             state.track_current_turn_event(
                 &event_turn_id,
-                &EventMsg::TurnComplete(turn_complete_event(&event_turn_id)),
+                &EventMsg::ItemCompleted(ItemCompletedEvent {
+                    thread_id: conversation_id,
+                    turn_id: event_turn_id.clone(),
+                    item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                        id: "msg-1".to_string(),
+                        content: vec![
+                            CoreAgentMessageContent::Text {
+                                text: "complete ".to_string(),
+                            },
+                            CoreAgentMessageContent::Text {
+                                text: "response".to_string(),
+                            },
+                        ],
+                        phase: None,
+                        memory_citation: None,
+                    }),
+                    completed_at_ms: 0,
+                }),
             );
+            state.track_current_turn_event(
+                &event_turn_id,
+                &EventMsg::ItemCompleted(ItemCompletedEvent {
+                    thread_id: conversation_id,
+                    turn_id: event_turn_id.clone(),
+                    item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                        id: "msg-2".to_string(),
+                        content: vec![CoreAgentMessageContent::Text {
+                            text: "  ".to_string(),
+                        }],
+                        phase: None,
+                        memory_citation: None,
+                    }),
+                    completed_at_ms: 0,
+                }),
+            );
+            state.track_current_turn_event(&event_turn_id, &EventMsg::TurnComplete(event.clone()));
         }
 
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
-            turn_complete_event(&event_turn_id),
+            event,
             &outgoing,
             &thread_state,
         )
@@ -3525,8 +3569,12 @@ mod tests {
             ServerNotification::TurnCompleted(n) => {
                 assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
-                assert_eq!(n.turn.items_view, TurnItemsView::NotLoaded);
-                assert!(n.turn.items.is_empty());
+                assert_eq!(n.turn.items_view, TurnItemsView::Summary);
+                assert!(matches!(
+                    &n.turn.items[..],
+                    [ThreadItem::AgentMessage { id, text, .. }]
+                        if id == "msg-1" && text == "complete response"
+                ));
                 assert_eq!(n.turn.error, None);
                 assert_eq!(n.turn.started_at, Some(42));
                 assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));
@@ -3539,7 +3587,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_turn_interrupted_emits_interrupted_with_error() -> Result<()> {
+    async fn test_handle_turn_interrupted_emits_interrupted_without_error() -> Result<()> {
         let conversation_id = ThreadId::new();
         let event_turn_id = "interrupt1".to_string();
         let thread_state = new_thread_state();
