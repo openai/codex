@@ -3,7 +3,7 @@ use std::time::Duration;
 use codex_api::ReqwestTransport;
 use codex_client::HttpTransport;
 use codex_client::RequestBody;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::create_client;
 use codex_model_provider::SharedModelProvider;
 use http::Method;
 use serde_json::Value;
@@ -51,7 +51,7 @@ impl HistoryNotesBackend {
             .apply_auth(request)
             .await
             .map_err(|error| format!("History backend auth failed: {error}"))?;
-        let response = ReqwestTransport::new(build_reqwest_client())
+        let response = ReqwestTransport::from_http_client(create_client())
             .execute(request)
             .await
             .map_err(|error| format!("History backend request failed: {error}"))?;
