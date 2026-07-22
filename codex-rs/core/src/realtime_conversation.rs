@@ -24,6 +24,7 @@ use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::RealtimeWebsocketEvents;
 use codex_api::RealtimeWebsocketWriter;
+use codex_api::build_session_headers;
 use codex_api::map_api_error;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
@@ -1162,7 +1163,7 @@ async fn prepare_realtime_start(
     let requested_realtime_session_id = session_config.session_id.clone();
     let event_parser = session_config.event_parser;
     let originator = sess.originator().await;
-    let extra_headers = match transport {
+    let mut extra_headers = match transport {
         ConversationStartTransport::Websocket => {
             let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
             realtime_request_headers(
@@ -1180,10 +1181,15 @@ async fn prepare_realtime_start(
                 originator.as_str(),
             )?
         }
-    };
+    }
+    .unwrap_or_default();
+    extra_headers.extend(build_session_headers(
+        Some(sess.session_id().to_string()),
+        Some(sess.thread_id().to_string()),
+    ));
     Ok(PreparedRealtimeConversationStart {
         api_provider,
-        extra_headers,
+        extra_headers: Some(extra_headers),
         client_managed_handoffs: params.client_managed_handoffs,
         flush_transcript_tail_on_session_end: params.flush_transcript_tail_on_session_end,
         codex_responses_as_items: params.codex_responses_as_items,
