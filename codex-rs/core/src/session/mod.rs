@@ -1324,9 +1324,7 @@ impl Session {
             }
             InitialHistory::Forked(mut rollout_items) => {
                 let turn_context = self.new_default_turn().await;
-                if turn_context.item_ids_enabled() {
-                    Self::assign_missing_rollout_response_item_ids(&mut rollout_items);
-                }
+                Self::assign_missing_rollout_response_item_ids(&mut rollout_items);
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
@@ -2807,11 +2805,7 @@ impl Session {
         for item in items.to_mut() {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }
-        if turn_context.item_ids_enabled() {
-            Self::assign_missing_response_item_ids(items)
-        } else {
-            items
-        }
+        Self::assign_missing_response_item_ids(items)
     }
 
     fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
@@ -3057,17 +3051,12 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
-        turn_context: &TurnContext,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         world_state_baseline: Option<Arc<WorldState>>,
         metadata: CompactedHistoryMetadata,
     ) {
-        let items = if turn_context.item_ids_enabled() {
-            Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
-        } else {
-            items
-        };
+        let items = Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned();
         let compacted_item = CompactedItem {
             message: metadata.message,
             replacement_history: Some(items.clone()),
@@ -3556,7 +3545,6 @@ impl Session {
             .await;
         let turn_context_item = turn_context.to_turn_context_item();
         self.replace_compacted_history(
-            turn_context,
             context_items,
             Some(turn_context_item),
             Some(world_state),

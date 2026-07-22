@@ -14,6 +14,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
@@ -762,17 +763,17 @@ fn compact_request_view(body: &Value, mode: Mode) -> Value {
     }
 
     let mut selected = selected_request_fields(body, SelectedFieldsMode::Compact);
-    selected["input"] = normalize_value(Value::Array(input));
+    selected["input"] = normalize_value(strip_response_item_ids_from_json(Value::Array(input)));
     canonical_json(&normalize_value(selected))
 }
 
 fn follow_up_request_view(body: &Value) -> Value {
     let mut selected = selected_request_fields(body, SelectedFieldsMode::FollowUp);
-    selected["input"] = normalize_value(
+    selected["input"] = normalize_value(strip_response_item_ids_from_json(
         body.get("input")
             .cloned()
             .expect("follow-up request should include input"),
-    );
+    ));
     canonical_json(&normalize_value(selected))
 }
 
@@ -800,7 +801,9 @@ fn replacement_history_from_rollout(path: &Path) -> Result<Value> {
     }
     let replacement_history =
         replacement_history.expect("expected compacted rollout replacement history");
-    Ok(canonical_json(&normalize_value(replacement_history)))
+    Ok(canonical_json(&normalize_value(
+        strip_response_item_ids_from_json(replacement_history),
+    )))
 }
 
 fn write_manual_compact_hooks(home: &Path) {

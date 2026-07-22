@@ -682,11 +682,6 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
         "expected generated image history to be replayed as an image_generation_call"
     );
     assert_eq!(
-        image_generation_calls[0]["id"].as_str(),
-        None,
-        "expected the image generation call id to be omitted"
-    );
-    assert_eq!(
         image_generation_calls[0]["result"].as_str(),
         Some("Zm9v"),
         "expected the original generated image payload to be preserved"
@@ -785,11 +780,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
     assert!(
         image_generation_calls.len() == 1,
         "second request should preserve the generated image call for text-only models"
-    );
-    assert_eq!(
-        image_generation_calls[0]["id"].as_str(),
-        None,
-        "second request should omit the generated image call id"
     );
     assert_eq!(
         image_generation_calls[0]["result"].as_str(),

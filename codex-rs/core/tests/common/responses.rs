@@ -109,6 +109,43 @@ pub fn strip_metadata_from_items(items: &[ResponseItem]) -> Vec<ResponseItem> {
     items.iter().cloned().map(strip_metadata).collect()
 }
 
+/// Returns a response item without its Responses API item ID for semantic assertions.
+pub fn strip_response_item_id(mut item: ResponseItem) -> ResponseItem {
+    item.set_id(/*new_id*/ None);
+    item
+}
+
+/// Returns response items without their Responses API item IDs for semantic assertions.
+pub fn strip_response_item_ids(items: &[ResponseItem]) -> Vec<ResponseItem> {
+    items.iter().cloned().map(strip_response_item_id).collect()
+}
+
+/// Returns JSON without IDs on recognized Responses API items.
+pub fn strip_response_item_ids_from_json(value: Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(strip_response_item_ids_from_json)
+                .collect(),
+        ),
+        Value::Object(mut map) => {
+            let is_response_item =
+                serde_json::from_value::<ResponseItem>(Value::Object(map.clone()))
+                    .is_ok_and(|item| !matches!(item, ResponseItem::Other));
+            if is_response_item {
+                map.remove("id");
+            }
+            Value::Object(
+                map.into_iter()
+                    .map(|(key, value)| (key, strip_response_item_ids_from_json(value)))
+                    .collect(),
+            )
+        }
+        value => value,
+    }
+}
+
 /// Returns JSON without internal transport metadata for semantic assertions.
 pub fn strip_metadata_from_json(value: Value) -> Value {
     match value {

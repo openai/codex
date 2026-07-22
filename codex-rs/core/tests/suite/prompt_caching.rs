@@ -26,6 +26,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::strip_metadata_from_json;
+use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
@@ -55,10 +56,10 @@ fn text_user_input_parts(texts: Vec<String>) -> serde_json::Value {
     })
 }
 
-fn assert_eq_without_metadata(left: serde_json::Value, right: serde_json::Value) {
+fn assert_eq_without_metadata_or_item_ids(left: serde_json::Value, right: serde_json::Value) {
     assert_eq!(
-        strip_metadata_from_json(left),
-        strip_metadata_from_json(right)
+        strip_response_item_ids_from_json(strip_metadata_from_json(left)),
+        strip_response_item_ids_from_json(strip_metadata_from_json(right))
     );
 }
 
@@ -392,15 +393,18 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         Some("input_text"),
         "expected environment context bundled after UI message in cached contextual message"
     );
-    assert_eq_without_metadata(input1[2].clone(), text_user_input("hello 1".to_string()));
+    assert_eq_without_metadata_or_item_ids(
+        input1[2].clone(),
+        text_user_input("hello 1".to_string()),
+    );
 
     let body2 = req2.single_request().body_json();
     let input2 = body2["input"].as_array().expect("input array");
-    assert_eq_without_metadata(
+    assert_eq_without_metadata_or_item_ids(
         serde_json::Value::Array(input2[..input1.len()].to_vec()),
         serde_json::Value::Array(input1.to_vec()),
     );
-    assert_eq_without_metadata(
+    assert_eq_without_metadata_or_item_ids(
         input2[input1.len()].clone(),
         text_user_input("hello 2".to_string()),
     );
@@ -533,7 +537,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     expected_body2.push(expected_permissions_msg_2);
     expected_body2.push(expected_env_msg_2);
     expected_body2.push(expected_user_message_2);
-    assert_eq_without_metadata(
+    assert_eq_without_metadata_or_item_ids(
         body2["input"].clone(),
         serde_json::Value::Array(expected_body2),
     );
@@ -823,7 +827,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     expected_body2.push(expected_permissions_update_msg);
     expected_body2.push(expected_env_msg_2);
     expected_body2.push(expected_user_message_2);
-    assert_eq_without_metadata(
+    assert_eq_without_metadata_or_item_ids(
         body2["input"].clone(),
         serde_json::Value::Array(expected_body2),
     );
@@ -955,7 +959,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
         expected_contextual_user_msg_1.clone(),
         expected_user_message_1.clone(),
     ]);
-    assert_eq_without_metadata(body1["input"].clone(), expected_input_1);
+    assert_eq_without_metadata_or_item_ids(body1["input"].clone(), expected_input_1);
 
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
@@ -964,7 +968,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
         expected_user_message_1,
         expected_user_message_2,
     ]);
-    assert_eq_without_metadata(body2["input"].clone(), expected_input_2);
+    assert_eq_without_metadata_or_item_ids(body2["input"].clone(), expected_input_2);
 
     Ok(())
 }
@@ -1094,7 +1098,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         expected_contextual_user_msg_1.clone(),
         expected_user_message_1.clone(),
     ]);
-    assert_eq_without_metadata(body1["input"].clone(), expected_input_1);
+    assert_eq_without_metadata_or_item_ids(body1["input"].clone(), expected_input_1);
 
     let body1_input = body1["input"].as_array().expect("input array");
     let expected_settings_update_msg = body2["input"][body1_input.len()].clone();
@@ -1139,7 +1143,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         expected_env_update_msg,
         expected_user_message_2,
     ]);
-    assert_eq_without_metadata(body2["input"].clone(), expected_input_2);
+    assert_eq_without_metadata_or_item_ids(body2["input"].clone(), expected_input_2);
 
     Ok(())
 }

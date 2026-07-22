@@ -104,7 +104,6 @@ fn test_model_client_with_thread_id(
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
-        /*item_ids_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
@@ -150,7 +149,6 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
-        /*item_ids_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
@@ -825,7 +823,6 @@ fn model_client_with_counting_attestation(
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
-        /*item_ids_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         Some(Arc::new(CountingAttestationProvider {
             calls: attestation_calls.clone(),

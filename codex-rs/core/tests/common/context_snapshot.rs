@@ -5,6 +5,7 @@ use similar::TextDiff;
 use std::sync::OnceLock;
 
 use crate::responses::ResponsesRequest;
+use crate::responses::strip_response_item_ids_from_json;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
@@ -25,6 +26,7 @@ pub struct ContextSnapshotOptions {
     render_mode: ContextSnapshotRenderMode,
     strip_capability_instructions: bool,
     strip_agents_md_user_context: bool,
+    strip_response_item_ids: bool,
 }
 
 impl Default for ContextSnapshotOptions {
@@ -33,6 +35,7 @@ impl Default for ContextSnapshotOptions {
             render_mode: ContextSnapshotRenderMode::RedactedText,
             strip_capability_instructions: false,
             strip_agents_md_user_context: false,
+            strip_response_item_ids: false,
         }
     }
 }
@@ -50,6 +53,11 @@ impl ContextSnapshotOptions {
 
     pub fn strip_agents_md_user_context(mut self) -> Self {
         self.strip_agents_md_user_context = true;
+        self
+    }
+
+    pub fn strip_response_item_ids(mut self) -> Self {
+        self.strip_response_item_ids = true;
         self
     }
 }
@@ -267,6 +275,11 @@ fn format_request_body_snapshot(
     options: &ContextSnapshotOptions,
 ) -> String {
     let mut body = crate::responses::strip_metadata_from_json(request.body_json());
+    if options.strip_response_item_ids
+        && let Some(input) = body.get_mut("input")
+    {
+        *input = strip_response_item_ids_from_json(std::mem::take(input));
+    }
     canonicalize_json_snapshot_value(&mut body, options);
     serde_json::to_string_pretty(&body).expect("request body should serialize")
 }
