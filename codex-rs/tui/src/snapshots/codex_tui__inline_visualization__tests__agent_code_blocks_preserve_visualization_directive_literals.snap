@@ -3,9 +3,9 @@ source: tui/src/inline_visualization_tests.rs
 expression: text
 ---
 • Fenced:
-  
+
   ::codex-inline-vis{file="chart.html"}
-  
+
   Indented:
-  
+
       ::codex-inline-vis{file="chart.html"}

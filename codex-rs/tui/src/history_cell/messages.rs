@@ -407,6 +407,21 @@ impl AgentMarkdownCell {
     }
 }
 
+fn normalize_whitespace_only_hyperlink_lines(mut lines: Vec<HyperlinkLine>) -> Vec<HyperlinkLine> {
+    for line in &mut lines {
+        if line
+            .line
+            .spans
+            .iter()
+            .all(|span| span.content.chars().all(char::is_whitespace))
+        {
+            line.line = Line::default().style(line.line.style);
+            line.hyperlinks.clear();
+        }
+    }
+    lines
+}
+
 impl HistoryCell for AgentMarkdownCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         visible_lines(self.display_hyperlink_lines(width))
@@ -432,7 +447,11 @@ impl HistoryCell for AgentMarkdownCell {
                 Some(self.cwd.as_path()),
                 self.inline_visualization_context.as_ref(),
             );
-            prefix_hyperlink_lines(lines, "• ".dim(), "  ".into())
+            normalize_whitespace_only_hyperlink_lines(prefix_hyperlink_lines(
+                lines,
+                "• ".dim(),
+                "  ".into(),
+            ))
         };
 
         if let Some(rendered_lines) = &self.rendered_lines {
@@ -487,7 +506,7 @@ impl HistoryCell for StreamingAgentTailCell {
     fn display_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
         // Tail lines are already rendered at the controller's current stream width.
         // Re-wrapping them here can split table borders and produce malformed in-flight rows.
-        let mut lines = prefix_hyperlink_lines(
+        normalize_whitespace_only_hyperlink_lines(prefix_hyperlink_lines(
             self.lines.clone(),
             if self.is_first_line {
                 "• ".dim()
@@ -495,19 +514,7 @@ impl HistoryCell for StreamingAgentTailCell {
                 "  ".into()
             },
             "  ".into(),
-        );
-        for line in &mut lines {
-            if line
-                .line
-                .spans
-                .iter()
-                .all(|span| span.content.chars().all(char::is_whitespace))
-            {
-                line.line = Line::default().style(line.line.style);
-                line.hyperlinks.clear();
-            }
-        }
-        lines
+        ))
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
