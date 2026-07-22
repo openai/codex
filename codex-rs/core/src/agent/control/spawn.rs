@@ -594,26 +594,17 @@ impl AgentControl {
         };
 
         let parent_thread_id = *parent_thread_id;
-        let parent_thread = state.get_thread(parent_thread_id).await.ok();
-        if let Some(parent_thread) = parent_thread.as_ref() {
-            // `record_conversation_items` only queues persistence writes asynchronously.
-            // Flush before snapshotting store history for a fork.
-            parent_thread.ensure_rollout_materialized().await;
-            parent_thread.flush_rollout().await?;
-        }
-        let parent_metadata = state
-            .read_stored_thread(ReadThreadParams {
-                thread_id: parent_thread_id,
-                include_archived: true,
-                include_history: false,
-            })
-            .await?;
+        let parent_thread = state.get_thread(parent_thread_id).await?;
+        let parent_history_mode = parent_thread.config_snapshot().await.history_mode;
+        // `record_conversation_items` only queues persistence writes asynchronously.
+        // Flush before snapshotting store history for a fork.
+        parent_thread.ensure_rollout_materialized().await;
+        parent_thread.flush_rollout().await?;
 
-        let destination_history_mode =
-            matches!(parent_metadata.history_mode, ThreadHistoryMode::Paginated)
-                .then_some(ThreadHistoryMode::Paginated);
+        let destination_history_mode = matches!(parent_history_mode, ThreadHistoryMode::Paginated)
+            .then_some(ThreadHistoryMode::Paginated);
         let mut forked_rollout_items =
-            load_agent_model_context(state, parent_thread_id, parent_metadata.history_mode)
+            load_agent_model_context(state, parent_thread_id, parent_history_mode)
                 .await?
                 .ok_or_else(|| {
                     CodexErr::Fatal(format!(
@@ -635,29 +626,17 @@ impl AgentControl {
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
-            if let Some(parent_thread) = parent_thread.as_ref() {
-                if multi_agent_version == MultiAgentVersion::V2 {
-                    let parent_config = parent_thread.session.get_config().await;
-                    [
-                        parent_config
-                            .multi_agent_v2
-                            .root_agent_usage_hint_text
-                            .clone(),
-                        parent_config
-                            .multi_agent_v2
-                            .subagent_usage_hint_text
-                            .clone(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect()
-                } else {
-                    Vec::new()
-                }
-            } else if multi_agent_version == MultiAgentVersion::V2 {
+            if multi_agent_version == MultiAgentVersion::V2 {
+                let parent_config = parent_thread.session.get_config().await;
                 [
-                    config.multi_agent_v2.root_agent_usage_hint_text.clone(),
-                    config.multi_agent_v2.subagent_usage_hint_text.clone(),
+                    parent_config
+                        .multi_agent_v2
+                        .root_agent_usage_hint_text
+                        .clone(),
+                    parent_config
+                        .multi_agent_v2
+                        .subagent_usage_hint_text
+                        .clone(),
                 ]
                 .into_iter()
                 .flatten()
