@@ -412,7 +412,7 @@ mod tests {
             /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
-            /*auth_route_config*/ None,
+            codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
         let auth = auth_manager.auth().await.expect("auth should load");
@@ -497,7 +497,7 @@ mod tests {
                 /*forced_chatgpt_workspace_id*/ None,
                 /*chatgpt_base_url*/ None,
                 AuthKeyringBackendKind::default(),
-                /*auth_route_config*/ None,
+                codex_login::test_support::transport_default_auth_route_config(),
             )
             .await,
         );

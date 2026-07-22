@@ -49,7 +49,7 @@ async fn auth_manager_with_replacement(
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
-        /*auth_route_config*/ None,
+        codex_login::test_support::transport_default_auth_route_config(),
     )
     .await;
     let mut replacement_auth = remote_control_auth_dot_json(Some(replacement_account_id));
@@ -1087,7 +1087,7 @@ async fn remote_control_handle_discards_pairing_response_after_auth_change() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
-        /*auth_route_config*/ None,
+        codex_login::test_support::transport_default_auth_route_config(),
     )
     .await;
     let remote_handle =
