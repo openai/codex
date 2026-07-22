@@ -596,7 +596,6 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         version: Some("1.2.3".to_string()),
         version_id: Some("version_123".to_string()),
         version_notes: Some("Fixes and improvements".to_string()),
-        first_party_type: Some("internal".to_string()),
         first_party_requires_install: Some(true),
         show_in_composer_when_unlinked: Some(true),
     });

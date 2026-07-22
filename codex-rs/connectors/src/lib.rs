@@ -429,11 +429,6 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
             {
                 existing_app_metadata.version_notes = incoming_app_metadata.version_notes;
             }
-            if existing_app_metadata.first_party_type.is_none()
-                && incoming_app_metadata.first_party_type.is_some()
-            {
-                existing_app_metadata.first_party_type = incoming_app_metadata.first_party_type;
-            }
             if existing_app_metadata.first_party_requires_install.is_none()
                 && incoming_app_metadata.first_party_requires_install.is_some()
             {

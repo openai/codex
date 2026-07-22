@@ -51,7 +51,6 @@ pub struct AppMetadata {
     pub version: Option<String>,
     pub version_id: Option<String>,
     pub version_notes: Option<String>,
-    pub first_party_type: Option<String>,
     pub first_party_requires_install: Option<bool>,
     pub show_in_composer_when_unlinked: Option<bool>,
 }

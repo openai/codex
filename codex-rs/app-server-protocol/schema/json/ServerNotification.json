@@ -353,12 +353,6 @@
             "null"
           ]
         },
-        "firstPartyType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "review": {
           "anyOf": [
             {
