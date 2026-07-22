@@ -1,5 +1,6 @@
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::write_attribution_frame;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -29,6 +30,8 @@ use url::Url;
 const PROXY_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
     "ALL_PROXY",
     "FTP_PROXY",
     "YARN_HTTP_PROXY",
@@ -72,7 +75,7 @@ struct ProxyRoutePlan {
     has_proxy_config: bool,
 }
 
-pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
+pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<(String, AbsolutePathBuf)> {
     let (attribution_token, plan) = extract_attribution_token_and_plan(std::env::vars().collect());
     // SAFETY: the sandbox helper is single-threaded here, before it forks bridge workers or
     // executes the user command.
@@ -93,6 +96,7 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
     let _ = cleanup_stale_proxy_socket_dirs_in(socket_parent_dir.as_path());
 
     let socket_dir = create_proxy_socket_dir()?;
+    let readable_socket_dir = AbsolutePathBuf::relative_to_current_dir(&socket_dir)?;
     let mut socket_by_endpoint: BTreeMap<SocketAddr, PathBuf> = BTreeMap::new();
     let mut next_index = 0usize;
     for route in &plan.routes {
@@ -128,7 +132,8 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         });
     }
 
-    serde_json::to_string(&ProxyRouteSpec { routes }).map_err(io::Error::other)
+    let spec = serde_json::to_string(&ProxyRouteSpec { routes }).map_err(io::Error::other)?;
+    Ok((spec, readable_socket_dir))
 }
 
 fn extract_attribution_token_and_plan(
@@ -732,6 +737,8 @@ mod tests {
     fn recognizes_proxy_env_keys_case_insensitively() {
         assert_eq!(is_proxy_env_key("HTTP_PROXY"), true);
         assert_eq!(is_proxy_env_key("http_proxy"), true);
+        assert_eq!(is_proxy_env_key("WS_PROXY"), true);
+        assert_eq!(is_proxy_env_key("wss_proxy"), true);
         assert_eq!(is_proxy_env_key("PATH"), false);
     }
 
