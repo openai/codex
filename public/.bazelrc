@@ -105,11 +105,6 @@ common:ci --disk_cache=
 # Shared config for the main Bazel CI workflow.
 common:ci-bazel --config=ci
 common:ci-bazel --build_metadata=TAG_workflow=bazel
-# Keep code-mode integration cases out of ordinary Bazel legs. The
-# Windows-cross config below re-enables them after generating its Windows V8
-# snapshot on the Windows runner. Also skip the ConPTY Ctrl-C integration test
-# until Windows Bazel CI can reliably interrupt foreground processes.
-common:ci-bazel --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::,tests::windows_tests::conpty_ctrl_c_interrupts_powershell_foreground_child
 
 # Shared config for Bazel-backed Rust linting.
 build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
@@ -165,6 +160,9 @@ build:argument-comment-lint --@rules_rust//rust/toolchain/channel=nightly
 common:ci-windows --config=ci-bazel
 common:ci-windows --build_metadata=TAG_os=windows
 common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+# The hidden dynamic-tool callback currently times out on Windows, and ConPTY
+# cannot reliably interrupt foreground processes on Windows Bazel runners.
+common:ci-windows --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::code_mode_can_call_hidden_dynamic_tools,tests::windows_tests::conpty_ctrl_c_interrupts_powershell_foreground_child
 
 # We prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
@@ -194,9 +192,7 @@ common:ci-windows-cross --local_test_jobs=8
 common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
 # Native Windows CI still covers the PowerShell parser-process tests. The
 # cross-built gnullvm binaries currently hang in those tests when run on the
-# Windows runner. Keep V8-backed code-mode tests enabled except for the hidden
-# dynamic-tool callback test, which currently times out on Windows. This config
-# replaces the base skip list, so repeat the exact ConPTY Ctrl-C test exclusion.
+# Windows runner. This replaces the Windows skip list, so retain its exclusions.
 common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=command_safety::powershell_parser::tests::,suite::code_mode::code_mode_can_call_hidden_dynamic_tools,tests::windows_tests::conpty_ctrl_c_interrupts_powershell_foreground_child
 common:ci-windows-cross --platforms=//:windows_x86_64_gnullvm
 common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_msvc
