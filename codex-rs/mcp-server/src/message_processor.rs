@@ -67,6 +67,12 @@ impl MessageProcessor {
             config.codex_home.clone(),
         ));
         let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+        codex_git_attribution::install(
+            &mut extensions,
+            auth_manager.clone(),
+            config.chatgpt_base_url.clone(),
+            config.http_client_factory(),
+        );
         codex_image_generation_extension::install(
             &mut extensions,
             auth_manager.clone(),

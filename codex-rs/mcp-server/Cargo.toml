@@ -25,6 +25,7 @@ codex-home = { workspace = true }
 codex-image-generation-extension = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-git-attribution = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-cli = { workspace = true }
@@ -45,6 +46,7 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+app_test_support = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-shell-command = { workspace = true }
 core_test_support = { workspace = true }

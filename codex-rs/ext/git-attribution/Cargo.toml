@@ -21,7 +21,5 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
-codex-protocol = { workspace = true }
-pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 wiremock = { workspace = true }
