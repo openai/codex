@@ -29,6 +29,7 @@ use tokio::time::timeout;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::rpc_server_requests::RpcServerRequestSender;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 const MAX_IN_FLIGHT_REGULAR_CALLS: usize = 1024;
@@ -63,12 +64,14 @@ enum RpcCallTimeout {
 
 #[derive(Debug)]
 pub(crate) enum RpcClientEvent {
+    Request(JSONRPCRequest),
     Notification(JSONRPCNotification),
     Disconnected { reason: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RpcServerOutboundMessage {
+    Request(JSONRPCRequest),
     Response {
         request_id: RequestId,
         result: Value,
@@ -83,11 +86,20 @@ pub(crate) enum RpcServerOutboundMessage {
 #[derive(Clone)]
 pub(crate) struct RpcNotificationSender {
     outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
+    requests: RpcServerRequestSender,
 }
 
 impl RpcNotificationSender {
     pub(crate) fn new(outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>) -> Self {
-        Self { outgoing_tx }
+        let requests = RpcServerRequestSender::new(outgoing_tx.clone());
+        Self {
+            outgoing_tx,
+            requests,
+        }
+    }
+
+    pub(crate) fn request_sender(&self) -> RpcServerRequestSender {
+        self.requests.clone()
     }
 
     pub(crate) async fn response(
@@ -339,6 +351,23 @@ impl RpcClient {
             .map_err(|_| RpcCallError::Closed)
     }
 
+    pub(crate) async fn respond_error(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> Result<(), RpcCallError> {
+        if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
+            return Err(RpcCallError::Closed);
+        }
+        self.write_tx
+            .send(JSONRPCMessage::Error(JSONRPCError {
+                id: request_id,
+                error,
+            }))
+            .await
+            .map_err(|_| RpcCallError::Closed)
+    }
+
     pub(crate) fn is_disconnected(&self) -> bool {
         self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow()
     }
@@ -522,6 +551,7 @@ pub(crate) fn encode_server_message(
     message: RpcServerOutboundMessage,
 ) -> Result<JSONRPCMessage, serde_json::Error> {
     match message {
+        RpcServerOutboundMessage::Request(request) => Ok(JSONRPCMessage::Request(request)),
         RpcServerOutboundMessage::Response { request_id, result } => {
             Ok(JSONRPCMessage::Response(JSONRPCResponse {
                 id: request_id,
@@ -642,10 +672,10 @@ async fn handle_server_message(
                 .await;
         }
         JSONRPCMessage::Request(request) => {
-            return Err(format!(
-                "unexpected JSON-RPC request from remote server: {}",
-                request.method
-            ));
+            event_tx
+                .send(RpcClientEvent::Request(request))
+                .await
+                .map_err(|_| "RPC client event receiver closed".to_string())?;
         }
     }
 
