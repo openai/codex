@@ -250,7 +250,6 @@ deny = [
         "codex-responses-api-proxy",
         "codex-rmcp-client",
         "codex-tui",
-        "core_test_support",
         # Third-party crates that own their reqwest integration. These are not part of the
         # first-party migration count above.
         "oauth2",

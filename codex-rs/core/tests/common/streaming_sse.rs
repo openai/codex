@@ -284,8 +284,10 @@ fn unix_ms_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_http_client::ClientRouteClass;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
     use pretty_assertions::assert_eq;
-    use reqwest::StatusCode;
     use tokio::net::TcpStream;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -607,13 +609,16 @@ data: {"type":"response.completed","response":{"id":"resp-1"}}
             "stream": true
         });
 
-        let resp = reqwest::Client::new()
+        let client = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+            .build_client(&url, ClientRouteClass::Other)
+            .expect("build HTTP client");
+        let resp = client
             .post(url)
             .json(&payload)
             .send()
             .await
             .expect("send request");
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status().as_u16(), 200);
 
         let bytes = resp.bytes().await.expect("read response body");
         assert_eq!(bytes, response_body.as_bytes());
