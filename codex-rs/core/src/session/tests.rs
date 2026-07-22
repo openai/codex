@@ -17,6 +17,7 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
+use crate::tools::registry::ToolRegistry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
@@ -197,14 +198,19 @@ use std::time::Duration as StdDuration;
 impl StepContext {
     pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
         let environments = turn.environments.clone();
-        Arc::new(Self::new(
-            Arc::clone(&turn),
+        Arc::new(Self {
+            turn: Arc::clone(&turn),
             environments,
-            Vec::new(),
-            /*executor_capability_discovery*/ None,
-            crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
-            /*loaded_agents_md*/ None,
-        ))
+            selected_capability_roots: Vec::new(),
+            executor_capability_discovery: None,
+            mcp: crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+            mcp_tools: Vec::new(),
+            tool_router: Arc::new(ToolRouter::from_parts(
+                ToolRegistry::empty_for_test(),
+                Vec::new(),
+            )),
+            loaded_agents_md: None,
+        })
     }
 }
 
@@ -652,7 +658,9 @@ async fn preview_session_start_hooks(
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let router = Arc::new(ToolRouter::from_context(
-        step_context.as_ref(),
+        step_context.turn.as_ref(),
+        &step_context.environments,
+        step_context.mcp.as_ref(),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             tool_runtimes: Vec::new(),
@@ -2895,8 +2903,9 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
     let rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("unique session")).await;
     let step_context = session
-        .capture_step_context(Arc::clone(&turn_context))
-        .await;
+        .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
+        .await
+        .expect("a fresh cancellation token cannot be cancelled");
     let world_state = Arc::new(session.build_world_state_for_step(&step_context).await);
 
     session
@@ -7737,8 +7746,9 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     let turn_context = Arc::new(turn_context);
     let old_runtime = session.services.latest_mcp_runtime();
     let step_context = session
-        .capture_step_context(Arc::clone(&turn_context))
-        .await;
+        .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
+        .await
+        .expect("a fresh cancellation token cannot be cancelled");
     assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
     let old_token = session.mcp_startup_cancellation_token().await;
     assert!(!old_token.is_cancelled());
@@ -8015,7 +8025,9 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
-    let step_context = session.capture_step_context(turn_context).await;
+    let step_context = session
+        .capture_step_context(turn_context, &CancellationToken::new())
+        .await?;
 
     let mut refresh_config = step_context.turn.config.as_ref().clone();
     refresh_config.mcp_servers.set(HashMap::from([(
@@ -8053,12 +8065,7 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
         )
         .await;
 
-    let router = crate::session::turn::built_tools(
-        session.as_ref(),
-        step_context.as_ref(),
-        &CancellationToken::new(),
-    )
-    .await?;
+    let router = &step_context.tool_router;
     assert!(
         !router
             .registered_tool_names_for_test()
@@ -10554,7 +10561,9 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let router = ToolRouter::from_context(
-        step_context.as_ref(),
+        step_context.turn.as_ref(),
+        &step_context.environments,
+        step_context.mcp.as_ref(),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             tool_runtimes: Vec::new(),

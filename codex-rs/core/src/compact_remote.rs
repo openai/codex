@@ -37,6 +37,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 use codex_utils_output_truncation::approx_token_count;
+use tokio_util::sync::CancellationToken;
 
 #[path = "compact_remote_request.rs"]
 mod request;
@@ -78,7 +79,9 @@ pub(crate) async fn run_remote_compact_task(
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
     // Standalone compaction is its own request boundary, so it captures a fresh step.
-    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    let step_context = sess
+        .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
+        .await?;
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         trace_id: turn_context.trace_id.clone(),

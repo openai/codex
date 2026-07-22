@@ -91,9 +91,8 @@ impl Session {
         ));
         let apps_available =
             if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                let tools = step_context.mcp_tools().await;
                 connectors::with_app_enabled_state(
-                    connectors::accessible_connectors_from_mcp_tools(tools),
+                    connectors::accessible_connectors_from_mcp_tools(&step_context.mcp_tools),
                     &turn_context.config,
                 )
                 .into_iter()

@@ -277,7 +277,9 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let turn_context = Arc::new(turn_context);
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let router = Arc::new(ToolRouter::from_context(
-        step_context.as_ref(),
+        step_context.turn.as_ref(),
+        &step_context.environments,
+        step_context.mcp.as_ref(),
         crate::tools::router::ToolRouterParams {
             tool_suggest_candidates: None,
             tool_runtimes: Vec::new(),
