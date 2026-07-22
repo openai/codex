@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use codex_protocol::protocol::SkillScope;
 use codex_utils_string::approx_token_count;
 use codex_utils_string::take_bytes_at_char_boundary;
 
@@ -39,6 +40,27 @@ impl SkillCatalogRenderPolicy {
                 .short_description
                 .as_deref()
                 .unwrap_or(entry.description.as_str()),
+        }
+    }
+
+    fn order_entries(self, entries: &mut [&SkillCatalogEntry]) {
+        match self {
+            Self::CoreCompatible => {
+                let scope_rank = |entry: &SkillCatalogEntry| match entry.prompt_scope() {
+                    Some(SkillScope::System) => 0,
+                    Some(SkillScope::Admin) => 1,
+                    Some(SkillScope::Repo) => 2,
+                    Some(SkillScope::User) => 3,
+                    None => 4,
+                };
+                entries.sort_by(|a, b| {
+                    scope_rank(a)
+                        .cmp(&scope_rank(b))
+                        .then_with(|| a.name.cmp(&b.name))
+                        .then_with(|| a.main_prompt.as_str().cmp(b.main_prompt.as_str()))
+                });
+            }
+            Self::ExtensionCompatible => {}
         }
     }
 }
@@ -287,10 +309,14 @@ pub(crate) fn available_skills_fragment(
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
 ) -> Option<AvailableSkillsInstructions> {
-    let skill_lines = catalog
+    let mut entries = catalog
         .entries
         .iter()
         .filter(|entry| entry.enabled && entry.prompt_visible)
+        .collect::<Vec<_>>();
+    policy.order_entries(&mut entries);
+    let skill_lines = entries
+        .iter()
         .map(|entry| SkillLine::new(entry, policy))
         .collect();
     let (mut skill_lines, mut omitted) = render_skill_lines(skill_lines, budget);

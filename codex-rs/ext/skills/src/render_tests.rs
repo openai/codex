@@ -4,17 +4,113 @@ use crate::catalog::SkillPackageId;
 use crate::catalog::SkillResourceId;
 use codex_core_skills::render_available_skills_body;
 use codex_extension_api::ContextualUserFragment;
+use codex_protocol::protocol::SkillScope;
 use pretty_assertions::assert_eq;
 
 fn entry(name: &str, description: &str, short_description: Option<&str>) -> SkillCatalogEntry {
+    entry_with_path(
+        name,
+        description,
+        short_description,
+        &format!("/skills/{name}/SKILL.md"),
+    )
+}
+
+fn entry_with_path(
+    name: &str,
+    description: &str,
+    short_description: Option<&str>,
+    path: &str,
+) -> SkillCatalogEntry {
     SkillCatalogEntry::new(
-        SkillPackageId(name.to_string()),
+        SkillPackageId(path.to_string()),
         SkillAuthority::new(SkillSourceKind::Host, "host"),
         name,
         description,
-        SkillResourceId::new(format!("/skills/{name}/SKILL.md")),
+        SkillResourceId::new(path),
     )
     .with_short_description(short_description.map(str::to_string))
+}
+
+#[test]
+fn ordering_follows_render_policy() {
+    let catalog = SkillCatalog {
+        entries: [
+            ("repo-zeta", SkillScope::Repo, "/skills/repo-zeta/SKILL.md"),
+            (
+                "user-alpha",
+                SkillScope::User,
+                "/skills/user-alpha/SKILL.md",
+            ),
+            (
+                "system-zeta",
+                SkillScope::System,
+                "/skills/system-zeta/SKILL.md",
+            ),
+            (
+                "admin-alpha",
+                SkillScope::Admin,
+                "/skills/admin-alpha/SKILL.md",
+            ),
+            (
+                "repo-alpha",
+                SkillScope::Repo,
+                "/skills/repo-alpha-z/SKILL.md",
+            ),
+            (
+                "repo-alpha",
+                SkillScope::Repo,
+                "/skills/repo-alpha-a/SKILL.md",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, scope, path)| {
+            entry_with_path(name, "Description.", /*short_description*/ None, path)
+                .with_prompt_scope(scope)
+        })
+        .collect(),
+        warnings: Vec::new(),
+    };
+
+    let render = |policy| {
+        available_skills_fragment(
+            &catalog,
+            /*include_skills_usage_instructions*/ false,
+            policy,
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("catalog should render")
+        .body()
+    };
+
+    assert_eq!(
+        render(SkillCatalogRenderPolicy::CoreCompatible),
+        render_available_skills_body(
+            &[],
+            &[
+                "- system-zeta: Description. (file: /skills/system-zeta/SKILL.md)".to_string(),
+                "- admin-alpha: Description. (file: /skills/admin-alpha/SKILL.md)".to_string(),
+                "- repo-alpha: Description. (file: /skills/repo-alpha-a/SKILL.md)".to_string(),
+                "- repo-alpha: Description. (file: /skills/repo-alpha-z/SKILL.md)".to_string(),
+                "- repo-zeta: Description. (file: /skills/repo-zeta/SKILL.md)".to_string(),
+                "- user-alpha: Description. (file: /skills/user-alpha/SKILL.md)".to_string(),
+            ],
+        )
+    );
+    assert_eq!(
+        render(SkillCatalogRenderPolicy::ExtensionCompatible),
+        render_available_skills_body(
+            &[],
+            &[
+                "- repo-zeta: Description. (file: /skills/repo-zeta/SKILL.md)".to_string(),
+                "- user-alpha: Description. (file: /skills/user-alpha/SKILL.md)".to_string(),
+                "- system-zeta: Description. (file: /skills/system-zeta/SKILL.md)".to_string(),
+                "- admin-alpha: Description. (file: /skills/admin-alpha/SKILL.md)".to_string(),
+                "- repo-alpha: Description. (file: /skills/repo-alpha-z/SKILL.md)".to_string(),
+                "- repo-alpha: Description. (file: /skills/repo-alpha-a/SKILL.md)".to_string(),
+            ],
+        )
+    );
 }
 
 #[test]
@@ -51,8 +147,8 @@ fn description_selection_follows_render_policy() {
         render_available_skills_body(
             &[],
             &[
-                "- shortened: full description (file: /skills/shortened/SKILL.md)".to_string(),
                 "- fallback: fallback description (file: /skills/fallback/SKILL.md)".to_string(),
+                "- shortened: full description (file: /skills/shortened/SKILL.md)".to_string(),
             ],
         )
     );
