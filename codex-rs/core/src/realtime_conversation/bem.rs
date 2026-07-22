@@ -1,16 +1,30 @@
 use codex_protocol::models::MessagePhase;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
-const BEM_ASSISTANT_CHANNEL_PREFIX: &str = "<|start|>assistant<|channel|>";
-const BEM_MESSAGE_MARKER: &str = "<|message|>";
-
-pub(super) fn message_phase(text: &str) -> Option<MessagePhase> {
-    let channel_and_message = text.strip_prefix(BEM_ASSISTANT_CHANNEL_PREFIX)?;
-    let (channel, _) = channel_and_message.split_once(BEM_MESSAGE_MARKER)?;
-    match channel {
-        "analysis" | "commentary" => Some(MessagePhase::Commentary),
-        "final" => Some(MessagePhase::FinalAnswer),
-        _ => None,
+pub(super) fn message_phase(
+    text: &str,
+    channel_prefixes: &BTreeMap<String, Vec<String>>,
+) -> Option<MessagePhase> {
+    for (channel, default_prefix, phase) in [
+        ("analysis", "[ANALYSIS]", MessagePhase::Commentary),
+        ("commentary", "[COMMENTARY]", MessagePhase::Commentary),
+        ("final", "[FINAL]", MessagePhase::FinalAnswer),
+    ] {
+        let matches = channel_prefixes.get(channel).map_or_else(
+            || text.starts_with(default_prefix),
+            |prefixes| {
+                prefixes
+                    .iter()
+                    .any(|prefix| !prefix.is_empty() && text.starts_with(prefix))
+            },
+        );
+        if matches {
+            return Some(phase);
+        }
     }
+
+    None
 }
 
 /// Buffers a streamed BEM message until its channel header is complete.
@@ -19,18 +33,26 @@ pub(super) fn message_phase(text: &str) -> Option<MessagePhase> {
 /// the frontend model can distinguish BEM `analysis` from `commentary`.
 #[derive(Debug, Default)]
 pub(super) struct ChannelParser {
+    channel_prefixes: Arc<BTreeMap<String, Vec<String>>>,
     buffered_text: String,
     phase: Option<MessagePhase>,
 }
 
 impl ChannelParser {
+    pub(super) fn new(channel_prefixes: Arc<BTreeMap<String, Vec<String>>>) -> Self {
+        Self {
+            channel_prefixes,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn push(&mut self, text: &str) -> Option<String> {
         if self.phase.is_some() {
             return Some(text.to_string());
         }
 
         self.buffered_text.push_str(text);
-        self.phase = message_phase(&self.buffered_text);
+        self.phase = message_phase(&self.buffered_text, &self.channel_prefixes);
         self.phase.as_ref()?;
         Some(std::mem::take(&mut self.buffered_text))
     }

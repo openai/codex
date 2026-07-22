@@ -983,7 +983,12 @@ for every automatic response. Pass `"commentary"` to route every response to
 commentary, or `"bemTags"` to route BEM commentary tags to `commentary`, final
 tags to `speakable`, and analysis tags to `commentary`. Unparsable BEM output
 falls back to `speakable`. BEM routing reads the raw envelope and preserves it
-in the appended text for the frontend model. This
+in the appended text for the frontend model. With `"bemTags"`, clients may pass
+`codexResponseHandoffChannelPrefixes` to override the accepted prefixes for
+individual channels, for example
+`{"analysis":["[THINKING]"],"commentary":["[PROGRESS]","[UPDATE]"],"final":["[DONE]"]}`.
+Omitted channels keep the hard-coded `[ANALYSIS]`, `[COMMENTARY]`, and `[FINAL]`
+defaults. This
 setting has no effect on V1 or V2. V3 handoffs never prepend the legacy `"Agent Final Message"` label. Older
 clients may continue to send the removed `codexResponseHandoffPrefix` field; the
 server ignores unknown request fields.
