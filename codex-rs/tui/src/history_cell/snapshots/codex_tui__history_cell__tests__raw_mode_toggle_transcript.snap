@@ -9,11 +9,11 @@ rich before:
 
 • - first item
   - second item
-  
+
    Col     Value
   ━━━━━━  ━━━━━━━
    code    x = 1
-  
+
   copy me
 • Called
   └ workspace.inspect({"path":"README.md
@@ -45,11 +45,11 @@ rich after:
 
 • - first item
   - second item
-  
+
    Col     Value
   ━━━━━━  ━━━━━━━
    code    x = 1
-  
+
   copy me
 • Called
   └ workspace.inspect({"path":"README.md
