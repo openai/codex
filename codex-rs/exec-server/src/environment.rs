@@ -490,6 +490,11 @@ fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> 
             "environment id cannot be empty".to_string(),
         ));
     }
+    if environment_id == LOCAL_ENVIRONMENT_ID {
+        return Err(ExecServerError::Protocol(format!(
+            "environment id `{LOCAL_ENVIRONMENT_ID}` is reserved for EnvironmentManager"
+        )));
+    }
     Ok(())
 }
 
