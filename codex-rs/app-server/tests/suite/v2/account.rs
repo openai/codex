@@ -84,6 +84,7 @@ struct CreateConfigTomlParams {
     forced_workspace_ids: Option<Vec<String>>,
     requires_openai_auth: Option<bool>,
     base_url: Option<String>,
+    chatgpt_base_url: Option<String>,
     model_provider_id: Option<String>,
     extra_provider_config: Option<String>,
 }
@@ -115,6 +116,10 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
         Some(false) => String::new(),
         None => String::new(),
     };
+    let chatgpt_base_url_line = params
+        .chatgpt_base_url
+        .map(|url| format!("chatgpt_base_url = \"{url}\"\n"))
+        .unwrap_or_default();
     let model_provider_id = params
         .model_provider_id
         .unwrap_or_else(|| "mock_provider".to_string());
@@ -137,6 +142,7 @@ stream_max_retries = 0
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+{chatgpt_base_url_line}
 {forced_line}
 {forced_workspace_line}
 
@@ -532,6 +538,16 @@ async fn respond_to_refresh_request(
     Ok(())
 }
 
+async fn mount_disabled_attribution_settings(mock_server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/settings/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "commit_attribution_enabled": false,
+        })))
+        .mount(mock_server)
+        .await;
+}
+
 #[tokio::test]
 // 401 response triggers account/chatgptAuthTokens/refresh and retries with new tokens.
 async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
@@ -542,6 +558,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
             base_url: Some(format!("{}/v1", mock_server.uri())),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
             ..Default::default()
         },
     )?;
@@ -560,6 +577,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
         vec![unauthorized, responses::sse_response(success_sse)],
     )
     .await;
+    mount_disabled_attribution_settings(&mock_server).await;
 
     let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
@@ -655,6 +673,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
             base_url: Some(format!("{}/v1", mock_server.uri())),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
             ..Default::default()
         },
     )?;
@@ -665,6 +684,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     }));
     let _responses_mock =
         responses::mount_response_sequence(&mock_server, vec![unauthorized]).await;
+    mount_disabled_attribution_settings(&mock_server).await;
 
     let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
@@ -764,6 +784,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
             forced_workspace_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
             requires_openai_auth: Some(true),
             base_url: Some(format!("{}/v1", mock_server.uri())),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
             ..Default::default()
         },
     )?;
@@ -774,6 +795,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     }));
     let _responses_mock =
         responses::mount_response_sequence(&mock_server, vec![unauthorized]).await;
+    mount_disabled_attribution_settings(&mock_server).await;
 
     let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
@@ -878,6 +900,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
             base_url: Some(format!("{}/v1", mock_server.uri())),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
             ..Default::default()
         },
     )?;
@@ -888,6 +911,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     }));
     let _responses_mock =
         responses::mount_response_sequence(&mock_server, vec![unauthorized]).await;
+    mount_disabled_attribution_settings(&mock_server).await;
 
     let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
@@ -1110,7 +1134,6 @@ async fn login_amazon_bedrock_rejects_non_bedrock_provider_override_without_chan
         AuthKeyringBackendKind::default(),
     )?;
     let expected_auth = load_file_auth(codex_home.path())?;
-    let expected_config = read_config_toml(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -1119,6 +1142,7 @@ async fn login_amazon_bedrock_rejects_non_bedrock_provider_override_without_chan
         .with_args(&["-c", "model_provider=\"mock_provider\""])
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
+    let expected_config = read_config_toml(codex_home.path())?;
 
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
@@ -1294,7 +1318,6 @@ async fn logout_aws_managed_bedrock_errors_without_changing_auth_or_config() -> 
         AuthKeyringBackendKind::default(),
     )?;
     let expected_auth = load_file_auth(codex_home.path())?;
-    let expected_config = read_config_toml(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -1302,6 +1325,7 @@ async fn logout_aws_managed_bedrock_errors_without_changing_auth_or_config() -> 
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
+    let expected_config = read_config_toml(codex_home.path())?;
     let request_id = mcp.send_logout_account_request().await?;
     let error = timeout(
         DEFAULT_READ_TIMEOUT,

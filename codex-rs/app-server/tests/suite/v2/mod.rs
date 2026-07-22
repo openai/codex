@@ -27,6 +27,7 @@ mod experimental_api;
 mod experimental_feature_list;
 mod external_agent_config;
 mod fs;
+mod git_attribution;
 mod hooks_list;
 mod host_skills;
 mod imagegen_extension;

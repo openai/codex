@@ -130,6 +130,11 @@ use core_test_support::test_codex::test_env;
 use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tokio::process::Command;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 use crate::json_logging::JsonLogCapture;
 use crate::local_websocket_exec_server::LocalWebsocketExecServer;
@@ -150,6 +155,7 @@ pub struct TestAppServer {
     // Fields drop in declaration order. Tear down the delayed child before
     // removing an owned CODEX_HOME that may still be its cwd on Windows.
     _delayed_exec_server: Option<(LocalWebsocketExecServer, WebsocketDelayInterposer)>,
+    _attribution_settings_server: Option<MockServer>,
     _owned_codex_home: Option<TempDir>,
 }
 
@@ -285,6 +291,7 @@ impl TestAppServer {
             auto_env: None,
             json_logs,
             _delayed_exec_server: None,
+            _attribution_settings_server: None,
             _owned_codex_home: None,
         })
     }
@@ -1879,6 +1886,35 @@ impl TestAppServerBuilder {
                 )
             }
         };
+        let attribution_settings_server = if codex_home.join("auth.json").is_file() {
+            let config_path = codex_home.join("config.toml");
+            let config = std::fs::read_to_string(&config_path)?;
+            if config
+                .lines()
+                .any(|line| line.trim_start().starts_with("chatgpt_base_url"))
+            {
+                None
+            } else {
+                let settings_server = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .and(path("/backend-api/wham/settings/user"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "commit_attribution_enabled": false,
+                    })))
+                    .mount(&settings_server)
+                    .await;
+                std::fs::write(
+                    &config_path,
+                    format!(
+                        "chatgpt_base_url = \"{}/backend-api\"\n{config}",
+                        settings_server.uri()
+                    ),
+                )?;
+                Some(settings_server)
+            }
+        } else {
+            None
+        };
         let (auto_env, delayed_exec_server) = match environment {
             TestAppServerEnvironment::Auto => {
                 let environments_toml = codex_home.join("environments.toml");
@@ -1985,6 +2021,7 @@ impl TestAppServerBuilder {
         app_server.auto_env = auto_env;
         app_server._owned_codex_home = owned_codex_home;
         app_server._delayed_exec_server = delayed_exec_server;
+        app_server._attribution_settings_server = attribution_settings_server;
         Ok(app_server)
     }
 }
