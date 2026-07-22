@@ -872,7 +872,7 @@ async fn assert_remote_manual_compact_request_parity(
             &normal_request,
             "Remote /responses/compact Request",
             &compact_request,
-            &ContextSnapshotOptions::default(),
+            &ContextSnapshotOptions::default().strip_response_item_ids(),
         )
     );
 

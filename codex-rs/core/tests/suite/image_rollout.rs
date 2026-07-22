@@ -16,6 +16,8 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::strip_metadata;
+use core_test_support::responses::strip_response_item_id;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
@@ -181,7 +183,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         internal_chat_message_metadata_passthrough: None,
     };
 
-    assert_eq!(responses::strip_metadata(actual), expected);
+    assert_eq!(strip_response_item_id(strip_metadata(actual)), expected);
 
     Ok(())
 }
@@ -272,7 +274,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         internal_chat_message_metadata_passthrough: None,
     };
 
-    assert_eq!(responses::strip_metadata(actual), expected);
+    assert_eq!(strip_response_item_id(strip_metadata(actual)), expected);
 
     Ok(())
 }

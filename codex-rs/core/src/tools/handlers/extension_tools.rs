@@ -183,6 +183,8 @@ mod tests {
     use codex_tools::ExtensionTurnItem;
     use codex_utils_absolute_path::test_support::PathExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use core_test_support::responses::strip_response_item_id;
+    use core_test_support::responses::strip_response_item_ids;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -357,7 +359,10 @@ mod tests {
         let EventMsg::RawResponseItem(raw_history_item) = raw_history_event.msg else {
             panic!("expected raw response item event");
         };
-        assert_eq!(raw_history_item.item, expected_history_item);
+        assert_eq!(
+            strip_response_item_id(raw_history_item.item),
+            expected_history_item
+        );
         let step_context = StepContext::for_test(Arc::clone(&turn));
         let invocation = ToolInvocation {
             session,
@@ -397,8 +402,8 @@ mod tests {
             expected_sandbox_cwds
         );
         assert_eq!(
-            captured_call.conversation_history.items(),
-            std::slice::from_ref(&expected_history_item)
+            strip_response_item_ids(captured_call.conversation_history.items()),
+            vec![expected_history_item]
         );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {

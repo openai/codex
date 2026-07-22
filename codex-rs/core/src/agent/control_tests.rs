@@ -56,6 +56,7 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadStore;
 use codex_utils_path_uri::PathUri;
+use core_test_support::responses::strip_response_item_ids;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -1340,8 +1341,8 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         },
     ];
     assert_eq!(
-        history.raw_items(),
-        &expected_history,
+        strip_response_item_ids(history.raw_items()),
+        strip_response_item_ids(&expected_history),
         "full-history forked child history should replace parent usage hints with the child subagent hint while filtering non-final assistant/tool chatter"
     );
     assert_eq!(

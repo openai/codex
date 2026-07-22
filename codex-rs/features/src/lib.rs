@@ -206,7 +206,7 @@ pub enum Feature {
     ImageGeneration,
     /// Removed compatibility flag for always-on centralized image preparation.
     ResizeAllImages,
-    /// Generate Responses API item IDs for client-created history items.
+    /// Removed compatibility flag for always-on response item IDs.
     ItemIds,
     /// Request sequential cutoff reasoning summary delivery.
     ConcurrentReasoningSummaries,
@@ -483,7 +483,7 @@ impl Features {
                 "tool_search" | "tool_search_always_defer_mcp_tools" | "apps_mcp_path_override" => {
                     continue;
                 }
-                "image_detail_original" | "resize_all_images" => {
+                "image_detail_original" | "resize_all_images" | "item_ids" => {
                     continue;
                 }
                 "plugin_hooks" => {
@@ -1198,8 +1198,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ItemIds,
         key: "item_ids",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Removed,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ConcurrentReasoningSummaries,

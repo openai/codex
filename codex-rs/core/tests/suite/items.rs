@@ -253,12 +253,7 @@ async fn missing_streamed_reasoning_id_is_reused_for_completion() -> anyhow::Res
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(|config| {
-            let _ = config.features.enable(Feature::ItemIds);
-        })
-        .build_with_auto_env(&server)
-        .await?;
+    let TestCodex { codex, .. } = test_codex().build_with_auto_env(&server).await?;
 
     let mut reasoning_added = ev_reasoning_item_added("unused", &[]);
     reasoning_added["item"]

@@ -71,6 +71,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::responses::strip_metadata_from_json;
+use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -250,7 +251,7 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
+async fn non_openai_responses_requests_include_item_ids_without_passthrough_metadata() {
     let server = MockServer::start().await;
     let response_mock = mount_sse_once(
         &server,
@@ -299,8 +300,8 @@ async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
             "input item should omit internal chat message metadata passthrough: {item}"
         );
         assert!(
-            item.get("id").is_none(),
-            "input item should omit generated IDs: {item}"
+            item.get("id").and_then(serde_json::Value::as_str).is_some(),
+            "input item should include a generated ID: {item}"
         );
     }
 }
@@ -433,9 +434,7 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
         ],
     )
     .await;
-    let mut builder = test_codex().with_config(|config| {
-        let _ = config.features.enable(Feature::ItemIds);
-    });
+    let mut builder = test_codex();
     let initial = builder.build(&server).await?;
     let home = Arc::clone(&initial.home);
     let rollout_path = initial
@@ -451,9 +450,6 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
     })
     .await;
 
-    builder = builder.with_config(|config| {
-        let _ = config.features.enable(Feature::ItemIds);
-    });
     let resumed = builder.resume(&server, home, rollout_path).await?;
     resumed.submit_turn("after resume").await?;
 
@@ -532,9 +528,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
     )
     .await;
     let codex_home = Arc::new(TempDir::new()?);
-    let mut builder = test_codex().with_config(|config| {
-        let _ = config.features.enable(Feature::ItemIds);
-    });
+    let mut builder = test_codex();
     let first = builder
         .resume(&server, Arc::clone(&codex_home), session_path.clone())
         .await?;
@@ -550,9 +544,6 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
         "prompt-only repair should not be persisted to the rollout"
     );
 
-    builder = builder.with_config(|config| {
-        let _ = config.features.enable(Feature::ItemIds);
-    });
     let second = builder.resume(&server, codex_home, session_path).await?;
     second.submit_turn("second resume").await?;
 
@@ -606,7 +597,6 @@ async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> a
     let test = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            let _ = config.features.enable(Feature::ItemIds);
             let _ = config.features.enable(Feature::RemoteCompactionV2);
         })
         .build(&server)
@@ -1503,7 +1493,6 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
-        /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
         /*concurrent_reasoning_summaries_enabled*/
         config
             .features
@@ -3236,7 +3225,6 @@ async fn azure_responses_request_includes_store_and_prefixed_item_ids() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
-        /*item_ids_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
         config.http_client_factory(),
@@ -4107,7 +4095,9 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let tail_len = r3_tail_expected.as_array().unwrap().len();
     let actual_tail = &r3_input_array[r3_input_array.len() - tail_len..];
     assert_eq!(
-        strip_metadata_from_json(serde_json::Value::Array(actual_tail.to_vec())),
+        strip_response_item_ids_from_json(strip_metadata_from_json(serde_json::Value::Array(
+            actual_tail.to_vec(),
+        ))),
         r3_tail_expected,
         "request 3 tail mismatch",
     );

@@ -24,6 +24,7 @@ use codex_app_server_protocol::WebSearchAction;
 use codex_app_server_protocol::WebSearchItem;
 use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
+use core_test_support::responses::strip_response_item_ids_from_json;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -228,7 +229,9 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     );
 
     assert_eq!(
-        responses::strip_metadata_from_json(requests[1].function_call_output(call_id)),
+        strip_response_item_ids_from_json(responses::strip_metadata_from_json(
+            requests[1].function_call_output(call_id),
+        )),
         json!({
             "type": "function_call_output",
             "call_id": call_id,

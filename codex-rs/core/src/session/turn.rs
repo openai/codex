@@ -1930,7 +1930,9 @@ fn assign_missing_streamed_response_item_id(
         return;
     }
 
-    let active_item_id = active_item.map(|item| ResponseItemId::from_server(item.id()));
+    let active_item_id = active_item
+        .map(|item| ResponseItemId::from_server(item.id()))
+        .filter(|item_id| !item_id.is_empty());
     item.set_id(active_item_id);
     Session::assign_missing_response_item_id(item);
 }
@@ -2051,9 +2053,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(mut item) => {
-                if turn_context.item_ids_enabled() {
-                    assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
-                }
+                assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
@@ -2148,9 +2148,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
-                if turn_context.item_ids_enabled() {
-                    assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
-                }
+                assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
                 if let ResponseItem::CustomToolCall {
                     call_id,
                     name,

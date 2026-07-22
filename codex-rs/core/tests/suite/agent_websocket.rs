@@ -257,6 +257,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
 
     let call_id = "shell-command-call";
     let mut shell_command_call = ev_shell_command_call(call_id, "echo websocket");
+    shell_command_call["item"]["id"] = serde_json::json!("fc_shell_command_call");
     shell_command_call["item"]["internal_chat_message_metadata_passthrough"] =
         serde_json::json!({"turn_id": "turn-123"});
     let server = start_websocket_server(vec![vec![

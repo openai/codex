@@ -4134,6 +4134,16 @@ mod tests {
     }
 
     #[test]
+    fn feature_toggles_accept_removed_item_ids_flag() {
+        let toggles = FeatureToggles {
+            enable: vec!["item_ids".to_string()],
+            disable: Vec::new(),
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(overrides, vec!["features.item_ids=true".to_string()]);
+    }
+
+    #[test]
     fn feature_toggles_unknown_feature_errors() {
         let toggles = FeatureToggles {
             enable: vec!["does_not_exist".to_string()],
