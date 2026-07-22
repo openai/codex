@@ -1323,11 +1323,6 @@ async fn capture_binding_waits_for_fresh_startup_even_with_cached_tools() {
             .collect::<Vec<_>>(),
         vec!["client_local_tool"]
     );
-    assert!(
-        step.resource_client()
-            .has_server(CODEX_APPS_MCP_SERVER_NAME)
-            .await
-    );
 }
 
 #[tokio::test]
@@ -1877,12 +1872,6 @@ async fn tool_lists_do_not_block_and_share_codex_apps_startup_reconnect() {
         pending_step.tools().is_empty(),
         "a model step must not advertise cached tools without an exact ready client"
     );
-    let pending_resources = pending_step.resource_client();
-    assert!(
-        !pending_resources
-            .has_server(CODEX_APPS_MCP_SERVER_NAME)
-            .await
-    );
 
     release_reconnect.notify_one();
     tokio::task::yield_now().await;
@@ -1908,18 +1897,6 @@ async fn tool_lists_do_not_block_and_share_codex_apps_startup_reconnect() {
             .prepare_call(CODEX_APPS_MCP_SERVER_NAME, "drive_search")
             .is_some()
     );
-    let recovered_resources = recovered_step.resource_client();
-    assert!(
-        recovered_resources
-            .has_server(CODEX_APPS_MCP_SERVER_NAME)
-            .await
-    );
-    assert!(
-        !pending_resources
-            .has_server(CODEX_APPS_MCP_SERVER_NAME)
-            .await
-    );
-    assert!(pending_resources.cache_key() != recovered_resources.cache_key());
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
