@@ -50,5 +50,5 @@ shlex = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+codex-http-client = { workspace = true }
 pretty_assertions = { workspace = true }
-reqwest = { workspace = true }
