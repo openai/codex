@@ -488,6 +488,121 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let capture = RealtimeCallRequestCapture::new();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/backend-api/codex/realtime/calls$"))
+        .and(capture.clone())
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/live/rtc_core_test")
+                .set_body_string("v=answer\r\n"),
+        )
+        .mount(&server)
+        .await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.started",
+        "session": { "id": "rtc_core_test", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let backend_base_url = format!("{}/backend-api/codex", server.uri());
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(backend_base_url);
+            config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+            config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            model: Some("session-override-model".to_string()),
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: false,
+            initial_items: Vec::new(),
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            version: Some(RealtimeConversationVersion::V3),
+            voice: None,
+        }))
+        .await?;
+
+    let created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationSdp(created) => Some(Ok(created.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .expect("conversation call create failed");
+    assert_eq!(created.sdp, "v=answer\r\n");
+
+    let request = capture.single_request();
+    let expected_session_id = test.session_configured.session_id.to_string();
+    let expected_thread_id = test.session_configured.thread_id.to_string();
+    assert_eq!(
+        (
+            request.url.path(),
+            request.url.query(),
+            request
+                .headers
+                .get("openai-alpha")
+                .and_then(|value| value.to_str().ok()),
+            request
+                .headers
+                .get("session-id")
+                .and_then(|value| value.to_str().ok()),
+            request
+                .headers
+                .get("thread-id")
+                .and_then(|value| value.to_str().ok()),
+        ),
+        (
+            "/backend-api/codex/realtime/calls",
+            Some("intent=quicksilver&architecture=avas"),
+            Some("quicksilver=v2"),
+            Some(expected_session_id.as_str()),
+            Some(expected_thread_id.as_str()),
+        )
+    );
+    let body: Value =
+        serde_json::from_slice(&request.body).context("backend body should be JSON")?;
+    assert_eq!(
+        json!({
+            "sdp": body["sdp"],
+            "delegation": body["session"]["delegation"]["type"],
+        }),
+        json!({
+            "sdp": "v=offer\r\n",
+            "delegation": "client",
+        })
+    );
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let _closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
