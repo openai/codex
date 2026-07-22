@@ -989,6 +989,7 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
+    let _profile_guard = turn_context.turn_timing_state.begin_compaction();
     if turn_context.config.features.enabled(Feature::TokenBudget) {
         // Compaction is the reset request, so force a new context window
         // instead of consuming a pending `new_context` tool request.
