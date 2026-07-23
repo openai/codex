@@ -1177,6 +1177,7 @@ pub struct MultiAgentV2Config {
     pub tool_namespace: Option<String>,
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
+    pub wait_agent_enabled: bool,
     pub non_code_mode_only: bool,
 }
 
@@ -1200,6 +1201,7 @@ impl MultiAgentV2Config {
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
+            wait_agent_enabled: true,
             non_code_mode_only: true,
         }
     }
@@ -2568,6 +2570,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let expose_spawn_agent_model_overrides = base
         .and_then(|config| config.expose_spawn_agent_model_overrides)
         .unwrap_or(default.expose_spawn_agent_model_overrides);
+    let wait_agent_enabled = base
+        .and_then(|config| config.wait_agent_enabled)
+        .unwrap_or(default.wait_agent_enabled);
     let mut default_root_agent_usage_hint_text = default.root_agent_usage_hint_text;
     let mut default_subagent_usage_hint_text = default.subagent_usage_hint_text;
     if expose_spawn_agent_model_overrides {
@@ -2612,6 +2617,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         tool_namespace,
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
+        wait_agent_enabled,
         non_code_mode_only,
     }
 }

@@ -32,6 +32,7 @@ use test_case::test_case;
 use tokio::time::sleep;
 
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
+const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
 fn spawn_agent_description(body: &Value) -> Option<String> {
@@ -302,5 +303,61 @@ async fn configured_agent_roles_control_spawn_agent_type(
         spawn_agent_exposes_agent_type(&response.single_request().body_json(), namespace),
         has_agent_role
     );
+    Ok(())
+}
+
+#[test_case(true, false; "wait agent remains available without clock sleep")]
+#[test_case(true, true; "wait agent remains available with clock sleep")]
+#[test_case(false, false; "wait agent can be disabled without clock sleep")]
+#[test_case(false, true; "wait agent can be disabled with clock sleep")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_wait_agent_tool_follows_configuration(
+    wait_agent_enabled: bool,
+    sleep_tool_enabled: bool,
+) -> Result<()> {
+    let current_time_reminder = if sleep_tool_enabled {
+        r#"
+[features.current_time_reminder]
+enabled = true
+sleep_tool = true
+"#
+    } else {
+        ""
+    };
+    let config_toml = format!(
+        r#"
+[features.multi_agent_v2]
+enabled = true
+wait_agent_enabled = {wait_agent_enabled}
+{current_time_reminder}"#
+    );
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            std::fs::write(home.join("config.toml"), &config_toml)
+                .expect("write multi-agent configuration");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response.single_request();
+    let body = request.body_json();
+    assert!(namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, SPAWN_AGENT_TOOL_NAME).is_some());
+    assert_eq!(
+        namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "wait_agent").is_some(),
+        wait_agent_enabled
+    );
+    assert_eq!(
+        namespace_child_tool(&body, "clock", "sleep").is_some(),
+        sleep_tool_enabled
+    );
+
     Ok(())
 }

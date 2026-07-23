@@ -412,6 +412,7 @@ multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = true
+wait_agent_enabled = false
 non_code_mode_only = true
 "#,
     )
@@ -437,6 +438,7 @@ non_code_mode_only = true
             tool_namespace: Some("agents".to_string()),
             hide_spawn_agent_metadata: Some(true),
             expose_spawn_agent_model_overrides: Some(true),
+            wait_agent_enabled: Some(false),
             non_code_mode_only: Some(true),
         }))
     );
