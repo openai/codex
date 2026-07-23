@@ -280,7 +280,7 @@ pub async fn inter_agent_communication(
         .enqueue_mailbox_communication(communication)
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
-    if trigger_turn {
+    if trigger_turn || sess.has_outstanding_durable_sleep() {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
     }

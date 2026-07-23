@@ -193,7 +193,7 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
         .expect("steer user input");
 }
 
-async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
+async fn enqueue_queue_only_agent_mail(codex: &CodexThread, text: &str) {
     codex
         .submit(Op::InterAgentCommunication {
             communication: InterAgentCommunication::new(
@@ -206,6 +206,10 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
         })
         .await
         .expect("submit queue-only agent mail");
+}
+
+async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
+    enqueue_queue_only_agent_mail(codex, text).await;
     codex
         .submit(Op::RealtimeConversationListVoices)
         .await
@@ -292,6 +296,64 @@ async fn wait_for_sleep_item_completed(codex: &CodexThread, call_id: &str, durat
             duration_ms,
         }
     );
+}
+
+struct SleepingRootExtension;
+
+impl codex_extension_api::ThreadLifecycleContributor<codex_core::config::Config>
+    for SleepingRootExtension
+{
+    fn on_thread_start<'a>(
+        &'a self,
+        input: codex_extension_api::ThreadStartInput<'a, codex_core::config::Config>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            input.thread_store.insert(SleepItem {
+                id: "clock-wait-1".to_string(),
+                duration_ms: 60_000,
+            });
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queue_only_agent_mail_wakes_sleeping_root_and_persists_message() {
+    const CHILD_MESSAGE: &str = "worker completed";
+
+    let (server, _completions) =
+        start_streaming_sse_server(vec![response_completed_chunks("resp-1")]).await;
+    let mut extensions =
+        codex_extension_api::ExtensionRegistryBuilder::<codex_core::config::Config>::new();
+    extensions.thread_lifecycle_contributor(Arc::new(SleepingRootExtension));
+    let codex = test_codex()
+        .with_model("gpt-5.4")
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session")
+        .codex;
+
+    enqueue_queue_only_agent_mail(&codex, CHILD_MESSAGE).await;
+    wait_for_turn_complete(&codex).await;
+
+    assert_eq!(server.requests().await.len(), 1);
+    let history = codex
+        .load_history(/*include_archived*/ true)
+        .await
+        .expect("load persisted thread history");
+    assert!(history.items.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::AgentMessage {
+                content,
+                ..
+            }) if content.iter().any(|content| matches!(
+                content,
+                codex_protocol::models::AgentMessageInputContent::InputText { text }
+                    if text == CHILD_MESSAGE
+            ))
+        )
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
