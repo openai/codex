@@ -20,10 +20,7 @@ async fn sampling_retry_logs_stream_error_context() {
     log_retry(
         ResponsesStreamRequest::Sampling,
         &turn_context,
-        &CodexErr::Stream(
-            "websocket closed by server before response.completed".to_string(),
-            None,
-        ),
+        &CodexErr::Stream("websocket closed by server before response.completed".to_string()),
         /*retries*/ 2,
         /*max_retries*/ 5,
         Duration::from_secs(1),

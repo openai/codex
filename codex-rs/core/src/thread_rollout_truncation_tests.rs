@@ -3,6 +3,7 @@ use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -169,8 +170,8 @@ fn truncate_rollout_after_turn_id_rejects_rolled_back_turn() {
         .expect_err("rolled-back turn should not be a fork anchor");
 
     assert!(matches!(
-        err,
-        CodexErr::InvalidRequest(message)
+        err.details(),
+        CodexErrorDetails::InvalidRequest(message)
             if message == "lastTurnId 'turn-2' was not found in the source thread"
     ));
 }
@@ -188,8 +189,8 @@ fn truncate_rollout_after_turn_id_rejects_synthetic_legacy_turn_id() {
         .expect_err("synthetic turn should not be a fork anchor");
 
     assert!(matches!(
-        err,
-        CodexErr::InvalidRequest(message)
+        err.details(),
+        CodexErrorDetails::InvalidRequest(message)
             if message
                 == "lastTurnId 'rollout-0' is not a persisted canonical turn in the source thread"
     ));
@@ -203,8 +204,8 @@ fn truncate_rollout_after_turn_id_rejects_in_progress_turn() {
         .expect_err("in-progress turn should not be a fork anchor");
 
     assert!(matches!(
-        err,
-        CodexErr::InvalidRequest(message)
+        err.details(),
+        CodexErrorDetails::InvalidRequest(message)
             if message == "lastTurnId 'turn-1' identifies an in-progress turn"
     ));
 }

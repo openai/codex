@@ -1,6 +1,7 @@
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -82,7 +83,9 @@ impl AgentRegistry {
     ) -> Result<SpawnReservation> {
         if let Some(max_threads) = max_threads {
             if !self.try_increment_spawned(max_threads) {
-                return Err(CodexErr::AgentLimitReached { max_threads });
+                return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
+                    max_threads,
+                }));
             }
         } else {
             self.total_count.fetch_add(1, Ordering::AcqRel);

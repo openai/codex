@@ -11,6 +11,64 @@ use reqwest::Response;
 use reqwest::ResponseBuilderExt;
 use reqwest::StatusCode;
 use reqwest::Url;
+use std::time::Duration;
+
+#[test]
+fn codex_err_debug_preserves_legacy_shape() {
+    let actual = [
+        CodexErr::Timeout,
+        CodexErr::Stream("disconnected".to_string()),
+        CodexErr::Stream("retry later".to_string()).with_retry_delay(Duration::from_secs(2)),
+        CodexErr::InternalServerError.with_retry_delay(Duration::from_secs(3)),
+    ]
+    .map(|err| format!("{err:?}"));
+
+    assert_eq!(
+        actual,
+        [
+            "Timeout".to_string(),
+            "Stream(\"disconnected\", None)".to_string(),
+            "Stream(\"retry later\", Some(2s))".to_string(),
+            "InternalServerError".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn retryability_preserves_error_details_distinctions() {
+    let errors = [
+        (CodexErr::ServerOverloaded, false),
+        (
+            CodexErr::RetryLimit(RetryLimitReachedError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                request_id: None,
+            }),
+            false,
+        ),
+        (
+            CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                body: String::new(),
+                user_message: None,
+                url: None,
+                cf_ray: None,
+                request_id: None,
+                identity_authorization_error: None,
+                identity_error_code: None,
+            }),
+            true,
+        ),
+        (CodexErr::InternalServerError, true),
+    ];
+
+    for (err, expected) in errors {
+        assert_eq!(
+            err.is_retryable(),
+            expected,
+            "unexpected retryability for {err:?}"
+        );
+    }
+}
 
 fn rate_limit_snapshot() -> RateLimitSnapshot {
     let primary_reset_at = Utc

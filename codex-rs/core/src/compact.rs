@@ -29,6 +29,7 @@ use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -291,16 +292,21 @@ async fn run_compact_task_inner_impl(
             Ok(()) => {
                 break;
             }
-            Err(err @ (CodexErr::Interrupted | CodexErr::TurnAborted)) => {
+            Err(err)
+                if matches!(
+                    err.details(),
+                    CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
+                ) =>
+            {
                 return Err(err);
             }
-            Err(e @ CodexErr::SessionBudgetExceeded) => {
+            Err(e) if matches!(e.details(), CodexErrorDetails::SessionBudgetExceeded) => {
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 return Err(e);
             }
-            Err(e @ CodexErr::ContextWindowExceeded) => {
+            Err(e) if matches!(e.details(), CodexErrorDetails::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
@@ -479,7 +485,14 @@ impl CompactionAnalyticsAttempt {
 pub(crate) fn compaction_status_from_result<T>(result: &CodexResult<T>) -> CompactionStatus {
     match result {
         Ok(_) => CompactionStatus::Completed,
-        Err(CodexErr::Interrupted | CodexErr::TurnAborted) => CompactionStatus::Interrupted,
+        Err(err)
+            if matches!(
+                err.details(),
+                CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
+            ) =>
+        {
+            CompactionStatus::Interrupted
+        }
         Err(_) => CompactionStatus::Failed,
     }
 }
@@ -697,7 +710,6 @@ async fn drain_to_completed(
         let Some(event) = maybe_event else {
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
-                None,
             ));
         };
         match event {

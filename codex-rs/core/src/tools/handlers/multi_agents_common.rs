@@ -12,6 +12,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ModelPreset;
@@ -80,27 +81,29 @@ where
 }
 
 pub(crate) fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
-    match err {
-        CodexErr::UnsupportedOperation(message) if message == "thread manager dropped" => {
+    match err.details() {
+        CodexErrorDetails::UnsupportedOperation(message) if message == "thread manager dropped" => {
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
         }
-        CodexErr::UnsupportedOperation(message) => FunctionCallError::RespondToModel(message),
-        err => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
+        CodexErrorDetails::UnsupportedOperation(message) => {
+            FunctionCallError::RespondToModel(message.clone())
+        }
+        _ => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
     }
 }
 
 pub(crate) fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
-    match err {
-        CodexErr::ThreadNotFound(id) => {
+    match err.details() {
+        CodexErrorDetails::ThreadNotFound(id) => {
             FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
         }
-        CodexErr::InternalAgentDied => {
+        CodexErrorDetails::InternalAgentDied => {
             FunctionCallError::RespondToModel(format!("agent with id {agent_id} is closed"))
         }
-        CodexErr::UnsupportedOperation(_) => {
+        CodexErrorDetails::UnsupportedOperation(_) => {
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
         }
-        err => FunctionCallError::RespondToModel(format!("collab tool failed: {err}")),
+        _ => FunctionCallError::RespondToModel(format!("collab tool failed: {err}")),
     }
 }
 

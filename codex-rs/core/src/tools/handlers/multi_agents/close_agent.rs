@@ -1,6 +1,6 @@
 use super::*;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
-use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
@@ -66,7 +66,9 @@ async fn handle_close_agent(
         .await
     {
         Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
-        Err(CodexErr::ThreadNotFound(_)) if known_agent => {
+        Err(err)
+            if known_agent && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
+        {
             session.services.agent_control.get_status(agent_id).await
         }
         Err(err) => {

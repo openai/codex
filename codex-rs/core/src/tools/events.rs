@@ -4,7 +4,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::AppliedPatchDelta;
-use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::items::CommandExecutionItem;
@@ -382,33 +382,37 @@ impl ToolEmitter {
                 };
                 (event, result)
             }
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => {
-                let response = self.format_exec_output_for_model(&output, ctx);
-                let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
-                let result = Err(FunctionCallError::RespondToModel(response));
-                (event, result)
-            }
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. }))) => {
-                let response = self.format_exec_output_for_model(&output, ctx);
-                // apply_patch can be denied after it has already committed a
-                // known prefix. Reuse the output-bearing path so the visible
-                // item still fails while the turn diff consumes that prefix.
-                let event = match (self, applied_patch_delta) {
-                    (Self::ApplyPatch { .. }, Some(delta)) => ToolEventStage::Success {
-                        output: *output,
-                        applied_patch_delta: Some(delta),
-                    },
-                    _ => ToolEventStage::Failure(ToolEventFailure::Output(*output)),
-                };
-                let result = Err(FunctionCallError::RespondToModel(response));
-                (event, result)
-            }
-            Err(ToolError::Codex(err)) => {
-                let message = format!("execution error: {err:?}");
-                let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
-                let result = Err(FunctionCallError::RespondToModel(message));
-                (event, result)
-            }
+            Err(ToolError::Codex(err)) => match err.details() {
+                CodexErrorDetails::Sandbox(SandboxErr::Timeout { output }) => {
+                    let output = output.as_ref().clone();
+                    let response = self.format_exec_output_for_model(&output, ctx);
+                    let event = ToolEventStage::Failure(ToolEventFailure::Output(output));
+                    let result = Err(FunctionCallError::RespondToModel(response));
+                    (event, result)
+                }
+                CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
+                    let output = output.as_ref().clone();
+                    let response = self.format_exec_output_for_model(&output, ctx);
+                    // apply_patch can be denied after it has already committed a
+                    // known prefix. Reuse the output-bearing path so the visible
+                    // item still fails while the turn diff consumes that prefix.
+                    let event = match (self, applied_patch_delta) {
+                        (Self::ApplyPatch { .. }, Some(delta)) => ToolEventStage::Success {
+                            output,
+                            applied_patch_delta: Some(delta),
+                        },
+                        _ => ToolEventStage::Failure(ToolEventFailure::Output(output)),
+                    };
+                    let result = Err(FunctionCallError::RespondToModel(response));
+                    (event, result)
+                }
+                _ => {
+                    let message = format!("execution error: {err:?}");
+                    let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
+                    let result = Err(FunctionCallError::RespondToModel(message));
+                    (event, result)
+                }
+            },
             Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
