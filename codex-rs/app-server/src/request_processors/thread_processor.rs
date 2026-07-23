@@ -3399,7 +3399,10 @@ impl ThreadRequestProcessor {
                     .await;
             }
             Err(err) => {
-                let error = internal_error(format!("error resuming thread: {err}"));
+                let error = match err {
+                    CodexErr::InvalidRequest(message) => invalid_request(message),
+                    err => internal_error(format!("error resuming thread: {err}")),
+                };
                 self.outgoing.send_error(request_id, error).await;
             }
         }
