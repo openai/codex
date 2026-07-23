@@ -451,9 +451,18 @@ impl Session {
         turn.task = Some(running_task);
     }
 
+    /// Returns whether an extension has marked this thread as durably asleep.
+    pub(crate) fn has_outstanding_durable_sleep(&self) -> bool {
+        self.services
+            .thread_extension_data
+            .get::<codex_extension_items::sleep::SleepItem>()
+            .is_some()
+    }
+
     /// Starts a regular turn when the session is idle and pending work is waiting.
     ///
-    /// Pending work currently includes mailbox mail marked with `trigger_turn`.
+    /// Pending work includes mailbox mail marked with `trigger_turn`, or any mailbox mail while
+    /// an outstanding durable sleep is attached to the thread.
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
@@ -469,13 +478,16 @@ impl Session {
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
     /// session.
     ///
-    /// The turn is created only when there is mailbox mail marked with `trigger_turn`, and only
-    /// if the session is currently idle.
+    /// The turn is created only when the session is idle and mailbox mail either requests a turn
+    /// or can wake an outstanding durable sleep.
     pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_trigger_turn_mailbox_items().await {
+        if !self.input_queue.has_pending_mailbox_items().await
+            || (!self.input_queue.has_trigger_turn_mailbox_items().await
+                && !self.has_outstanding_durable_sleep())
+        {
             return;
         }
 
