@@ -2861,6 +2861,8 @@ impl ThreadRequestProcessor {
                     SortDirection::Asc => StoreSortDirection::Asc,
                     SortDirection::Desc => StoreSortDirection::Desc,
                 },
+                after_updated_at: None,
+                through_updated_at: None,
             })
             .await
             .map_err(|err| match err {

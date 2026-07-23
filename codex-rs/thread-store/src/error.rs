@@ -46,6 +46,13 @@ pub enum ThreadStoreError {
         operation: &'static str,
     },
 
+    /// The store cannot return the requested result within a required resource limit.
+    #[error("thread-store resource exhausted: {message}")]
+    ResourceExhausted {
+        /// User-facing explanation of the exhausted resource.
+        message: String,
+    },
+
     /// Catch-all for implementation failures that do not fit a more specific category.
     #[error("thread-store internal error: {message}")]
     Internal {

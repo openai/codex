@@ -401,6 +401,13 @@ pub struct ListItemsParams {
     pub page_size: usize,
     /// Sort direction requested by the caller.
     pub sort_direction: SortDirection,
+    /// Exclusive lower bound for item updates. Requires `through_updated_at` when set.
+    #[serde(default)]
+    pub after_updated_at: Option<DateTime<Utc>>,
+    /// Inclusive upper bound for item updates. Implementations that do not support bounded reads
+    /// must return [`crate::ThreadStoreError::Unsupported`] instead of ignoring this field.
+    #[serde(default)]
+    pub through_updated_at: Option<DateTime<Utc>>,
 }
 
 /// A projected app-server `ThreadItem` snapshot within a turn.
@@ -425,6 +432,9 @@ pub struct ItemPage {
     pub next_cursor: Option<String>,
     /// Opaque cursor for fetching in the opposite direction.
     pub backwards_cursor: Option<String>,
+    /// Inclusive update bound applied by the store, echoed for bounded reads.
+    #[serde(default)]
+    pub read_through_updated_at: Option<DateTime<Utc>>,
 }
 
 /// Parameters for searching visible message occurrences within one paginated thread.

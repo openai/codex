@@ -90,6 +90,8 @@ mod tests {
                 cursor: None,
                 page_size: 10,
                 sort_direction: SortDirection::Asc,
+                after_updated_at: None,
+                through_updated_at: None,
             })
             .await
             .expect_err("default list_items should be unsupported");
