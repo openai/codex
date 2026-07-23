@@ -7,6 +7,8 @@
 use std::fmt;
 use std::io::stdout;
 
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use crossterm::Command;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
@@ -123,18 +125,44 @@ pub(super) fn enable_keyboard_enhancement() {
         return;
     }
 
+    let running_in_tmux_session = running_in_tmux_session();
+    let tmux_extended_keys_format = if running_in_tmux_session {
+        read_tmux_extended_keys_format()
+    } else {
+        None
+    };
+
     let _ = execute!(
         stdout(),
         DisableModifyOtherKeys,
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
+        PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+            terminal_info().name,
+            tmux_extended_keys_format.as_deref()
+        ))
     );
 
-    if tmux_should_enable_modify_other_keys() {
+    if tmux_should_enable_modify_other_keys_for(
+        running_in_tmux_session,
+        tmux_extended_keys_format.as_deref(),
+    ) {
         let _ = execute!(stdout(), EnableModifyOtherKeys);
+    }
+}
+
+fn keyboard_enhancement_flags(
+    terminal_name: TerminalName,
+    tmux_extended_keys_format: Option<&str>,
+) -> KeyboardEnhancementFlags {
+    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
+
+    // iTerm can leak the release of an exit shortcut into the parent shell.
+    // tmux's xterm key format also loses Shift-Enter when event types are
+    // reported. Preserve repeat classification on transports that support it.
+    if terminal_name == TerminalName::Iterm2 || matches!(tmux_extended_keys_format, Some("xterm")) {
+        flags
+    } else {
+        flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
     }
 }
 
@@ -147,13 +175,6 @@ fn running_in_tmux_session() -> bool {
 
 fn tmux_session_detected(tmux: Option<&str>, tmux_pane: Option<&str>) -> bool {
     tmux.is_some() || tmux_pane.is_some()
-}
-
-fn tmux_should_enable_modify_other_keys() -> bool {
-    tmux_should_enable_modify_other_keys_for(
-        running_in_tmux_session(),
-        read_tmux_extended_keys_format().as_deref(),
-    )
 }
 
 fn tmux_should_enable_modify_other_keys_for(
@@ -283,17 +304,75 @@ mod tests {
     use super::EnableModifyOtherKeys;
     use super::ResetKeyboardEnhancementFlags;
     use super::keyboard_enhancement_disabled_for;
+    use super::keyboard_enhancement_flags;
     use super::parse_bool_env;
     use super::tmux_session_detected;
     use super::tmux_should_enable_modify_other_keys_for;
     use super::vscode_terminal_detected;
+    use codex_terminal_detection::TerminalName;
     use crossterm::Command;
+    use crossterm::event::PushKeyboardEnhancementFlags;
     use pretty_assertions::assert_eq;
 
     fn ansi_for(command: impl Command) -> String {
         let mut out = String::new();
         command.write_ansi(&mut out).unwrap();
         out
+    }
+
+    #[test]
+    fn keyboard_enhancement_suppresses_release_reporting_for_iterm() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Iterm2,
+                /*tmux_extended_keys_format*/ None
+            ))),
+            "\x1b[>5u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_preserves_repeat_reporting_for_kitty() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Kitty,
+                /*tmux_extended_keys_format*/ None
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_preserves_repeat_reporting_for_csi_u_tmux() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Kitty,
+                Some("csi-u")
+            ))),
+            "\x1b[>7u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_preserves_shift_enter_for_xterm_tmux() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Kitty,
+                Some("xterm")
+            ))),
+            "\x1b[>5u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_preserves_repeat_reporting_for_unknown_terminals() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Unknown,
+                /*tmux_extended_keys_format*/ None
+            ))),
+            "\x1b[>7u"
+        );
     }
 
     #[test]
