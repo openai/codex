@@ -539,6 +539,9 @@
             "guardian_approval": {
               "type": "boolean"
             },
+            "guardianv2": {
+              "type": "boolean"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -5058,6 +5061,9 @@
           "type": "boolean"
         },
         "guardian_approval": {
+          "type": "boolean"
+        },
+        "guardianv2": {
           "type": "boolean"
         },
         "hooks": {
