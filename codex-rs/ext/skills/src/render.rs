@@ -15,7 +15,11 @@ const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 const MAX_CATALOG_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
+const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
+const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
+const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
+    "Exceeded skills context budget. All skill descriptions were removed and";
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
@@ -85,6 +89,41 @@ pub(crate) struct SkillRenderReport {
     pub(crate) omitted_count: usize,
     pub(crate) truncated_description_chars: usize,
     pub(crate) truncated_description_count: usize,
+}
+
+impl SkillRenderReport {
+    pub(crate) fn warning_message(&self) -> Option<String> {
+        if self.omitted_count > 0 {
+            let skill_word = if self.omitted_count == 1 {
+                "skill"
+            } else {
+                "skills"
+            };
+            let verb = if self.omitted_count == 1 {
+                "was"
+            } else {
+                "were"
+            };
+            return Some(format!(
+                "{} {} additional {} {} not included in the model-visible skills list.",
+                SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX, self.omitted_count, skill_word, verb
+            ));
+        }
+
+        (self.average_truncated_description_chars()
+            > SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS)
+            .then(|| SKILL_DESCRIPTION_TRUNCATED_WARNING.to_string())
+    }
+
+    fn average_truncated_description_chars(&self) -> usize {
+        if self.total_count == 0 || self.truncated_description_chars == 0 {
+            return 0;
+        }
+
+        self.truncated_description_chars
+            .saturating_add(self.total_count.saturating_sub(1))
+            / self.total_count
+    }
 }
 
 pub(crate) fn capped_skill_metadata_budget(context_window: Option<i64>) -> SkillMetadataBudget {
@@ -385,13 +424,6 @@ fn sum_description_truncation(rendered: &[RenderedSkillLine]) -> (usize, usize) 
 
 pub(crate) struct AvailableSkillsRender {
     skill_lines: Vec<String>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "consumed by alias selection and render side effects in follow-ups"
-        )
-    )]
     pub(crate) report: SkillRenderReport,
 }
 
@@ -477,7 +509,8 @@ pub(crate) fn render_available_skills(
     })
 }
 
-pub(crate) fn available_skills_fragment(
+#[cfg(test)]
+fn available_skills_fragment(
     catalog: &SkillCatalog,
     include_skills_usage_instructions: bool,
     policy: SkillCatalogRenderPolicy,
