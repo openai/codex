@@ -503,7 +503,9 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
             list_calls: None,
             fail_first_list: false,
         }));
-    let mut builder = ExtensionRegistryBuilder::new();
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
     install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
@@ -537,6 +539,19 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
     assert!(!rendered.contains("- skill-199:"));
     assert!(!rendered.contains("description-"));
     assert!(rendered.contains("additional skills omitted from this bounded skills list"));
+    let omitted_count = 200 - included_count;
+    let event = event_rx.try_recv()?;
+    assert_eq!("thread", event.id);
+    let EventMsg::Warning(warning) = event.msg else {
+        panic!("expected catalog budget warning");
+    };
+    assert_eq!(
+        warning.message,
+        format!(
+            "Exceeded skills context budget. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
+        )
+    );
+    assert!(event_rx.try_recv().is_err());
 
     Ok(())
 }
@@ -833,7 +848,9 @@ async fn model_context_window_scales_executor_catalog_but_not_thread_catalog() -
             list_calls: None,
             fail_first_list: false,
         }));
-    let mut builder = ExtensionRegistryBuilder::new();
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
     install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
@@ -886,11 +903,46 @@ async fn model_context_window_scales_executor_catalog_but_not_thread_catalog() -
             turn_store: &turn_store,
         })
         .await;
+    // Core rebuilds world state before each sampling step.
+    let _repeated_sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+    let event = event_rx.try_recv()?;
+    assert_eq!("turn-1", event.id);
+    let EventMsg::Warning(warning) = event.msg else {
+        panic!("expected catalog budget warning");
+    };
+    assert!(
+        warning
+            .message
+            .starts_with("Exceeded skills context budget.")
+    );
+    assert!(
+        warning
+            .message
+            .ends_with("additional skills were not included in the model-visible skills list.")
+    );
+    let snapshot = sections[0].snapshot().clone();
     let fragment = sections[0]
         .render_diff(PreviousWorldStateSection::Absent)
         .ok_or("bounded executor catalog should render")?;
     assert!(fragment.body().contains("additional skills omitted"));
     assert!(!fragment.body().contains("skill-39"));
+    assert!(
+        sections[0]
+            .render_diff(PreviousWorldStateSection::Known(&snapshot))
+            .is_none()
+    );
+    assert!(event_rx.try_recv().is_err());
 
     Ok(())
 }

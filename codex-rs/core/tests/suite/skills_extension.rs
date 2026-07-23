@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_core::config::Config;
+use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_skills_extension::SkillProvider;
 use codex_skills_extension::SkillProviderSource;
 use codex_skills_extension::SkillProviders;
@@ -32,6 +35,14 @@ use pretty_assertions::assert_eq;
 
 struct StaticSkillProvider {
     catalog: SkillCatalog,
+}
+
+struct ChannelEventSink(std::sync::mpsc::Sender<Event>);
+
+impl ExtensionEventSink for ChannelEventSink {
+    fn emit(&self, event: Event) {
+        let _ = self.0.send(event);
+    }
 }
 
 impl SkillProvider for StaticSkillProvider {
@@ -88,7 +99,10 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
                 .collect(),
             warnings: Vec::new(),
         };
-        let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let mut extensions = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::new(
+            ChannelEventSink(event_tx),
+        ));
         install_with_providers(
             &mut extensions,
             SkillProviders::new().with_provider(SkillProviderSource::new(
@@ -139,12 +153,22 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             .iter()
             .filter(|line| line.starts_with("- skill-"))
             .count();
+        let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
+            panic!("expected catalog budget warning");
+        };
+        let omitted_count = 400 - included_count;
 
         assert!(catalog_text.contains("additional skills omitted"));
         assert!(!catalog_text.contains(
             "A description long enough to keep the catalog under sustained budget pressure."
         ));
         assert!(metadata_cost <= expected_budget);
+        assert_eq!(
+            warning.message,
+            format!(
+                "Exceeded skills context budget. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
+            )
+        );
         included_counts.push(included_count);
     }
 
@@ -180,7 +204,9 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
             .collect(),
         warnings: Vec::new(),
     };
-    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut extensions =
+        ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
     install_with_providers(
         &mut extensions,
         SkillProviders::new().with_provider(SkillProviderSource::new(
@@ -232,6 +258,13 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
             .all(|length| *length > 0 && *length < 1_024)
     );
     assert!(!catalog_text.contains("additional skills omitted"));
+    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
+        panic!("expected catalog budget warning");
+    };
+    assert_eq!(
+        warning.message,
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+    );
 
     Ok(())
 }

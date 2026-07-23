@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -334,6 +335,18 @@ impl OrchestratorResourceCache {
         self.contents_bytes = next_contents_bytes;
         self.entries.insert(key, result.clone());
         result
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct EmittedCatalogBudgetWarnings(Mutex<HashSet<String>>);
+
+impl EmittedCatalogBudgetWarnings {
+    pub(crate) fn insert(&self, warning: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(warning.to_string())
     }
 }
 
