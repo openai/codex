@@ -4,7 +4,10 @@ use std::time::Instant;
 
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
+use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::HttpResponse;
+use codex_http_client::RouteAwareClientPool;
 use futures::FutureExt;
 use http::HeaderMap;
 use http::HeaderName;
@@ -49,7 +52,7 @@ const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
 struct EnvironmentRegistryClient {
     base_url: String,
     auth_provider: SharedAuthProvider,
-    http: reqwest::Client,
+    http: RouteAwareClientPool,
     connect_timeout: Duration,
     telemetry: ExecServerTelemetry,
 }
@@ -66,21 +69,28 @@ impl std::fmt::Debug for EnvironmentRegistryClient {
 impl EnvironmentRegistryClient {
     #[cfg(test)]
     fn new(base_url: String, auth_provider: SharedAuthProvider) -> Result<Self, ExecServerError> {
-        Self::new_with_telemetry(base_url, auth_provider, ExecServerTelemetry::default())
+        Self::new_with_telemetry(
+            base_url,
+            auth_provider,
+            ExecServerTelemetry::default(),
+            HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault),
+        )
     }
 
     fn new_with_telemetry(
         base_url: String,
         auth_provider: SharedAuthProvider,
         telemetry: ExecServerTelemetry,
+        http_client_factory: HttpClientFactory,
     ) -> Result<Self, ExecServerError> {
         let base_url = normalize_base_url(base_url)?;
         Ok(Self {
             base_url,
             auth_provider,
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+            http: RouteAwareClientPool::new_without_redirects_or_request_logging(
+                http_client_factory,
+                ClientRouteClass::Api,
+            ),
             connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
             telemetry,
         })
@@ -206,15 +216,15 @@ impl EnvironmentRegistryClient {
         })
     }
 
-    async fn parse_json_response<R>(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<R, ExecServerError>
+    async fn parse_json_response<R>(&self, response: HttpResponse) -> Result<R, ExecServerError>
     where
         R: for<'de> Deserialize<'de>,
     {
         if response.status().is_success() {
-            return response.json::<R>().await.map_err(ExecServerError::from);
+            return response
+                .json::<R>()
+                .await
+                .map_err(|error| ExecServerError::EnvironmentRegistryRequest(error.into()));
         }
 
         let status = response.status();
@@ -276,7 +286,8 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
         }
         let response = response
             .json::<EnvironmentRegistryHarnessKeyValidationResponse>()
-            .await?;
+            .await
+            .map_err(|error| ExecServerError::EnvironmentRegistryRequest(error.into()))?;
         if !response.valid {
             return Err(ExecServerError::Protocol(
                 "environment registry rejected Noise relay harness key".to_string(),
@@ -288,17 +299,22 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
 
 /// Noise connection configuration for a Codex harness.
 ///
-/// The provider holds the authenticated registry client so every reconnect
-/// receives fresh URL and harness-key authorization material.
+/// Configuration stays inert until the effective outbound HTTP policy is known.
+/// Its connection provider then holds the authenticated registry client so every
+/// reconnect receives fresh URL and harness-key authorization material.
 #[derive(Clone)]
 pub(crate) struct NoiseRendezvousEnvironmentConfig {
-    provider: Arc<dyn NoiseRendezvousConnectProvider>,
+    base_url: String,
+    environment_id: String,
+    auth_provider: SharedAuthProvider,
 }
 
 impl std::fmt::Debug for NoiseRendezvousEnvironmentConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NoiseRendezvousEnvironmentConfig")
-            .field("provider", &"<redacted>")
+            .field("base_url", &"<redacted>")
+            .field("environment_id", &self.environment_id)
+            .field("auth_provider", &"<redacted>")
             .finish()
     }
 }
@@ -310,23 +326,30 @@ impl NoiseRendezvousEnvironmentConfig {
         bearer_token: String,
         chatgpt_account_id: Option<String>,
     ) -> Result<Self, ExecServerError> {
+        let base_url = normalize_base_url(base_url)?;
         let environment_id = normalize_environment_id(environment_id)?;
         let auth_provider = static_bearer_auth_provider(bearer_token, chatgpt_account_id)?;
-        let client = EnvironmentRegistryClient::new_with_telemetry(
-            base_url,
-            auth_provider,
-            ExecServerTelemetry::default(),
-        )?;
         Ok(Self {
-            provider: Arc::new(EnvironmentRegistryNoiseConnectProvider {
-                client,
-                environment_id,
-            }),
+            base_url,
+            environment_id,
+            auth_provider,
         })
     }
 
-    pub(crate) fn connect_provider(&self) -> Arc<dyn NoiseRendezvousConnectProvider> {
-        Arc::clone(&self.provider)
+    pub(crate) fn into_connect_provider(
+        self,
+        http_client_factory: HttpClientFactory,
+    ) -> Result<Arc<dyn NoiseRendezvousConnectProvider>, ExecServerError> {
+        let client = EnvironmentRegistryClient::new_with_telemetry(
+            self.base_url,
+            self.auth_provider,
+            ExecServerTelemetry::default(),
+            http_client_factory,
+        )?;
+        Ok(Arc::new(EnvironmentRegistryNoiseConnectProvider {
+            client,
+            environment_id: self.environment_id,
+        }))
     }
 }
 
@@ -475,6 +498,7 @@ pub async fn run_remote_environment(
         config.base_url.clone(),
         config.auth_provider.clone(),
         config.telemetry.clone(),
+        config.http_client_factory.clone(),
     )?;
     let processor = ConnectionProcessor::new_with_telemetry(
         runtime_paths,
@@ -685,6 +709,8 @@ mod tests {
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
     use tracing::Instrument;
     use tracing_subscriber::prelude::*;
     use wiremock::Mock;
@@ -805,7 +831,10 @@ mod tests {
         .expect("noise configuration");
 
         let bundle = config
-            .connect_provider()
+            .into_connect_provider(HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ))
+            .expect("Noise connect provider")
             .connect_bundle(harness_public_key)
             .await
             .expect("Noise connect bundle");
@@ -841,6 +870,52 @@ mod tests {
             .await
         {
             Ok(_) => panic!("stalled connect response should time out"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            ExecServerError::EnvironmentRegistryRequest(error) if error.is_timeout()
+        ));
+    }
+
+    #[tokio::test]
+    async fn connect_environment_times_out_when_registry_response_body_stalls() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("registry listener should bind");
+        let registry_url = format!(
+            "http://{}",
+            listener
+                .local_addr()
+                .expect("registry listener should have an address")
+        );
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("registry request should connect");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 256\r\n\r\n{",
+                )
+                .await
+                .expect("registry response headers should write");
+            sleep(Duration::from_secs(1)).await;
+        });
+        let mut client =
+            EnvironmentRegistryClient::new(registry_url, static_registry_auth_provider())
+                .expect("client");
+        client.connect_timeout = Duration::from_millis(50);
+        let harness_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+
+        let error = match client
+            .connect_environment("environment-requested", harness_public_key)
+            .await
+        {
+            Ok(_) => panic!("stalled connect response body should time out"),
             Err(error) => error,
         };
 

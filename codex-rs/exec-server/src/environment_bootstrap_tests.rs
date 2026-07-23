@@ -12,6 +12,7 @@ use crate::LOCAL_ENVIRONMENT_ID;
 use crate::REMOTE_ENVIRONMENT_ID;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProviderSnapshot;
+use crate::remote::NoiseRendezvousEnvironmentConfig;
 
 #[test]
 fn prepared_remote_environment_is_detected_without_starting_a_connection() {
@@ -33,6 +34,70 @@ fn prepared_remote_environment_is_detected_without_starting_a_connection() {
         *connection_state.borrow(),
         EnvironmentConnectionState::Disconnected
     );
+}
+
+#[test]
+fn prepared_noise_environment_is_detected_before_http_policy_is_resolved() {
+    let config = NoiseRendezvousEnvironmentConfig::new(
+        "https://registry-user:registry-password@registry.example/api?access_token=query-secret#fragment-secret"
+            .to_string(),
+        "environment-requested".to_string(),
+        "registry-token".to_string(),
+        Some("workspace-123".to_string()),
+    )
+    .expect("Noise environment configuration");
+    let prepared = PreparedEnvironmentManager {
+        source: PreparedEnvironmentSource::Noise(config),
+    };
+
+    assert!(prepared.default_environment_is_remote());
+
+    let debug = format!("{prepared:?}");
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("registry-token"));
+    assert!(!debug.contains("workspace-123"));
+    assert!(!debug.contains("registry-user"));
+    assert!(!debug.contains("registry-password"));
+    assert!(!debug.contains("registry.example"));
+    assert!(!debug.contains("query-secret"));
+    assert!(!debug.contains("fragment-secret"));
+}
+
+#[test]
+fn prepared_noise_environment_rejects_invalid_configuration() {
+    let invalid_configs = [
+        ("", "environment-requested", "registry-token", None),
+        ("https://registry.example", "", "registry-token", None),
+        (
+            "https://registry.example",
+            "environment-requested",
+            "",
+            None,
+        ),
+        (
+            "https://registry.example",
+            "environment-requested",
+            "registry\ntoken",
+            None,
+        ),
+        (
+            "https://registry.example",
+            "environment-requested",
+            "registry-token",
+            Some("workspace\n123"),
+        ),
+    ];
+
+    for (registry_url, environment_id, auth_token, chatgpt_account_id) in invalid_configs {
+        let result = NoiseRendezvousEnvironmentConfig::new(
+            registry_url.to_string(),
+            environment_id.to_string(),
+            auth_token.to_string(),
+            chatgpt_account_id.map(str::to_string),
+        );
+
+        assert!(result.is_err());
+    }
 }
 
 #[test]

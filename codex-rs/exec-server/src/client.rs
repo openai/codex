@@ -563,7 +563,7 @@ pub enum ExecServerError {
     Server { code: i64, message: String },
     #[error("environment registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
     EnvironmentRegistryHttp {
-        status: reqwest::StatusCode,
+        status: http::StatusCode,
         code: Option<String>,
         message: String,
     },
@@ -572,7 +572,7 @@ pub enum ExecServerError {
     #[error("environment registry authentication error: {0}")]
     EnvironmentRegistryAuth(String),
     #[error("environment registry request failed: {0}")]
-    EnvironmentRegistryRequest(#[from] reqwest::Error),
+    EnvironmentRegistryRequest(#[from] codex_http_client::RouteAwareRequestError),
     #[error("exec-server connection attempt failed: {0}")]
     ConnectionAttempt(#[source] Arc<ExecServerError>),
 }
