@@ -136,9 +136,26 @@ impl ConfigRequestProcessor {
         &self,
         params: ConfigBatchWriteParams,
     ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
-        self.handle_config_mutation_result(self.batch_write_inner(params).await)
-            .await
-            .map(ClientResponsePayload::ConfigBatchWrite)
+        let session_defaults_only = !params.edits.is_empty()
+            && params.edits.iter().all(|edit| {
+                matches!(
+                    edit.key_path.as_str(),
+                    "model"
+                        | "model_reasoning_effort"
+                        | "plan_mode_reasoning_effort"
+                        | "service_tier"
+                        | "personality"
+                )
+            });
+        let reload_user_config = params.reload_user_config;
+        let response = self.batch_write_inner(params).await?;
+        if !session_defaults_only {
+            self.handle_config_mutation().await;
+            if reload_user_config {
+                self.reload_user_config().await;
+            }
+        }
+        Ok(ClientResponsePayload::ConfigBatchWrite(response))
     }
 
     pub(crate) async fn experimental_feature_enablement_set(
@@ -149,6 +166,9 @@ impl ConfigRequestProcessor {
         let response = self
             .handle_config_mutation_result(self.set_experimental_feature_enablement(params).await)
             .await?;
+        if !response.enablement.is_empty() {
+            self.reload_user_config().await;
+        }
         self.outgoing
             .send_response_as(
                 request_id,
@@ -219,7 +239,6 @@ impl ConfigRequestProcessor {
         &self,
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        let reload_user_config = params.reload_user_config;
         let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
             params
                 .edits
@@ -232,9 +251,6 @@ impl ConfigRequestProcessor {
             .await
             .map_err(map_error)?;
         self.emit_plugin_toggle_events(pending_changes).await;
-        if reload_user_config {
-            self.reload_user_config().await;
-        }
         Ok(response)
     }
 
@@ -270,7 +286,6 @@ impl ConfigRequestProcessor {
             .map_err(|_| internal_error("failed to update feature enablement"))?;
 
         self.load_latest_config(/*fallback_cwd*/ None).await?;
-        self.reload_user_config().await;
 
         Ok(ExperimentalFeatureEnablementSetResponse { enablement })
     }
