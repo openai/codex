@@ -226,6 +226,7 @@ impl EnvironmentManager {
         local_runtime_paths: Option<ExecServerRuntimePaths>,
         http_client_factory: HttpClientFactory,
     ) -> Result<Self, ExecServerError> {
+        let connect_provider = config.into_connect_provider(http_client_factory.clone())?;
         let manager = Self {
             default_environment: Some(REMOTE_ENVIRONMENT_ID.to_string()),
             environments: RwLock::new(HashMap::new()),
@@ -233,10 +234,7 @@ impl EnvironmentManager {
             local_runtime_paths,
             http_client_factory,
         };
-        manager.upsert_noise_environment(
-            REMOTE_ENVIRONMENT_ID.to_string(),
-            config.connect_provider(),
-        )?;
+        manager.upsert_noise_environment(REMOTE_ENVIRONMENT_ID.to_string(), connect_provider)?;
         Ok(manager)
     }
 
@@ -584,13 +582,13 @@ fn noise_environment_config_from_values(
             }
         };
 
-    let config = NoiseRendezvousEnvironmentConfig::new(
+    NoiseRendezvousEnvironmentConfig::new(
         registry_url,
         environment_id,
         auth_token,
         chatgpt_account_id,
-    )?;
-    Ok(Some(config))
+    )
+    .map(Some)
 }
 
 fn optional_environment_value(name: &str) -> Option<String> {
@@ -939,10 +937,14 @@ mod tests {
         let manager = EnvironmentManager::from_noise_environment_config(
             config,
             /*local_runtime_paths*/ None,
-            legacy_http_client_factory(),
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
         )
         .expect("build environment manager");
 
+        assert_eq!(
+            manager.http_client_factory().outbound_proxy_policy(),
+            OutboundProxyPolicy::RespectSystemProxy
+        );
         assert_eq!(
             manager.default_environment_id(),
             Some(REMOTE_ENVIRONMENT_ID)

@@ -597,12 +597,12 @@ fn is_retryable_registry_error(error: &ExecServerError) -> bool {
         error,
         ExecServerError::EnvironmentRegistryHttp { status, code, .. }
             if status.is_server_error()
-                || *status == reqwest::StatusCode::REQUEST_TIMEOUT
-                || *status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || *status == http::StatusCode::REQUEST_TIMEOUT
+                || *status == http::StatusCode::TOO_MANY_REQUESTS
                 // TODO: Replace this coarse retry with an explicit registry/presence
                 // recovery FSM so `environment_offline` is retried only while the
                 // executor is expected to reconnect.
-                || (*status == reqwest::StatusCode::CONFLICT
+                || (*status == http::StatusCode::CONFLICT
                     && code.as_deref() == Some("environment_offline"))
     )
 }
