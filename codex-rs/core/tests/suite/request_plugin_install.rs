@@ -38,6 +38,9 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use wiremock::Mock;
@@ -137,7 +140,13 @@ async fn build_test(
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config({
             let apps_base_url = apps_server.chatgpt_base_url.clone();
-            move |config| configure_apps_without_search_tool(config, apps_base_url.as_str())
+            move |config| {
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::Disabled)
+                    .expect("test config should allow disabled permissions");
+                configure_apps_without_search_tool(config, apps_base_url.as_str());
+            }
         });
     builder.build(server).await
 }
@@ -550,9 +559,11 @@ async fn remote_plugin_install_refreshes_plugin_and_apps_tool_caches() -> Result
 
 async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTools) -> Result<()> {
     let server = start_mock_server().await;
+    let tools_available = Arc::new(AtomicBool::new(false));
     let apps_server = match refreshed_tools {
         RefreshedAppsTools::Available => {
-            AppsTestServer::mount_with_tools_available_after_initial_list(&server).await?
+            AppsTestServer::mount_with_tools_available_when(&server, Arc::clone(&tools_available))
+                .await?
         }
         RefreshedAppsTools::Missing => AppsTestServer::mount_without_tools(&server).await?,
     };
@@ -589,6 +600,10 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
     let elicitation = start_install_turn(&test, "use Calendar").await?;
     mount_remote_calendar_installed_plugins(&server).await;
     drop(initial_remote_installed_plugins);
+    tools_available.store(
+        matches!(refreshed_tools, RefreshedAppsTools::Available),
+        Ordering::SeqCst,
+    );
     resolve_install_elicitation(&test, elicitation, ElicitationAction::Accept).await?;
 
     let requests = mock.requests();

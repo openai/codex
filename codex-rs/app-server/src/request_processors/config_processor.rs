@@ -276,8 +276,8 @@ impl ConfigRequestProcessor {
     }
 
     async fn reload_user_config(&self) {
-        let next_config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
+        match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(_) => {}
             Err(err) => {
                 tracing::warn!(
                     "failed to rebuild user config for runtime refresh: {}",
@@ -291,7 +291,19 @@ impl ConfigRequestProcessor {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
                 continue;
             };
-            thread.refresh_runtime_config(next_config.clone()).await;
+            let current_config = thread.config().await;
+            let next_config = match self
+                .config_manager
+                .load_latest_config_for_thread(current_config.as_ref())
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    tracing::warn!(%thread_id, %err, "failed to reload thread configuration");
+                    continue;
+                }
+            };
+            thread.refresh_runtime_config(next_config).await;
         }
     }
 

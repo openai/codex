@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 
 use codex_config::AppToolApproval;
 use codex_config::Constrained;
+use codex_config::types::ApprovalsReviewer;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -97,15 +98,20 @@ async fn test_step(
         SERVER_NAME.to_string(),
         Arc::clone(&managed_client),
     )])));
-    let connections = Arc::new(McpConnectionSet::new_uninitialized_with_permission_profile(
-        &Constrained::allow_any(AskForApproval::OnRequest),
-        &PermissionProfile::default(),
-        /*prefix_mcp_tool_names*/ true,
-    ));
+    let connections = Arc::new(McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true));
     let tool_catalog_revision = Arc::new(tokio::sync::RwLock::new(0));
+    let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
+    if label == "old" {
+        config.approval_policy = Constrained::allow_any(AskForApproval::Never);
+        config.permission_profile = PermissionProfile::Disabled;
+    } else {
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    }
+    let config = Arc::new(config);
     let prepared = PreparedMcpCall::new(
         Arc::clone(&connections),
         managed_client,
+        Arc::clone(&config),
         /*catalog_revision*/ 0,
         Arc::clone(&tool_catalog_revision),
         tool.clone(),
@@ -128,7 +134,7 @@ async fn test_step(
         step: Arc::new(McpBinding::new(
             connections,
             clients,
-            Arc::new(crate::mcp::tests::test_mcp_config(std::env::temp_dir())),
+            config,
             /*plugins_available*/ false,
             vec![tool],
             calls,
@@ -206,6 +212,25 @@ async fn prepared_call_keeps_captured_connection_and_authority_after_refresh() -
     );
     assert!(Arc::ptr_eq(&old_call.client.client, &old.client));
     assert!(!Arc::ptr_eq(&old.client, &new.client));
+    assert_eq!(
+        (
+            old_call.config().approval_policy.value(),
+            &old_call.config().permission_profile,
+            old_call.config().approvals_reviewer,
+        ),
+        (
+            AskForApproval::Never,
+            &PermissionProfile::Disabled,
+            ApprovalsReviewer::User,
+        )
+    );
+    assert_eq!(
+        (
+            new_call.config().approval_policy.value(),
+            new_call.config().approvals_reviewer,
+        ),
+        (AskForApproval::OnRequest, ApprovalsReviewer::AutoReview)
+    );
 
     drop(old.step);
     assert!(

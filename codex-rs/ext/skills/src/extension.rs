@@ -24,6 +24,7 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
+use codex_mcp::McpResourceClient;
 use codex_otel::MetricsClient;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::Event;
@@ -306,7 +307,7 @@ where
                 include_host_skills: !host_catalog_in_world_state,
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
-                mcp_resources,
+                mcp_resources: mcp_resources.clone(),
                 executor_capability_discovery: None,
             };
             let host_query = query.clone();
@@ -366,7 +367,12 @@ where
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
             for entry in &selected_entries {
                 match self
-                    .read_main_prompt(entry, host_snapshot.clone(), session_store, &thread_state)
+                    .read_main_prompt(
+                        entry,
+                        host_snapshot.clone(),
+                        mcp_resources.clone(),
+                        &thread_state,
+                    )
                     .await
                 {
                     Ok(read_result) => {
@@ -466,7 +472,7 @@ impl<C> SkillsExtension<C> {
         &self,
         entry: &SkillCatalogEntry,
         host_snapshot: Option<Arc<HostSkillsSnapshot>>,
-        session_store: &ExtensionData,
+        mcp_resources: Option<Arc<McpResourceClient>>,
         thread_state: &SkillsThreadState,
     ) -> Result<SkillReadResult, String> {
         thread_state
@@ -477,9 +483,7 @@ impl<C> SkillsExtension<C> {
                     package: entry.id.clone(),
                     resource: entry.main_prompt.clone(),
                     host_snapshot,
-                    mcp_resources: session_store
-                        .get::<SkillsSessionState>()
-                        .and_then(|state| state.mcp_resources.clone()),
+                    mcp_resources,
                 },
             )
             .await

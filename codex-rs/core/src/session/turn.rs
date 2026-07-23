@@ -39,7 +39,6 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
-use crate::session::McpRuntimeSnapshot;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -602,17 +601,7 @@ async fn build_skills_and_plugins(
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
-        match step_context
-            .mcp
-            .manager_arc()
-            .list_all_tools()
-            .or_cancel(cancellation_token)
-            .await
-        {
-            Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return None,
-            Err(_) => Vec::new(),
-        }
+        step_context.mcp.tools().to_vec()
     } else {
         Vec::new()
     };
@@ -1281,14 +1270,9 @@ pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     environments: &TurnEnvironmentSnapshot,
-    mcp: &McpRuntimeSnapshot,
-    cancellation_token: &CancellationToken,
-) -> CodexResult<(Vec<ToolInfo>, Arc<ToolRouter>)> {
-    let all_mcp_tools = mcp
-        .manager()
-        .list_all_tools()
-        .or_cancel(cancellation_token)
-        .await?;
+    mcp: &codex_mcp::McpBinding,
+) -> (Vec<ToolInfo>, Arc<ToolRouter>) {
+    let all_mcp_tools = mcp.tools().to_vec();
     let loaded_plugins = sess
         .services
         .plugins_manager
@@ -1409,7 +1393,7 @@ pub(crate) async fn built_tools(
         },
         &sess.services.tool_search_handler_cache,
     ));
-    Ok((all_mcp_tools, tool_router))
+    (all_mcp_tools, tool_router)
 }
 
 #[derive(Debug)]

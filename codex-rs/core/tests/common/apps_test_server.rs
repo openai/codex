@@ -8,6 +8,7 @@ use codex_models_manager::bundled_models_response;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use wiremock::Mock;
@@ -81,10 +82,10 @@ pub enum AppsTestToolLoading {
     Searchable,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum AppsTestToolsListBehavior {
     AlwaysAvailable,
-    AvailableAfterInitialList,
+    AvailableWhen(Arc<AtomicBool>),
     AlwaysUnavailable,
 }
 
@@ -197,12 +198,13 @@ impl AppsTestServer {
         ))
     }
 
-    pub async fn mount_with_tools_available_after_initial_list(
+    pub async fn mount_with_tools_available_when(
         server: &MockServer,
+        tools_available: Arc<AtomicBool>,
     ) -> Result<Self> {
         Self::mount_with_tools_list_behavior(
             server,
-            AppsTestToolsListBehavior::AvailableAfterInitialList,
+            AppsTestToolsListBehavior::AvailableWhen(tools_available),
         )
         .await
     }
@@ -435,7 +437,6 @@ async fn mount_streamable_http_json_rpc_with_startup_control(
             searchable,
             include_app_only_tool,
             tools_list_behavior,
-            tools_list_calls: AtomicUsize::new(0),
             initialize_attempts,
             remaining_initialize_failures,
         })
@@ -449,7 +450,6 @@ struct CodexAppsJsonRpcResponder {
     searchable: bool,
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
-    tools_list_calls: AtomicUsize,
     initialize_attempts: Option<Arc<AtomicUsize>>,
     remaining_initialize_failures: Option<Arc<AtomicUsize>>,
 }
@@ -515,10 +515,11 @@ impl Respond for CodexAppsJsonRpcResponder {
             }
             "notifications/initialized" => ResponseTemplate::new(202),
             "tools/list" => {
-                let list_index = self.tools_list_calls.fetch_add(1, Ordering::SeqCst);
-                let tools_available = match self.tools_list_behavior {
+                let tools_available = match &self.tools_list_behavior {
                     AppsTestToolsListBehavior::AlwaysAvailable => true,
-                    AppsTestToolsListBehavior::AvailableAfterInitialList => list_index > 0,
+                    AppsTestToolsListBehavior::AvailableWhen(tools_available) => {
+                        tools_available.load(Ordering::SeqCst)
+                    }
                     AppsTestToolsListBehavior::AlwaysUnavailable => false,
                 };
                 let id = body.get("id").cloned().unwrap_or(Value::Null);

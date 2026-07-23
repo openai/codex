@@ -32,6 +32,7 @@ use crate::config::CurrentTimeReminderConfig;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::tests::mcp_config_for_test;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -681,7 +682,9 @@ async fn environment_tools_follow_the_step_context() {
     let environments = turn.environments.clone();
     turn.environments.environments.clear();
     let turn = Arc::new(turn);
-    let mcp = crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config);
+    let mcp = Arc::new(codex_mcp::McpBinding::empty(mcp_config_for_test(
+        &turn.config,
+    )));
 
     let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
         turn.as_ref(),

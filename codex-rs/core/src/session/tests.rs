@@ -195,6 +195,13 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration as StdDuration;
 
+pub(crate) fn mcp_config_for_test(config: &crate::config::Config) -> Arc<codex_mcp::McpConfig> {
+    Arc::new(config.to_mcp_config_with_loaded_plugins(
+        &codex_core_plugins::PluginLoadOutcome::default(),
+        std::iter::empty(),
+    ))
+}
+
 impl StepContext {
     pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
         let environments = turn.environments.clone();
@@ -203,7 +210,9 @@ impl StepContext {
             environments,
             selected_capability_roots: Vec::new(),
             executor_capability_discovery: None,
-            mcp: crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+            mcp: Arc::new(codex_mcp::McpBinding::empty(mcp_config_for_test(
+                &turn.config,
+            ))),
             mcp_tools: Vec::new(),
             tool_router: Arc::new(ToolRouter::from_parts(
                 ToolRegistry::empty_for_test(),
@@ -414,8 +423,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     session
         .services
-        .latest_mcp_runtime()
-        .manager()
+        .mcp_runtime
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
     let response = session
@@ -5407,16 +5415,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let mcp_runtime_snapshot =
-        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
-    let mcp_runtime = Arc::new(codex_mcp::McpRuntime::new(
-        mcp_runtime_snapshot.manager_arc(),
-    ));
+    let mcp_runtime = Arc::new(codex_mcp::McpRuntime::empty(config.prefix_mcp_tool_names()));
     let services = SessionServices {
         mcp_runtime,
-        mcp_runtime_snapshot: arc_swap::ArcSwapOption::from(Some(mcp_runtime_snapshot)),
-        mcp_projection_lock: Mutex::new(()),
-        mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -5539,7 +5540,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
-        pending_mcp_server_refresh_config: Mutex::new(None),
+        mcp_refresh_pending: std::sync::atomic::AtomicBool::new(true),
+        mcp_refresh_lock: Semaphore::new(/*permits*/ 1),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -6634,7 +6636,6 @@ fn op_kind_for_input_and_context_ops() {
 async fn user_turn_updates_approvals_reviewer() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let config = session.get_config().await;
-
     handlers::user_input_or_turn(
         &session,
         "sub-1".to_string(),
@@ -6672,6 +6673,12 @@ async fn user_turn_updates_approvals_reviewer() {
     assert_eq!(
         state.session_configuration.approvals_reviewer,
         codex_config::types::ApprovalsReviewer::AutoReview
+    );
+    assert!(
+        session
+            .mcp_refresh_pending
+            .load(std::sync::atomic::Ordering::Acquire),
+        "server elicitation authority changes must refresh MCP state"
     );
 }
 
@@ -7569,16 +7576,9 @@ where
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let mcp_runtime_snapshot =
-        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
-    let mcp_runtime = Arc::new(codex_mcp::McpRuntime::new(
-        mcp_runtime_snapshot.manager_arc(),
-    ));
+    let mcp_runtime = Arc::new(codex_mcp::McpRuntime::empty(config.prefix_mcp_tool_names()));
     let services = SessionServices {
         mcp_runtime,
-        mcp_runtime_snapshot: arc_swap::ArcSwapOption::from(Some(mcp_runtime_snapshot)),
-        mcp_projection_lock: Mutex::new(()),
-        mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -7701,7 +7701,8 @@ where
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
-        pending_mcp_server_refresh_config: Mutex::new(None),
+        mcp_refresh_pending: std::sync::atomic::AtomicBool::new(true),
+        mcp_refresh_lock: Semaphore::new(/*permits*/ 1),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -7740,23 +7741,15 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
+async fn refresh_mcp_servers_uses_latest_state_for_existing_turns() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
-    let old_runtime = session.services.latest_mcp_runtime();
-    let step_context = session
+    let old_step = session
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
         .await
         .expect("a fresh cancellation token cannot be cancelled");
-    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
-    let old_token = session.mcp_startup_cancellation_token().await;
-    assert!(!old_token.is_cancelled());
 
-    let mcp_oauth_credentials_store_mode =
-        serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
-    let auth_keyring_backend_kind =
-        serde_json::to_value(AuthKeyringBackendKind::Secrets).expect("serialize keyring backend");
     let refreshed_mcp_servers = serde_json::from_value::<HashMap<String, McpServerConfig>>(json!({
         "refreshed": {
             "url": "https://refreshed.example/mcp",
@@ -7764,46 +7757,129 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
         }
     }))
     .expect("parse refreshed MCP servers");
-    let refresh_config = McpServerRefreshConfig {
-        mcp_servers: serde_json::to_value(&refreshed_mcp_servers)
-            .expect("serialize refreshed MCP servers"),
-        mcp_oauth_credentials_store_mode,
-        auth_keyring_backend_kind,
-    };
     {
-        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
-        *guard = Some(refresh_config);
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config
+            .mcp_servers
+            .set(refreshed_mcp_servers.clone())
+            .expect("set refreshed MCP servers");
+        config.mcp_oauth_credentials_store_mode =
+            codex_config::types::OAuthCredentialsStoreMode::Auto;
+        config
+            .features
+            .set_enabled(Feature::SecretAuthStorage, /*enabled*/ true)
+            .expect("enable secret auth storage");
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
     }
+    session.mark_mcp_runtime_dirty();
 
-    assert!(!old_token.is_cancelled());
-    assert!(
-        session
-            .pending_mcp_server_refresh_config
-            .lock()
-            .await
-            .is_some()
-    );
-
-    session
-        .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
+    let next_turn = session.new_default_turn().await;
+    let new_step = session
+        .capture_step_context(next_turn, &CancellationToken::new())
+        .await
+        .expect("a fresh cancellation token cannot be cancelled");
+    let rematerialized_old = session
+        .mcp_runtime_for_step(&turn_context, /*selected_capability_roots*/ &[])
         .await;
 
-    assert!(!old_token.is_cancelled());
+    let configured_servers = codex_mcp::configured_mcp_servers(new_step.mcp.config());
+    assert_eq!(
+        configured_servers.get("refreshed"),
+        refreshed_mcp_servers.get("refreshed")
+    );
+    assert!(
+        !codex_mcp::configured_mcp_servers(old_step.mcp.config()).contains_key("refreshed"),
+        "an already-bound step must keep its captured config"
+    );
+    assert!(
+        codex_mcp::configured_mcp_servers(rematerialized_old.config()).contains_key("refreshed"),
+        "an older turn should resolve the latest MCP state"
+    );
+    let current = session
+        .services
+        .mcp_runtime
+        .current_binding()
+        .await
+        .expect("current MCP binding");
+    assert!(
+        codex_mcp::configured_mcp_servers(current.config()).contains_key("refreshed"),
+        "the refreshed state should remain globally current"
+    );
+}
+
+#[tokio::test]
+async fn refreshed_mcp_binding_captures_current_approval_authority() {
+    let (session, old_turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let previous_policy = old_turn.approval_policy.value();
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            approval_policy: Some(AskForApproval::Never),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        })
+        .await
+        .expect("approval settings should update");
+    session.refresh_mcp_if_dirty().await;
+
+    let binding = session
+        .services
+        .mcp_runtime
+        .current_binding()
+        .await
+        .expect("refreshed runtime should be available");
+    let config = binding.config();
+    assert_eq!(
+        (
+            config.approval_policy.value(),
+            &config.permission_profile,
+            config.approvals_reviewer,
+        ),
+        (
+            AskForApproval::Never,
+            &PermissionProfile::Disabled,
+            ApprovalsReviewer::AutoReview,
+        )
+    );
+    assert_eq!(old_turn.approval_policy.value(), previous_policy);
+}
+
+#[tokio::test]
+async fn cancelled_mcp_refresh_remains_pending() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+
+    {
+        let _state = session.state.lock().await;
+        {
+            let mut refresh = Box::pin(session.refresh_mcp_if_dirty());
+            let mut context = std::task::Context::from_waker(futures::task::noop_waker_ref());
+            assert!(std::future::Future::poll(refresh.as_mut(), &mut context).is_pending());
+            assert!(
+                !session
+                    .mcp_refresh_pending
+                    .load(std::sync::atomic::Ordering::Acquire),
+                "the refresh should have claimed its pending invalidation"
+            );
+        }
+    }
+
     assert!(
         session
-            .pending_mcp_server_refresh_config
-            .lock()
-            .await
-            .is_none()
+            .mcp_refresh_pending
+            .load(std::sync::atomic::Ordering::Acquire),
+        "a cancelled refresh must leave the runtime dirty"
     );
-    let new_token = session.mcp_startup_cancellation_token().await;
-    assert!(!new_token.is_cancelled());
-    let new_runtime = session.services.latest_mcp_runtime();
-    assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
-    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
-    assert_eq!(
-        codex_mcp::configured_mcp_servers(new_runtime.config()),
-        refreshed_mcp_servers
+
+    session.refresh_mcp_if_dirty().await;
+    assert!(
+        !session
+            .mcp_refresh_pending
+            .load(std::sync::atomic::Ordering::Acquire),
+        "the next refresh should publish the pending runtime"
     );
 }
 
@@ -7819,126 +7895,6 @@ impl codex_exec_server::NoiseRendezvousConnectProvider for PendingNoiseConnectPr
     > {
         Box::pin(futures::future::pending())
     }
-}
-
-#[tokio::test]
-async fn deferred_environment_roots_refresh_plugin_availability() {
-    struct ReadyPluginContributor;
-
-    impl codex_extension_api::McpServerContributor<Config> for ReadyPluginContributor {
-        fn id(&self) -> &'static str {
-            "ready_plugin_test"
-        }
-
-        fn contribute<'a>(
-            &'a self,
-            context: codex_extension_api::McpServerContributionContext<'a, Config>,
-        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
-        {
-            Box::pin(async move {
-                let available = context
-                    .ready_selected_capability_roots()
-                    .is_some_and(|roots| roots.iter().any(|root| root.id == "skill-only"));
-                available
-                    .then(
-                        || codex_extension_api::McpServerContribution::SelectedPluginPackage {
-                            plugin_id: "skill-only".to_string(),
-                            plugin_display_name: "Skill Only".to_string(),
-                            connector_ids: Vec::new(),
-                        },
-                    )
-                    .into_iter()
-                    .collect()
-            })
-        }
-    }
-
-    let (mut session, turn_context) = make_session_and_context().await;
-    let mut registry = codex_extension_api::ExtensionRegistryBuilder::new();
-    registry.mcp_server_contributor(Arc::new(ReadyPluginContributor));
-    let registry = Arc::new(registry.build());
-    session.services.extensions = Arc::clone(&registry);
-    session.services.mcp_manager = Arc::new(McpManager::new_with_extensions(
-        Arc::clone(&session.services.plugins_manager),
-        registry,
-        crate::CodexAppsToolsCache::default(),
-    ));
-    let session = Arc::new(session);
-    session
-        .refresh_mcp_servers_now(
-            &turn_context,
-            &turn_context.config,
-            /*elicitation_reviewer*/ None,
-        )
-        .await;
-    let old_runtime = session.services.latest_mcp_runtime();
-    let old_manager = old_runtime.manager_arc();
-
-    let selected_root = codex_protocol::capabilities::SelectedCapabilityRoot {
-        id: "skill-only".to_string(),
-        location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
-            environment_id: "executor".to_string(),
-            path: PathUri::from_host_native_path(turn_context.config.cwd.as_path())
-                .expect("selected capability root URI"),
-        },
-    };
-    let environment_manager = session.services.turn_environments.environment_manager();
-    let registration = environment_manager
-        .register_deferred_noise_environment(
-            "executor".to_string(),
-            Arc::new(PendingNoiseConnectProvider),
-        )
-        .expect("register deferred environment");
-    let environment = environment_manager
-        .get_environment("executor")
-        .expect("deferred environment");
-    assert!(environment.selected_capability_roots().is_empty());
-    registration
-        .complete(Ok(codex_exec_server::EnvironmentReadyInfo {
-            selected_capability_roots: vec![selected_root.clone()],
-        }))
-        .expect("complete deferred environment");
-    assert_eq!(
-        environment.selected_capability_roots(),
-        std::slice::from_ref(&selected_root)
-    );
-    let local_environment = turn_context
-        .environments
-        .primary()
-        .expect("ready local environment");
-    let environments = TurnEnvironmentSnapshot {
-        environments: vec![TurnEnvironmentState::Ready(TurnEnvironment::new(
-            "executor".to_string(),
-            environment,
-            local_environment.cwd().clone(),
-            local_environment.workspace_roots().to_vec(),
-            local_environment.shell.clone(),
-        ))],
-    };
-    let resolved_roots = session
-        .resolve_selected_capability_roots_for_step(&environments)
-        .await;
-    assert_eq!(
-        resolved_roots
-            .iter()
-            .map(|root| root.selected_root().clone())
-            .collect::<Vec<_>>(),
-        vec![selected_root]
-    );
-
-    let new_runtime = session
-        .mcp_runtime_for_step(
-            &turn_context,
-            &environments,
-            &resolved_roots,
-            /*executor_capability_discovery*/ None,
-        )
-        .await;
-
-    assert!(!old_runtime.plugins_available());
-    assert!(new_runtime.plugins_available());
-    assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
-    assert!(Arc::ptr_eq(&old_manager, &new_runtime.manager_arc()));
 }
 
 #[tokio::test]
@@ -8021,7 +7977,7 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
 }
 
 #[tokio::test]
-async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
+async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -8064,6 +8020,22 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
             /*elicitation_reviewer*/ None,
         )
         .await;
+
+    let next_step = session
+        .capture_step_context(Arc::clone(&step_context.turn), &CancellationToken::new())
+        .await
+        .expect("a fresh cancellation token cannot be cancelled");
+    assert!(codex_mcp::configured_mcp_servers(next_step.mcp.config()).contains_key("newer"));
+
+    session.mark_mcp_runtime_dirty();
+    session.refresh_mcp_if_dirty().await;
+    let current = session
+        .services
+        .mcp_runtime
+        .current_binding()
+        .await
+        .expect("refreshed runtime should be available");
+    assert!(codex_mcp::configured_mcp_servers(current.config()).contains_key("newer"));
 
     let router = &step_context.tool_router;
     assert!(

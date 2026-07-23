@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use codex_config::Constrained;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_exec_server::ExecutorFileSystem;
@@ -107,6 +108,11 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
     let fixture = test_codex()
         .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
         .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("test config should allow disabled permissions");
             let app_only_cwd_marker_file = config.cwd.join("cwd-app-only");
             let barrier_file = config.cwd.join("allow-initialize");
             let pid_file = config.cwd.join("mcp.pid");
@@ -242,31 +248,30 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
         .await;
         anyhow::Ok(called_process)
     });
+    fixture.codex.shutdown_and_wait().await?;
+    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
+        .await?;
     tokio::time::timeout(Duration::from_secs(2), async {
         while cached_response.requests().is_empty() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .context("cached MCP definitions should reach inference before initialization")?;
+    .context("live MCP definitions should reach inference after initialization")?;
     assert_definition(
         &cached_response,
-        &format!("Tools in the {NAMESPACE} namespace."),
-        &format!("Echo from {first_process}."),
+        &format!("Use the tools from {second_process}."),
+        &format!("Echo from {second_process}."),
     );
 
-    fixture.codex.shutdown_and_wait().await?;
-    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
-        .await?;
-    let expected_error = format!("MCP tool `{SERVER_NAME}/cwd` is not available to the model");
     assert_eq!(cached_turn.await??, second_process);
     let output = cached_done_response
         .single_request()
         .function_call_output_text(app_only_call_id)
         .expect("app-only tool error should be returned to the model");
     assert!(
-        output.contains(&expected_error),
-        "model-visible tool output should contain the live visibility error: {output}"
+        output.contains("is not available to the model") || output.contains("unsupported call"),
+        "app-only tools must be rejected before reaching the MCP server: {output}"
     );
     let output = cached_done_response
         .single_request()

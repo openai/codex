@@ -1,4 +1,3 @@
-use super::required::startup_outcome_error_message;
 use super::*;
 use crate::McpBinding;
 use crate::elicitation::ElicitationLifecycle;
@@ -34,6 +33,7 @@ use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::InProcessTransportFactory;
 use codex_rmcp_client::RmcpClient;
 use futures::FutureExt;
@@ -508,7 +508,7 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
         PermissionProfile::default(),
         /*reviewer*/ None,
         Some(lifecycle),
-        router,
+        router.clone(),
     );
     let (tx_event, rx_event) = async_channel::bounded(2);
     let sender_a = manager_a.make_sender("server".to_string(), Some(tx_event.clone()));
@@ -552,7 +552,7 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
         content: Some(serde_json::json!({"runtime": "a"})),
         meta: None,
     };
-    manager_b
+    router
         .resolve(
             "server".to_string(),
             NumberOrString::String(request_a_id.into()),
@@ -565,7 +565,7 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
         content: Some(serde_json::json!({"runtime": "b"})),
         meta: None,
     };
-    manager_a
+    router
         .resolve(
             "server".to_string(),
             NumberOrString::String(request_b_id.into()),
@@ -1962,42 +1962,6 @@ fn server_metadata_preserves_tool_approval_policy() {
     );
 }
 
-#[test]
-fn host_owned_codex_apps_requires_server_metadata() {
-    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-    let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let manager = McpConnectionSet::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
-        /*prefix_mcp_tool_names*/ true,
-    );
-
-    assert!(!manager.is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME));
-}
-
-#[test]
-fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
-    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-    let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionSet::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
-        /*prefix_mcp_tool_names*/ true,
-    );
-    let server = EffectiveMcpServer::configured(crate::codex_apps_mcp_server_config(
-        "https://chatgpt.com",
-        /*apps_mcp_product_sku*/ None,
-        /*originator*/ None,
-    ));
-    manager.server_metadata.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        McpServerMetadata::from(&server),
-    );
-
-    assert!(manager.is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME));
-    assert!(!manager.is_host_owned_codex_apps_server("docs"));
-}
-
 #[tokio::test]
 async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -2087,6 +2051,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         ElicitationRequestRouter::default(),
+        crate::runtime::McpPublicationGate::already_published(),
     )
     .await;
 
@@ -2108,8 +2073,11 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         Ok(_) => panic!("local stdio MCP startup should fail"),
         Err(error) => error,
     };
+    let StartupOutcomeError::Failed { error, .. } = error else {
+        panic!("local stdio MCP startup should fail rather than be cancelled");
+    };
     assert_eq!(
-        startup_outcome_error_message(error),
+        error,
         "local stdio MCP server `stdio` requires a local environment"
     );
     cancel_token.cancel();

@@ -59,7 +59,7 @@ impl ListMcpResourcesHandler {
             ..
         } = invocation;
         let turn = std::sync::Arc::clone(&step_context.turn);
-        let manager = step_context.mcp.manager();
+        let mcp = &step_context.mcp;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -91,7 +91,7 @@ impl ListMcpResourcesHandler {
                 let params = cursor
                     .clone()
                     .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
-                let result = manager
+                let result = mcp
                     .list_resources(&server_name, params)
                     .await
                     .map_err(|err| {
@@ -108,7 +108,7 @@ impl ListMcpResourcesHandler {
                     ));
                 }
 
-                let resources = manager
+                let resources = mcp
                     .list_all_resources(|server_name| {
                         model_can_access_mcp_server(turn.as_ref(), server_name)
                     })

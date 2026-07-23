@@ -1,6 +1,5 @@
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
-use crate::session::McpRuntimeSnapshot;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -63,7 +62,7 @@ impl ToolRouter {
     pub(crate) fn from_context(
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
-        mcp: &McpRuntimeSnapshot,
+        mcp: &codex_mcp::McpBinding,
         params: ToolRouterParams<'_>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {

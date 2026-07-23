@@ -44,7 +44,6 @@ use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
-use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::mcp_tool_call::mcp_approvals_reviewer;
 use crate::session::GitEnrichmentPolicy;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
@@ -372,24 +371,12 @@ async fn forward_events(
                         id,
                         msg: EventMsg::McpToolCallBegin(event),
                     } => {
-                        // Runtime refreshes are published before a request step is captured, so
-                        // the child runtime at call begin is the one executing this invocation.
-                        // Cache its metadata now; the later approval event has only a call ID.
-                        let metadata = if let Some(turn_context) =
-                            session.turn_context_for_sub_id(&id).await
-                        {
-                            let mcp = session.services.latest_mcp_runtime();
-                            lookup_mcp_tool_metadata(
-                                session.as_ref(),
-                                turn_context.as_ref(),
-                                mcp.manager(),
-                                &event.invocation.server,
-                                &event.invocation.tool,
-                            )
-                            .await
-                        } else {
-                            None
-                        };
+                        // The later approval event has only a call ID. Retain the exact facts
+                        // captured before this begin event instead of consulting the latest
+                        // runtime after a refresh.
+                        let metadata = session
+                            .mcp_tool_approval_metadata(&id, &event.call_id)
+                            .await;
                         pending_mcp_invocations
                             .lock()
                             .await

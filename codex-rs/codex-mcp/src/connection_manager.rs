@@ -1,10 +1,9 @@
 //! Aggregates MCP server connections for Codex.
 //!
-//! [`McpConnectionSet`] owns the set of running async RMCP clients keyed by
-//! MCP server name. It coordinates startup status events, keeps server origin
-//! metadata, aggregates tools/resources/templates across servers, routes tool
-//! calls to the right client, and exposes the public manager API used by
-//! `codex-core`.
+//! [`McpConnectionSet`] is the private connection set behind
+//! [`crate::McpRuntime`] and [`crate::McpBinding`]. It coordinates startup status
+//! events, keeps server metadata, and aggregates tools and resources across
+//! running RMCP clients.
 
 #[path = "connection_manager/required.rs"]
 mod required;
@@ -27,6 +26,7 @@ use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::runtime::McpPublicationGate;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
@@ -58,19 +58,14 @@ use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupFailureReason;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
-use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::McpAuthState;
 use codex_rmcp_client::McpLoginRequirement;
 use codex_rmcp_client::determine_streamable_http_auth_status_from_credentials;
 use rmcp::model::ElicitationCapability;
-use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
-use rmcp::model::RequestId;
-use rmcp::model::Resource;
-use rmcp::model::ResourceTemplate;
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -107,7 +102,7 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
-pub struct McpConnectionSet {
+pub(crate) struct McpConnectionSet {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
     required_servers: Vec<String>,
@@ -116,7 +111,6 @@ pub struct McpConnectionSet {
     codex_apps_refresh_lock: Mutex<()>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     prefix_mcp_tool_names: bool,
-    elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
 }
 
@@ -147,15 +141,16 @@ impl McpConnectionSet {
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
         elicitation_lifecycle: Option<crate::ElicitationLifecycle>,
         elicitation_router: ElicitationRequestRouter,
+        publication_gate: McpPublicationGate,
     ) -> Self {
+        let mut clients = HashMap::new();
+        let mut server_metadata = HashMap::new();
         let mut required_servers = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
-            .map(|(name, _)| name.clone())
+            .map(|(server_name, _)| server_name.clone())
             .collect::<Vec<_>>();
         required_servers.sort();
-        let mut clients = HashMap::new();
-        let mut server_metadata = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(
             approval_policy.value(),
@@ -165,7 +160,8 @@ impl McpConnectionSet {
             elicitation_router,
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
-        let startup_submit_id = submit_id.clone();
+        let startup_submit_id = submit_id;
+        let startup_publication_gate = publication_gate.clone();
         let static_chatgpt_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
@@ -181,17 +177,6 @@ impl McpConnectionSet {
         {
             server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = startup_cancellation_token.child_token();
-            if let Some(tx_event) = tx_event.as_ref() {
-                let _ = emit_update(
-                    startup_submit_id.as_str(),
-                    tx_event,
-                    McpStartupUpdateEvent {
-                        server: server_name.clone(),
-                        status: McpStartupStatus::Starting,
-                    },
-                )
-                .await;
-            }
             let configured_config = server.configured_config().cloned();
             let resolved_environment = configured_config.as_ref().map_or_else(
                 || Ok(None),
@@ -273,7 +258,22 @@ impl McpConnectionSet {
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
+            let publication_gate = publication_gate.clone();
             join_set.spawn(async move {
+                if !publication_gate.wait().await {
+                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                }
+                if let Some(tx_event) = tx_event.as_ref() {
+                    let _ = emit_update(
+                        submit_id.as_str(),
+                        tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name.clone(),
+                            status: McpStartupStatus::Starting,
+                        },
+                    )
+                    .await;
+                }
                 let mut outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
                     outcome = Err(StartupOutcomeError::Cancelled);
@@ -362,11 +362,13 @@ impl McpConnectionSet {
             codex_apps_refresh_lock: Mutex::new(()),
             tool_plugin_provenance,
             prefix_mcp_tool_names,
-            elicitation_requests: elicitation_requests.clone(),
-            startup_cancellation_token: startup_cancellation_token.clone(),
+            startup_cancellation_token,
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
+            if !startup_publication_gate.wait().await {
+                return;
+            }
             if let Some(tx_event) = tx_event {
                 let mut summary = McpStartupCompleteEvent::default();
                 for (server_name, outcome) in outcomes {
@@ -392,11 +394,7 @@ impl McpConnectionSet {
         manager
     }
 
-    pub fn new_uninitialized_with_permission_profile(
-        approval_policy: &Constrained<AskForApproval>,
-        permission_profile: &PermissionProfile,
-        prefix_mcp_tool_names: bool,
-    ) -> Self {
+    pub fn empty(prefix_mcp_tool_names: bool) -> Self {
         Self {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
@@ -406,27 +404,16 @@ impl McpConnectionSet {
             codex_apps_refresh_lock: Mutex::new(()),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             prefix_mcp_tool_names,
-            elicitation_requests: ElicitationRequestManager::new(
-                approval_policy.value(),
-                permission_profile.clone(),
-                /*reviewer*/ None,
-                /*lifecycle*/ None,
-                ElicitationRequestRouter::default(),
-            ),
             startup_cancellation_token: CancellationToken::new(),
         }
     }
 
-    pub fn empty(prefix_mcp_tool_names: bool) -> Self {
-        Self::new_uninitialized_with_permission_profile(
-            &Constrained::allow_any(AskForApproval::OnRequest),
-            &PermissionProfile::default(),
-            prefix_mcp_tool_names,
-        )
-    }
-
     pub fn has_servers(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    pub(crate) fn cancel_startup(&self) {
+        self.startup_cancellation_token.cancel();
     }
 
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
@@ -448,25 +435,6 @@ impl McpConnectionSet {
         }
     }
 
-    pub fn server_origin(&self, server_name: &str) -> Option<&str> {
-        self.server_metadata
-            .get(server_name)
-            .and_then(|metadata| metadata.origin.as_ref())
-            .map(super::server::McpServerOrigin::as_str)
-    }
-
-    pub fn server_environment_id(&self, server_name: &str) -> Option<&str> {
-        self.server_metadata
-            .get(server_name)
-            .map(|metadata| metadata.environment_id.as_str())
-    }
-
-    pub fn server_pollutes_memory(&self, server_name: &str) -> bool {
-        self.server_metadata
-            .get(server_name)
-            .is_none_or(|metadata| metadata.pollutes_memory)
-    }
-
     pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
         self.tool_plugin_provenance
             .plugin_id_for_mcp_server_name(server_name)
@@ -475,56 +443,6 @@ impl McpConnectionSet {
     pub fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
         self.tool_plugin_provenance
             .is_selected_plugin_mcp_server(server_name)
-    }
-
-    pub fn tool_approval_mode(
-        &self,
-        server_name: &str,
-        tool_name: &str,
-    ) -> codex_config::AppToolApproval {
-        self.server_metadata
-            .get(server_name)
-            .map(|metadata| metadata.tool_approval_mode(tool_name))
-            .unwrap_or_default()
-    }
-
-    pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
-        server_name == CODEX_APPS_MCP_SERVER_NAME && self.server_metadata.contains_key(server_name)
-    }
-
-    pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
-        if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
-            *policy = approval_policy.value();
-        }
-    }
-
-    pub fn set_permission_profile(&self, permission_profile: PermissionProfile) {
-        if let Ok(mut profile) = self.elicitation_requests.permission_profile.lock() {
-            *profile = permission_profile;
-        }
-    }
-
-    pub fn elicitations_auto_deny(&self) -> bool {
-        self.elicitation_requests.auto_deny()
-    }
-
-    pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
-        self.elicitation_requests.set_auto_deny(auto_deny);
-    }
-
-    pub fn elicitation_router(&self) -> ElicitationRequestRouter {
-        self.elicitation_requests.router()
-    }
-
-    pub async fn resolve_elicitation(
-        &self,
-        server_name: String,
-        id: RequestId,
-        response: ElicitationResponse,
-    ) -> Result<()> {
-        self.elicitation_requests
-            .resolve(server_name, id, response)
-            .await
     }
 
     pub async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
@@ -538,24 +456,20 @@ impl McpConnectionSet {
         }
     }
 
-    /// Returns resources from servers selected by `include_server`. Each key
-    /// is the server name and the value is a vector of resources.
     pub async fn list_all_resources(
         &self,
         include_server: impl Fn(&str) -> bool,
-    ) -> HashMap<String, Vec<Resource>> {
+    ) -> HashMap<String, Vec<rmcp::model::Resource>> {
         self.ready_clients_matching(&include_server)
             .await
             .list_all_resources(|_| true)
             .await
     }
 
-    /// Returns resource templates from servers selected by `include_server`.
-    /// Each key is the server name and the value is a vector of templates.
     pub async fn list_all_resource_templates(
         &self,
         include_server: impl Fn(&str) -> bool,
-    ) -> HashMap<String, Vec<ResourceTemplate>> {
+    ) -> HashMap<String, Vec<rmcp::model::ResourceTemplate>> {
         self.ready_clients_matching(&include_server)
             .await
             .list_all_resource_templates(|_| true)
@@ -617,16 +531,6 @@ impl McpConnectionSet {
         })
     }
 
-    pub async fn server_supports_sandbox_state_meta_capability(
-        &self,
-        server: &str,
-    ) -> Result<bool> {
-        Ok(self
-            .client_by_name(server)
-            .await?
-            .server_supports_sandbox_state_meta_capability)
-    }
-
     /// List resources from the specified server.
     pub async fn list_resources(
         &self,
@@ -641,22 +545,6 @@ impl McpConnectionSet {
             .list_resources(params, timeout)
             .await
             .with_context(|| format!("resources/list failed for `{server}`"))
-    }
-
-    /// List resource templates from the specified server.
-    pub async fn list_resource_templates(
-        &self,
-        server: &str,
-        params: Option<PaginatedRequestParams>,
-    ) -> Result<ListResourceTemplatesResult> {
-        let managed = self.client_by_name(server).await?;
-        let client = managed.client.clone();
-        let timeout = managed.tool_timeout;
-
-        client
-            .list_resource_templates(params, timeout)
-            .await
-            .with_context(|| format!("resources/templates/list failed for `{server}`"))
     }
 
     /// Read a resource from the specified server.
@@ -713,15 +601,11 @@ impl McpConnectionSet {
 
     #[cfg(test)]
     fn new_uninitialized(
-        approval_policy: &Constrained<AskForApproval>,
-        permission_profile: &Constrained<PermissionProfile>,
+        _approval_policy: &Constrained<AskForApproval>,
+        _permission_profile: &Constrained<PermissionProfile>,
         prefix_mcp_tool_names: bool,
     ) -> Self {
-        Self::new_uninitialized_with_permission_profile(
-            approval_policy,
-            permission_profile.get(),
-            prefix_mcp_tool_names,
-        )
+        Self::empty(prefix_mcp_tool_names)
     }
 }
 

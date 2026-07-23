@@ -5,49 +5,301 @@
 //! [`crate::rmcp_client`] and connection-set behavior lives in
 //! [`crate::connection_manager`].
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
+use async_channel::Sender;
+use codex_connectors::ConnectorRuntimeContextKey;
+use codex_connectors::ConnectorRuntimeManager;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::Event;
+use codex_rmcp_client::ElicitationResponse;
 use codex_utils_path_uri::PathUri;
+use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ReadResourceResult;
+use rmcp::model::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
-use crate::McpConnectionSet;
+use crate::McpConfig;
+use crate::binding::McpBinding;
+use crate::connection_manager::McpConnectionSet;
+use crate::elicitation::ElicitationLifecycle;
+use crate::elicitation::ElicitationRequestRouter;
+use crate::elicitation::ElicitationReviewerHandle;
+use crate::server::EffectiveMcpServer;
+use crate::tool_catalog_cache::McpToolCatalogCache;
+use crate::tools::ToolInfo;
 
-/// Owns the currently published MCP connection set for one Codex thread.
+/// Everything needed to materialize one exact MCP configuration.
+pub struct McpRuntimeInput {
+    pub config: Arc<McpConfig>,
+    pub plugins_available: bool,
+    pub ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    pub mcp_servers: HashMap<String, EffectiveMcpServer>,
+    pub submit_id: String,
+    pub tx_event: Option<Sender<Event>>,
+    pub startup_cancellation_token: CancellationToken,
+    pub runtime_context: McpRuntimeContext,
+    pub codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
+    pub tool_catalog_cache: McpToolCatalogCache,
+    pub codex_apps_tools_cache_key: ConnectorRuntimeContextKey,
+    pub supports_openai_form_elicitation: bool,
+    pub auth: Option<CodexAuth>,
+    pub codex_apps_auth_manager: Option<Arc<AuthManager>>,
+    pub elicitation_reviewer: Option<ElicitationReviewerHandle>,
+    pub elicitation_lifecycle: Option<ElicitationLifecycle>,
+}
+
+/// Owns all mutable MCP state for one Codex thread.
 ///
-/// Replacements are published atomically. Callers that already hold a snapshot
-/// keep the previous connection set alive until their work completes.
+/// Publication replaces the latest state atomically. Existing bindings retain
+/// their exact connections and configuration for as long as they are needed.
 pub struct McpRuntime {
-    connections: ArcSwap<McpConnectionSet>,
+    current: ArcSwap<PublishedMcpRuntime>,
+    elicitation_router: ElicitationRequestRouter,
+}
+
+struct PublishedMcpRuntime {
+    connections: Arc<McpConnectionSet>,
+    config: Option<Arc<McpConfig>>,
+    plugins_available: bool,
+    ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
+}
+
+#[derive(Clone)]
+pub(crate) struct McpPublicationGate {
+    published: Option<watch::Receiver<bool>>,
+}
+
+impl McpPublicationGate {
+    fn pending() -> (watch::Sender<bool>, Self) {
+        let (publish, published) = watch::channel(false);
+        (
+            publish,
+            Self {
+                published: Some(published),
+            },
+        )
+    }
+
+    pub(crate) fn already_published() -> Self {
+        Self { published: None }
+    }
+
+    pub(crate) async fn wait(mut self) -> bool {
+        let Some(published) = self.published.as_mut() else {
+            return true;
+        };
+        loop {
+            if *published.borrow() {
+                return true;
+            }
+            if published.changed().await.is_err() {
+                return false;
+            }
+        }
+    }
 }
 
 impl McpRuntime {
-    pub fn new(connections: Arc<McpConnectionSet>) -> Self {
+    /// Creates a runtime with no configured servers.
+    ///
+    /// This is useful while constructing a thread that must publish a stable
+    /// runtime handle before its full MCP inputs are available.
+    pub fn empty(prefix_mcp_tool_names: bool) -> Self {
         Self {
-            connections: ArcSwap::from(connections),
+            current: ArcSwap::from_pointee(PublishedMcpRuntime {
+                connections: Arc::new(McpConnectionSet::empty(prefix_mcp_tool_names)),
+                config: None,
+                plugins_available: false,
+                ready_selected_capability_roots: Vec::new(),
+            }),
+            elicitation_router: ElicitationRequestRouter::default(),
         }
     }
 
-    pub fn snapshot(&self) -> Arc<McpConnectionSet> {
-        self.connections.load_full()
+    pub async fn new(input: McpRuntimeInput) -> Self {
+        let runtime = Self::empty(input.config.prefix_mcp_tool_names);
+        runtime.replace(input).await;
+        runtime
     }
 
-    pub fn replace(&self, connections: McpConnectionSet) -> Arc<McpConnectionSet> {
-        let connections = Arc::new(connections);
-        self.connections.store(Arc::clone(&connections));
-        connections
+    /// Rebuilds configured servers and publishes their immutable runtime snapshot.
+    pub async fn replace(&self, input: McpRuntimeInput) {
+        let (publish, publication_gate) = McpPublicationGate::pending();
+        let config = Arc::clone(&input.config);
+        let plugins_available = input.plugins_available;
+        let ready_selected_capability_roots = input.ready_selected_capability_roots.clone();
+        let connections = Arc::new(
+            Self::materialize(input, self.elicitation_router.clone(), publication_gate).await,
+        );
+        self.current.store(Arc::new(PublishedMcpRuntime {
+            connections,
+            config: Some(config),
+            plugins_available,
+            ready_selected_capability_roots,
+        }));
+        let _ = publish.send(true);
+    }
+
+    /// Captures the latest published configuration and live client handles.
+    pub async fn current_binding(&self) -> Option<Arc<McpBinding>> {
+        let current = self.current.load_full();
+        let config = Arc::clone(current.config.as_ref()?);
+        Some(Arc::new(
+            current
+                .connections
+                .capture_binding_with_metadata(config, current.plugins_available)
+                .await,
+        ))
+    }
+
+    pub fn current_ready_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
+        self.current.load().ready_selected_capability_roots.clone()
+    }
+
+    pub fn elicitations_auto_deny(&self) -> bool {
+        self.elicitation_router.auto_deny()
+    }
+
+    pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
+        self.elicitation_router.set_auto_deny(auto_deny);
+    }
+
+    pub async fn resolve_elicitation(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> anyhow::Result<()> {
+        self.elicitation_router
+            .resolve(server_name, id, response)
+            .await
+    }
+
+    pub async fn latest_hard_refresh_codex_apps_tools_cache(
+        &self,
+    ) -> anyhow::Result<Vec<ToolInfo>> {
+        self.latest_connections()
+            .hard_refresh_codex_apps_tools_cache()
+            .await
+    }
+
+    /// Lists the latest known tools for non-model discovery surfaces.
+    ///
+    /// Unlike [`Self::current_binding`], this may return cached tools while their
+    /// client reconnects because callers only inspect tool metadata.
+    pub async fn latest_list_all_tools(&self) -> Vec<ToolInfo> {
+        self.latest_connections().list_all_tools().await
+    }
+
+    pub async fn latest_call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> anyhow::Result<CallToolResult> {
+        self.latest_connections()
+            .call_tool(server, tool, arguments, meta)
+            .await
+    }
+
+    pub async fn latest_read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> anyhow::Result<ReadResourceResult> {
+        self.latest_connections()
+            .read_resource(server, params)
+            .await
+    }
+
+    pub async fn latest_wait_for_server_ready(&self, server: &str, timeout: Duration) -> bool {
+        self.latest_connections()
+            .wait_for_server_ready(server, timeout)
+            .await
+    }
+
+    pub async fn validate_required_servers(&self) -> anyhow::Result<()> {
+        self.latest_connections().validate_required_servers().await
+    }
+
+    pub fn cancel_startup(&self) {
+        self.current.load().connections.cancel_startup();
+    }
+
+    pub(crate) fn latest_connections(&self) -> Arc<McpConnectionSet> {
+        Arc::clone(&self.current.load().connections)
     }
 
     pub async fn shutdown(&self) {
-        self.snapshot().shutdown().await;
+        self.latest_connections().shutdown().await;
+    }
+
+    async fn materialize(
+        input: McpRuntimeInput,
+        elicitation_router: ElicitationRequestRouter,
+        publication_gate: McpPublicationGate,
+    ) -> McpConnectionSet {
+        let McpRuntimeInput {
+            config,
+            plugins_available: _,
+            ready_selected_capability_roots: _,
+            mcp_servers,
+            submit_id,
+            tx_event,
+            startup_cancellation_token,
+            runtime_context,
+            codex_apps_tools_cache,
+            tool_catalog_cache,
+            codex_apps_tools_cache_key,
+            supports_openai_form_elicitation,
+            auth,
+            codex_apps_auth_manager,
+            elicitation_reviewer,
+            elicitation_lifecycle,
+        } = input;
+        McpConnectionSet::new(
+            &mcp_servers,
+            config.mcp_oauth_credentials_store_mode,
+            config.auth_keyring_backend_kind,
+            &config.approval_policy,
+            submit_id,
+            tx_event,
+            startup_cancellation_token,
+            config.permission_profile.clone(),
+            runtime_context,
+            config.codex_home.clone(),
+            codex_apps_tools_cache,
+            tool_catalog_cache,
+            codex_apps_tools_cache_key,
+            config.prefix_mcp_tool_names,
+            config.client_elicitation_capability.clone(),
+            supports_openai_form_elicitation,
+            crate::mcp::tool_plugin_provenance(&config),
+            auth.as_ref(),
+            codex_apps_auth_manager,
+            elicitation_reviewer,
+            elicitation_lifecycle,
+            elicitation_router,
+            publication_gate,
+        )
+        .await
     }
 }
 
@@ -177,6 +429,21 @@ mod tests {
             oauth_resource: None,
             tools: HashMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn publication_gate_opens_only_for_the_winning_candidate() {
+        let (publish, gate) = McpPublicationGate::pending();
+        let wait = tokio::spawn(gate.wait());
+        tokio::task::yield_now().await;
+        assert!(!wait.is_finished());
+
+        publish.send(true).expect("publish candidate");
+        assert!(wait.await.expect("gate task"));
+
+        let (publish, gate) = McpPublicationGate::pending();
+        drop(publish);
+        assert!(!gate.wait().await);
     }
 
     fn http_server(environment_id: &str) -> McpServerConfig {

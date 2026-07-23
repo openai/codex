@@ -1,6 +1,7 @@
 use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -8,7 +9,7 @@ use std::io;
 use std::sync::Arc;
 use tracing::warn;
 
-pub(crate) async fn queue_strict_refresh(
+pub(crate) async fn reload_mcp_config(
     thread_manager: &Arc<ThreadManager>,
     config_manager: &ConfigManager,
 ) -> io::Result<()> {
@@ -25,15 +26,19 @@ pub(crate) async fn queue_strict_refresh(
         refreshes.push((thread_id, thread, config));
     }
     for (thread_id, thread, config) in refreshes {
-        queue_refresh(thread_id, thread, config).await?;
+        thread
+            .submit(Op::ReloadMcpConfig { config })
+            .await
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to queue MCP config reload for thread {thread_id}: {err}"
+                ))
+            })?;
     }
     Ok(())
 }
 
-pub(crate) async fn queue_best_effort_refresh(
-    thread_manager: &Arc<ThreadManager>,
-    config_manager: &ConfigManager,
-) {
+pub(crate) async fn invalidate_loaded_threads(thread_manager: &Arc<ThreadManager>) {
     for thread_id in thread_manager.list_thread_ids().await {
         let thread = match thread_manager.get_thread(thread_id).await {
             Ok(thread) => thread,
@@ -42,31 +47,29 @@ pub(crate) async fn queue_best_effort_refresh(
                 continue;
             }
         };
-        let config = match build_refresh_config(thread.as_ref(), config_manager).await {
-            Ok(config) => config,
-            Err(err) => {
-                warn!("failed to build MCP refresh config for thread {thread_id}: {err}");
-                continue;
-            }
-        };
-        if let Err(err) = queue_refresh(thread_id, thread, config).await {
+        if let Err(err) = queue_invalidation(thread_id, thread).await {
             warn!("{err}");
         }
     }
+}
+
+async fn load_refresh_config(
+    thread: &CodexThread,
+    config_manager: &ConfigManager,
+) -> io::Result<Config> {
+    let thread_config = thread.config().await;
+    config_manager
+        .load_latest_config_for_thread(thread_config.as_ref())
+        .await
 }
 
 async fn build_refresh_config(
     thread: &CodexThread,
     config_manager: &ConfigManager,
 ) -> io::Result<McpServerRefreshConfig> {
-    let thread_config = thread.config().await;
-    let config = config_manager
-        .load_latest_config_for_thread(thread_config.as_ref())
-        .await?;
-    let mcp_config = thread.runtime_mcp_config(&config).await;
-    let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
+    let config = load_refresh_config(thread, config_manager).await?;
     Ok(McpServerRefreshConfig {
-        mcp_servers: serde_json::to_value(mcp_servers).map_err(io::Error::other)?,
+        mcp_servers: serde_json::to_value(config.mcp_servers.get()).map_err(io::Error::other)?,
         mcp_oauth_credentials_store_mode: serde_json::to_value(
             config.mcp_oauth_credentials_store_mode,
         )
@@ -76,13 +79,9 @@ async fn build_refresh_config(
     })
 }
 
-async fn queue_refresh(
-    thread_id: ThreadId,
-    thread: Arc<CodexThread>,
-    config: McpServerRefreshConfig,
-) -> io::Result<()> {
+async fn queue_invalidation(thread_id: ThreadId, thread: Arc<CodexThread>) -> io::Result<()> {
     thread
-        .submit(Op::RefreshMcpServers { config })
+        .submit(Op::RefreshMcpServers)
         .await
         .map(|_| ())
         .map_err(|err| {
@@ -127,33 +126,48 @@ mod tests {
 
     #[tokio::test]
     async fn strict_refresh_reports_thread_planning_failures() -> anyhow::Result<()> {
-        let (_temp_dir, thread_manager, config_manager, _loader) = refresh_test_state().await?;
-
-        let err = queue_strict_refresh(&thread_manager, &config_manager)
-            .await
-            .expect_err("strict refresh should fail");
-
-        assert_eq!(err.to_string(), "failed to load refresh config");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn best_effort_refresh_attempts_every_loaded_thread() -> anyhow::Result<()> {
-        let (_temp_dir, thread_manager, config_manager, loader) = refresh_test_state().await?;
-
-        queue_best_effort_refresh(&thread_manager, &config_manager).await;
-
-        assert_eq!(loader.good_loads.load(Ordering::Relaxed), 1);
-        assert_eq!(loader.bad_loads.load(Ordering::Relaxed), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn refresh_config_uses_latest_auth_keyring_backend() -> anyhow::Result<()> {
         let (temp_dir, thread_manager, config_manager, _loader) = refresh_test_state().await?;
         std::fs::write(
             temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
             "[features]\nsecret_auth_storage = true\n",
+        )?;
+
+        let err = reload_mcp_config(&thread_manager, &config_manager)
+            .await
+            .expect_err("strict refresh should fail");
+
+        assert_eq!(err.to_string(), "failed to load refresh config");
+        for thread_id in thread_manager.list_thread_ids().await {
+            assert_eq!(
+                thread_manager
+                    .get_thread(thread_id)
+                    .await?
+                    .config()
+                    .await
+                    .auth_keyring_backend_kind(),
+                AuthKeyringBackendKind::Direct
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalidation_does_not_reload_thread_config() -> anyhow::Result<()> {
+        let (_temp_dir, thread_manager, _config_manager, loader) = refresh_test_state().await?;
+
+        invalidate_loaded_threads(&thread_manager).await;
+
+        assert_eq!(loader.good_loads.load(Ordering::Relaxed), 0);
+        assert_eq!(loader.bad_loads.load(Ordering::Relaxed), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mcp_config_reload_only_applies_mcp_inputs() -> anyhow::Result<()> {
+        let (temp_dir, thread_manager, config_manager, _loader) = refresh_test_state().await?;
+        std::fs::write(
+            temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
+            "model = \"unrelated-model-change\"\n[features]\nsecret_auth_storage = true\n",
         )?;
 
         let mut good_thread = None;
@@ -166,17 +180,15 @@ mod tests {
             }
         }
         let thread = good_thread.expect("good test thread should exist");
+        let original_model = thread.config().await.model.clone();
 
         let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
-        let backend = serde_json::from_value::<AuthKeyringBackendKind>(
+        let keyring_backend_kind = serde_json::from_value::<AuthKeyringBackendKind>(
             refresh_config.auth_keyring_backend_kind,
         )?;
 
-        assert_eq!(
-            thread.config().await.auth_keyring_backend_kind(),
-            AuthKeyringBackendKind::Direct
-        );
-        assert_eq!(backend, AuthKeyringBackendKind::Secrets);
+        assert_eq!(keyring_backend_kind, AuthKeyringBackendKind::Secrets);
+        assert_eq!(thread.config().await.model, original_model);
         Ok(())
     }
 
@@ -253,7 +265,7 @@ enabled = false
 "#,
         )?;
 
-        queue_strict_refresh(&thread_manager, &config_manager).await?;
+        reload_mcp_config(&thread_manager, &config_manager).await?;
 
         assert_eq!(
             thread.config().await.mcp_servers.get(),
