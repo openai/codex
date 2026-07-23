@@ -9,6 +9,8 @@ export type ConfigBatchWriteParams = { edits: Array<ConfigEdit>,
  */
 filePath?: string | null, expectedVersion?: string | null,
 /**
- * When true, hot-reload the updated user config into all loaded threads after writing.
+ * When true, hot-reload updated runtime settings into loaded threads after writing.
+ * Session-static model, reasoning-effort, Plan-mode reasoning-effort, service-tier, and
+ * personality defaults are not reloaded.
  */
 reloadUserConfig?: boolean, };

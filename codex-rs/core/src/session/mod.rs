@@ -1626,8 +1626,6 @@ impl Session {
             (previous_config, new_config, config)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.services.skills_service.clear_cache();
-        self.services.plugins_manager.clear_cache();
         let environments = self.services.turn_environments.snapshot().await;
         let hooks = build_hooks_for_config(
             config.as_ref(),
@@ -1791,6 +1789,8 @@ impl Session {
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
             config
         };
+        self.services.skills_service.clear_cache();
+        self.services.plugins_manager.clear_cache();
         self.refresh_runtime_config(next_config).await;
     }
 

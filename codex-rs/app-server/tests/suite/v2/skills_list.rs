@@ -7,8 +7,12 @@ use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::SkillsChangedNotification;
@@ -587,7 +591,8 @@ async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
 }
 
 #[tokio::test]
-async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
+async fn skills_list_uses_cached_result_after_session_default_writes_until_force_reload()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
 
@@ -620,6 +625,47 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         skill_dir.join("SKILL.md"),
         "---\nname: late-extra-skill\ndescription: late skill\n---\n\n# Body\n",
     )?;
+
+    for edits in [
+        vec![ConfigEdit {
+            key_path: "plan_mode_reasoning_effort".to_string(),
+            value: serde_json::json!("high"),
+            merge_strategy: MergeStrategy::Replace,
+        }],
+        vec![ConfigEdit {
+            key_path: "service_tier".to_string(),
+            value: serde_json::json!("fast"),
+            merge_strategy: MergeStrategy::Replace,
+        }],
+        vec![ConfigEdit {
+            key_path: "personality".to_string(),
+            value: serde_json::json!("friendly"),
+            merge_strategy: MergeStrategy::Replace,
+        }],
+        vec![
+            ConfigEdit {
+                key_path: "model".to_string(),
+                value: serde_json::json!("gpt-5.4"),
+                merge_strategy: MergeStrategy::Replace,
+            },
+            ConfigEdit {
+                key_path: "model_reasoning_effort".to_string(),
+                value: serde_json::json!("high"),
+                merge_strategy: MergeStrategy::Replace,
+            },
+        ],
+    ] {
+        let write_id = mcp
+            .send_config_batch_write_request(ConfigBatchWriteParams {
+                edits,
+                file_path: None,
+                expected_version: None,
+                reload_user_config: true,
+            })
+            .await?;
+        let _: ConfigWriteResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(write_id)).await??;
+    }
 
     let second_request_id = mcp
         .send_skills_list_request(SkillsListParams {

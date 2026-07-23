@@ -864,7 +864,9 @@ pub struct ConfigBatchWriteParams {
     pub file_path: Option<String>,
     #[ts(optional = nullable)]
     pub expected_version: Option<String>,
-    /// When true, hot-reload the updated user config into all loaded threads after writing.
+    /// When true, hot-reload updated runtime settings into loaded threads after writing.
+    /// Session-static model, reasoning-effort, Plan-mode reasoning-effort, service-tier, and
+    /// personality defaults are not reloaded.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reload_user_config: bool,
 }
