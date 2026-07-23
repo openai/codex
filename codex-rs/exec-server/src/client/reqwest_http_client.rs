@@ -5,12 +5,13 @@
 //! - in a remote environment, that means the remote runtime after the
 //!   orchestrator has forwarded `http/request` over JSON-RPC
 
-use std::error::Error as StdError;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
-use codex_http_client::build_reqwest_client_with_custom_ca;
-use codex_http_client::with_chatgpt_cloudflare_cookie_store;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::RouteAwareClientPool;
+use codex_http_client::RouteAwareRequestError;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -35,10 +36,12 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 
-/// `HttpClient` implementation that performs the actual HTTP request with
-/// `reqwest`.
-#[derive(Clone, Default)]
-pub struct ReqwestHttpClient;
+/// HTTP capability implementation backed by the shared route-aware transport.
+#[derive(Clone)]
+pub struct ReqwestHttpClient {
+    follow_redirects: RouteAwareClientPool,
+    stop_redirects: RouteAwareClientPool,
+}
 
 /// Streaming response state held between the initial HTTP response and
 /// downstream body-delta forwarding.
@@ -50,26 +53,32 @@ pub(crate) struct PendingReqwestHttpBodyStream {
 /// Validates `http/request` parameters and runs the actual `reqwest` call used
 /// by the exec-server route and the local [`HttpClient`] backend.
 pub(crate) struct ReqwestHttpRequestRunner {
-    client: reqwest::Client,
+    client: RouteAwareClientPool,
 }
 
 impl ReqwestHttpClient {
-    fn build_client(
-        timeout_ms: Option<u64>,
-        redirect_policy: HttpRedirectPolicy,
-    ) -> Result<reqwest::Client, ExecServerError> {
-        let builder = match timeout_ms {
-            None => reqwest::Client::builder(),
-            Some(timeout_ms) => {
-                reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
-            }
+    pub fn new(http_client_factory: HttpClientFactory) -> Self {
+        Self {
+            follow_redirects: RouteAwareClientPool::with_chatgpt_cloudflare_cookies_without_request_logging(
+                http_client_factory.clone(),
+                // Delegated HTTP targets arbitrary endpoints; route class only labels diagnostics.
+                ClientRouteClass::Other,
+            ),
+            stop_redirects:
+                RouteAwareClientPool::with_chatgpt_cloudflare_cookies_without_redirects_or_request_logging(
+                    http_client_factory,
+                    // Proxy routing comes from the factory, not this diagnostic-only route class.
+                    ClientRouteClass::Other,
+                ),
+        }
+    }
+
+    pub(crate) fn runner(&self, redirect_policy: HttpRedirectPolicy) -> ReqwestHttpRequestRunner {
+        let client = match redirect_policy {
+            HttpRedirectPolicy::Follow => self.follow_redirects.clone(),
+            HttpRedirectPolicy::Stop => self.stop_redirects.clone(),
         };
-        let builder = match redirect_policy {
-            HttpRedirectPolicy::Follow => builder,
-            HttpRedirectPolicy::Stop => builder.redirect(reqwest::redirect::Policy::none()),
-        };
-        build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(builder))
-            .map_err(|error| ExecServerError::HttpRequest(error.to_string()))
+        ReqwestHttpRequestRunner { client }
     }
 }
 
@@ -79,8 +88,7 @@ impl HttpClient for ReqwestHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
         async move {
-            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms, params.redirect_policy)
-                .map_err(|error| ExecServerError::HttpRequest(error.message))?;
+            let runner = self.runner(params.redirect_policy);
             let (response, _) = runner
                 .run(HttpRequestParams {
                     stream_response: false,
@@ -98,8 +106,7 @@ impl HttpClient for ReqwestHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         async move {
-            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms, params.redirect_policy)
-                .map_err(|error| ExecServerError::HttpRequest(error.message))?;
+            let runner = self.runner(params.redirect_policy);
             let (response, pending_stream) = runner
                 .run(HttpRequestParams {
                     stream_response: true,
@@ -122,15 +129,6 @@ impl HttpClient for ReqwestHttpClient {
 }
 
 impl ReqwestHttpRequestRunner {
-    pub(crate) fn new(
-        timeout_ms: Option<u64>,
-        redirect_policy: HttpRedirectPolicy,
-    ) -> Result<Self, JSONRPCErrorError> {
-        let client = ReqwestHttpClient::build_client(timeout_ms, redirect_policy)
-            .map_err(|error| internal_error(error.to_string()))?;
-        Ok(Self { client })
-    }
-
     pub(crate) async fn run(
         &self,
         params: HttpRequestParams,
@@ -163,6 +161,9 @@ impl ReqwestHttpRequestRunner {
         let mut request = self.client.request(method.clone(), url).headers(headers);
         if let Some(body) = params.body {
             request = request.body(body.into_inner());
+        }
+        if let Some(timeout_ms) = params.timeout_ms {
+            request = request.timeout(Duration::from_millis(timeout_ms));
         }
 
         let response = match request.send().instrument(request_span.clone()).await {
@@ -301,25 +302,18 @@ impl ReqwestHttpRequestRunner {
     }
 }
 
-fn log_send_error(method: &Method, error: reqwest::Error) {
-    let error = error.without_url();
-    let source_chain = error_source_chain(&error);
+fn log_send_error(method: &Method, error: RouteAwareRequestError) {
+    let error_is_timeout = error.is_timeout();
+    let error_is_connect = error.is_connect();
+    let error = match error {
+        RouteAwareRequestError::Request(error) => error.without_url().to_string(),
+        error => error.to_string(),
+    };
     tracing::warn!(
         http_method = method.as_str(),
-        error_is_timeout = error.is_timeout(),
-        error_is_connect = error.is_connect(),
+        error_is_timeout,
+        error_is_connect,
         error = %error,
-        error_sources = ?source_chain,
         "http/request send failed"
     );
-}
-
-fn error_source_chain(error: &reqwest::Error) -> Option<String> {
-    let mut sources = Vec::new();
-    let mut source = error.source();
-    while let Some(error) = source {
-        sources.push(error.to_string());
-        source = error.source();
-    }
-    (!sources.is_empty()).then(|| sources.join(": "))
 }

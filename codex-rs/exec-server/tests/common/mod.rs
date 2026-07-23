@@ -9,6 +9,8 @@ use std::time::Duration;
 use codex_exec_server::CODEX_ARG0_EXEC_HELPER_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_test_binary_support::TestBinaryDispatchGuard;
 use codex_test_binary_support::TestBinaryDispatchMode;
@@ -19,6 +21,9 @@ pub(crate) mod exec_server;
 
 pub(crate) const DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG: &str =
     "--codex-test-delayed-output-after-exit-parent";
+pub(crate) const SYSTEM_PROXY_REQUEST_URL_ENV: &str =
+    "CODEX_EXEC_SERVER_TEST_SYSTEM_PROXY_REQUEST_URL";
+pub(crate) const SYSTEM_PROXY_URL_ENV: &str = "CODEX_EXEC_SERVER_TEST_SYSTEM_PROXY_URL";
 
 const CODEX_WINDOWS_SANDBOX_ARG1: &str = "--run-as-windows-sandbox";
 const DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG: &str = "--codex-test-delayed-output-after-exit-child";
@@ -188,8 +193,27 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
             std::process::exit(1);
         }
     };
-    let exit_code = match runtime.block_on(codex_exec_server::run_main(&listen_url, runtime_paths))
-    {
+    let http_client_factory = match (
+        env::var(SYSTEM_PROXY_REQUEST_URL_ENV),
+        env::var(SYSTEM_PROXY_URL_ENV),
+    ) {
+        (Ok(request_url), Ok(proxy_url)) => {
+            codex_http_client::cache_system_proxy_route_for_test(&request_url, proxy_url);
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy)
+        }
+        (Err(env::VarError::NotPresent), Err(env::VarError::NotPresent)) => {
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+        }
+        _ => {
+            eprintln!("system proxy test configuration requires both request and proxy URLs");
+            std::process::exit(1);
+        }
+    };
+    let exit_code = match runtime.block_on(codex_exec_server::run_main(
+        &listen_url,
+        runtime_paths,
+        http_client_factory,
+    )) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("exec-server failed: {error}");

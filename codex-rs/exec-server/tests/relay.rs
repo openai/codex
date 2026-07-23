@@ -31,6 +31,8 @@ use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
 use codex_exec_server_test_support::environment_manager_without_environments;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
@@ -144,6 +146,7 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
         registry.uri(),
         ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )?;
     let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,
@@ -274,6 +277,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         registry.uri(),
         ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )?;
     let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,

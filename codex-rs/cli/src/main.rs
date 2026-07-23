@@ -1713,6 +1713,7 @@ async fn run_exec_server_command(
             base_url,
             environment_id,
             auth_provider,
+            config.http_client_factory(),
         )?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
@@ -1731,11 +1732,25 @@ async fn run_exec_server_command(
             config_result.ok()
         };
         let (_otel, telemetry) = exec_server_telemetry::init(config.as_ref());
+        let http_client_factory = config
+            .as_ref()
+            .map(codex_core::config::Config::http_client_factory)
+            .unwrap_or_else(|| {
+                codex_http_client::HttpClientFactory::new(
+                    codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+                )
+            });
         let listen_url = cmd
             .listen
             .unwrap_or_else(|| codex_exec_server::DEFAULT_LISTEN_URL.to_string());
         exec_server_telemetry::run_until_shutdown(async move {
-            codex_exec_server::run_main_with_telemetry(&listen_url, runtime_paths, telemetry).await
+            codex_exec_server::run_main_with_telemetry(
+                &listen_url,
+                runtime_paths,
+                telemetry,
+                http_client_factory,
+            )
+            .await
         })
         .await
         .map_err(anyhow::Error::from_boxed)

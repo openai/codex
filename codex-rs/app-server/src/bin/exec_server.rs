@@ -6,6 +6,8 @@
 //! `codex_self_exe` for sandboxed filesystem and process requests.
 
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use std::ffi::OsStr;
 
 const CODEX_LINUX_SANDBOX_EXE_ENV_VAR: &str = "CODEX_TEST_LINUX_SANDBOX_EXE";
@@ -32,5 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .block_on(codex_exec_server::run_main(
             "ws://127.0.0.1:0",
             runtime_paths,
+            // This test-only fixture has no application configuration to resolve HTTP policy.
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         ))
 }

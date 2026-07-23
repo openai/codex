@@ -5,6 +5,8 @@
 //! helper mode because sandboxed process requests re-exec this binary.
 
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 #[cfg(unix)]
 use std::ffi::OsStr;
 
@@ -26,5 +28,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let current_exe = std::env::current_exe()?;
     let runtime_paths =
         ExecServerRuntimePaths::new(current_exe, /*codex_linux_sandbox_exe*/ None)?;
-    codex_exec_server::run_main("ws://127.0.0.1:0", runtime_paths).await
+    codex_exec_server::run_main(
+        "ws://127.0.0.1:0",
+        runtime_paths,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .await
 }

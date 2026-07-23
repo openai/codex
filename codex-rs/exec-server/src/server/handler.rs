@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_exec_server_protocol::RequestId;
+use codex_http_client::HttpClientFactory;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -13,6 +14,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
+use crate::client::http_client::ReqwestHttpClient;
 use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::CapabilityRootsDiscoverParams;
 use crate::protocol::CapabilityRootsDiscoverResponse;
@@ -73,6 +75,7 @@ pub(crate) struct ExecServerHandler {
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
     runtime_paths: ExecServerRuntimePaths,
+    http_client: ReqwestHttpClient,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -82,6 +85,7 @@ impl ExecServerHandler {
         session_registry: Arc<SessionRegistry>,
         notifications: RpcNotificationSender,
         runtime_paths: ExecServerRuntimePaths,
+        http_client_factory: HttpClientFactory,
     ) -> Self {
         Self {
             session_registry,
@@ -92,6 +96,7 @@ impl ExecServerHandler {
             background_tasks: TaskTracker::new(),
             file_system: FileSystemHandler::new(runtime_paths.clone()),
             runtime_paths,
+            http_client: ReqwestHttpClient::new(http_client_factory),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }
@@ -222,7 +227,9 @@ impl ExecServerHandler {
         if stream_response {
             self.reserve_http_body_stream(&http_request_id).await?;
         }
-        let response = ReqwestHttpRequestRunner::new(params.timeout_ms, params.redirect_policy)?
+        let response = self
+            .http_client
+            .runner(params.redirect_policy)
             .run(params)
             .await;
         if response.is_err() && stream_response {
