@@ -226,6 +226,21 @@ impl RouteAwareClientPool {
         Self::with_builder(http_client_factory, route_class, HttpClientBuilder::new())
     }
 
+    /// Creates a pool that returns redirect responses without following them.
+    ///
+    /// This applies both when reqwest owns redirect handling and when the pool follows redirects
+    /// manually so each hop can receive its own proxy-route decision.
+    pub fn new_without_redirects(
+        http_client_factory: HttpClientFactory,
+        route_class: ClientRouteClass,
+    ) -> Self {
+        Self::with_builder(
+            http_client_factory,
+            route_class,
+            HttpClientBuilder::new().without_redirects(),
+        )
+    }
+
     /// Creates a pool whose clients limit only connection establishment.
     ///
     /// The timeout applies to every client built for a resolved route, including redirect hops.
@@ -275,6 +290,21 @@ impl RouteAwareClientPool {
             http_client_factory,
             route_class,
             HttpClientBuilder::new().with_chatgpt_cloudflare_cookie_store(),
+        )
+    }
+
+    /// Creates a no-redirect pool that retains the Cloudflare cookies required by ChatGPT
+    /// endpoints.
+    pub fn with_chatgpt_cloudflare_cookies_without_redirects(
+        http_client_factory: HttpClientFactory,
+        route_class: ClientRouteClass,
+    ) -> Self {
+        Self::with_builder(
+            http_client_factory,
+            route_class,
+            HttpClientBuilder::new()
+                .with_chatgpt_cloudflare_cookie_store()
+                .without_redirects(),
         )
     }
 
@@ -354,8 +384,9 @@ impl RouteAwareClientPool {
     {
         let request_method = request.method().clone();
         let request_url = request.url().to_string();
-        let follows_redirects_manually = self.http_client_factory.outbound_proxy_policy()
-            == OutboundProxyPolicy::RespectSystemProxy;
+        let follows_redirects_manually = self.client_builder.follows_redirects()
+            && self.http_client_factory.outbound_proxy_policy()
+                == OutboundProxyPolicy::RespectSystemProxy;
         let timeout_deadline = request
             .timeout()
             .copied()
@@ -421,7 +452,7 @@ impl RouteAwareClientPool {
                 }
             };
             let status = response.status();
-            if !is_redirect(status) {
+            if !follows_redirects_manually || !is_redirect(status) {
                 if follows_redirects_manually {
                     client.log_response(&request_method, &request_url, &response);
                 }

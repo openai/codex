@@ -78,6 +78,10 @@ impl HttpClientBuilder {
         self
     }
 
+    pub(crate) fn follows_redirects(&self) -> bool {
+        self.follow_redirects
+    }
+
     /// Limits only connection establishment, not the request as a whole.
     pub fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(timeout);
