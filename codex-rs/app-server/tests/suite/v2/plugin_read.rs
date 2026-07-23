@@ -39,6 +39,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ScheduledTaskSchedule;
 use codex_app_server_protocol::ScheduledTaskSummary;
 use codex_app_server_protocol::ScheduledTaskWeekday;
+use codex_app_server_protocol::SkillInterface;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -575,7 +576,9 @@ async fn plugin_read_includes_share_url_for_admin_disabled_remote_plugin() -> Re
         "plugin_release_skill_id": "skill-1",
         "interface": {
           "display_name": "Plan Work",
-          "short_description": "Create a plan from issues"
+          "short_description": "Create a plan from issues",
+          "icon_small_url": "https://example.com/plan-work-small.svg",
+          "icon_large_url": "https://example.com/plan-work-large.png"
         }
       }
     ]
@@ -703,6 +706,19 @@ async fn plugin_read_includes_share_url_for_admin_disabled_remote_plugin() -> Re
     assert_eq!(response.plugin.skills[0].name, "plan-work");
     assert_eq!(response.plugin.skills[0].path, None);
     assert_eq!(response.plugin.skills[0].enabled, false);
+    assert_eq!(
+        response.plugin.skills[0].interface,
+        Some(SkillInterface {
+            display_name: Some("Plan Work".to_string()),
+            short_description: Some("Create a plan from issues".to_string()),
+            icon_small: None,
+            icon_large: None,
+            icon_small_url: Some("https://example.com/plan-work-small.svg".to_string()),
+            icon_large_url: Some("https://example.com/plan-work-large.png".to_string()),
+            brand_color: None,
+            default_prompt: None,
+        })
+    );
     assert_eq!(response.plugin.apps.len(), 0);
     assert_eq!(
         response.plugin.app_templates,

@@ -449,6 +449,10 @@ pub struct SkillInterface {
     pub icon_small: Option<AbsolutePathBuf>,
     #[ts(optional)]
     pub icon_large: Option<AbsolutePathBuf>,
+    /// Remote small icon URL from the plugin catalog.
+    pub icon_small_url: Option<String>,
+    /// Remote large icon URL from the plugin catalog.
+    pub icon_large_url: Option<String>,
     #[ts(optional)]
     pub brand_color: Option<String>,
     #[ts(optional)]
@@ -908,6 +912,8 @@ impl From<CoreSkillInterface> for SkillInterface {
             default_prompt: value.default_prompt,
             icon_small: value.icon_small,
             icon_large: value.icon_large,
+            icon_small_url: None,
+            icon_large_url: None,
         }
     }
 }
