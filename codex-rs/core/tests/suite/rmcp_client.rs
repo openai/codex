@@ -696,6 +696,119 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stdio_mcp_tool_names_respect_selected_servers() -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let call_id = "history-echo";
+    let search_call_id = "search-mcp-echo";
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_tool_search_call(
+                search_call_id,
+                &json!({"query": "echo message and environment data"}),
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let call_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-2"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                "history",
+                "echo",
+                r#"{"message":"ping"}"#,
+            ),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "history echo completed successfully."),
+            responses::ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    let command = remote_aware_stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_pre_build_hook(move |codex_home| {
+            fs::write(
+                codex_home.join("config.toml"),
+                r#"
+[features.non_prefixed_mcp_tool_names]
+enabled = true
+server_names = ["history", "notes"]
+"#,
+            )
+            .expect("write MCP namespace configuration");
+        })
+        .with_config(move |config| {
+            for server_name in ["history", "notes", "other"] {
+                insert_mcp_server(
+                    config,
+                    server_name,
+                    stdio_transport(command.clone(), /*env*/ None, Vec::new()),
+                    TestMcpServerOptions {
+                        environment_id: remote_aware_environment_id(),
+                        ..Default::default()
+                    },
+                );
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, "history").await?;
+
+    fixture
+        .submit_turn_with_permission_profile(
+            "call the history echo tool",
+            PermissionProfile::read_only(),
+        )
+        .await?;
+
+    let search_output = call_mock
+        .single_request()
+        .tool_search_output(search_call_id);
+    let mut actual_namespaces = [
+        "history",
+        "notes",
+        "other",
+        "mcp__history",
+        "mcp__notes",
+        "mcp__other",
+    ]
+    .into_iter()
+    .filter(|namespace| {
+        responses::namespace_child_tool(&search_output, namespace, "echo").is_some()
+    })
+    .collect::<Vec<_>>();
+    actual_namespaces.sort_unstable();
+    assert_eq!(actual_namespaces, ["history", "mcp__other", "notes"]);
+
+    let output = final_mock.single_request().function_call_output(call_id);
+    let output_text = output["output"]
+        .as_str()
+        .expect("MCP function-call output should be a string");
+    let output_json: Value = serde_json::from_str(split_wall_time_wrapped_output(output_text))?;
+    assert_eq!(output_json["echo"], "ECHOING: ping");
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

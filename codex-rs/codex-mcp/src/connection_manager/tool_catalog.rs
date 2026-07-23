@@ -110,7 +110,11 @@ impl McpConnectionSet {
                     .map(|tool| Self::with_server_metadata(tool, &view.metadata)),
             );
         }
-        let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);
+        let tools = normalize_tools_for_model_with_prefix(
+            tools,
+            self.prefix_mcp_tool_names,
+            &self.non_prefixed_mcp_tool_servers,
+        );
         trace!(
             available_server_count,
             unavailable_server_count,
@@ -170,8 +174,11 @@ impl McpConnectionSet {
             );
         }
         let clients = Arc::new(McpBindingClients::new(clients));
-        let listed_tools =
-            normalize_tools_for_model_with_prefix(listed_tools, self.prefix_mcp_tool_names);
+        let listed_tools = normalize_tools_for_model_with_prefix(
+            listed_tools,
+            self.prefix_mcp_tool_names,
+            &self.non_prefixed_mcp_tool_servers,
+        );
         let mut tools = Vec::with_capacity(listed_tools.len());
         let mut calls = std::collections::HashMap::with_capacity(listed_tools.len());
         for tool_info in listed_tools {
@@ -298,7 +305,11 @@ impl McpConnectionSet {
         )
         .into_iter()
         .map(|tool| Self::with_server_metadata(tool, &view.metadata));
-        let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);
+        let tools = normalize_tools_for_model_with_prefix(
+            tools,
+            self.prefix_mcp_tool_names,
+            &self.non_prefixed_mcp_tool_servers,
+        );
         emit_duration(
             CODEX_APPS_REFRESH_DURATION_METRIC,
             refresh_start.elapsed(),
