@@ -272,18 +272,16 @@ const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
 
-fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
+fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<AbsolutePathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let path = PathBuf::from(trimmed);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(resolved_cwd.join(path))
-    }
+    Some(AbsolutePathBuf::resolve_path_against_base(
+        trimmed,
+        resolved_cwd,
+    ))
 }
 
 fn resolve_cli_auth_credentials_store_mode(
@@ -893,8 +891,8 @@ pub struct Config {
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: AbsolutePathBuf,
 
-    /// Directory where Codex stores the SQLite state DB.
-    pub sqlite_home: PathBuf,
+    /// Resolved configuration shared by all Codex SQLite databases.
+    pub sqlite: codex_state::SqliteConfig,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
@@ -1437,6 +1435,10 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
+        &self.sqlite
+    }
+
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
         if self.features.enabled(Feature::MultiAgentV2) {
             Some(MultiAgentVersion::V2)
@@ -3822,9 +3824,9 @@ impl Config {
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
-            .map(AbsolutePathBuf::to_path_buf)
+            .cloned()
             .or(sqlite_home_env)
-            .unwrap_or_else(|| codex_home.to_path_buf());
+            .unwrap_or_else(|| codex_home.clone());
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -4019,7 +4021,7 @@ impl Config {
             memories: memories_config,
             agent_interrupt_message_enabled,
             codex_home,
-            sqlite_home,
+            sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
             log_dir,
             config_lock_export_dir: cfg
                 .debug

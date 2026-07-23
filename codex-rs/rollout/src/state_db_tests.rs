@@ -12,6 +12,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -47,12 +48,59 @@ fn cursor_to_anchor_preserves_recency_tie_breaker() {
     );
 }
 
+/// A runtime for another SQLite home must not be queried or clean up rows when
+/// a caller supplies a mismatched configuration.
+#[tokio::test]
+async fn list_threads_db_rejects_mismatched_sqlite_config_without_cleanup() -> anyhow::Result<()> {
+    let root = TempDir::new().expect("temp dir");
+    let runtime_sqlite = codex_state::SqliteConfig::new_for_testing(
+        root.path().join("runtime-sqlite").as_path().abs(),
+    );
+    let requested_sqlite = codex_state::SqliteConfig::new_for_testing(
+        root.path().join("requested-sqlite").as_path().abs(),
+    );
+    let runtime =
+        codex_state::StateRuntime::init(runtime_sqlite, "test-provider".to_string()).await?;
+    let thread_id = ThreadId::new();
+    let metadata = ThreadMetadataBuilder::new(
+        thread_id,
+        root.path().join("missing-rollout.jsonl"),
+        Utc::now(),
+        SessionSource::Cli,
+    )
+    .build("test-provider");
+    runtime.upsert_thread(&metadata).await?;
+
+    let page = list_threads_db(
+        Some(runtime.as_ref()),
+        &requested_sqlite,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        /*relation_filter*/ None,
+        /*archived*/ false,
+        /*is_pinned*/ None,
+        /*search_term*/ None,
+    )
+    .await;
+
+    assert!(page.is_none());
+    assert_eq!(runtime.get_thread(thread_id).await?, Some(metadata));
+    Ok(())
+}
+
 #[tokio::test]
 async fn try_init_waits_for_concurrent_startup_backfill() -> anyhow::Result<()> {
     let home = TempDir::new().expect("temp dir");
-    let runtime =
-        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
-            .await?;
+    let runtime = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
     let claimed = runtime.try_claim_backfill(/*lease_seconds*/ 60).await?;
     assert!(claimed);
     let runtime_for_completion = runtime.clone();
@@ -65,7 +113,7 @@ async fn try_init_waits_for_concurrent_startup_backfill() -> anyhow::Result<()> 
 
     let initialized = try_init_with_roots_and_backfill_lease(
         home.path().to_path_buf(),
-        home.path().to_path_buf(),
+        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
         "test-provider".to_string(),
         /*backfill_lease_seconds*/ 60,
     )
@@ -82,15 +130,17 @@ async fn try_init_waits_for_concurrent_startup_backfill() -> anyhow::Result<()> 
 #[tokio::test]
 async fn try_init_times_out_waiting_for_stuck_startup_backfill() -> anyhow::Result<()> {
     let home = TempDir::new().expect("temp dir");
-    let runtime =
-        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
-            .await?;
+    let runtime = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
     let claimed = runtime.try_claim_backfill(/*lease_seconds*/ 60).await?;
     assert!(claimed);
 
     let result = try_init_with_roots_and_backfill_lease(
         home.path().to_path_buf(),
-        home.path().to_path_buf(),
+        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
         "test-provider".to_string(),
         /*backfill_lease_seconds*/ 60,
     )
@@ -114,9 +164,11 @@ async fn reconcile_rollout_preserves_existing_explicit_title() -> anyhow::Result
     let thread_id = ThreadId::new();
     let rollout_path =
         write_rollout_with_user_message(home.path(), thread_id, "Hey", ThreadHistoryMode::Legacy)?;
-    let runtime =
-        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
-            .await?;
+    let runtime = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
 
     let mut metadata =
         metadata::extract_metadata_from_rollout(rollout_path.as_path(), "test-provider")
@@ -157,9 +209,11 @@ async fn reconcile_rollout_preserves_existing_paginated_memory_mode() -> anyhow:
         "Hey",
         ThreadHistoryMode::Paginated,
     )?;
-    let runtime =
-        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
-            .await?;
+    let runtime = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
 
     reconcile_rollout(
         Some(runtime.as_ref()),

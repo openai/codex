@@ -29,6 +29,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as RolloutGitInfo;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::fs;
@@ -681,7 +682,11 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
 }
 
 async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
-    let state_db = StateRuntime::init(codex_home.to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;

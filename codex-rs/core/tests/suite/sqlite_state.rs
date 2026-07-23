@@ -24,7 +24,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
 use codex_web_search_extension::install as install_web_search_extension;
-use core_test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -67,9 +66,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let thread_id = test.session_configured.thread_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let db_path =
-        codex_state::SqliteConfig::new_for_testing(test.config.sqlite_home.as_path().abs())
-            .state_db_path();
+    let db_path = test.config.sqlite.state_db_path();
 
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
@@ -426,9 +423,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let test = builder.build(&server).await?;
 
-    let db_path =
-        codex_state::SqliteConfig::new_for_testing(test.config.sqlite_home.as_path().abs())
-            .state_db_path();
+    let db_path = test.config.sqlite.state_db_path();
     let rollout_path = test.config.codex_home.join(&rollout_rel_path);
     let default_provider = test.config.model_provider_id.clone();
 
@@ -479,9 +474,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let db_path =
-        codex_state::SqliteConfig::new_for_testing(test.config.sqlite_home.as_path().abs())
-            .state_db_path();
+    let db_path = test.config.sqlite.state_db_path();
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;

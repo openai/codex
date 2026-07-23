@@ -113,7 +113,11 @@ async fn main() -> anyhow::Result<()> {
         .parent()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| PathBuf::from("."));
-    let runtime = StateRuntime::init(codex_home, "logs-client".to_string()).await?;
+    let runtime = StateRuntime::init(
+        SqliteConfig::from_sqlite_home(AbsolutePathBuf::relative_to_current_dir(codex_home)?),
+        "logs-client".to_string(),
+    )
+    .await?;
 
     let mut last_id =
         print_backfill(runtime.as_ref(), &filter, args.backfill, args.compact).await?;

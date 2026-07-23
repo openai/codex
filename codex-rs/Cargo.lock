@@ -1853,6 +1853,7 @@ version = "0.0.0"
 dependencies = [
  "codex-protocol",
  "codex-state",
+ "codex-utils-absolute-path",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2766,6 +2767,7 @@ dependencies = [
  "codex-model-provider-info",
  "codex-models-manager",
  "codex-protocol",
+ "codex-state",
  "codex-utils-absolute-path",
 ]
 
@@ -3167,6 +3169,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-absolute-path",
  "codex-utils-template",
  "pretty_assertions",
  "serde",

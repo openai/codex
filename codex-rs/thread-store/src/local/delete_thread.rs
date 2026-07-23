@@ -223,6 +223,7 @@ mod tests {
     use codex_protocol::protocol::HistoryPosition;
     use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::protocol::ThreadMemoryMode;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -420,9 +421,11 @@ mod tests {
             ThreadHistoryMode::Paginated,
         )
         .expect("session file");
-        let pool = codex_state::open_thread_history_db(home.path())
-            .await
-            .expect("open thread history db");
+        let pool = codex_state::open_thread_history_db(
+            &codex_state::SqliteConfig::new_for_testing(home.path().abs()),
+        )
+        .await
+        .expect("open thread history db");
         let thread_id_string = thread_id.to_string();
         sqlx::query(
             "INSERT INTO thread_turns (thread_id, turn_id, rollout_ordinal, status) VALUES (?, 'turn-1', 1, 'completed')",

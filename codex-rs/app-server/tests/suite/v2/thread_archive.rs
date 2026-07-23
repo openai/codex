@@ -25,6 +25,7 @@ use codex_core::find_thread_path_by_id_str;
 use codex_protocol::ThreadId;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -186,8 +187,11 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
     let parent_thread_id = ThreadId::from_string(&parent_id)?;
     let child_thread_id = ThreadId::from_string(&child_id)?;
     let grandchild_thread_id = ThreadId::from_string(&grandchild_id)?;
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
@@ -292,8 +296,11 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     let parent_thread_id = ThreadId::from_string(&parent_id)?;
     let child_thread_id = ThreadId::from_string(&child_id)?;
     let grandchild_thread_id = ThreadId::from_string(&grandchild_id)?;
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
@@ -408,8 +415,11 @@ async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<
     let parent_thread_id = ThreadId::from_string(&parent_id)?;
     let missing_child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000901")?;
 
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;

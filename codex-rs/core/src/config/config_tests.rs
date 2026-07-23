@@ -5414,7 +5414,7 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
     )
     .await?;
 
-    assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
+    assert_eq!(config.sqlite.home(), codex_home.path());
 
     Ok(())
 }
@@ -11933,7 +11933,7 @@ sandbox_private_desktop = false
     );
     let config = load_with_enterprise_requirement(&codex_home, requirements).await?;
 
-    assert_eq!(config.sqlite_home, required_sqlite_home);
+    assert_eq!(config.sqlite.home(), required_sqlite_home.as_path());
     assert_eq!(config.log_dir, required_log_dir);
     assert_eq!(config.model_catalog, Some(catalog));
     assert!(!config.check_for_update_on_startup);

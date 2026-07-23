@@ -18,6 +18,7 @@ use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
 use crate::app_event::HistoryBatchEntryResponse;
+use codex_utils_absolute_path::test_support::PathExt;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
@@ -2249,7 +2250,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
-        app.config.sqlite_home = codex_home.path().to_path_buf();
+        app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
         // Seed the previous setting so this test exercises the thread-mode update path.
         app.config.memories.generate_memories = true;
 
@@ -2267,7 +2268,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
         .await;
 
         let state_db = codex_state::StateRuntime::init(
-            codex_home.path().to_path_buf(),
+            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
             app.config.model_provider_id.clone(),
         )
         .await
@@ -2289,7 +2290,7 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
-        app.config.sqlite_home = codex_home.path().to_path_buf();
+        app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
 
         let memory_root = codex_home.path().join("memories");
         let extensions_root = memory_root.join("extensions");

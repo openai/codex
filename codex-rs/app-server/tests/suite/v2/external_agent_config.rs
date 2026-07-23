@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::test_support::PathExt;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -538,9 +539,11 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     )
     .await??;
     assert_eq!(completed.import_id, import_id);
-    let state_db =
-        codex_state::StateRuntime::init(sqlite_home.path().to_path_buf(), "mock_provider".into())
-            .await?;
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(sqlite_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     let details_record = state_db
         .external_agent_config_import_details_record(&import_id)
         .await?

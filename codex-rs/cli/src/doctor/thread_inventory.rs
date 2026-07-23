@@ -91,15 +91,9 @@ impl RolloutScan {
 }
 
 pub(super) async fn thread_inventory_check(config: &Config) -> DoctorCheck {
-    let sqlite = codex_state::SqliteConfig::from_sqlite_home(
-        codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(
-            &config.sqlite_home,
-            &config.codex_home,
-        ),
-    );
     thread_inventory_check_for_roots(
         config.codex_home.as_path(),
-        &sqlite,
+        config.sqlite_config(),
         config.model_provider_id.as_str(),
     )
     .await
@@ -142,7 +136,7 @@ async fn thread_inventory_check_for_roots(
         return missing_state_db_check(scan, details);
     }
 
-    let rows = match codex_state::read_thread_state_audit_rows(&state_db_path).await {
+    let rows = match codex_state::read_thread_state_audit_rows(sqlite).await {
         Ok(rows) => rows,
         Err(err) => {
             details.push(format!("rollout DB read error: {err}"));
@@ -1310,7 +1304,7 @@ mod tests {
             let codex_home = TempDir::new().expect("codex home");
             let sqlite_home = TempDir::new().expect("sqlite home");
             let _runtime = codex_state::StateRuntime::init(
-                sqlite_home.path().to_path_buf(),
+                codex_state::SqliteConfig::new_for_testing(sqlite_home.path().abs()),
                 "test-provider".to_string(),
             )
             .await
@@ -1359,9 +1353,8 @@ mod tests {
 
         async fn insert_thread_row(&self, id: &str, rollout_path: &Path, archived: bool) {
             let sqlite = self.sqlite();
-            let state_db_path = sqlite.state_db_path();
             let pool = sqlite
-                .open_read_write_pool(&state_db_path)
+                .open_read_write_pool(&sqlite.state_db_path())
                 .await
                 .expect("sqlite pool");
             sqlx::query(

@@ -8,6 +8,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_protocol::AgentPath;
+use codex_state::SqliteConfig;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -152,7 +153,7 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                 let mut app = make_test_app().await;
                 let codex_home = tempdir()?;
                 app.config.codex_home = codex_home.path().to_path_buf().abs();
-                app.config.sqlite_home = codex_home.path().to_path_buf();
+                app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
                 let (mut app_server, requests, proxy) =
                     start_recording_app_server(&app.config).await?;
                 let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -208,7 +209,8 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                 let mut app = make_test_app().await;
                 let codex_home = tempdir()?;
                 app.config.codex_home = codex_home.path().to_path_buf().abs();
-                app.config.sqlite_home = codex_home.path().to_path_buf();
+                app.config.sqlite =
+                    codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
                 let root_timestamp = "2026-01-01T00-00-00";
                 let root_thread_id = ThreadId::from_string(
                     &create_fake_rollout(

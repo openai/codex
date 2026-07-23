@@ -471,8 +471,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
     let thread_id = codex_protocol::ThreadId::default();
     let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     let state_db =
-        codex_state::StateRuntime::init(sqlite.home().to_path_buf(), "mock_provider".to_string())
-            .await?;
+        codex_state::StateRuntime::init(sqlite.clone(), "mock_provider".to_string()).await?;
     let store = LocalThreadStore::new(
         LocalThreadStoreConfig {
             codex_home: codex_home.path().to_path_buf(),
@@ -1450,8 +1449,7 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
     let thread_id = codex_protocol::ThreadId::default();
     let sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     let state_db =
-        codex_state::StateRuntime::init(sqlite.home().to_path_buf(), "mock_provider".to_string())
-            .await?;
+        codex_state::StateRuntime::init(sqlite.clone(), "mock_provider".to_string()).await?;
     let store = LocalThreadStore::new(
         LocalThreadStoreConfig {
             codex_home: codex_home.path().to_path_buf(),

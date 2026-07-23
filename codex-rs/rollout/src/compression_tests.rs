@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::test_support::PathExt;
 use std::fs;
 use std::fs::FileTimes;
 #[cfg(unix)]
@@ -392,7 +393,7 @@ async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let config = RolloutConfig {
         codex_home: home.path().to_path_buf(),
-        sqlite_home: home.path().to_path_buf(),
+        sqlite: codex_state::SqliteConfig::new_for_testing(home.path().abs()),
         cwd: home.path().to_path_buf(),
         model_provider_id: "test-provider".to_string(),
         generate_memories: true,

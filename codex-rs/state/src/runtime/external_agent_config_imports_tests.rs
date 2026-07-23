@@ -1,10 +1,15 @@
 use super::*;
 use crate::runtime::test_support::unique_temp_dir;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn records_completion_by_import_id() -> anyhow::Result<()> {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test-provider".to_string()).await?;
+    let runtime = StateRuntime::init(
+        crate::SqliteConfig::new_for_testing(unique_temp_dir().as_path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
 
     runtime
         .record_external_agent_config_import_completed(
@@ -127,7 +132,11 @@ async fn records_completion_by_import_id() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn reads_all_history_records() -> anyhow::Result<()> {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test-provider".to_string()).await?;
+    let runtime = StateRuntime::init(
+        crate::SqliteConfig::new_for_testing(unique_temp_dir().as_path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
 
     runtime
         .record_external_agent_config_import_completed(

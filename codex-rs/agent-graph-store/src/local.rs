@@ -16,7 +16,7 @@ pub struct LocalAgentGraphStore {
 impl std::fmt::Debug for LocalAgentGraphStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalAgentGraphStore")
-            .field("codex_home", &self.state_db.codex_home())
+            .field("sqlite", self.state_db.sqlite())
             .finish_non_exhaustive()
     }
 }
@@ -126,6 +126,7 @@ fn internal_error(err: impl std::fmt::Display) -> AgentGraphStoreError {
 mod tests {
     use super::*;
     use codex_state::DirectionalThreadSpawnEdgeStatus;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -141,10 +142,12 @@ mod tests {
 
     async fn state_runtime() -> TestRuntime {
         let codex_home = TempDir::new().expect("tempdir should be created");
-        let state_db =
-            StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string())
-                .await
-                .expect("state db should initialize");
+        let state_db = StateRuntime::init(
+            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("state db should initialize");
         TestRuntime {
             state_db,
             _codex_home: codex_home,

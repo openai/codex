@@ -41,7 +41,7 @@ pub(super) async fn list_threads(
     let state_db = store.state_db().await;
     let rollout_config = RolloutConfig {
         codex_home: store.config.codex_home.clone(),
-        sqlite_home: store.config.sqlite.home().to_path_buf(),
+        sqlite: store.config.sqlite.clone(),
         cwd: store.config.codex_home.clone(),
         model_provider_id: store.config.default_model_provider_id.clone(),
         generate_memories: false,
@@ -110,7 +110,7 @@ pub(super) async fn list_rollout_threads(
             });
         let page = codex_rollout::state_db::list_threads_db(
             state_db.as_deref(),
-            config.codex_home.as_path(),
+            &config.sqlite,
             params.page_size,
             cursor,
             sort_key,
@@ -202,6 +202,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadHistoryMode;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::TempDir;
@@ -262,7 +263,7 @@ mod tests {
         fs::write(&rollout_path, "").expect("placeholder rollout file");
 
         let runtime = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
+            codex_state::SqliteConfig::new_for_testing(home.path().abs()),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -331,7 +332,7 @@ mod tests {
         fs::write(&rollout_path, "").expect("placeholder rollout file");
 
         let runtime = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await

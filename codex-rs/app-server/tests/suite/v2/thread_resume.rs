@@ -98,6 +98,7 @@ use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::read_session_meta_line;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::PathExt;
 use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -1890,8 +1891,11 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
     )
     .await??;
 
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     let thread_id = ThreadId::from_string(&thread_id)?;
     let thread_metadata = state_db
         .get_thread(thread_id)
@@ -2589,8 +2593,11 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
         .join("\n")
             + "\n",
     )?;
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;

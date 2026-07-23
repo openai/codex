@@ -5776,7 +5776,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             Some(
                 codex_state::StateRuntime::init(
-                    config.sqlite_home.clone(),
+                    config.sqlite.clone(),
                     config.model_provider_id.clone(),
                 )
                 .await

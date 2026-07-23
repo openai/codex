@@ -45,6 +45,7 @@ use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
+use codex_core_api::SqliteConfig;
 use codex_core_api::StartThreadOptions;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
@@ -251,7 +252,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         agent_max_depth: 1,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
-        sqlite_home: codex_home.to_path_buf(),
+        sqlite: SqliteConfig::from_sqlite_home(codex_home.clone()),
         log_dir: codex_home.join("log").to_path_buf(),
         config_lock_export_dir: None,
         config_lock_allow_codex_version_mismatch: false,

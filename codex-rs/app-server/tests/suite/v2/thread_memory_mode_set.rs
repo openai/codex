@@ -12,6 +12,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::sync::Arc;
@@ -99,7 +100,11 @@ async fn thread_memory_mode_set_updates_stored_thread_state() -> Result<()> {
 }
 
 async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
-    let state_db = StateRuntime::init(codex_home.to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;

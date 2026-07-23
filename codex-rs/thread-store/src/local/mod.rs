@@ -24,7 +24,6 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use codex_state::SqliteConfig;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
@@ -128,17 +127,10 @@ pub struct LocalThreadStoreConfig {
 }
 
 impl LocalThreadStoreConfig {
-    #[expect(
-        clippy::expect_used,
-        reason = "resolved Codex configuration paths must be absolute"
-    )]
     pub fn from_config(config: &impl codex_rollout::RolloutConfigView) -> Self {
         Self {
             codex_home: config.codex_home().to_path_buf(),
-            sqlite: SqliteConfig::from_sqlite_home(
-                AbsolutePathBuf::from_absolute_path_checked(config.sqlite_home())
-                    .expect("sqlite home from resolved config should be absolute"),
-            ),
+            sqlite: config.sqlite_config().clone(),
             default_model_provider_id: config.model_provider_id().to_string(),
         }
     }
@@ -174,7 +166,7 @@ impl LocalThreadStore {
     async fn thread_history_db(&self) -> ThreadStoreResult<&sqlx::SqlitePool> {
         self.thread_history_db
             .get_or_try_init(|| async {
-                codex_state::open_thread_history_db(self.config.sqlite.home()).await
+                codex_state::open_thread_history_db(&self.config.sqlite).await
             })
             .await
             .map_err(|err| ThreadStoreError::Internal {
@@ -517,7 +509,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -552,7 +544,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -587,7 +579,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -655,7 +647,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -744,7 +736,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -780,7 +772,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -820,7 +812,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -864,7 +856,7 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await
@@ -919,7 +911,7 @@ mod tests {
         let external_home = TempDir::new().expect("external temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
-            config.sqlite.home().to_path_buf(),
+            config.sqlite.clone(),
             config.default_model_provider_id.clone(),
         )
         .await

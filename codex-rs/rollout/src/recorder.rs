@@ -437,6 +437,7 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
+        let sqlite = config.sqlite_config();
         let archived = match archive_filter {
             ThreadListArchiveFilter::Active => false,
             ThreadListArchiveFilter::Archived => true,
@@ -448,7 +449,7 @@ impl RolloutRecorder {
         if matches!(repair_mode, ThreadListRepairMode::StateDbOnly) {
             return Ok(state_db::list_threads_db(
                 state_db_ctx.as_deref(),
-                codex_home,
+                sqlite,
                 page_size,
                 cursor,
                 sort_key,
@@ -558,7 +559,7 @@ impl RolloutRecorder {
 
         let db_page = state_db::list_threads_db(
             state_db_ctx.as_deref(),
-            codex_home,
+            sqlite,
             page_size,
             cursor,
             sort_key,
@@ -588,7 +589,7 @@ impl RolloutRecorder {
                 }
                 if let Some(repaired_db_page) = state_db::list_threads_db(
                     state_db_ctx.as_deref(),
-                    codex_home,
+                    sqlite,
                     page_size,
                     cursor,
                     sort_key,
@@ -629,7 +630,7 @@ impl RolloutRecorder {
                 if sort_key == ThreadSortKey::RecencyAt {
                     if let Some(repaired_db_page) = state_db::list_threads_db(
                         state_db_ctx.as_deref(),
-                        codex_home,
+                        sqlite,
                         page_size,
                         cursor,
                         sort_key,
@@ -701,6 +702,7 @@ impl RolloutRecorder {
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home();
+        let sqlite = config.sqlite_config();
         let cwd_filter = filter_cwd.map(Path::to_path_buf);
         let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
         if state_db_ctx.is_some() {
@@ -708,7 +710,7 @@ impl RolloutRecorder {
             loop {
                 let Some(db_page) = state_db::list_threads_db(
                     state_db_ctx.as_deref(),
-                    codex_home,
+                    sqlite,
                     page_size,
                     db_cursor.as_ref(),
                     sort_key,

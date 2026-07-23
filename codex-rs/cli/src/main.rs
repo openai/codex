@@ -26,7 +26,6 @@ use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
 use codex_rollout_trace::replay_bundle;
-use codex_state::SqliteConfig;
 use codex_state::StateRuntime;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
@@ -2062,11 +2061,9 @@ async fn run_debug_clear_memories_command(
         .build()
         .await?;
 
-    let sqlite_home =
-        AbsolutePathBuf::resolve_path_against_base(&config.sqlite_home, &config.codex_home);
-    let memories_path = SqliteConfig::from_sqlite_home(sqlite_home).memories_db_path();
+    let memories_path = config.sqlite_config().memories_db_path();
     let cleared_memories_db =
-        StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
+        StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_config()).await?;
 
     clear_memory_roots_contents(&config.codex_home).await?;
 

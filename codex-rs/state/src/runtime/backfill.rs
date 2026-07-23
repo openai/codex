@@ -119,9 +119,12 @@ mod tests {
     #[tokio::test]
     async fn backfill_state_persists_progress_and_completion() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let initial = runtime
             .get_backfill_state()
@@ -172,10 +175,10 @@ mod tests {
     #[tokio::test]
     async fn get_backfill_state_succeeds_while_another_connection_holds_writer_slot() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+        let sqlite = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs());
+        let runtime = StateRuntime::init(sqlite.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
-        let sqlite = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs());
         let write_pool = sqlite
             .open_read_write_pool(&sqlite.state_db_path())
             .await
@@ -202,9 +205,12 @@ mod tests {
     #[tokio::test]
     async fn get_backfill_state_repairs_a_missing_singleton_row() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
         sqlx::query("DELETE FROM backfill_state WHERE id = 1")
             .execute(runtime.pool.as_ref())
             .await
@@ -228,9 +234,12 @@ mod tests {
     #[tokio::test]
     async fn backfill_claim_is_singleton_until_stale_and_blocked_when_complete() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
 
         let claimed = runtime
             .try_claim_backfill(/*lease_seconds*/ 3600)
