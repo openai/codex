@@ -142,6 +142,19 @@ impl App {
 
         let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
 
+        let side_toggle_bindings = &self.keymap.app.toggle_side_conversation;
+        if app_keymap_shortcuts_available
+            && (side_toggle_bindings.is_pressed(key_event)
+                || side_toggle_bindings.contains(&crate::key_hint::ctrl(KeyCode::Char('/')))
+                    && crate::key_hint::ctrl(KeyCode::Char('7')).is_press(key_event))
+        {
+            if let Err(err) = self.toggle_side_conversation(tui, app_server).await {
+                self.chat_widget
+                    .add_error_message(format!("Failed to switch side conversation: {err}"));
+            }
+            return;
+        }
+
         if app_keymap_shortcuts_available && self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
             self.chat_widget.toggle_vim_mode_and_notify();
             return;
