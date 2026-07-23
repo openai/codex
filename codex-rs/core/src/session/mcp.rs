@@ -3,6 +3,7 @@ use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
@@ -202,7 +203,7 @@ impl Session {
         }
     }
 
-    /// Refreshes the future Apps catalog without making an exact step a refresh owner.
+    /// Reconnects the runtime so refreshed Apps tools belong to their new exact client.
     pub(crate) async fn hard_refresh_latest_codex_apps_tools(
         self: &Arc<Self>,
     ) -> anyhow::Result<Vec<codex_mcp::ToolInfo>> {
@@ -212,10 +213,43 @@ impl Session {
             .acquire()
             .await
             .map_err(|_| anyhow::anyhow!("MCP runtime refresh semaphore closed"))?;
-        self.services
-            .mcp_runtime
-            .latest_hard_refresh_codex_apps_tools_cache()
-            .await
+        let desired = self.latest_mcp_desired_state().await;
+        let selected_capability_roots = self
+            .resolve_selected_capability_roots_for_step(&desired.environments)
+            .await;
+        let ready_selected_capability_roots =
+            Self::ready_selected_capability_roots(&selected_capability_roots);
+        let executor_capability_discovery = self
+            .executor_capability_discovery_for_step(
+                &desired.config,
+                &ready_selected_capability_roots,
+            )
+            .await;
+        let mcp_projection = self
+            .services
+            .mcp_manager
+            .runtime_config_for_step(
+                &desired.config,
+                &self.services.mcp_thread_init,
+                &self.services.thread_extension_data,
+                &desired.originator,
+                &ready_selected_capability_roots,
+                executor_capability_discovery.as_deref(),
+            )
+            .await;
+        let input = self
+            .build_mcp_runtime_input(
+                &desired,
+                mcp_projection,
+                &ready_selected_capability_roots,
+                Some(self.mcp_elicitation_reviewer()),
+            )
+            .await;
+        anyhow::ensure!(
+            input.mcp_servers.contains_key(CODEX_APPS_MCP_SERVER_NAME),
+            "unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"
+        );
+        self.services.mcp_runtime.replace_fresh(input).await
     }
 
     pub(super) fn mark_mcp_runtime_dirty(&self) {
