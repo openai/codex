@@ -149,7 +149,9 @@ fn thread_store_delete_error(err: ThreadStoreError) -> JSONRPCErrorError {
         ThreadStoreError::ThreadNotFound { thread_id } => {
             invalid_request(format!("thread not found: {thread_id}"))
         }
-        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::InvalidRequest { message } | ThreadStoreError::Conflict { message } => {
+            invalid_request(message)
+        }
         ThreadStoreError::Unsupported { operation } => {
             unsupported_thread_store_operation(operation)
         }

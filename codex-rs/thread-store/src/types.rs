@@ -806,6 +806,17 @@ pub struct ArchiveThreadParams {
     pub thread_id: ThreadId,
 }
 
+/// Parameters for archiving a set of threads as one store operation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveThreadsParams {
+    /// Thread ids to archive, in the order their persisted data should be moved.
+    pub thread_ids: Vec<ThreadId>,
+    /// Thread ids whose paginated writer ownership must be checked before archiving, including
+    /// descendants whose rollout has not materialized yet.
+    #[serde(default)]
+    pub writer_lock_thread_ids: Vec<ThreadId>,
+}
+
 /// Parameters for deleting a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeleteThreadParams {

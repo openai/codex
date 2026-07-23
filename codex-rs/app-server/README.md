@@ -324,7 +324,7 @@ By default, `thread/resume` includes the reconstructed turn history in `thread.t
 
 Paginated threads keep the same resume contract as legacy threads. A default resume materializes the full projected history into `thread.turns`; `excludeTurns: true` keeps that array empty and includes `turnsBackwardsCursor` and `itemsBackwardsCursor` for the durable history visible at the resume boundary. Pass each cursor directly to its matching list API with `sortDirection: "desc"`; the first page includes the cursor's head row, while newer records arrive through live notifications. Either cursor is `null` when there is no durable row yet.
 
-Only one app-server process can hold a paginated thread open for writing at a time. If another process already owns the thread, `thread/resume` fails with JSON-RPC error `-32600`. Read-only requests remain available without resuming the thread.
+Only one app-server process can hold a paginated thread open for writing at a time. If another process already owns the thread, `thread/resume`, `thread/archive`, and `thread/delete` fail with JSON-RPC error `-32600`. Archive and deletion also fail if another process owns any spawned descendant. Read-only requests remain available without resuming the thread.
 
 Experimental clients that want the live resume subscription plus a turns page in one round trip can pass `initialTurnsPage`. It accepts the same `limit`, `sortDirection`, and `itemsView` controls as `thread/turns/list`; omitted controls use its defaults. The response includes `initialTurnsPage` with `nextCursor` and `backwardsCursor` for follow-up pagination.
 

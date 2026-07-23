@@ -34,6 +34,7 @@ use tokio::sync::OwnedMutexGuard;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
+use crate::ArchiveThreadsParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
 use crate::DeleteThreadsParams;
@@ -91,7 +92,7 @@ struct LiveRecorderEntry {
     // canonical SessionMeta is durable. Retain the mode captured when live persistence was opened
     // so missing SQLite rows can still be seeded.
     history_mode: ThreadHistoryMode,
-    _writer_lock: Option<WriterLockGuard>,
+    writer_lock: Option<WriterLockGuard>,
 }
 
 #[derive(Default)]
@@ -207,6 +208,42 @@ impl LocalThreadStore {
         Ok(())
     }
 
+    async fn acquire_paginated_writer_locks(
+        &self,
+        thread_ids: &[ThreadId],
+    ) -> ThreadStoreResult<Vec<WriterLockGuard>> {
+        let mut writer_locks = Vec::new();
+        for &thread_id in thread_ids {
+            if self
+                .live_recorders
+                .lock()
+                .await
+                .get(&thread_id)
+                .is_some_and(|entry| entry.writer_lock.is_some())
+            {
+                continue;
+            }
+
+            // Only a readable legacy header proves no paginated writer can own this id. Missing
+            // lazy rollouts and damaged headers must conservatively try the lock.
+            let history_mode = match read_thread::resolve_rollout_path(
+                self, thread_id, /*include_archived*/ true,
+            )
+            .await?
+            {
+                Some(rollout_path) => codex_rollout::read_session_meta_line(rollout_path.as_path())
+                    .await
+                    .ok()
+                    .map(|meta_line| meta_line.meta.history_mode),
+                None => None,
+            };
+            if !matches!(history_mode, Some(ThreadHistoryMode::Legacy)) {
+                writer_locks.push(self.writer_lock_coordinator.acquire(thread_id)?);
+            }
+        }
+        Ok(writer_locks)
+    }
+
     async fn insert_live_recorder(
         &self,
         thread_id: ThreadId,
@@ -222,7 +259,7 @@ impl LocalThreadStore {
                 entry.insert(LiveRecorderEntry {
                     recorder,
                     history_mode,
-                    _writer_lock: writer_lock,
+                    writer_lock,
                 });
                 Ok(())
             }
@@ -402,7 +439,24 @@ impl ThreadStore for LocalThreadStore {
     }
 
     fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { archive_thread::archive_thread(self, params).await })
+        Box::pin(async move {
+            archive_thread::archive_threads(
+                self,
+                ArchiveThreadsParams {
+                    thread_ids: vec![params.thread_id],
+                    writer_lock_thread_ids: Vec::new(),
+                },
+            )
+            .await
+            .map(|_| ())
+        })
+    }
+
+    fn archive_threads(
+        &self,
+        params: ArchiveThreadsParams,
+    ) -> ThreadStoreFuture<'_, Vec<ThreadId>> {
+        Box::pin(async move { archive_thread::archive_threads(self, params).await })
     }
 
     fn unarchive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, StoredThread> {
