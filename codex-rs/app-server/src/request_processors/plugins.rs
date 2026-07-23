@@ -17,6 +17,8 @@ use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use codex_core_plugins::remote::RemoteAppTemplateUnavailableReason;
+use codex_core_plugins::remote::RemotePluginCatalogCacheMode;
+use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_core_plugins::remote_bundle::RemotePluginBundleInstallError;
@@ -540,7 +542,7 @@ impl PluginRequestProcessor {
         let PluginListParams {
             cwds,
             marketplace_kinds,
-            force_refetch: _,
+            force_refetch,
         } = params;
         let roots = cwds.unwrap_or_default();
         let explicit_marketplace_kinds = marketplace_kinds.is_some();
@@ -578,12 +580,12 @@ impl PluginRequestProcessor {
         let use_remote_global_catalog =
             include_global_remote && auth_mode.is_some_and(DomainAuthMode::uses_codex_backend);
         let remote_plugin_service_config = remote_plugin_service_config(&config);
-        let refresh_global_remote_catalog_cache = use_remote_global_catalog
-            && codex_core_plugins::remote::has_cached_global_remote_plugin_catalog(
-                config.codex_home.as_path(),
-                &remote_plugin_service_config,
-                auth.as_ref(),
-            );
+        let remote_catalog_cache_mode = if force_refetch {
+            RemotePluginCatalogCacheMode::ForceRefetch
+        } else {
+            RemotePluginCatalogCacheMode::PreferCache
+        };
+        let mut remote_catalog_cache_refresh_scopes = Default::default();
         let (mut data, marketplace_load_errors) = if include_local {
             let config_for_marketplace_listing = plugins_input.clone();
             let plugins_manager_for_marketplace_listing = plugins_manager.clone();
@@ -700,12 +702,15 @@ impl PluginRequestProcessor {
                 &remote_plugin_service_config,
                 auth.as_ref(),
                 &remote_sources,
-                /*global_catalog_cache_path*/ Some(config.codex_home.as_path()),
+                /*catalog_cache_root*/ Some(config.codex_home.as_path()),
+                remote_catalog_cache_mode,
             )
             .await
             {
-                Ok(remote_marketplaces) => {
-                    for remote_marketplace in remote_marketplaces
+                Ok(outcome) => {
+                    remote_catalog_cache_refresh_scopes = outcome.catalog_cache_refresh_scopes;
+                    for remote_marketplace in outcome
+                        .marketplaces
                         .into_iter()
                         .map(remote_marketplace_to_info)
                     {
@@ -743,13 +748,14 @@ impl PluginRequestProcessor {
             || include_created_by_me_remote
             || include_shared_with_me
             || include_global_remote
+            || !remote_catalog_cache_refresh_scopes.is_empty()
         {
             plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
                 &plugins_input,
                 auth.clone(),
                 &roots,
                 PluginListBackgroundTaskOptions {
-                    refresh_global_remote_catalog_cache,
+                    remote_catalog_cache_refresh_scopes,
                 },
                 Some(self.effective_plugins_changed_callback()),
             );
@@ -1254,6 +1260,12 @@ impl PluginRequestProcessor {
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
+        codex_core_plugins::remote::invalidate_cached_remote_plugin_catalog_scopes(
+            config.codex_home.as_path(),
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &[RemotePluginScope::User, RemotePluginScope::Workspace],
+        );
         let remote_plugin_id = result.remote_plugin_id;
         self.clear_plugin_related_caches();
         Ok(PluginShareSaveResponse {
@@ -1292,6 +1304,12 @@ impl PluginRequestProcessor {
         .map_err(|err| {
             remote_plugin_catalog_error_to_jsonrpc(err, "update remote plugin share targets")
         })?;
+        codex_core_plugins::remote::invalidate_cached_remote_plugin_catalog_scopes(
+            config.codex_home.as_path(),
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &[RemotePluginScope::User, RemotePluginScope::Workspace],
+        );
         self.clear_plugin_related_caches();
         Ok(PluginShareUpdateTargetsResponse {
             principals: result
@@ -1385,6 +1403,12 @@ impl PluginRequestProcessor {
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "delete remote plugin share"))?;
+        codex_core_plugins::remote::invalidate_cached_remote_plugin_catalog_scopes(
+            config.codex_home.as_path(),
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &[RemotePluginScope::User, RemotePluginScope::Workspace],
+        );
         self.clear_plugin_related_caches();
         Ok(PluginShareDeleteResponse {})
     }

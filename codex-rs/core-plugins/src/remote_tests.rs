@@ -47,6 +47,30 @@ async fn remote_plugin_list_routes_the_complete_query_url() {
 }
 
 #[test]
+fn cached_remote_plugin_catalog_scopes_returns_existing_scopes() {
+    let codex_home = tempfile::tempdir().expect("create codex home");
+    let config = RemotePluginServiceConfig::new(
+        "https://chatgpt.com/backend-api".to_string(),
+        crate::test_support::test_http_client_factory(),
+    );
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    for scope in [RemotePluginScope::Global, RemotePluginScope::Workspace] {
+        catalog_cache::write_cached_directory_plugins(
+            codex_home.path(),
+            &config,
+            &auth,
+            scope,
+            &[],
+        );
+    }
+
+    assert_eq!(
+        cached_remote_plugin_catalog_scopes(codex_home.path(), &config, Some(&auth)),
+        BTreeSet::from([RemotePluginScope::Global, RemotePluginScope::Workspace])
+    );
+}
+
+#[test]
 fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only_plugins() {
     let directory_plugins = vec![
         directory_plugin("plugin-z", "zulu"),
