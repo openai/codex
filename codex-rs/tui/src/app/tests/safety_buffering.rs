@@ -149,6 +149,121 @@ async fn wait_for_turn_completed(
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_turn_interrupt_is_nonblocking_and_coalesces_repeated_requests() -> Result<()> {
+    let (chunks, release_response) =
+        gated_response_chunks("interrupt-response", ev_completed("interrupt-response"));
+    let (server, _completions) = start_streaming_sse_server(vec![chunks]).await;
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model = "{CURRENT_MODEL}"
+model_provider = "{MODEL_PROVIDER_ID}"
+
+[model_providers.{MODEL_PROVIDER_ID}]
+name = "Interrupt test"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+            server.uri()
+        ),
+    )?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite_home = codex_home.path().to_path_buf();
+    app.config.model = Some(CURRENT_MODEL.to_string());
+    app.config.model_provider_id = MODEL_PROVIDER_ID.to_string();
+    app.config.model_provider = ModelProviderInfo {
+        name: "Interrupt test".to_string(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        ..ModelProviderInfo::default()
+    };
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let started = app_server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    app.replace_chat_widget_with_app_server_thread(
+        &mut tui,
+        started,
+        ThreadAttachPresentation::SessionLineage,
+        /*initial_user_message*/ None,
+    )
+    .await?;
+    while app_event_rx.try_recv().is_ok() {}
+
+    submit_prompt(&mut app, "Keep this turn running until interrupted");
+    let turn = next_user_turn_event(&mut app_event_rx);
+    app.submit_thread_op(&mut app_server, thread_id, turn)
+        .await?;
+    let turn_id = next_turn_started(&mut app, &mut app_server, thread_id).await;
+    drive_until_request_count(
+        &mut app,
+        &mut app_server,
+        &server,
+        /*expected_request_count*/ 1,
+    )
+    .await;
+
+    let interrupt = AppCommand::interrupt();
+    assert!(
+        app.try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &interrupt)
+            .await?
+    );
+    let AppServerRequestId::Integer(next_request_id) = app_server.next_request_id() else {
+        unreachable!("embedded app-server request IDs are integers");
+    };
+    assert!(
+        app.try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &interrupt)
+            .await?
+    );
+    assert_eq!(
+        app_server.next_request_id(),
+        AppServerRequestId::Integer(next_request_id + 1)
+    );
+    {
+        let store = app.thread_event_channels[&thread_id].store.lock().await;
+        assert_eq!(store.active_turn_id.as_deref(), Some(turn_id.as_str()));
+        assert_eq!(
+            store.pending_interrupt_turn_id.as_deref(),
+            Some(turn_id.as_str())
+        );
+    }
+
+    while app_event_rx.try_recv().is_ok() {}
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::Warning(WarningNotification {
+            thread_id: Some(thread_id.to_string()),
+            message: "event handled while interrupt is pending".to_string(),
+        }),
+    ));
+    assert!(matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::InsertHistoryCell(_))
+    ));
+
+    wait_for_turn_completed(&mut app, &mut app_server, thread_id).await;
+    assert_eq!(
+        app.thread_event_channels[&thread_id]
+            .store
+            .lock()
+            .await
+            .pending_interrupt_turn_id,
+        None
+    );
+
+    let _ = release_response.send(());
+    app_server.shutdown().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
 async fn drive_until_request_count(
     app: &mut App,
     app_server: &mut AppServerSession,
