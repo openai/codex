@@ -571,6 +571,14 @@ impl PluginRequestProcessor {
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
         plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
+        if include_local
+            && force_refetch
+            && plugins_manager
+                .refresh_non_curated_plugin_cache_for_config(&plugins_input, &roots)
+                .await
+        {
+            self.on_effective_plugins_changed();
+        }
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
         let include_created_by_me_remote = marketplace_kinds
