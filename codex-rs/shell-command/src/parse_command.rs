@@ -1747,7 +1747,8 @@ fn cd_target(args: &[String]) -> Option<String> {
     target
 }
 
-fn is_pathish(s: &str) -> bool {
+/// Returns whether a command token has an explicit path shape.
+pub fn is_pathish(s: &str) -> bool {
     s == "."
         || s == ".."
         || s.starts_with("./")
