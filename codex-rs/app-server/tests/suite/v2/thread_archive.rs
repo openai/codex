@@ -9,6 +9,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -32,6 +33,75 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test]
+async fn thread_archive_rejects_owned_unmaterialized_paginated_descendant() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let parent_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-00-00",
+        "2025-01-01T00:00:00Z",
+        "parent",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let parent_thread_id = ThreadId::from_string(&parent_id)?;
+    let mut owner = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread: child, .. } = owner
+        .start_thread(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let child_thread_id = ThreadId::from_string(&child.id)?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
+    state_db
+        .upsert_thread_spawn_edge(
+            parent_thread_id,
+            child_thread_id,
+            DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await?;
+
+    let mut other = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let request_id = other
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: parent_id.clone(),
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        other.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        format!("thread {} already has an active writer", child.id)
+    );
+    timeout(DEFAULT_READ_TIMEOUT, owner.shutdown_gracefully()).await??;
+    let _: ThreadArchiveResponse = other
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: parent_id,
+            },
+        })
+        .await?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_archive_requires_materialized_rollout() -> Result<()> {

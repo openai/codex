@@ -465,6 +465,7 @@ use codex_rollout::state_db::reconcile_rollout;
 use codex_state::ThreadMetadata;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
+use codex_thread_store::ArchiveThreadsParams as StoreArchiveThreadsParams;
 use codex_thread_store::DeleteThreadsParams as StoreDeleteThreadsParams;
 use codex_thread_store::GitInfoPatch as StoreGitInfoPatch;
 use codex_thread_store::ItemSortKey as StoreItemSortKey;

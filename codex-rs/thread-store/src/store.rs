@@ -6,6 +6,7 @@ use std::pin::Pin;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
+use crate::ArchiveThreadsParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
 use crate::DeleteThreadsParams;
@@ -166,6 +167,26 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Archives a thread.
     fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()>;
+
+    /// Archives threads in order, returning the successfully archived thread ids.
+    ///
+    /// The first thread must archive successfully; later failures are best effort.
+    fn archive_threads(
+        &self,
+        params: ArchiveThreadsParams,
+    ) -> ThreadStoreFuture<'_, Vec<ThreadId>> {
+        Box::pin(async move {
+            let mut archived_thread_ids = Vec::new();
+            for thread_id in params.thread_ids {
+                match self.archive_thread(ArchiveThreadParams { thread_id }).await {
+                    Ok(()) => archived_thread_ids.push(thread_id),
+                    Err(err) if archived_thread_ids.is_empty() => return Err(err),
+                    Err(err) => tracing::warn!("failed to archive thread {thread_id}: {err}"),
+                }
+            }
+            Ok(archived_thread_ids)
+        })
+    }
 
     /// Unarchives a thread and returns its updated metadata.
     fn unarchive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, StoredThread>;

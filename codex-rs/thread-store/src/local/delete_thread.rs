@@ -34,7 +34,8 @@ pub(super) async fn delete_thread(
     if reference_index.reference_count(thread_id) > 0 {
         return Err(referenced_thread_error(thread_id));
     }
-    delete_thread_after_reference_check(store, thread_id).await
+    let mut writer_guards = store.acquire_paginated_writer_locks(&[thread_id]).await?;
+    delete_thread_after_reference_check(store, thread_id, &mut writer_guards).await
 }
 
 pub(super) async fn delete_threads(
@@ -50,7 +51,7 @@ pub(super) async fn delete_threads(
     let mut lock_thread_ids: Vec<_> = deletion_set.iter().copied().collect();
     lock_thread_ids.sort_unstable_by_key(ToString::to_string);
     let mut _live_writer_guards = Vec::with_capacity(lock_thread_ids.len());
-    for thread_id in lock_thread_ids {
+    for &thread_id in &lock_thread_ids {
         _live_writer_guards.push(store.live_writer_locks.lock(thread_id).await);
     }
 
@@ -78,8 +79,11 @@ pub(super) async fn delete_threads(
         }
     }
 
+    let mut writer_guards = store
+        .acquire_paginated_writer_locks(&lock_thread_ids)
+        .await?;
     for thread_id in thread_ids {
-        match delete_thread_after_reference_check(store, thread_id).await {
+        match delete_thread_after_reference_check(store, thread_id, &mut writer_guards).await {
             Ok(()) | Err(ThreadStoreError::ThreadNotFound { .. }) => {}
             Err(err) => return Err(err),
         }
@@ -106,6 +110,7 @@ fn referenced_thread_error(thread_id: codex_protocol::ThreadId) -> ThreadStoreEr
 async fn delete_thread_after_reference_check(
     store: &LocalThreadStore,
     thread_id: codex_protocol::ThreadId,
+    writer_guards: &mut Vec<super::writer_lock::WriterLockGuard>,
 ) -> ThreadStoreResult<()> {
     let thread_id_str = thread_id.to_string();
     let state_db_ctx = store.state_db().await;
@@ -145,12 +150,15 @@ async fn delete_thread_after_reference_check(
         }
     }
     // Drop the recorder before removing files, but retain its writer lock until cleanup finishes.
-    let _writer_lock = store
+    if let Some(writer_lock) = store
         .live_recorders
         .lock()
         .await
         .remove(&thread_id)
-        .and_then(|entry| entry._writer_lock);
+        .and_then(|entry| entry.writer_lock)
+    {
+        writer_guards.push(writer_lock);
+    }
     let found_rollout_path = !rollout_paths.is_empty();
     for rollout_path in rollout_paths {
         delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
@@ -393,6 +401,89 @@ mod tests {
 
         assert!(!source_path.exists());
         assert!(!child_path.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_threads_rejects_owned_descendants_before_deleting_anything() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let owner = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let parent_uuid = Uuid::from_u128(309);
+        let parent_thread_id =
+            ThreadId::from_string(&parent_uuid.to_string()).expect("valid parent thread id");
+        let parent_path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T12-00-00",
+            parent_uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("parent session file");
+        let child_uuid = Uuid::from_u128(310);
+        let child_thread_id =
+            ThreadId::from_string(&child_uuid.to_string()).expect("valid child thread id");
+        let child_path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T12-00-01",
+            child_uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("child session file");
+        let _owner_guard = owner
+            .writer_lock_coordinator
+            .acquire(child_thread_id)
+            .expect("acquire child writer lock");
+
+        let error = store
+            .delete_threads(DeleteThreadsParams {
+                thread_ids: vec![parent_thread_id, child_thread_id],
+            })
+            .await
+            .expect_err("owned descendant should block deletion");
+
+        assert!(matches!(error, ThreadStoreError::Conflict { .. }));
+        assert!(parent_path.exists());
+        assert!(child_path.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_threads_rejects_owned_thread_before_rollout_materializes() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let owner = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let thread_id = ThreadId::default();
+        let _owner_guard = owner
+            .writer_lock_coordinator
+            .acquire(thread_id)
+            .expect("acquire writer lock before rollout exists");
+
+        let error = store
+            .delete_threads(DeleteThreadsParams {
+                thread_ids: vec![thread_id],
+            })
+            .await
+            .expect_err("owned thread should block deletion before rollout exists");
+
+        assert!(matches!(error, ThreadStoreError::Conflict { .. }));
+    }
+
+    #[tokio::test]
+    async fn delete_threads_removes_rollout_with_unreadable_metadata() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = Uuid::from_u128(311);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        std::fs::write(&rollout_path, "{not json}\n").expect("damage rollout metadata");
+
+        store
+            .delete_threads(DeleteThreadsParams {
+                thread_ids: vec![thread_id],
+            })
+            .await
+            .expect("delete rollout with unreadable metadata");
+
+        assert!(!rollout_path.exists());
     }
 
     #[tokio::test]
