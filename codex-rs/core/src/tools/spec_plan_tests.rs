@@ -727,6 +727,55 @@ async fn sleep_tool_follows_current_time_config() {
 }
 
 #[tokio::test]
+async fn sleep_tool_stays_direct_and_outside_code_mode() {
+    for code_mode_only in [false, true] {
+        let plan = probe(|turn| {
+            set_features(
+                turn,
+                &[
+                    Feature::CodeMode,
+                    Feature::CurrentTimeReminder,
+                    Feature::MultiAgentV2,
+                ],
+            );
+            if code_mode_only {
+                set_feature(turn, Feature::CodeModeOnly, /*enabled*/ true);
+            }
+            update_config(turn, |config| {
+                config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                    sleep_tool: true,
+                    ..CurrentTimeReminderConfig::default()
+                });
+                config.multi_agent_v2.wait_agent_enabled = false;
+            });
+        })
+        .await;
+
+        assert!(
+            plan.namespace_function_names("clock")
+                .iter()
+                .any(|name| name == "sleep")
+        );
+        let sleep_tool_name = ToolName::namespaced("clock", "sleep").to_string();
+        let wait_agent_tool_name =
+            ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "wait_agent").to_string();
+        assert_eq!(
+            plan.exposure(&sleep_tool_name),
+            ToolExposure::DirectModelOnly
+        );
+        plan.assert_registered_lacks(&[wait_agent_tool_name.as_str()]);
+
+        let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+            panic!("expected code mode exec tool");
+        };
+        if code_mode_only {
+            assert!(exec.description.contains("clock__curr_time"));
+        }
+        assert!(!exec.description.contains("clock__sleep"));
+    }
+}
+
+#[tokio::test]
 async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},
