@@ -104,6 +104,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
+use tokio::sync::watch;
 use tracing::instrument;
 use tracing::warn;
 
@@ -249,7 +250,16 @@ pub struct PluginListBackgroundTaskOptions {
 struct NonCuratedCacheRefreshRequest {
     roots: Vec<AbsolutePathBuf>,
     configured_plugin_keys: Vec<String>,
+    configured_plugin_sources: Vec<NonCuratedPluginSource>,
     mode: NonCuratedCacheRefreshMode,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct NonCuratedPluginSource {
+    marketplace_path: AbsolutePathBuf,
+    plugin_key: String,
+    source: MarketplacePluginSource,
+    local_version: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -263,6 +273,12 @@ struct NonCuratedCacheRefreshState {
     requested: Option<NonCuratedCacheRefreshRequest>,
     last_refreshed: Option<NonCuratedCacheRefreshRequest>,
     in_flight: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct NonCuratedCacheRefreshCompletion {
+    sequence: u64,
+    changed_sequence: u64,
 }
 
 #[derive(Default)]
@@ -406,7 +422,9 @@ pub struct PluginsManager {
     recommended_plugins_refreshes:
         RwLock<HashMap<RecommendedPluginsCacheKey, Arc<OnceCell<RecommendedPluginsMode>>>>,
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
+    non_curated_cache_refresh_lock: Semaphore,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
+    non_curated_cache_refresh_completion: watch::Sender<NonCuratedCacheRefreshCompletion>,
     // Keep the cache auth-independent so auth changes only need to resolve capabilities again.
     loaded_plugins_cache: RwLock<LoadedPluginsCache>,
     loaded_plugins_load_semaphore: Semaphore,
@@ -484,7 +502,12 @@ impl PluginsManager {
             configured_marketplace_upgrade_state: RwLock::new(
                 ConfiguredMarketplaceUpgradeState::default(),
             ),
+            non_curated_cache_refresh_lock: Semaphore::new(/*permits*/ 1),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
+            non_curated_cache_refresh_completion: watch::channel(
+                NonCuratedCacheRefreshCompletion::default(),
+            )
+            .0,
             loaded_plugins_cache: RwLock::new(LoadedPluginsCache::default()),
             loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
             skill_root_scan_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
@@ -2190,6 +2213,32 @@ impl PluginsManager {
         );
     }
 
+    pub async fn refresh_non_curated_plugin_cache_for_config(
+        self: &Arc<Self>,
+        config: &PluginsConfigInput,
+        roots: &[AbsolutePathBuf],
+    ) -> bool {
+        let Ok(_refresh_permit) = self.non_curated_cache_refresh_lock.acquire().await else {
+            return false;
+        };
+        let mut completion = self.non_curated_cache_refresh_completion.subscribe();
+        let changed_sequence = completion.borrow_and_update().changed_sequence;
+        self.maybe_start_non_curated_plugin_cache_refresh(config, roots);
+
+        loop {
+            let in_flight = match self.non_curated_cache_refresh_state.read() {
+                Ok(state) => state.in_flight,
+                Err(err) => err.into_inner().in_flight,
+            };
+            if !in_flight {
+                return completion.borrow().changed_sequence != changed_sequence;
+            }
+            if completion.changed().await.is_err() {
+                return false;
+            }
+        }
+    }
+
     fn schedule_remote_installed_plugins_cache_refresh(
         self: &Arc<Self>,
         mut request: RemoteInstalledPluginsCacheRefreshRequest,
@@ -2319,6 +2368,12 @@ impl PluginsManager {
             }
         };
         let policy = MarketplacePolicy::from_requirements(config.config_layer_stack.requirements());
+        let mut configured_plugin_keys =
+            configured_plugins_from_stack(&config.config_layer_stack, self.codex_home.as_path())
+                .into_keys()
+                .collect::<Vec<_>>();
+        configured_plugin_keys.sort_unstable();
+        let mut configured_plugin_sources = Vec::new();
         let mut roots = outcome
             .marketplaces
             .into_iter()
@@ -2330,7 +2385,20 @@ impl PluginsManager {
                     &marketplace.path,
                     &marketplace.name,
                 ) {
-                    Ok(()) => Some(marketplace.path),
+                    Ok(()) => {
+                        for plugin in marketplace.plugins {
+                            let plugin_key = format!("{}@{}", plugin.name, marketplace.name);
+                            if configured_plugin_keys.binary_search(&plugin_key).is_ok() {
+                                configured_plugin_sources.push(NonCuratedPluginSource {
+                                    marketplace_path: marketplace.path.clone(),
+                                    plugin_key,
+                                    source: plugin.source,
+                                    local_version: plugin.local_version,
+                                });
+                            }
+                        }
+                        Some(marketplace.path)
+                    }
                     Err(err) => {
                         warn!(
                             marketplace = marketplace.name,
@@ -2345,17 +2413,18 @@ impl PluginsManager {
             .collect::<Vec<_>>();
         roots.sort_unstable();
         roots.dedup();
-        let mut configured_plugin_keys =
-            configured_plugins_from_stack(&config.config_layer_stack, self.codex_home.as_path())
-                .into_keys()
-                .collect::<Vec<_>>();
-        configured_plugin_keys.sort_unstable();
         if roots.is_empty() || configured_plugin_keys.is_empty() {
             return;
         }
+        configured_plugin_sources.sort_by(|left, right| {
+            left.marketplace_path
+                .cmp(&right.marketplace_path)
+                .then_with(|| left.plugin_key.cmp(&right.plugin_key))
+        });
         let mut request = NonCuratedCacheRefreshRequest {
             roots,
             configured_plugin_keys,
+            configured_plugin_sources,
             mode,
         };
 
@@ -2365,6 +2434,23 @@ impl PluginsManager {
                 Err(err) => err.into_inner(),
             };
             if request.mode == NonCuratedCacheRefreshMode::IfVersionChanged
+                && state.last_refreshed.as_ref().is_some_and(|last_refreshed| {
+                    request.configured_plugin_sources.iter().any(|source| {
+                        last_refreshed
+                            .configured_plugin_sources
+                            .iter()
+                            .any(|previous_source| {
+                                previous_source.plugin_key == source.plugin_key
+                                    && previous_source.local_version == source.local_version
+                                    && (previous_source.marketplace_path != source.marketplace_path
+                                        || previous_source.source != source.source)
+                            })
+                    })
+                })
+            {
+                request.mode = NonCuratedCacheRefreshMode::ForceReinstall;
+            }
+            if request.mode == NonCuratedCacheRefreshMode::IfVersionChanged
                 && state.requested.as_ref().is_some_and(|requested| {
                     requested.mode == NonCuratedCacheRefreshMode::ForceReinstall
                         && requested.roots == request.roots
@@ -2372,14 +2458,17 @@ impl PluginsManager {
             {
                 request.mode = NonCuratedCacheRefreshMode::ForceReinstall;
             }
-            // Collapse repeated plugin/list requests onto one worker and only queue another pass
-            // when the roots or configured plugin set changes. Forced reinstall requests are not
-            // deduped against the last completed pass because the same marketplace root path can
-            // point at newly activated files after an auto-upgrade.
+            // Reconcile each canonical plugin generation once before publishing its resource.
             if state.requested.as_ref() == Some(&request)
                 || (request.mode == NonCuratedCacheRefreshMode::IfVersionChanged
                     && !state.in_flight
-                    && state.last_refreshed.as_ref() == Some(&request))
+                    && state.last_refreshed.as_ref().is_some_and(|last_refreshed| {
+                        last_refreshed.roots == request.roots
+                            && last_refreshed.configured_plugin_keys
+                                == request.configured_plugin_keys
+                            && last_refreshed.configured_plugin_sources
+                                == request.configured_plugin_sources
+                    }))
             {
                 return;
             }
@@ -2406,6 +2495,10 @@ impl PluginsManager {
             };
             state.in_flight = false;
             state.requested = None;
+            self.non_curated_cache_refresh_completion
+                .send_modify(|completion| {
+                    completion.sequence = completion.sequence.wrapping_add(1);
+                });
             warn!("failed to start non-curated plugin cache refresh task: {err}");
         }
     }
@@ -2585,6 +2678,10 @@ impl PluginsManager {
                     Err(err) => err.into_inner(),
                 };
                 state.in_flight = false;
+                self.non_curated_cache_refresh_completion
+                    .send_modify(|completion| {
+                        completion.sequence = completion.sequence.wrapping_add(1);
+                    });
                 return;
             };
 
@@ -2604,7 +2701,7 @@ impl PluginsManager {
                     )
                 }
             };
-            let refreshed = match refresh_result {
+            let (refreshed, cache_changed) = match refresh_result {
                 Ok(refresh_outcome) => {
                     if refresh_outcome.cache_refreshed {
                         self.clear_cache();
@@ -2616,12 +2713,15 @@ impl PluginsManager {
                             "failed to refresh configured plugin cache"
                         );
                     }
-                    refresh_outcome.errors.is_empty()
+                    (
+                        refresh_outcome.errors.is_empty(),
+                        refresh_outcome.cache_refreshed,
+                    )
                 }
                 Err(err) => {
                     self.clear_cache();
                     warn!("failed to refresh non-curated plugin cache: {err}");
-                    false
+                    (false, false)
                 }
             };
 
@@ -2632,9 +2732,19 @@ impl PluginsManager {
             if refreshed {
                 state.last_refreshed = Some(request.clone());
             }
-            if state.requested.as_ref() == Some(&request) {
+            let complete = state.requested.as_ref() == Some(&request);
+            if complete {
                 state.requested = None;
                 state.in_flight = false;
+            }
+            self.non_curated_cache_refresh_completion
+                .send_modify(|completion| {
+                    completion.sequence = completion.sequence.wrapping_add(1);
+                    if cache_changed {
+                        completion.changed_sequence = completion.changed_sequence.wrapping_add(1);
+                    }
+                });
+            if complete {
                 return;
             }
         }
