@@ -243,6 +243,7 @@ async fn read_rollout_resume_state(path: &Path) -> io::Result<RolloutResumeState
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -435,10 +436,12 @@ mod tests {
                 ),
             ],
         )?;
-        let state_runtime =
-            StateRuntime::init(temp_dir.path().to_path_buf(), "test-provider".to_string())
-                .await
-                .map_err(std::io::Error::other)?;
+        let state_runtime = StateRuntime::init(
+            codex_state::SqliteConfig::new_for_testing(temp_dir.path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .map_err(std::io::Error::other)?;
         let created_at = chrono::DateTime::parse_from_rfc3339("2025-01-05T12:00:00Z")
             .expect("timestamp should parse")
             .with_timezone(&chrono::Utc);

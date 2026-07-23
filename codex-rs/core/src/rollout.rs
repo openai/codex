@@ -28,8 +28,8 @@ impl codex_rollout::RolloutConfigView for Config {
         self.codex_home.as_path()
     }
 
-    fn sqlite_home(&self) -> &std::path::Path {
-        self.sqlite_home.as_path()
+    fn sqlite_config(&self) -> &codex_state::SqliteConfig {
+        self.sqlite_config()
     }
 
     fn cwd(&self) -> &std::path::Path {

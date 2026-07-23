@@ -15,7 +15,9 @@ use codex_core::find_thread_path_by_id_str;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HistoryPosition;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+use codex_state::SqliteConfig;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -32,8 +34,11 @@ async fn thread_delete_deletes_spawned_descendants() -> Result<()> {
     let grandchild_id =
         create_delete_test_rollout(codex_home.path(), /*minute*/ 2, "grandchild")?;
 
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     let parent_thread_id = ThreadId::from_string(&parent_id)?;
     let child_thread_id = ThreadId::from_string(&child_id)?;
     let grandchild_thread_id = ThreadId::from_string(&grandchild_id)?;
@@ -139,8 +144,11 @@ async fn thread_delete_preflights_external_fork_references_for_spawned_subtrees(
     })?;
     std::fs::write(external_path.as_path(), format!("{external_meta}\n"))?;
 
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let state_db = StateRuntime::init(
+        SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .upsert_thread_spawn_edge(
             parent_thread_id,

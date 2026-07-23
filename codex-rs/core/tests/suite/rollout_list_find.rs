@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+use codex_utils_absolute_path::test_support::PathExt;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -66,9 +67,12 @@ async fn upsert_thread_metadata(
     thread_id: ThreadId,
     rollout_path: PathBuf,
 ) -> StateDbHandle {
-    let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string())
-        .await
-        .unwrap();
+    let runtime = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.abs()),
+        "test-provider".to_string(),
+    )
+    .await
+    .unwrap();
     runtime
         .mark_backfill_complete(/*last_watermark*/ None)
         .await

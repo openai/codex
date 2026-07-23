@@ -36,6 +36,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
@@ -608,15 +609,17 @@ sqlite = true
     // `thread/list` applies `search_term` on the sqlite fast path. This test creates
     // rollouts manually, so mark the DB backfill complete and then run an unsearched
     // list large enough to repair every rollout the searched list should find.
-    let state_db =
-        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
-            .await?;
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
     let rollout_config = codex_rollout::RolloutConfig {
         codex_home: codex_home.path().to_path_buf(),
-        sqlite_home: codex_home.path().to_path_buf(),
+        sqlite: codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
         cwd: codex_home.path().to_path_buf(),
         model_provider_id: "mock_provider".to_string(),
         generate_memories: false,
@@ -831,9 +834,11 @@ sqlite = true
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
-    let state_db =
-        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
-            .await?;
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
@@ -938,7 +943,7 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
     let newer_child_id = ThreadId::new();
     let grandchild_id = ThreadId::new();
     let state_db = codex_state::StateRuntime::init(
-        codex_home.path().to_path_buf(),
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
         "mock_provider".to_string(),
     )
     .await?;
@@ -1722,15 +1727,17 @@ async fn thread_list_sort_recency_at_uses_state_db_order_with_provider_filter() 
         "2025-01-03T00:00:00Z",
     )?;
 
-    let state_db =
-        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
-            .await?;
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
     let rollout_config = codex_rollout::RolloutConfig {
         codex_home: codex_home.path().to_path_buf(),
-        sqlite_home: codex_home.path().to_path_buf(),
+        sqlite: codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
         cwd: codex_home.path().to_path_buf(),
         model_provider_id: "mock_provider".to_string(),
         generate_memories: false,
