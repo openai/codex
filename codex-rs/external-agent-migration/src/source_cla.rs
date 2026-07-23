@@ -21,6 +21,8 @@ use crate::model::PluginsMigration;
 pub(super) const KNOWN_MARKETPLACES_PATH: &str = "plugins/known_marketplaces.json";
 pub(super) const OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
 pub(super) const OFFICIAL_MARKETPLACE_SOURCE: &str = "anthropics/claude-plugins-official";
+pub(super) const CLAUDE_CODE_MARKETPLACE_NAME: &str = "claude-code-plugins";
+pub(super) const CLAUDE_CODE_MARKETPLACE_SOURCE: &str = "anthropics/claude-code";
 pub(super) const REWRITE_PROFILE: RewriteProfile = ClaSource::REWRITE_PROFILE;
 const COMMAND_MIGRATION_PROFILE: CommandMigrationProfile = CommandMigrationProfile::new(
     CommandRewriteProfile::new(
@@ -101,16 +103,21 @@ pub(super) fn marketplace_import_sources(
         ));
     }
 
-    if has_enabled_plugin_for_marketplace(settings, OFFICIAL_MARKETPLACE_NAME)
-        && !import_sources.contains_key(OFFICIAL_MARKETPLACE_NAME)
-    {
-        import_sources.insert(
-            OFFICIAL_MARKETPLACE_NAME.to_string(),
-            MarketplaceImportSource {
-                source: OFFICIAL_MARKETPLACE_SOURCE.to_string(),
-                ref_name: None,
-            },
-        );
+    for (marketplace_name, marketplace_source) in [
+        (OFFICIAL_MARKETPLACE_NAME, OFFICIAL_MARKETPLACE_SOURCE),
+        (CLAUDE_CODE_MARKETPLACE_NAME, CLAUDE_CODE_MARKETPLACE_SOURCE),
+    ] {
+        if has_enabled_plugin_for_marketplace(settings, marketplace_name)
+            && !import_sources.contains_key(marketplace_name)
+        {
+            import_sources.insert(
+                marketplace_name.to_string(),
+                MarketplaceImportSource {
+                    source: marketplace_source.to_string(),
+                    ref_name: None,
+                },
+            );
+        }
     }
 
     import_sources
