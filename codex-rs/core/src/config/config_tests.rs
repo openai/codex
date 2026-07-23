@@ -10602,6 +10602,7 @@ multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = false
+wait_agent_enabled = false
 non_code_mode_only = true
 
 [agents]
@@ -10649,6 +10650,7 @@ max_concurrent_threads_per_session = 9
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(!config.multi_agent_v2.expose_spawn_agent_model_overrides);
+    assert!(!config.multi_agent_v2.wait_agent_enabled);
     assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
@@ -10750,6 +10752,48 @@ fn multi_agent_v2_exposes_model_overrides_by_default() {
             hint.ends_with(DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT)
         }))
     );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_allows_disabled_wait_agent_without_sleep_tool() -> std::io::Result<()> {
+    for config_toml in [
+        r#"
+[features.multi_agent_v2]
+enabled = true
+wait_agent_enabled = false
+"#,
+        r#"
+[features.multi_agent_v2]
+enabled = true
+wait_agent_enabled = false
+
+[features.current_time_reminder]
+enabled = true
+sleep_tool = false
+"#,
+        r#"
+[features.multi_agent_v2]
+enabled = true
+wait_agent_enabled = false
+
+[features.current_time_reminder]
+enabled = false
+sleep_tool = true
+"#,
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert!(!config.multi_agent_v2.wait_agent_enabled);
+    }
+
+    Ok(())
 }
 
 #[test]

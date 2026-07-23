@@ -835,13 +835,15 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                 multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
                 exposure,
             ));
-            planned_tools.add_arc(override_tool_exposure(
-                multi_agent_v2_handler(
-                    WaitAgentHandlerV2::new(context.wait_agent_timeouts),
-                    tool_namespace,
-                ),
-                exposure,
-            ));
+            if turn_context.config.multi_agent_v2.wait_agent_enabled {
+                planned_tools.add_arc(override_tool_exposure(
+                    multi_agent_v2_handler(
+                        WaitAgentHandlerV2::new(context.wait_agent_timeouts),
+                        tool_namespace,
+                    ),
+                    exposure,
+                ));
+            }
             planned_tools.add_arc(override_tool_exposure(
                 multi_agent_v2_handler(InterruptAgentHandler, tool_namespace),
                 exposure,

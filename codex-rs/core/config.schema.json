@@ -1824,6 +1824,10 @@
         },
         "usage_hint_text": {
           "type": "string"
+        },
+        "wait_agent_enabled": {
+          "description": "Expose the multi-agent v2 `wait_agent` tool.",
+          "type": "boolean"
         }
       },
       "type": "object"
