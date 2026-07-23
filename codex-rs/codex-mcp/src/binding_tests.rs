@@ -26,7 +26,6 @@ use crate::connection_manager::McpConnectionSet;
 use crate::rmcp_client::ManagedClient;
 use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
-use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 
 const SERVER_NAME: &str = "docs";
@@ -88,7 +87,6 @@ async fn test_step(
             website_url: None,
         },
         tools: vec![tool.clone()],
-        tool_filter: ToolFilter::default(),
         tool_timeout: None,
         server_instructions: None,
         server_supports_sandbox_state_meta_capability: supports_sandbox_state_meta,

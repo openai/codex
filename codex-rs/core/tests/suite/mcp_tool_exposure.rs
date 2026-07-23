@@ -381,6 +381,9 @@ async fn later_follow_up_uses_background_recovered_apps_after_mid_thread_startup
 
     tokio::fs::remove_dir_all(test.codex_home_path().join("cache/codex_apps_tools")).await?;
     startup_control.fail_next_initialize_attempts(/*attempts*/ 1);
+    test.codex
+        .set_openai_form_elicitation_support(/*supported*/ true)
+        .await?;
     test.codex.submit(Op::RefreshMcpServers).await?;
     test.submit_turn("use Calendar after transient Apps startup failures")
         .await?;

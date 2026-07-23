@@ -16,7 +16,7 @@ impl McpConnectionSet {
         let failures = async {
             let mut failures = Vec::new();
             for server_name in &self.required_servers {
-                let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
+                let Some(view) = self.servers.get(server_name) else {
                     failures.push(McpStartupFailure {
                         server: server_name.clone(),
                         error: format!("required MCP server `{server_name}` was not initialized"),
@@ -24,7 +24,7 @@ impl McpConnectionSet {
                     continue;
                 };
 
-                match async_managed_client.client().await {
+                match view.connection.client().await {
                     Ok(_) => {}
                     Err(error) => failures.push(McpStartupFailure {
                         server: server_name.clone(),

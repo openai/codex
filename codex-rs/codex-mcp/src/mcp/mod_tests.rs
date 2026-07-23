@@ -440,15 +440,9 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps server should exist");
 
-    let sample = sample
-        .configured_config()
-        .expect("configured server should retain transport");
-    let docs = docs
-        .configured_config()
-        .expect("configured server should retain transport");
-    let codex_apps = codex_apps
-        .configured_config()
-        .expect("codex apps should use configured transport");
+    let sample = sample.config();
+    let docs = docs.config();
+    let codex_apps = codex_apps.config();
 
     match &sample.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => {

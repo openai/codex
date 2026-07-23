@@ -733,6 +733,12 @@ impl RmcpClient {
         }
     }
 
+    /// Returns `None` when this client does not manage stored OAuth credentials.
+    pub async fn managed_oauth_credentials(&self) -> Option<Option<StoredOAuthTokens>> {
+        let persistor = self.oauth_persistor().await?;
+        Some(persistor.stored_credentials().await)
+    }
+
     /// Stop the MCP transport and any stdio server process owned by this client.
     pub async fn shutdown(&self) {
         let previous_state = {

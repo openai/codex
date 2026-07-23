@@ -33,8 +33,8 @@ async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
     let servers = manager.effective_servers(&config, Some(&auth)).await;
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
-        .and_then(|server| server.configured_config())
-        .ok_or("hosted plugin runtime should be contributed as a configured server")?;
+        .ok_or("hosted plugin runtime should be contributed as a configured server")?
+        .config();
     let McpServerTransportConfig::StreamableHttp { url, .. } = &server.transport else {
         panic!("hosted plugin runtime should use streamable HTTP");
     };
@@ -94,8 +94,8 @@ async fn default_fallback_overwrites_reserved_config_without_an_extension() -> T
     let servers = manager.effective_servers(&config, Some(&auth)).await;
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
-        .and_then(|server| server.configured_config())
-        .ok_or("default Apps MCP should be present")?;
+        .ok_or("default Apps MCP should be present")?
+        .config();
     let McpServerTransportConfig::StreamableHttp { url, .. } = &server.transport else {
         panic!("default Apps MCP should use streamable HTTP");
     };

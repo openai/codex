@@ -12,31 +12,63 @@ use tracing::trace;
 use tracing::trace_span;
 
 use super::McpConnectionSet;
+use super::McpServerMetadata;
 use crate::binding::McpBinding;
 use crate::binding::PreparedMcpCall;
 use crate::binding_clients::McpBindingClients;
-use crate::codex_apps::prepare_openai_file_params_for_model;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
 use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::list_tools_for_client_uncached;
+use crate::rmcp_client::prepare_codex_apps_tools_for_model;
 use crate::runtime::emit_duration;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
 
+const MCP_UI_META_KEY: &str = "ui";
+const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
+const MCP_UI_MODEL_VISIBILITY: &str = "model";
+
+/// Returns whether a tool may be included in model-facing tool declarations.
+///
+/// Tools without visibility metadata remain visible. Tools with visibility
+/// metadata are hidden unless they explicitly include `model`.
+///
+/// <https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx#resource-discovery>
+pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
+    let Some(visibility) = tool
+        .tool
+        .meta
+        .as_deref()
+        .and_then(|meta| meta.get(MCP_UI_META_KEY))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|ui| ui.get(MCP_UI_VISIBILITY_META_KEY))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return true;
+    };
+    visibility
+        .iter()
+        .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
+}
+
 impl McpConnectionSet {
     /// Returns all tools with model-visible names normalized.
-    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.servers.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         let mut available_server_count = 0;
         let mut unavailable_server_count = 0;
-        for (server_name, managed_client) in &self.clients {
-            managed_client.reconnect_failed_startup().await;
-            let has_cached_tools = managed_client.has_cached_tools();
-            let startup_complete = managed_client.startup_complete.load(Ordering::Acquire);
+        for (server_name, view) in &self.servers {
+            view.connection.client.reconnect_failed_startup().await;
+            let has_cached_tools = view.connection.client.has_cached_tools();
+            let startup_complete = view
+                .connection
+                .client
+                .startup_complete
+                .load(Ordering::Acquire);
             let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 self.codex_apps_tools_override.read().await.clone()
             } else {
@@ -44,8 +76,14 @@ impl McpConnectionSet {
             };
             let Some(server_tools) = async {
                 match catalog_override {
-                    Some(tools) => Some(managed_client.prepare_tools(tools)),
-                    None => managed_client.listed_tools().await,
+                    Some(tools) => {
+                        let tools = filter_tools(tools, &view.tool_filter);
+                        Some(prepare_codex_apps_tools_for_model(
+                            tools,
+                            &self.tool_plugin_provenance,
+                        ))
+                    }
+                    None => view.listed_tools(&self.tool_plugin_provenance).await,
                 }
             }
             .instrument(trace_span!(
@@ -69,7 +107,7 @@ impl McpConnectionSet {
             tools.extend(
                 server_tools
                     .into_iter()
-                    .map(|tool| self.with_server_metadata(tool)),
+                    .map(|tool| Self::with_server_metadata(tool, &view.metadata)),
             );
         }
         let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);
@@ -94,27 +132,41 @@ impl McpConnectionSet {
         let revision = self.tool_catalog_revision.read().await;
         let mut listed_tools = Vec::new();
         let mut clients = std::collections::HashMap::new();
-        for (server_name, managed_client) in &self.clients {
+        for (server_name, view) in &self.servers {
+            if !view
+                .connection
+                .client
+                .startup_complete
+                .load(Ordering::Acquire)
+            {
+                let _ = view.connection.client.client().await;
+            }
+            view.connection.client.reconnect_failed_startup().await;
+            let Ok(mut client) = view.connection.client.client().await else {
+                trace!(server_name = %server_name, "omitting MCP server without an exact ready client");
+                continue;
+            };
+            client.tool_timeout = view.tool_timeout;
             let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 self.codex_apps_tools_override.read().await.clone()
             } else {
                 None
             };
-            let Some((client, server_tools)) = managed_client
-                .capture_ready_client_and_tools(catalog_override)
-                .await
-            else {
-                trace!(
-                    server_name = %server_name,
-                    "omitting MCP server without an exact ready client"
-                );
-                continue;
+            let server_tools = catalog_override.unwrap_or_else(|| client.tools.clone());
+            let server_tools = filter_tools(server_tools, &view.tool_filter);
+            let server_tools = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                prepare_codex_apps_tools_for_model(server_tools, &self.tool_plugin_provenance)
+            } else {
+                crate::rmcp_client::prepare_regular_mcp_tools_for_model(
+                    server_tools,
+                    &self.tool_plugin_provenance,
+                )
             };
-            clients.insert(server_name.clone(), client);
+            clients.insert(server_name.clone(), Arc::new(client));
             listed_tools.extend(
                 server_tools
                     .into_iter()
-                    .map(|tool| self.with_server_metadata(tool)),
+                    .map(|tool| Self::with_server_metadata(tool, &view.metadata)),
             );
         }
         let clients = Arc::new(McpBindingClients::new(clients));
@@ -165,6 +217,7 @@ impl McpConnectionSet {
         tool_catalog_revision: u64,
     ) -> Option<PreparedMcpCall> {
         let server_name = &tool_info.server_name;
+        let view = self.servers.get(server_name)?;
         Some(PreparedMcpCall::new(
             Arc::clone(self),
             client,
@@ -172,7 +225,7 @@ impl McpConnectionSet {
             tool_catalog_revision,
             Arc::clone(&self.tool_catalog_revision),
             tool_info.clone(),
-            self.server_metadata.get(server_name)?.clone(),
+            view.metadata.clone(),
             self.plugin_id_for_mcp_server_name(server_name)
                 .map(str::to_string),
             self.is_selected_plugin_mcp_server(server_name),
@@ -184,13 +237,15 @@ impl McpConnectionSet {
         clippy::await_holding_invalid_type,
         reason = "catalog publication must remain serialized with captured tool calls"
     )]
-    pub(crate) async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
+    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let _refresh = self.codex_apps_refresh_lock.lock().await;
         let refresh_start = Instant::now();
-        let managed_client = self
-            .clients
+        let view = self
+            .servers
             .get(CODEX_APPS_MCP_SERVER_NAME)
-            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
+        let managed_client = view
+            .connection
             .client()
             .await
             .context("failed to get client")?;
@@ -208,7 +263,7 @@ impl McpConnectionSet {
             /*is_codex_apps_mcp_server*/ true,
             /*codex_apps_refresh_trigger*/ "explicit",
             &managed_client.client,
-            managed_client.tool_timeout,
+            view.tool_timeout,
             managed_client.server_instructions.as_deref(),
         )
         .await
@@ -237,12 +292,12 @@ impl McpConnectionSet {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        let tools = filter_tools(tools, &managed_client.tool_filter)
-            .into_iter()
-            .map(|mut tool| {
-                prepare_openai_file_params_for_model(&mut tool);
-                self.with_server_metadata(tool)
-            });
+        let tools = prepare_codex_apps_tools_for_model(
+            filter_tools(tools, &view.tool_filter),
+            &self.tool_plugin_provenance,
+        )
+        .into_iter()
+        .map(|tool| Self::with_server_metadata(tool, &view.metadata));
         let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);
         emit_duration(
             CODEX_APPS_REFRESH_DURATION_METRIC,
@@ -252,13 +307,7 @@ impl McpConnectionSet {
         Ok(tools)
     }
 
-    fn with_server_metadata(&self, mut tool: ToolInfo) -> ToolInfo {
-        let Some(metadata) = self.server_metadata.get(&tool.server_name) else {
-            tool.supports_parallel_tool_calls = false;
-            tool.server_origin = None;
-            return tool;
-        };
-
+    fn with_server_metadata(mut tool: ToolInfo, metadata: &McpServerMetadata) -> ToolInfo {
         tool.supports_parallel_tool_calls = metadata.supports_parallel_tool_calls;
         tool.server_origin = metadata
             .origin
