@@ -11,13 +11,16 @@ pub struct ConnectorToolSummary {
     pub name: String,
     pub title: Option<String>,
     pub description: String,
+    pub is_enabled: bool,
+    pub disabled_reason: Option<String>,
+    pub is_read_only: bool,
 }
 
 /// Metadata returned by the app batch-read API.
 ///
 /// This intentionally excludes connector runtime state, full actions, and model descriptions.
-/// Tool summaries contain display text only, and icon URLs are already projected as public URLs by
-/// the backend.
+/// Tool summaries contain display text and enabled/read-only state only, and icon URLs are already
+/// projected as public URLs by the backend.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorMetadata {
     pub id: String,
@@ -116,6 +119,9 @@ impl ConnectorMetadataStore {
     }
 }
 
+// `apps_mcp_product_sku` affects which tools the batch API returns, but is intentionally omitted
+// from this key because we assume an app-server does not change its product SKU after launch.
+// If that assumption changes, the SKU must be included in the cache scope.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConnectorMetadataStoreScope {
     backend_base_url: String,

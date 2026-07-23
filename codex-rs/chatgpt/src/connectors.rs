@@ -246,6 +246,12 @@ struct BatchAppToolSummary {
     name: String,
     title: Option<String>,
     description: String,
+    #[serde(default)]
+    is_enabled: Option<bool>,
+    #[serde(default)]
+    disabled_reason: Option<String>,
+    #[serde(default)]
+    is_read_only: bool,
 }
 
 fn batch_app_to_metadata(app: BatchApp) -> ConnectorMetadata {
@@ -273,11 +279,17 @@ fn batch_app_to_metadata(app: BatchApp) -> ConnectorMetadata {
                         name,
                         title,
                         description,
+                        is_enabled,
+                        disabled_reason,
+                        is_read_only,
                     } = tool;
                     ConnectorToolSummary {
                         name,
                         title,
                         description,
+                        is_enabled: is_enabled.unwrap_or(true),
+                        disabled_reason,
+                        is_read_only,
                     }
                 })
                 .collect()
@@ -368,7 +380,11 @@ mod tests {
             "name": "Alpha",
             "description": "Alpha description",
             "icon_url": null,
-            "tools": null,
+            "tools": [{
+                "name": "search",
+                "title": "Search",
+                "description": "Search Alpha",
+            }],
         }))
         .expect("valid legacy batch app");
 
@@ -381,7 +397,14 @@ mod tests {
                 icon_url: None,
                 icon_url_dark: None,
                 distribution_channel: None,
-                tool_summaries: None,
+                tool_summaries: Some(vec![ConnectorToolSummary {
+                    name: "search".to_string(),
+                    title: Some("Search".to_string()),
+                    description: "Search Alpha".to_string(),
+                    is_enabled: true,
+                    disabled_reason: None,
+                    is_read_only: false,
+                }]),
             }
         );
     }

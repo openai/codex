@@ -1990,7 +1990,10 @@ instead of failing the whole request.
                 {
                     "name": "search",
                     "title": "Search",
-                    "description": "Search the app."
+                    "description": "Search the app.",
+                    "isEnabled": true,
+                    "disabledReason": null,
+                    "isReadOnly": true
                 }
             ]
         }
@@ -2004,8 +2007,8 @@ account/workspace identity, then makes at most one `POST /ps/apps/batch` for mis
 expired ids. `includeTools` defaults to false and is forwarded as `include_tools`; a fresh
 metadata-only cache entry is refetched when tool summaries are requested. Backend or transport
 failures return an RPC error without replacing existing cache records. Its metadata shape can
-include display-only public tool summaries and intentionally excludes runtime state, MCP tool
-state, full actions, and model descriptions.
+include display-only public tool summaries with enabled/read-only state and intentionally excludes
+runtime state, MCP tool state, full actions, and model descriptions.
 
 Connected apps may override the thread's approval reviewer in `config.toml`.
 Use `apps._default.approvals_reviewer` to set the reviewer for all apps, and a

@@ -34,6 +34,54 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[test]
+fn app_read_deserializes_legacy_tool_summaries() -> Result<()> {
+    let response: AppsReadResponse = serde_json::from_value(json!({
+        "apps": [{
+            "id": "alpha",
+            "name": "Alpha",
+            "description": null,
+            "iconUrl": null,
+            "iconUrlDark": null,
+            "distributionChannel": null,
+            "installUrl": null,
+            "pluginDisplayNames": [],
+            "toolSummaries": [{
+                "name": "search",
+                "title": "Search",
+                "description": "Search Alpha",
+            }],
+        }],
+        "missingAppIds": [],
+    }))?;
+
+    assert_eq!(
+        serde_json::to_value(response)?,
+        json!({
+            "apps": [{
+                "id": "alpha",
+                "name": "Alpha",
+                "description": null,
+                "iconUrl": null,
+                "iconUrlDark": null,
+                "distributionChannel": null,
+                "installUrl": null,
+                "pluginDisplayNames": [],
+                "toolSummaries": [{
+                    "name": "search",
+                    "title": "Search",
+                    "description": "Search Alpha",
+                    "isEnabled": true,
+                    "disabledReason": null,
+                    "isReadOnly": false,
+                }],
+            }],
+            "missingAppIds": [],
+        })
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn app_read_deduplicates_orders_partial_misses_and_reuses_cached_metadata() -> Result<()> {
     let access_token = encode_id_token(
@@ -450,6 +498,9 @@ fn metadata_json(id: &str, name: &str, icon_url: Option<&str>) -> Value {
             "name": format!("{id}_tool"),
             "title": format!("{name} Tool"),
             "description": format!("Use {name}"),
+            "isEnabled": false,
+            "disabledReason": "disabled_by_admin",
+            "isReadOnly": true,
         }],
     })
 }
@@ -473,6 +524,9 @@ fn app_response(id: &str, name: &str, icon_url: Option<&str>) -> Value {
             "name": format!("{id}_tool"),
             "title": format!("{name} Tool"),
             "description": format!("Use {name}"),
+            "is_enabled": false,
+            "disabled_reason": "disabled_by_admin",
+            "is_read_only": true,
         }],
         "branding": {
             "category": "PRODUCTIVITY",

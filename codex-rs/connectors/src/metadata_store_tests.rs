@@ -90,6 +90,9 @@ fn tool_inclusive_reads_require_cached_tool_summaries() {
         name: "search".to_string(),
         title: Some("Search".to_string()),
         description: "Search the app".to_string(),
+        is_enabled: true,
+        disabled_reason: None,
+        is_read_only: true,
     }]);
     let ids = vec![
         "metadata-only".to_string(),
@@ -133,6 +136,9 @@ fn metadata_only_commit_does_not_replace_fresh_tool_summaries() {
         name: "search".to_string(),
         title: Some("Search".to_string()),
         description: "Search the app".to_string(),
+        is_enabled: true,
+        disabled_reason: None,
+        is_read_only: true,
     }]);
     let ids = vec!["with-tools".to_string()];
 

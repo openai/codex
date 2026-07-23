@@ -477,7 +477,7 @@ fn record_legacy_apps_installed_duration(started_at: Instant, reload: bool) {
         );
     }
 }
-const APP_READ_MAX_IDS: usize = 100;
+pub(super) const APP_READ_MAX_IDS: usize = 100;
 
 enum AppListLoadResult {
     Accessible(Result<AccessibleConnectorsStatus, String>),
