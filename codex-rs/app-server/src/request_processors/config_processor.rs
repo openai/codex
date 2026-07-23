@@ -7,6 +7,7 @@ use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
+use codex_app_server_protocol::BrowserUseRequirements;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -403,6 +404,9 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
+        browser_use: requirements
+            .browser_use
+            .map(map_browser_use_requirements_to_api),
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -435,6 +439,14 @@ fn map_computer_use_requirements_to_api(
 ) -> ComputerUseRequirements {
     ComputerUseRequirements {
         allow_locked_computer_use: computer_use.allow_locked_computer_use,
+    }
+}
+
+fn map_browser_use_requirements_to_api(
+    browser_use: codex_config::BrowserUseRequirementsToml,
+) -> BrowserUseRequirements {
+    BrowserUseRequirements {
+        disable_auto_review: browser_use.disable_auto_review,
     }
 }
 

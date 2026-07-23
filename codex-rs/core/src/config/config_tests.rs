@@ -9219,6 +9219,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allow_appshots: None,
         allow_remote_control: None,
         computer_use: None,
+        browser_use: None,
         windows: None,
         feature_requirements: None,
         hooks: None,

@@ -96,6 +96,36 @@ additionalContextLimit = 4096
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_requirements_read_includes_browser_use_auto_review_setting() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"
+[browser_use]
+disable_auto_review = true
+"#,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_config_requirements_read_request().await?;
+    let response: ConfigRequirementsReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        response
+            .requirements
+            .and_then(|requirements| requirements.browser_use)
+            .and_then(|browser_use| browser_use.disable_auto_review),
+        Some(true)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_requirements_read_includes_new_thread_model_defaults() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
