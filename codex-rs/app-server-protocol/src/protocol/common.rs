@@ -1155,6 +1155,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ExternalAgentConfigImportResponse,
     },
+    ExternalAgentConfigImportHistoryRecord => "externalAgentConfig/import/recordHistory" {
+        params: v2::ExternalAgentConfigImportHistoryRecordParams,
+        serialization: global("config"),
+        response: v2::ExternalAgentConfigImportHistoryRecordResponse,
+    },
     ExternalAgentConfigImportHistoriesRead => "externalAgentConfig/import/readHistories" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global_shared_read("config"),

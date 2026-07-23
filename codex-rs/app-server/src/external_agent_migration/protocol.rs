@@ -210,6 +210,7 @@ pub(super) fn protocol_import_history(
 
     Ok(ExternalAgentConfigImportHistory {
         import_id: record.import_id,
+        provider_id: record.provider_id,
         completed_at_ms: record.completed_at_ms,
         successes,
         failures,
