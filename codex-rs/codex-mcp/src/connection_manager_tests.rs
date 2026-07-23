@@ -247,6 +247,36 @@ impl InProcessTransportFactory for MutableToolsTransportFactory {
     }
 }
 
+struct DisconnectingToolsTransportFactory {
+    server: MutableToolsServer,
+    disconnect: CancellationToken,
+}
+
+impl InProcessTransportFactory for DisconnectingToolsTransportFactory {
+    fn open(&self) -> BoxFuture<'static, io::Result<DuplexStream>> {
+        let server = self.server.clone();
+        let disconnect = self.disconnect.clone();
+        async move {
+            let (client_stream, server_stream) = tokio::io::duplex(4096);
+            tokio::spawn(async move {
+                let server = server
+                    .serve(server_stream)
+                    .await
+                    .expect("serve disconnecting MCP tools");
+                let cancellation = server.cancellation_token();
+                tokio::select! {
+                    () = disconnect.cancelled() => cancellation.cancel(),
+                    result = server.waiting() => {
+                        result.expect("disconnecting MCP server should complete");
+                    }
+                }
+            });
+            Ok(client_stream)
+        }
+        .boxed()
+    }
+}
+
 async fn create_test_managed_client(tools: Vec<ToolInfo>) -> ManagedClient {
     ManagedClient {
         client: Arc::new(
@@ -2652,6 +2682,80 @@ async fn reconciliation_reuses_ready_server_when_startup_timeout_changes() {
     let reconciled = reconcile_reusable_server(&previous, config, runtime_context).await;
 
     assert!(previous.shares_test_connection_with(&reconciled, "docs"));
+}
+
+#[tokio::test]
+async fn reconciliation_replaces_closed_connections() -> anyhow::Result<()> {
+    let runtime_context = reusable_server_runtime_context();
+    let config = reusable_server_config("http://127.0.0.1:1");
+    let mut previous = manager_with_reusable_ready_server(
+        &config,
+        &runtime_context,
+        vec![create_test_tool("docs", "search")],
+    )
+    .await;
+    let disconnect = CancellationToken::new();
+    let client = Arc::new(
+        RmcpClient::new_in_process_client(Arc::new(DisconnectingToolsTransportFactory {
+            server: MutableToolsServer {
+                tools: Arc::new(tokio::sync::RwLock::new(vec![Tool::new(
+                    "search",
+                    "search",
+                    Arc::new(JsonObject::default()),
+                )])),
+                block_tool_listing: Arc::new(AtomicBool::new(false)),
+            },
+            disconnect: disconnect.clone(),
+        }))
+        .await?,
+    );
+    client
+        .initialize(
+            InitializeRequestParams::new(
+                ClientCapabilities::default(),
+                Implementation::new("codex-test", "0.0.0-test"),
+            )
+            .with_protocol_version(ProtocolVersion::V_2025_06_18),
+            /*timeout*/ None,
+            Box::new(|_, _| async { Err(anyhow!("unexpected elicitation")) }.boxed()),
+        )
+        .await?;
+    let view = previous
+        .servers
+        .get_mut("docs")
+        .expect("test server should exist");
+    let mut connected_client = view.connection.client().await?;
+    connected_client.client = Arc::clone(&client);
+    view.connection = Arc::new(McpServerConnection {
+        identity: Some(reusable_server_identity(&config, &runtime_context)),
+        client: AsyncManagedClient {
+            client: futures::future::ready(Ok(connected_client))
+                .boxed()
+                .shared(),
+            is_codex_apps_mcp_server: false,
+            cached_server_info: None,
+            codex_apps_tools_cache_context: None,
+            tool_catalog_cache_context: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            startup_reconnect: None,
+            cancel_token: CancellationToken::new(),
+        },
+    });
+
+    assert!(!client.is_closed().await);
+    disconnect.cancel();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !client.is_closed().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("closed MCP transport should be detected");
+
+    let reconciled = reconcile_reusable_server(&previous, config, runtime_context).await;
+
+    assert!(!previous.shares_test_connection_with(&reconciled, "docs"));
+    Ok(())
 }
 
 #[tokio::test]
