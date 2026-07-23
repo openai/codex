@@ -157,6 +157,38 @@ async fn reqwest_default_route_preserves_transport_redirects() {
 }
 
 #[tokio::test]
+async fn no_redirect_pool_returns_redirect_response() {
+    for outbound_proxy_policy in [
+        OutboundProxyPolicy::ReqwestDefault,
+        OutboundProxyPolicy::RespectSystemProxy,
+    ] {
+        let (address, server) = spawn_response_server(vec![
+            "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_string(),
+        ]);
+        let pool = RouteAwareClientPool::new_without_redirects(
+            HttpClientFactory::new(outbound_proxy_policy),
+            ClientRouteClass::Api,
+        );
+        let initial_url = format!("http://{address}/start");
+        let request = reqwest::Request::new(
+            Method::GET,
+            reqwest::Url::parse(&initial_url).expect("request URL should parse"),
+        );
+
+        let response = pool
+            .send_with_resolver(request, |_| async { Ok(OutboundProxyRoute::Direct) })
+            .await
+            .expect("no-redirect request should finish");
+
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let requests = server.join().expect("redirect server should finish");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /start HTTP/1.1\r\n"));
+    }
+}
+
+#[tokio::test]
 async fn bounds_cached_routes_and_rebuilds_an_evicted_route() {
     let pool = RouteAwareClientPool::with_builder(
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
@@ -488,6 +520,9 @@ fn spawn_response_server(
                     Err(error) => panic!("response server should accept: {error}"),
                 }
             };
+            stream
+                .set_nonblocking(false)
+                .expect("response stream should become blocking");
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .expect("response stream should get a read timeout");
