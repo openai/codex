@@ -327,12 +327,19 @@ impl Session {
     }
 
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
-        Arc::new(GuardianMcpElicitationReviewer::new(self))
+        Arc::clone(
+            self.mcp_elicitation_reviewer_handle
+                .get_or_init(|| Arc::new(GuardianMcpElicitationReviewer::new(self))),
+        )
     }
 
     pub(crate) fn mcp_elicitation_lifecycle(&self) -> codex_mcp::ElicitationLifecycle {
-        let elicitations = self.services.elicitations.clone();
-        codex_mcp::ElicitationLifecycle::new(move || elicitations.register())
+        self.mcp_elicitation_lifecycle_handle
+            .get_or_init(|| {
+                let elicitations = self.services.elicitations.clone();
+                codex_mcp::ElicitationLifecycle::new(move || elicitations.register())
+            })
+            .clone()
     }
 
     #[expect(

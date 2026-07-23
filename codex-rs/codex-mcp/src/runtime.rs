@@ -138,14 +138,21 @@ impl McpRuntime {
         runtime
     }
 
-    /// Rebuilds configured servers and publishes their immutable runtime snapshot.
+    /// Reconciles configured servers and publishes their immutable runtime snapshot.
     pub async fn replace(&self, input: McpRuntimeInput) {
+        let current = self.current.load_full();
         let (publish, publication_gate) = McpPublicationGate::pending();
         let config = Arc::clone(&input.config);
         let plugins_available = input.plugins_available;
         let ready_selected_capability_roots = input.ready_selected_capability_roots.clone();
         let connections = Arc::new(
-            Self::materialize(input, self.elicitation_router.clone(), publication_gate).await,
+            McpConnectionSet::new(
+                Some(current.connections.as_ref()),
+                publication_gate,
+                input,
+                self.elicitation_router.clone(),
+            )
+            .await,
         );
         self.current.store(Arc::new(PublishedMcpRuntime {
             connections,
@@ -249,57 +256,6 @@ impl McpRuntime {
 
     pub async fn shutdown(&self) {
         self.latest_connections().shutdown().await;
-    }
-
-    async fn materialize(
-        input: McpRuntimeInput,
-        elicitation_router: ElicitationRequestRouter,
-        publication_gate: McpPublicationGate,
-    ) -> McpConnectionSet {
-        let McpRuntimeInput {
-            config,
-            plugins_available: _,
-            ready_selected_capability_roots: _,
-            mcp_servers,
-            submit_id,
-            tx_event,
-            startup_cancellation_token,
-            runtime_context,
-            codex_apps_tools_cache,
-            tool_catalog_cache,
-            codex_apps_tools_cache_key,
-            supports_openai_form_elicitation,
-            auth,
-            codex_apps_auth_manager,
-            elicitation_reviewer,
-            elicitation_lifecycle,
-        } = input;
-        McpConnectionSet::new(
-            &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            config.auth_keyring_backend_kind,
-            &config.approval_policy,
-            submit_id,
-            tx_event,
-            startup_cancellation_token,
-            config.permission_profile.clone(),
-            runtime_context,
-            config.codex_home.clone(),
-            codex_apps_tools_cache,
-            tool_catalog_cache,
-            codex_apps_tools_cache_key,
-            config.prefix_mcp_tool_names,
-            config.client_elicitation_capability.clone(),
-            supports_openai_form_elicitation,
-            crate::mcp::tool_plugin_provenance(&config),
-            auth.as_ref(),
-            codex_apps_auth_manager,
-            elicitation_reviewer,
-            elicitation_lifecycle,
-            elicitation_router,
-            publication_gate,
-        )
-        .await
     }
 }
 

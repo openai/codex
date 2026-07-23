@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use codex_config::ConfigLayerStack;
@@ -49,7 +50,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ResolvedMcpCatalog;
 use crate::connection_manager::McpConnectionSet;
+use crate::runtime::McpPublicationGate;
 use crate::runtime::McpRuntimeContext;
+use crate::runtime::McpRuntimeInput;
 use crate::server::EffectiveMcpServer;
 use crate::tools::ToolInfo;
 
@@ -319,30 +322,30 @@ pub async fn read_mcp_resource(
     let mut mcp_servers = effective_mcp_servers(config, auth);
     mcp_servers.retain(|name, _| name == server);
     let cancel_token = CancellationToken::new();
+    let mut runtime_config = config.clone();
+    runtime_config.permission_profile = PermissionProfile::default();
     let manager = McpConnectionSet::new(
-        &mcp_servers,
-        config.mcp_oauth_credentials_store_mode,
-        config.auth_keyring_backend_kind,
-        &config.approval_policy,
-        String::new(),
-        /*tx_event*/ None,
-        cancel_token.clone(),
-        PermissionProfile::default(),
-        runtime_context,
-        config.codex_home.clone(),
-        codex_apps_tools_cache,
-        tool_catalog_cache,
-        connector_runtime_context_key(auth),
-        config.prefix_mcp_tool_names,
-        config.client_elicitation_capability.clone(),
-        /*supports_openai_form_elicitation*/ false,
-        tool_plugin_provenance(config),
-        auth,
-        /*codex_apps_auth_manager*/ None,
-        /*elicitation_reviewer*/ None,
-        /*elicitation_lifecycle*/ None,
+        /*previous*/ None,
+        McpPublicationGate::already_published(),
+        McpRuntimeInput {
+            config: Arc::new(runtime_config),
+            plugins_available: false,
+            ready_selected_capability_roots: Vec::new(),
+            mcp_servers,
+            submit_id: String::new(),
+            tx_event: None,
+            startup_cancellation_token: cancel_token.clone(),
+            runtime_context,
+            codex_apps_tools_cache,
+            tool_catalog_cache,
+            codex_apps_tools_cache_key: connector_runtime_context_key(auth),
+            supports_openai_form_elicitation: false,
+            auth: auth.cloned(),
+            codex_apps_auth_manager: None,
+            elicitation_reviewer: None,
+            elicitation_lifecycle: None,
+        },
         crate::elicitation::ElicitationRequestRouter::default(),
-        crate::runtime::McpPublicationGate::already_published(),
     )
     .await;
 
@@ -373,7 +376,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
-    let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpServerStatusSnapshot {
             server_infos: HashMap::new(),
@@ -397,35 +399,35 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let server_names = mcp_servers.keys().cloned().collect();
 
     let cancel_token = CancellationToken::new();
-    let mcp_connection_set = McpConnectionSet::new(
-        &mcp_servers,
-        config.mcp_oauth_credentials_store_mode,
-        config.auth_keyring_backend_kind,
-        &config.approval_policy,
-        submit_id,
-        /*tx_event*/ None,
-        cancel_token.clone(),
-        PermissionProfile::default(),
-        runtime_context,
-        config.codex_home.clone(),
-        codex_apps_tools_cache,
-        tool_catalog_cache,
-        connector_runtime_context_key(auth),
-        config.prefix_mcp_tool_names,
-        config.client_elicitation_capability.clone(),
-        /*supports_openai_form_elicitation*/ false,
-        tool_plugin_provenance,
-        auth,
-        /*codex_apps_auth_manager*/ None,
-        /*elicitation_reviewer*/ None,
-        /*elicitation_lifecycle*/ None,
+    let mut runtime_config = config.clone();
+    runtime_config.permission_profile = PermissionProfile::default();
+    let mcp_connection_manager = McpConnectionSet::new(
+        /*previous*/ None,
+        McpPublicationGate::already_published(),
+        McpRuntimeInput {
+            config: Arc::new(runtime_config),
+            plugins_available: false,
+            ready_selected_capability_roots: Vec::new(),
+            mcp_servers,
+            submit_id,
+            tx_event: None,
+            startup_cancellation_token: cancel_token.clone(),
+            runtime_context,
+            codex_apps_tools_cache,
+            tool_catalog_cache,
+            codex_apps_tools_cache_key: connector_runtime_context_key(auth),
+            supports_openai_form_elicitation: false,
+            auth: auth.cloned(),
+            codex_apps_auth_manager: None,
+            elicitation_reviewer: None,
+            elicitation_lifecycle: None,
+        },
         crate::elicitation::ElicitationRequestRouter::default(),
-        crate::runtime::McpPublicationGate::already_published(),
     )
     .await;
 
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
-        &mcp_connection_set,
+        &mcp_connection_manager,
         auth_status_entries,
         server_names,
         detail,
@@ -652,27 +654,27 @@ fn convert_mcp_resource_templates(
 }
 
 async fn collect_mcp_server_status_snapshot_from_manager(
-    mcp_connection_set: &McpConnectionSet,
+    mcp_connection_manager: &McpConnectionSet,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
     server_names: Vec<String>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let ((server_infos, tools), resources, resource_templates) = tokio::join!(
         async {
-            let server_infos = mcp_connection_set.list_available_server_infos().await;
-            let tools = mcp_connection_set.list_all_tools().await;
+            let server_infos = mcp_connection_manager.list_available_server_infos().await;
+            let tools = mcp_connection_manager.list_all_tools().await;
             (server_infos, tools)
         },
         async {
             if detail.include_resources() {
-                mcp_connection_set.list_all_resources(|_| true).await
+                mcp_connection_manager.list_all_resources(|_| true).await
             } else {
                 HashMap::new()
             }
         },
         async {
             if detail.include_resources() {
-                mcp_connection_set
+                mcp_connection_manager
                     .list_all_resource_templates(|_| true)
                     .await
             } else {

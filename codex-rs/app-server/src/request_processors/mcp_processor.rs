@@ -144,14 +144,12 @@ impl McpRequestProcessor {
             }
         };
         let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
-        let Some(server) = effective_servers
-            .get(&name)
-            .and_then(codex_mcp::EffectiveMcpServer::configured_config)
-        else {
+        let Some(server) = effective_servers.get(&name) else {
             return Err(invalid_request(format!(
                 "No MCP server named '{name}' found."
             )));
         };
+        let server = server.config();
 
         let (url, http_headers, env_http_headers) = match &server.transport {
             McpServerTransportConfig::StreamableHttp {

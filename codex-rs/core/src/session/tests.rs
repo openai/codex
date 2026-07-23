@@ -5542,6 +5542,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         mcp_refresh_pending: std::sync::atomic::AtomicBool::new(true),
         mcp_refresh_lock: Semaphore::new(/*permits*/ 1),
+        mcp_elicitation_reviewer_handle: OnceLock::new(),
+        mcp_elicitation_lifecycle_handle: OnceLock::new(),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -7703,6 +7705,8 @@ where
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         mcp_refresh_pending: std::sync::atomic::AtomicBool::new(true),
         mcp_refresh_lock: Semaphore::new(/*permits*/ 1),
+        mcp_elicitation_reviewer_handle: OnceLock::new(),
+        mcp_elicitation_lifecycle_handle: OnceLock::new(),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -7881,6 +7885,18 @@ async fn cancelled_mcp_refresh_remains_pending() {
             .load(std::sync::atomic::Ordering::Acquire),
         "the next refresh should publish the pending runtime"
     );
+}
+
+#[tokio::test]
+async fn mcp_elicitation_reviewer_is_reused_across_runtime_refreshes() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let previous = session.mcp_elicitation_reviewer();
+
+    session.mark_mcp_runtime_dirty();
+    session.refresh_mcp_if_dirty().await;
+
+    assert!(Arc::ptr_eq(&previous, &session.mcp_elicitation_reviewer()));
 }
 
 struct PendingNoiseConnectProvider;

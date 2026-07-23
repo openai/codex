@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
+use codex_config::types::OAuthCredentialsStoreMode;
 use keyring::Error as KeyringError;
 use oauth2::AccessToken;
 use oauth2::TokenResponse;
@@ -39,6 +40,7 @@ use crate::oauth::compute_store_key;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::refresh_lock::RefreshCredentialLock;
 use crate::oauth::save_oauth_tokens_to_file;
+use crate::oauth::stored_oauth_credentials;
 use crate::startup_error::is_authentication_required_error;
 
 const REFRESH_LOCK_CONTENTION_EVENT_TARGET: &str =
@@ -114,6 +116,7 @@ async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> R
 
     let first = persistor_for(&initial).await?;
     let second = persistor_for(&initial).await?;
+    let initial_credentials = first.stored_credentials().await;
     let first_task = tokio::spawn({
         let first = first.clone();
         async move { first.refresh_if_needed().await }
@@ -135,6 +138,15 @@ async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> R
     first.persist_if_needed().await?;
     let stored = load_oauth_tokens_from_file(&initial.server_name, &initial.url)?
         .expect("refreshed credentials should be stored");
+    let live_credentials = first.stored_credentials().await;
+    let disk_credentials = stored_oauth_credentials(
+        &initial.server_name,
+        &initial.url,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::Direct,
+    )?;
+    assert_eq!(live_credentials, disk_credentials);
+    assert_ne!(live_credentials, initial_credentials);
     let mut expected_response = initial.token_response.0.clone();
     expected_response.set_access_token(AccessToken::new("refreshed-access-token".to_string()));
     // File loads derive `expires_in` from stable `expires_at`, so it may tick down before this

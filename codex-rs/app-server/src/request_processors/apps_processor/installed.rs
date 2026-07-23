@@ -70,8 +70,7 @@ impl AppsRequestProcessor {
                     );
                     let startup_timeout = mcp_servers
                         .get(CODEX_APPS_MCP_SERVER_NAME)
-                        .and_then(|server| server.configured_config())
-                        .and_then(|config| config.startup_timeout_sec)
+                        .and_then(|server| server.config().startup_timeout_sec)
                         .unwrap_or(CONNECTOR_RUNTIME_REFRESH_TIMEOUT);
                     let runtime_context = McpRuntimeContext::new(
                         self.thread_manager.environment_manager(),

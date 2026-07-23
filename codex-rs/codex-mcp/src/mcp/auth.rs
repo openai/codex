@@ -192,46 +192,38 @@ where
 {
     let futures = servers.into_iter().map(|(name, server)| {
         let name = name.clone();
-        let config = server.configured_config().cloned();
+        let config = server.config().clone();
         let runtime_context = runtime_context.clone();
-        let has_runtime_auth = config
-            .as_ref()
-            .is_some_and(|config| matches!(&config.auth, McpServerAuth::ChatGpt))
+        let has_runtime_auth = matches!(&config.auth, McpServerAuth::ChatGpt)
             && auth.is_some_and(CodexAuth::uses_codex_backend)
-            && config.as_ref().is_some_and(|config| {
-                matches!(
-                    &config.transport,
-                    McpServerTransportConfig::StreamableHttp {
-                        bearer_token_env_var: None,
-                        ..
-                    }
-                )
-            });
-        async move {
-            let auth_state = match config.as_ref() {
-                Some(config) => {
-                    match compute_auth_status(
-                        &name,
-                        config,
-                        store_mode,
-                        keyring_backend_kind,
-                        has_runtime_auth,
-                        &runtime_context,
-                    )
-                    .await
-                    {
-                        Ok(status) => status,
-                        Err(error) => {
-                            warn!(
-                                "failed to determine auth status for MCP server `{name}`: {error:?}"
-                            );
-                            McpAuthState::Unsupported
-                        }
-                    }
+            && matches!(
+                &config.transport,
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var: None,
+                    ..
                 }
-                None => McpAuthState::Unsupported,
+            );
+        async move {
+            let auth_state = match compute_auth_status(
+                &name,
+                &config,
+                store_mode,
+                keyring_backend_kind,
+                has_runtime_auth,
+                &runtime_context,
+            )
+            .await
+            {
+                Ok(status) => status,
+                Err(error) => {
+                    warn!("failed to determine auth status for MCP server `{name}`: {error:?}");
+                    McpAuthState::Unsupported
+                }
             };
-            let entry = McpAuthStatusEntry { config, auth_state };
+            let entry = McpAuthStatusEntry {
+                config: Some(config),
+                auth_state,
+            };
             (name, entry)
         }
     });

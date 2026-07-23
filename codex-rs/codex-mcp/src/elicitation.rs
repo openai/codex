@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -116,12 +117,17 @@ impl ElicitationRequestRouter {
 }
 
 #[derive(Clone)]
-pub(crate) struct ElicitationRequestManager {
-    router: ElicitationRequestRouter,
-    approval_policy: AskForApproval,
-    permission_profile: PermissionProfile,
+pub(crate) struct ElicitationAuthority {
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) permission_profile: PermissionProfile,
     reviewer: Option<ElicitationReviewerHandle>,
     lifecycle: Option<ElicitationLifecycle>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ElicitationRequestManager {
+    router: ElicitationRequestRouter,
+    pub(crate) authority: Arc<StdMutex<ElicitationAuthority>>,
 }
 
 impl ElicitationRequestManager {
@@ -134,11 +140,32 @@ impl ElicitationRequestManager {
     ) -> Self {
         Self {
             router,
+            authority: Arc::new(StdMutex::new(ElicitationAuthority {
+                approval_policy,
+                permission_profile,
+                reviewer,
+                lifecycle,
+            })),
+        }
+    }
+
+    pub(crate) fn update(
+        &self,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+        reviewer: Option<ElicitationReviewerHandle>,
+        lifecycle: Option<ElicitationLifecycle>,
+    ) -> bool {
+        let Ok(mut authority) = self.authority.lock() else {
+            return false;
+        };
+        *authority = ElicitationAuthority {
             approval_policy,
             permission_profile,
             reviewer,
             lifecycle,
-        }
+        };
+        true
     }
 
     pub(crate) fn make_sender(
@@ -147,18 +174,12 @@ impl ElicitationRequestManager {
         tx_event: Option<Sender<Event>>,
     ) -> SendElicitation {
         let router = self.router.clone();
-        let approval_policy = self.approval_policy;
-        let permission_profile = self.permission_profile.clone();
-        let reviewer = self.reviewer.clone();
-        let lifecycle = self.lifecycle.clone();
+        let authority = self.authority.clone();
         Box::new(move |id, elicitation| {
             let router = router.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
-            let approval_policy = approval_policy;
-            let permission_profile = permission_profile.clone();
-            let reviewer = reviewer.clone();
-            let lifecycle = lifecycle.clone();
+            let authority = authority.clone();
             async move {
                 if router.auto_deny() {
                     return Ok(ElicitationResponse {
@@ -168,6 +189,19 @@ impl ElicitationRequestManager {
                     });
                 }
 
+                let Ok(authority) = authority.lock().map(|authority| authority.clone()) else {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Decline,
+                        content: None,
+                        meta: None,
+                    });
+                };
+                let ElicitationAuthority {
+                    approval_policy,
+                    permission_profile,
+                    reviewer,
+                    lifecycle,
+                } = authority;
                 if mcp_permission_prompt_is_auto_approved(
                     approval_policy,
                     &permission_profile,
@@ -189,7 +223,7 @@ impl ElicitationRequestManager {
                     });
                 }
 
-                if let Some(reviewer) = reviewer.as_ref() {
+                if let Some(reviewer) = reviewer {
                     let request = ElicitationReviewRequest {
                         server_name: server_name.clone(),
                         request_id: id.clone(),

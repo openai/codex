@@ -41,6 +41,8 @@ pub(crate) struct Session {
     pub(super) mcp_refresh_pending: std::sync::atomic::AtomicBool,
     /// Serializes runtime refreshes without blocking calls that own a snapshot.
     pub(super) mcp_refresh_lock: Semaphore,
+    pub(super) mcp_elicitation_reviewer_handle: OnceLock<codex_mcp::ElicitationReviewerHandle>,
+    pub(super) mcp_elicitation_lifecycle_handle: OnceLock<codex_mcp::ElicitationLifecycle>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
@@ -1151,6 +1153,8 @@ impl Session {
                 multi_agent_version,
                 mcp_refresh_pending: std::sync::atomic::AtomicBool::new(false),
                 mcp_refresh_lock: Semaphore::new(/*permits*/ 1),
+                mcp_elicitation_reviewer_handle: OnceLock::new(),
+                mcp_elicitation_lifecycle_handle: OnceLock::new(),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
