@@ -302,6 +302,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
+        let windows_sandbox_proxy_settings_mode = ctx.session.windows_sandbox_proxy_settings_mode;
         let session_shell = ctx.session.user_shell();
         let shell = req
             .turn_environment
@@ -464,6 +465,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                         .open_session_with_prepared_exec_env(
                             req.process_id,
                             &prepared.exec_request,
+                            windows_sandbox_proxy_settings_mode,
                             req.tty,
                             prepared.spawn_lifecycle,
                             req.turn_environment.environment.as_ref(),
@@ -510,6 +512,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 network_proxy_launch,
                 /*environment_id*/ Some(&req.turn_environment.environment_id),
                 req.exec_server_env_config.clone(),
+                windows_sandbox_proxy_settings_mode,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
                 req.turn_environment.environment.as_ref(),

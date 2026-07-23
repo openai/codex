@@ -371,4 +371,36 @@ mod tests {
             vec![8080]
         );
     }
+
+    #[test]
+    fn guardian_preserve_mode_does_not_churn_marker_with_empty_proxy_ports() {
+        let marker = SetupMarker {
+            version: crate::setup::SETUP_VERSION,
+            offline_username: "offline".to_string(),
+            online_username: "online".to_string(),
+            created_at: None,
+            proxy_ports: vec![3128, 8081],
+            allow_local_binding: true,
+        };
+        let env_map = HashMap::new();
+        let reconciled = desired_offline_proxy_settings(
+            Some(&marker),
+            WindowsSandboxProxySettingsMode::Reconcile,
+            &env_map,
+            SandboxNetworkIdentity::Offline,
+        );
+        assert_eq!(reconciled.proxy_ports, Vec::<u16>::new());
+
+        let desired = desired_offline_proxy_settings(
+            Some(&marker),
+            WindowsSandboxProxySettingsMode::Preserve,
+            &env_map,
+            SandboxNetworkIdentity::Offline,
+        );
+        assert_eq!(desired, marker.offline_proxy_settings());
+        assert_eq!(
+            marker.request_mismatch_reason(SandboxNetworkIdentity::Offline, &desired),
+            None
+        );
+    }
 }

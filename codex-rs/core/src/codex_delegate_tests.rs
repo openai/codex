@@ -212,6 +212,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             SubAgentSource::Review,
             /*initial_history*/ None,
             crate::session::GitEnrichmentPolicy::Fresh,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         ),
     )
     .await

@@ -87,6 +87,7 @@ pub(crate) async fn run_codex_thread_interactive(
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
     git_enrichment_policy: GitEnrichmentPolicy,
+    windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -139,6 +140,7 @@ pub(crate) async fn run_codex_thread_interactive(
         external_time_provider: Some(Arc::clone(&parent_session.services.time_provider)),
         inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
         git_enrichment_policy,
+        windows_sandbox_proxy_settings_mode,
     }))
     .or_cancel(&cancel_token)
     .await??;
@@ -224,6 +226,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         subagent_source,
         initial_history,
         GitEnrichmentPolicy::Fresh,
+        codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
     ))
     .await?;
 

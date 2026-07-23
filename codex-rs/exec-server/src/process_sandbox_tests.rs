@@ -394,6 +394,8 @@ async fn managed_network_selects_elevated_windows_spawn() {
         cwd_uri.clone(),
     );
     sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    sandbox.windows_sandbox_proxy_settings_mode =
+        Some(codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve);
     let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
         enabled: true,
         enable_socks5: false,
@@ -434,6 +436,10 @@ async fn managed_network_selects_elevated_windows_spawn() {
         );
         assert!(spawn.proxy_enforced);
         assert!(spawn.network_proxy_restricting_sid.is_some());
+        assert_eq!(
+            spawn.proxy_settings_mode,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve
+        );
         assert_eq!(spawn.permission_profile, &permissions);
         assert_eq!(spawn.workspace_roots, std::slice::from_ref(&cwd));
     }
