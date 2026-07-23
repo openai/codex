@@ -220,6 +220,30 @@ fn marketplace_import_sources_prefers_supported_declaration_over_materialization
     );
 }
 
+#[test]
+fn marketplace_import_sources_infers_bundled_claude_code_marketplace() {
+    let (_root, external_agent_home, _codex_home) = fixture_paths();
+    let settings = serde_json::json!({
+        "enabledPlugins": {
+            "code-review@claude-code-plugins": true,
+        }
+    });
+
+    let import_sources = source_cla::marketplace_import_sources(
+        &settings,
+        &external_agent_home,
+        &external_agent_home,
+    );
+
+    assert_eq!(
+        import_sources.get("claude-code-plugins"),
+        Some(&MarketplaceImportSource {
+            source: "anthropics/claude-code".to_string(),
+            ref_name: None,
+        })
+    );
+}
+
 #[tokio::test]
 async fn detect_home_plugins_uses_local_settings_over_project_settings() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
