@@ -63,15 +63,6 @@ use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tracing::warn;
 
-#[cfg(test)]
-use codex_config::Constrained;
-#[cfg(test)]
-use codex_protocol::protocol::McpStartupFailureReason;
-#[cfg(test)]
-use codex_rmcp_client::McpAuthState;
-#[cfg(test)]
-use codex_rmcp_client::McpLoginRequirement;
-
 pub(crate) struct McpServerConnection {
     identity: Option<McpServerConnectionIdentity>,
     client: AsyncManagedClient,
@@ -517,30 +508,6 @@ impl McpConnectionSet {
         manager
     }
 
-    #[cfg(test)]
-    fn new_uninitialized_with_permission_profile(
-        approval_policy: &Constrained<AskForApproval>,
-        permission_profile: &PermissionProfile,
-        prefix_mcp_tool_names: bool,
-    ) -> Self {
-        Self {
-            servers: HashMap::new(),
-            required_servers: Vec::new(),
-            tool_catalog_revision: Arc::new(RwLock::new(0)),
-            codex_apps_tools_override: RwLock::new(None),
-            codex_apps_refresh_lock: Mutex::new(()),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            prefix_mcp_tool_names,
-            elicitation_requests: ElicitationRequestManager::new(
-                approval_policy.value(),
-                permission_profile.clone(),
-                /*reviewer*/ None,
-                /*lifecycle*/ None,
-                ElicitationRequestRouter::default(),
-            ),
-        }
-    }
-
     pub fn empty(prefix_mcp_tool_names: bool) -> Self {
         Self {
             servers: HashMap::new(),
@@ -684,67 +651,6 @@ impl McpConnectionSet {
             }
         }
         server_infos
-    }
-
-    #[cfg(test)]
-    fn new_uninitialized(
-        approval_policy: &Constrained<AskForApproval>,
-        permission_profile: &Constrained<PermissionProfile>,
-        prefix_mcp_tool_names: bool,
-    ) -> Self {
-        Self::new_uninitialized_with_permission_profile(
-            approval_policy,
-            permission_profile.get(),
-            prefix_mcp_tool_names,
-        )
-    }
-
-    #[cfg(test)]
-    fn insert_test_client(&mut self, name: impl Into<String>, client: AsyncManagedClient) {
-        let name = name.into();
-        self.servers.insert(
-            name,
-            McpServerView {
-                tool_filter: ToolFilter::default(),
-                connection: Arc::new(McpServerConnection {
-                    identity: None,
-                    client,
-                }),
-                metadata: McpServerMetadata {
-                    environment_id: String::new(),
-                    pollutes_memory: true,
-                    origin: None,
-                    supports_parallel_tool_calls: false,
-                    default_tools_approval_mode: None,
-                    tool_approval_modes: HashMap::new(),
-                },
-                tool_timeout: None,
-            },
-        );
-    }
-
-    #[cfg(test)]
-    fn test_client(&self, name: &str) -> &AsyncManagedClient {
-        &self.servers[name].connection.client
-    }
-
-    #[cfg(test)]
-    fn set_test_server_metadata(&mut self, name: &str, metadata: McpServerMetadata) {
-        self.servers
-            .get_mut(name)
-            .expect("test server exists")
-            .metadata = metadata;
-    }
-
-    #[cfg(test)]
-    fn shares_test_connection_with(&self, other: &Self, name: &str) -> bool {
-        let Some(left) = self.servers.get(name) else {
-            return false;
-        };
-        let Some(right) = other.servers.get(name) else {
-            return false;
-        };
-        Arc::ptr_eq(&left.connection, &right.connection)
     }
 }
 
