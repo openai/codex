@@ -911,6 +911,98 @@
       },
       "type": "object"
     },
+    "ExternalAgentConfigImportHistoryRecordParams": {
+      "properties": {
+        "itemTypeResults": {
+          "description": "Completed results grouped by imported item type.",
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportTypeResult"
+          },
+          "type": "array"
+        },
+        "providerId": {
+          "description": "Opaque provider identifier for the externally completed import.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemTypeResults",
+        "providerId"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigImportItemTypeFailure": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "errorType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureStage": {
+          "type": "string"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "message": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subErrorType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "failureStage",
+        "itemType",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigImportItemTypeSuccess": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "itemType"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigImportParams": {
       "properties": {
         "migrationItems": {
@@ -927,7 +1019,7 @@
           ]
         },
         "providerId": {
-          "description": "Opaque provider identifier supplied by the caller for analytics attribution. This does not select the migration source.",
+          "description": "Opaque provider identifier supplied by the caller for analytics attribution and import history display. This does not select the migration source.",
           "type": [
             "string",
             "null"
@@ -943,6 +1035,31 @@
       },
       "required": [
         "migrationItems"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigImportTypeResult": {
+      "properties": {
+        "failures": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeFailure"
+          },
+          "type": "array"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "successes": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeSuccess"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "failures",
+        "itemType",
+        "successes"
       ],
       "type": "object"
     },
@@ -7074,6 +7191,30 @@
         "params"
       ],
       "title": "ExternalAgentConfig/importRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "externalAgentConfig/import/recordHistory"
+          ],
+          "title": "ExternalAgentConfig/import/recordHistoryRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExternalAgentConfigImportHistoryRecordParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ExternalAgentConfig/import/recordHistoryRequest",
       "type": "object"
     },
     {

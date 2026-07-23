@@ -896,6 +896,11 @@ impl MessageProcessor {
                 .import(request_id.clone(), params)
                 .await
                 .map(|()| None),
+            ClientRequest::ExternalAgentConfigImportHistoryRecord { params, .. } => self
+                .external_agent_config_processor
+                .record_import_history(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigImportHistoriesRead { .. } => self
                 .external_agent_config_processor
                 .read_import_histories()

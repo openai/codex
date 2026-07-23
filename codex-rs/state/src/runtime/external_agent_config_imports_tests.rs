@@ -9,6 +9,7 @@ async fn records_completion_by_import_id() -> anyhow::Result<()> {
     runtime
         .record_external_agent_config_import_completed(
             "import-1",
+            Some("provider-1"),
             &[ExternalAgentConfigImportSuccessRecord {
                 item_type: "CONFIG".to_string(),
                 cwd: None,
@@ -21,6 +22,7 @@ async fn records_completion_by_import_id() -> anyhow::Result<()> {
     runtime
         .record_external_agent_config_import_completed(
             "import-1",
+            Some("provider-2"),
             &[
                 ExternalAgentConfigImportSuccessRecord {
                     item_type: "CONFIG".to_string(),
@@ -84,6 +86,7 @@ async fn records_completion_by_import_id() -> anyhow::Result<()> {
             .into_iter()
             .map(|record| (
                 record.import_id,
+                record.provider_id,
                 record.successes,
                 record.failures,
                 record.completed_at_ms > 0
@@ -91,6 +94,7 @@ async fn records_completion_by_import_id() -> anyhow::Result<()> {
             .collect::<Vec<_>>(),
         vec![(
             "import-1".to_string(),
+            Some("provider-2".to_string()),
             vec![
                 ExternalAgentConfigImportSuccessRecord {
                     item_type: "CONFIG".to_string(),
@@ -126,10 +130,20 @@ async fn reads_all_history_records() -> anyhow::Result<()> {
     let runtime = StateRuntime::init(unique_temp_dir(), "test-provider".to_string()).await?;
 
     runtime
-        .record_external_agent_config_import_completed("import-1", &[], &[])
+        .record_external_agent_config_import_completed(
+            "import-1",
+            /*provider_id*/ None,
+            &[],
+            &[],
+        )
         .await?;
     runtime
-        .record_external_agent_config_import_completed("import-2", &[], &[])
+        .record_external_agent_config_import_completed(
+            "import-2",
+            /*provider_id*/ None,
+            &[],
+            &[],
+        )
         .await?;
 
     let mut records = runtime

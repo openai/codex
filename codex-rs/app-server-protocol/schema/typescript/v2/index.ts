@@ -119,6 +119,8 @@ export type { ExternalAgentConfigDetectResponse } from "./ExternalAgentConfigDet
 export type { ExternalAgentConfigImportCompletedNotification } from "./ExternalAgentConfigImportCompletedNotification";
 export type { ExternalAgentConfigImportHistoriesReadResponse } from "./ExternalAgentConfigImportHistoriesReadResponse";
 export type { ExternalAgentConfigImportHistory } from "./ExternalAgentConfigImportHistory";
+export type { ExternalAgentConfigImportHistoryRecordParams } from "./ExternalAgentConfigImportHistoryRecordParams";
+export type { ExternalAgentConfigImportHistoryRecordResponse } from "./ExternalAgentConfigImportHistoryRecordResponse";
 export type { ExternalAgentConfigImportItemTypeFailure } from "./ExternalAgentConfigImportItemTypeFailure";
 export type { ExternalAgentConfigImportItemTypeSuccess } from "./ExternalAgentConfigImportItemTypeSuccess";
 export type { ExternalAgentConfigImportParams } from "./ExternalAgentConfigImportParams";
