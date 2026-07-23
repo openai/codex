@@ -64,6 +64,13 @@
             }
           ]
         },
+        "iconLargeUrl": {
+          "description": "Remote large icon URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "iconSmall": {
           "anyOf": [
             {
@@ -72,6 +79,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "iconSmallUrl": {
+          "description": "Remote small icon URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "shortDescription": {

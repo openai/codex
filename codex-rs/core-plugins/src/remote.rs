@@ -1782,11 +1782,15 @@ fn remote_skill_interface_to_info(
             short_description: interface.short_description,
             icon_small: None,
             icon_large: None,
+            icon_small_url: interface.icon_small_url,
+            icon_large_url: interface.icon_large_url,
             brand_color: interface.brand_color,
             default_prompt: interface.default_prompt,
         };
         let has_fields = result.display_name.is_some()
             || result.short_description.is_some()
+            || result.icon_small_url.is_some()
+            || result.icon_large_url.is_some()
             || result.brand_color.is_some()
             || result.default_prompt.is_some();
         has_fields.then_some(result)
