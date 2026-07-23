@@ -144,9 +144,13 @@ async fn delete_thread_after_reference_check(
             });
         }
     }
-    // Stop the live writer before removing files. The per-thread lock keeps new writes and
-    // replacements out while we find paths and clean up rollout files and history rows.
-    store.live_recorders.lock().await.remove(&thread_id);
+    // Drop the recorder before removing files, but retain its writer lock until cleanup finishes.
+    let _writer_lock = store
+        .live_recorders
+        .lock()
+        .await
+        .remove(&thread_id)
+        .and_then(|entry| entry._writer_lock);
     let found_rollout_path = !rollout_paths.is_empty();
     for rollout_path in rollout_paths {
         delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
@@ -218,11 +222,14 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::HistoryPosition;
     use codex_protocol::protocol::ThreadHistoryMode;
+    use codex_protocol::protocol::ThreadMemoryMode;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::*;
+    use crate::ResumeThreadParams;
+    use crate::ThreadPersistenceMetadata;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
@@ -406,7 +413,7 @@ mod tests {
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(306);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        write_session_file_with_history_mode(
+        let rollout_path = write_session_file_with_history_mode(
             home.path(),
             "2025-01-03T12-00-00",
             uuid,
@@ -440,9 +447,30 @@ mod tests {
         .expect("insert projection state");
 
         store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: false,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: Some(home.path().to_path_buf()),
+                    model_provider: "test-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+            })
+            .await
+            .expect("resume paginated writer before deletion");
+        let lock_path = home
+            .path()
+            .join("thread-writer-locks")
+            .join(format!("{thread_id}.lock"));
+        assert!(lock_path.exists());
+
+        store
             .delete_thread(DeleteThreadParams { thread_id })
             .await
             .expect("delete thread");
+        assert!(!lock_path.exists());
 
         let counts = sqlx::query_as::<_, (i64, i64, i64)>(
             r#"
