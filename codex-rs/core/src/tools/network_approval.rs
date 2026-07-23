@@ -687,6 +687,7 @@ impl NetworkApprovalService {
                     /*proposed_execpolicy_amendment*/ None,
                     /*additional_permissions*/ None,
                     available_decisions,
+                    /*plugin_attribution_override*/ None,
                 )
                 .await
         };

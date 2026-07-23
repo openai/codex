@@ -229,6 +229,8 @@ async fn run_codex_tool_session_inner(
                             command,
                             cwd,
                             call_id,
+                            plugin_id: _,
+                            script_path: _,
                             approval_id: _,
                             reason: _,
                             proposed_execpolicy_amendment: _,

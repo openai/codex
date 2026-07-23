@@ -179,8 +179,8 @@ pub fn build_item_from_guardian_event(
             }];
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
-                plugin_id: None,
-                script_path: None,
+                plugin_id: assessment.plugin_id.clone(),
+                script_path: assessment.script_path.clone(),
                 command,
                 cwd: cwd.clone().into(),
                 process_id: None,
@@ -217,8 +217,8 @@ pub fn build_item_from_guardian_event(
             };
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
-                plugin_id: None,
-                script_path: None,
+                plugin_id: assessment.plugin_id.clone(),
+                script_path: assessment.script_path.clone(),
                 command,
                 cwd: cwd.clone().into(),
                 process_id: None,

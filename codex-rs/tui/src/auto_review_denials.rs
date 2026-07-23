@@ -87,6 +87,8 @@ mod tests {
         GuardianAssessmentEvent {
             id: format!("review-{id}"),
             target_item_id: None,
+            plugin_id: None,
+            script_path: None,
             turn_id: "turn-1".to_string(),
             started_at_ms: 0,
             completed_at_ms: Some(1),

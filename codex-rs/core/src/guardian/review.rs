@@ -5,6 +5,7 @@ use codex_analytics::GuardianReviewFailureReason;
 use codex_analytics::GuardianReviewTerminalStatus;
 use codex_analytics::GuardianReviewTrackContext;
 use codex_analytics::GuardianReviewedAction;
+use codex_core_plugins::PluginCommandAttribution;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -62,6 +63,32 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
 );
 
 const GUARDIAN_REVIEW_MAX_ATTEMPTS: i64 = 3;
+
+fn plugin_attribution_for_guardian_request(
+    turn: &TurnContext,
+    request: &GuardianApprovalRequest,
+) -> Option<PluginCommandAttribution> {
+    match request {
+        GuardianApprovalRequest::Shell { command, cwd, .. }
+        | GuardianApprovalRequest::ExecCommand { command, cwd, .. } => {
+            turn.plugin_attribution_for_command(command, cwd)
+        }
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve {
+            program, argv, cwd, ..
+        } => {
+            let command = if argv.is_empty() {
+                vec![program.clone()]
+            } else {
+                std::iter::once(program.clone())
+                    .chain(argv.iter().skip(1).cloned())
+                    .collect()
+            };
+            turn.plugin_attribution_for_command(&command, cwd)
+        }
+        _ => None,
+    }
+}
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -261,11 +288,21 @@ async fn run_guardian_review(
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
-    approval_request_source: GuardianApprovalRequestSource,
-    external_cancel: Option<CancellationToken>,
+    options: GuardianReviewOptions,
 ) -> ReviewDecision {
+    let GuardianReviewOptions {
+        plugin_attribution_override,
+        approval_request_source,
+        external_cancel,
+    } = options;
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
+    let plugin_attribution = plugin_attribution_override
+        .or_else(|| plugin_attribution_for_guardian_request(turn.as_ref(), &request));
+    let (plugin_id, script_path) = plugin_attribution
+        .as_ref()
+        .map(PluginCommandAttribution::serialized_fields)
+        .unzip();
     let action_summary = guardian_assessment_action(&request);
     let reviewed_action = guardian_reviewed_action(&request);
     let review_tracking = GuardianReviewTrackContext::new(
@@ -284,6 +321,8 @@ async fn run_guardian_review(
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: review_id.clone(),
                 target_item_id: target_item_id.clone(),
+                plugin_id: plugin_id.clone(),
+                script_path: script_path.clone(),
                 turn_id: assessment_turn_id.clone(),
                 started_at_ms,
                 completed_at_ms: None,
@@ -321,6 +360,8 @@ async fn run_guardian_review(
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                     id: review_id,
                     target_item_id,
+                    plugin_id: plugin_id.clone(),
+                    script_path: script_path.clone(),
                     turn_id: assessment_turn_id.clone(),
                     started_at_ms,
                     completed_at_ms: Some(completed_at_ms),
@@ -414,6 +455,8 @@ async fn run_guardian_review(
                         EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                             id: review_id,
                             target_item_id,
+                            plugin_id: plugin_id.clone(),
+                            script_path: script_path.clone(),
                             turn_id: assessment_turn_id.clone(),
                             started_at_ms,
                             completed_at_ms: Some(completed_at_ms),
@@ -449,6 +492,8 @@ async fn run_guardian_review(
                         EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                             id: review_id,
                             target_item_id,
+                            plugin_id: plugin_id.clone(),
+                            script_path: script_path.clone(),
                             turn_id: assessment_turn_id.clone(),
                             started_at_ms,
                             completed_at_ms: Some(completed_at_ms),
@@ -535,6 +580,8 @@ async fn run_guardian_review(
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: review_id,
                 target_item_id,
+                plugin_id: plugin_id.clone(),
+                script_path: script_path.clone(),
                 turn_id: assessment_turn_id.clone(),
                 started_at_ms,
                 completed_at_ms: Some(completed_at_ms),
@@ -568,6 +615,12 @@ async fn run_guardian_review(
     }
 }
 
+pub(crate) struct GuardianReviewOptions {
+    pub(crate) plugin_attribution_override: Option<PluginCommandAttribution>,
+    pub(crate) approval_request_source: GuardianApprovalRequestSource,
+    pub(crate) external_cancel: Option<CancellationToken>,
+}
+
 /// Public entrypoint for approval requests that should be reviewed by guardian.
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
@@ -584,8 +637,11 @@ pub(crate) async fn review_approval_request(
         review_id,
         request,
         retry_reason,
-        GuardianApprovalRequestSource::MainTurn,
-        /*external_cancel*/ None,
+        GuardianReviewOptions {
+            plugin_attribution_override: None,
+            approval_request_source: GuardianApprovalRequestSource::MainTurn,
+            external_cancel: None,
+        },
     ))
     .await
 }
@@ -596,8 +652,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
-    approval_request_source: GuardianApprovalRequestSource,
-    cancel_token: CancellationToken,
+    options: GuardianReviewOptions,
 ) -> ReviewDecision {
     run_guardian_review(
         Arc::clone(session),
@@ -605,8 +660,7 @@ pub(crate) async fn review_approval_request_with_cancel(
         review_id,
         request,
         retry_reason,
-        approval_request_source,
-        Some(cancel_token),
+        options,
     )
     .await
 }
@@ -617,8 +671,7 @@ pub(crate) fn spawn_approval_request_review(
     review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
-    approval_request_source: GuardianApprovalRequestSource,
-    cancel_token: CancellationToken,
+    options: GuardianReviewOptions,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
     let spawn_result = std::thread::Builder::new()
@@ -639,8 +692,7 @@ pub(crate) fn spawn_approval_request_review(
                 review_id,
                 request,
                 retry_reason,
-                approval_request_source,
-                cancel_token,
+                options,
             ));
             let _ = tx.send(decision);
         });

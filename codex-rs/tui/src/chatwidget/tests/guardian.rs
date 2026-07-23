@@ -5,6 +5,8 @@ fn auto_review_denial_event() -> GuardianAssessmentEvent {
     GuardianAssessmentEvent {
         id: "auto-review-recent-1".into(),
         target_item_id: Some("target-auto-review-recent-1".into()),
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-recent-1".into(),
         started_at_ms: 0,
         completed_at_ms: Some(1),
@@ -31,6 +33,8 @@ fn guardian_command_event(
     GuardianAssessmentEvent {
         id: id.to_string(),
         target_item_id: Some(format!("{id}-target")),
+        plugin_id: None,
+        script_path: None,
         turn_id: turn_id.to_string(),
         started_at_ms: 0,
         completed_at_ms: terminal.then_some(1),
@@ -100,6 +104,8 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-1".into(),
         target_item_id: Some("guardian-target-1".into()),
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".into(),
         started_at_ms: 0,
         completed_at_ms: None,
@@ -114,6 +120,8 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-1".into(),
         target_item_id: Some("guardian-target-1".into()),
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".into(),
         started_at_ms: 0,
         completed_at_ms: Some(1),
@@ -158,6 +166,8 @@ async fn guardian_approved_exec_renders_approved_request() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "thread:child-thread:guardian-1".into(),
         target_item_id: Some("guardian-approved-target".into()),
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".into(),
         started_at_ms: 0,
         completed_at_ms: Some(1),
@@ -216,6 +226,8 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-request-permissions".into(),
         target_item_id: None,
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".into(),
         started_at_ms: 0,
         completed_at_ms: None,
@@ -240,6 +252,8 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-request-permissions".into(),
         target_item_id: None,
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".into(),
         started_at_ms: 0,
         completed_at_ms: Some(1),
@@ -290,6 +304,8 @@ async fn guardian_timed_out_exec_renders_warning_and_timed_out_request() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-1".into(),
         target_item_id: Some("guardian-target-1".into()),
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".into(),
         started_at_ms: 0,
         completed_at_ms: None,
@@ -304,6 +320,8 @@ async fn guardian_timed_out_exec_renders_warning_and_timed_out_request() {
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-1".into(),
         target_item_id: Some("guardian-target-1".into()),
+        plugin_id: None,
+        script_path: None,
         turn_id: "turn-1".into(),
         started_at_ms: 0,
         completed_at_ms: Some(1),

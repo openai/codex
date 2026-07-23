@@ -183,6 +183,14 @@ pub struct GuardianAssessmentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub target_item_id: Option<String>,
+    /// Trusted plugin attribution for command items synthesized from this review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
+    /// Safe plugin-relative path for command items synthesized from this review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub script_path: Option<String>,
     /// Turn ID that this assessment belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
@@ -218,6 +226,14 @@ pub struct GuardianAssessmentEvent {
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated command execution item.
     pub call_id: String,
+    /// Trusted plugin attribution for the command item, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
+    /// Safe plugin-relative path for the command item, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub script_path: Option<String>,
     /// Identifier for this specific approval callback.
     ///
     /// When absent, the approval is for the command item itself (`call_id`).

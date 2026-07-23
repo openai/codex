@@ -2088,13 +2088,13 @@ mod tests {
     }
 
     #[test]
-    fn rebuilds_command_execution_item_from_persisted_completion() {
+    fn preserves_command_plugin_id_across_legacy_upsert() {
         let turn_id = "turn-1";
         let thread_id = ThreadId::new();
         let command_item = CoreTurnItem::CommandExecution(CoreCommandExecutionItem {
             id: "exec-1".to_string(),
-            plugin_id: None,
-            script_path: None,
+            plugin_id: Some("sample@openai-curated".to_string()),
+            script_path: Some("scripts/run.py".to_string()),
             process_id: Some("pid-1".to_string()),
             command: vec!["echo".to_string(), "hello world".to_string()],
             cwd: test_path_buf("/tmp").abs().into(),
@@ -2125,6 +2125,28 @@ mod tests {
                 item: command_item,
                 completed_at_ms: 1_000,
             }),
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id: "exec-1".to_string(),
+                plugin_id: Some("sample@openai-curated".to_string()),
+                script_path: Some("scripts/run.py".to_string()),
+                process_id: Some("pid-1".to_string()),
+                turn_id: turn_id.to_string(),
+                completed_at_ms: 1_000,
+                command: vec!["echo".to_string(), "hello world".to_string()],
+                cwd: test_path_buf("/tmp").abs().into(),
+                parsed_cmd: vec![ParsedCommand::Unknown {
+                    cmd: "echo hello world".to_string(),
+                }],
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+                stdout: "hello world\n".to_string(),
+                stderr: String::new(),
+                aggregated_output: "hello world\n".to_string(),
+                exit_code: 0,
+                duration: Duration::from_millis(12),
+                formatted_output: "hello world\n".to_string(),
+                status: CoreExecCommandStatus::Completed,
+            }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn_id.to_string(),
                 started_at: None,
@@ -2147,8 +2169,8 @@ mod tests {
             turns[0].items,
             vec![ThreadItem::CommandExecution {
                 id: "exec-1".to_string(),
-                plugin_id: None,
-                script_path: None,
+                plugin_id: Some("sample@openai-curated".to_string()),
+                script_path: Some("scripts/run.py".to_string()),
                 command: "echo 'hello world'".to_string(),
                 cwd: test_path_buf("/tmp").abs().into(),
                 process_id: Some("pid-1".to_string()),
@@ -3083,6 +3105,8 @@ mod tests {
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: "review-guardian-exec".into(),
                 target_item_id: Some("guardian-exec".into()),
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 turn_id: "turn-1".into(),
                 started_at_ms: 1_000,
                 completed_at_ms: None,
@@ -3102,6 +3126,8 @@ mod tests {
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: "review-guardian-exec".into(),
                 target_item_id: Some("guardian-exec".into()),
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 turn_id: "turn-1".into(),
                 started_at_ms: 1_000,
                 completed_at_ms: Some(1_042),
@@ -3133,8 +3159,8 @@ mod tests {
             turns[0].items[1],
             ThreadItem::CommandExecution {
                 id: "guardian-exec".into(),
-                plugin_id: None,
-                script_path: None,
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 command: "rm -rf /tmp/guardian".into(),
                 cwd: test_path_buf("/tmp").abs().into(),
                 process_id: None,
@@ -3171,6 +3197,8 @@ mod tests {
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: "review-guardian-execve".into(),
                 target_item_id: Some("guardian-execve".into()),
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 turn_id: "turn-1".into(),
                 started_at_ms: 2_000,
                 completed_at_ms: None,
@@ -3201,8 +3229,8 @@ mod tests {
             turns[0].items[1],
             ThreadItem::CommandExecution {
                 id: "guardian-execve".into(),
-                plugin_id: None,
-                script_path: None,
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 command: "/bin/rm -f /tmp/file.sqlite".into(),
                 cwd: test_path_buf("/tmp").abs().into(),
                 process_id: None,
