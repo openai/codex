@@ -739,6 +739,18 @@ impl RmcpClient {
         Some(persistor.stored_credentials().await)
     }
 
+    /// Returns whether an initialized transport or its underlying service has stopped.
+    pub async fn is_closed(&self) -> bool {
+        let state = self.state.lock().await;
+        match &*state {
+            ClientState::Ready { service, .. } => {
+                service.is_closed() || service.peer().is_transport_closed()
+            }
+            ClientState::Connecting { .. } => false,
+            ClientState::Closed => true,
+        }
+    }
+
     /// Stop the MCP transport and any stdio server process owned by this client.
     pub async fn shutdown(&self) {
         let previous_state = {

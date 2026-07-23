@@ -90,6 +90,9 @@ impl McpServerConnection {
             return None;
         }
         let client = self.client.client().await.ok()?;
+        if client.client.is_closed().await {
+            return None;
+        }
         let Ok(desired_credentials) = desired.oauth_credentials() else {
             return Some(client);
         };
