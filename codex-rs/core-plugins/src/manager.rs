@@ -74,6 +74,7 @@ use codex_hooks::plugin_hook_declarations;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -117,6 +118,7 @@ type EffectivePluginsChangedCallback = Arc<dyn Fn(EffectivePluginsChange) + Send
 #[derive(Debug, Clone)]
 pub struct PluginsConfigInput {
     pub config_layer_stack: ConfigLayerStack,
+    pub model_provider_id: String,
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
     pub chatgpt_base_url: String,
@@ -126,6 +128,7 @@ pub struct PluginsConfigInput {
 impl PluginsConfigInput {
     pub fn new(
         config_layer_stack: ConfigLayerStack,
+        model_provider_id: String,
         plugins_enabled: bool,
         remote_plugin_enabled: bool,
         chatgpt_base_url: String,
@@ -133,6 +136,7 @@ impl PluginsConfigInput {
     ) -> Self {
         Self {
             config_layer_stack,
+            model_provider_id,
             plugins_enabled,
             remote_plugin_enabled,
             chatgpt_base_url,
@@ -2786,10 +2790,12 @@ impl PluginsManager {
             self.codex_home.as_path(),
         ));
         let curated_marketplace_path = if include_openai_curated {
-            if matches!(
-                self.auth_mode(),
-                Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
-            ) {
+            if config.model_provider_id == AMAZON_BEDROCK_PROVIDER_ID
+                || matches!(
+                    self.auth_mode(),
+                    Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
+                )
+            {
                 let api_marketplace_path =
                     curated_plugins_api_marketplace_path(self.codex_home.as_path());
                 api_marketplace_path

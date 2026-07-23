@@ -108,6 +108,7 @@ fn plugins_config_input_with_requirements(
 ) -> PluginsConfigInput {
     PluginsConfigInput::new(
         config_layer_stack_with_requirements(codex_home, user_config, requirements),
+        String::new(),
         /*plugins_enabled*/ true,
         /*remote_plugin_enabled*/ false,
         String::new(),
@@ -2625,6 +2626,7 @@ async fn plugin_cache_ignores_unrelated_session_overrides() {
     let config = |session_config| {
         PluginsConfigInput::new(
             stack(session_config),
+            String::new(),
             /*plugins_enabled*/ true,
             /*remote_plugin_enabled*/ false,
             "https://chatgpt.com".to_string(),
@@ -4408,6 +4410,52 @@ plugins = true
             }],
         }
     );
+}
+
+#[tokio::test]
+async fn list_marketplaces_uses_resolved_provider_instead_of_configured_default() {
+    for (configured_provider, resolved_provider, expected_marketplace) in [
+        (
+            "openai",
+            AMAZON_BEDROCK_PROVIDER_ID,
+            OPENAI_API_CURATED_MARKETPLACE_NAME,
+        ),
+        (
+            AMAZON_BEDROCK_PROVIDER_ID,
+            "openai",
+            OPENAI_CURATED_MARKETPLACE_NAME,
+        ),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let curated_root = curated_plugins_repo_path(tmp.path());
+
+        write_file(
+            &tmp.path().join(CONFIG_TOML_FILE),
+            &format!(
+                r#"model_provider = "{configured_provider}"
+
+[features]
+plugins = true
+"#
+            ),
+        );
+        write_openai_curated_marketplace(&curated_root, &["chatgpt-plugin"]);
+        write_openai_api_curated_marketplace(&curated_root, &["api-plugin"]);
+
+        let mut config = load_config(tmp.path(), tmp.path()).await;
+        config.model_provider_id = resolved_provider.to_string();
+        let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+            .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+            .unwrap()
+            .marketplaces;
+
+        assert!(
+            marketplaces
+                .iter()
+                .any(|marketplace| marketplace.name == expected_marketplace),
+            "expected `{expected_marketplace}` for resolved provider `{resolved_provider}`"
+        );
+    }
 }
 
 #[tokio::test]

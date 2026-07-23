@@ -1535,6 +1535,7 @@ impl Config {
     pub fn plugins_config_input(&self) -> PluginsConfigInput {
         PluginsConfigInput::new(
             self.config_layer_stack.clone(),
+            self.model_provider_id.clone(),
             self.features.enabled(Feature::Plugins),
             self.features.enabled(Feature::RemotePlugin),
             self.chatgpt_base_url.clone(),
