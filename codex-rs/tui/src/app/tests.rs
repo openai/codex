@@ -3788,7 +3788,7 @@ async fn side_fork_config_inherits_parent_thread_runtime_settings() {
 }
 
 #[tokio::test]
-async fn side_start_block_message_tracks_open_side_conversation() {
+async fn side_start_block_message_allows_replacing_open_side_conversation() {
     let mut app = make_test_app().await;
     assert_eq!(
         app.side_start_block_message(),
@@ -3803,10 +3803,14 @@ async fn side_start_block_message_tracks_open_side_conversation() {
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
+    app.active_thread_id = Some(parent_thread_id);
+    assert_eq!(app.side_start_block_message(), None);
+
+    app.active_thread_id = Some(side_thread_id);
     assert_eq!(
         app.side_start_block_message(),
         Some(
-            "A side conversation is already open. Press Ctrl+C to return before starting another."
+            "A side conversation is already open. Press ctrl + c to return before starting another."
         )
     );
 
@@ -4268,6 +4272,16 @@ async fn side_discard_selection_keeps_current_side_thread() {
     assert_eq!(
         app.side_thread_to_discard_after_switch(parent_thread_id),
         Some(side_thread_id)
+    );
+
+    app.active_thread_id = Some(parent_thread_id);
+    assert_eq!(
+        app.side_thread_to_discard_after_switch(ThreadId::new()),
+        Some(side_thread_id)
+    );
+    assert_eq!(
+        app.side_thread_to_discard_after_switch(side_thread_id),
+        None
     );
 }
 

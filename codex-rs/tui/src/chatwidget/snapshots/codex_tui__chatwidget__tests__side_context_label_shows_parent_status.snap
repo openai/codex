@@ -6,4 +6,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Check recently modified functions for compatibility                           "
 "                                                                                "
-"  gpt-5.6-sol def… Side from main thread · main needs input · Ctrl+C to return  "
+"  Side from main thread · main needs input · ctrl + / to switch · ctrl + c to cl"

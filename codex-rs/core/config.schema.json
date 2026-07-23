@@ -3240,6 +3240,7 @@
               "toggle_fast_mode": null,
               "toggle_raw_output": null,
               "toggle_shortcuts": null,
+              "toggle_side_conversation": null,
               "toggle_vim_mode": null
             },
             "list": {
@@ -3818,6 +3819,14 @@
           ],
           "description": "Toggle the composer shortcut overlay."
         },
+        "toggle_side_conversation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch between a side conversation and its parent without closing either."
+        },
         "toggle_vim_mode": {
           "allOf": [
             {
@@ -3919,6 +3928,7 @@
             "toggle_fast_mode": null,
             "toggle_raw_output": null,
             "toggle_shortcuts": null,
+            "toggle_side_conversation": null,
             "toggle_vim_mode": null
           }
         },

@@ -20,7 +20,7 @@ const SIDE_NO_STARTED_CONVERSATION_MESSAGE: &str = concat!(
     "Send a message first, then try /side again."
 );
 const SIDE_ALREADY_OPEN_MESSAGE: &str =
-    "A side conversation is already open. Press Ctrl+C to return before starting another.";
+    "A side conversation is already open. Press ctrl + c to return before starting another.";
 const SIDE_BOUNDARY_PROMPT: &str = r#"Side conversation boundary.
 
 Everything before this boundary is inherited history from the parent thread. It is reference context only. It is not your current task.
@@ -236,6 +236,19 @@ impl App {
             .map(|state| (state.parent_thread_id, state.parent_status))
         else {
             clear_side_ui(&mut self.chat_widget);
+            if self
+                .side_threads
+                .values()
+                .any(|state| state.parent_thread_id == active_thread_id)
+                && let Some(binding) =
+                    crate::keymap::primary_binding(&self.keymap.app.toggle_side_conversation)
+            {
+                self.chat_widget
+                    .set_side_conversation_context_label(Some(format!(
+                        "{} for side",
+                        binding.display_label()
+                    )));
+            }
             return;
         };
 
@@ -256,7 +269,12 @@ impl App {
         if let Some(parent_status) = parent_status {
             label_parts.push(parent_status.label(parent_is_main).to_string());
         }
-        label_parts.push("Ctrl+C to return".to_string());
+        if let Some(binding) =
+            crate::keymap::primary_binding(&self.keymap.app.toggle_side_conversation)
+        {
+            label_parts.push(format!("{} to switch", binding.display_label()));
+        }
+        label_parts.push("ctrl + c to close".to_string());
         self.chat_widget
             .set_side_conversation_context_label(Some(format!("Side {}", label_parts.join(" · "))));
     }
@@ -353,12 +371,37 @@ impl App {
         &self,
         target_thread_id: ThreadId,
     ) -> Option<ThreadId> {
-        let side_thread_id = self.current_displayed_thread_id()?;
-        if target_thread_id == side_thread_id || !self.side_threads.contains_key(&side_thread_id) {
+        let active_thread_id = self.current_displayed_thread_id()?;
+        let (&side_thread_id, state) = self.side_threads.iter().next()?;
+        if target_thread_id == side_thread_id || target_thread_id == active_thread_id {
             return None;
         }
 
-        Some(side_thread_id)
+        (active_thread_id == side_thread_id || active_thread_id == state.parent_thread_id)
+            .then_some(side_thread_id)
+    }
+
+    pub(super) async fn toggle_side_conversation(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        let Some(active_thread_id) = self.current_displayed_thread_id() else {
+            return Ok(());
+        };
+        let Some((&side_thread_id, state)) = self.side_threads.iter().next() else {
+            return Ok(());
+        };
+        let target_thread_id = if active_thread_id == side_thread_id {
+            state.parent_thread_id
+        } else if active_thread_id == state.parent_thread_id {
+            side_thread_id
+        } else {
+            return Ok(());
+        };
+
+        self.select_agent_thread(tui, app_server, target_thread_id)
+            .await
     }
 
     pub(super) async fn discard_side_thread(
@@ -484,7 +527,7 @@ impl App {
     pub(super) fn side_start_block_message(&self) -> Option<&'static str> {
         if self.primary_thread_id.is_none() {
             Some(SIDE_MAIN_THREAD_UNAVAILABLE_MESSAGE)
-        } else if !self.side_threads.is_empty() {
+        } else if self.active_side_parent_thread_id().is_some() {
             Some(SIDE_ALREADY_OPEN_MESSAGE)
         } else {
             None
@@ -530,7 +573,6 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        let active_thread_id_before_switch = self.active_thread_id;
         let side_thread_to_discard = self.side_thread_to_discard_after_switch(thread_id);
         self.select_agent_thread(tui, app_server, thread_id).await?;
         if self.active_thread_id == Some(thread_id)
@@ -539,7 +581,7 @@ impl App {
             if self.discard_side_thread(app_server, side_thread_id).await {
                 self.surface_pending_inactive_thread_interactive_requests()
                     .await?;
-            } else if active_thread_id_before_switch == Some(side_thread_id) {
+            } else {
                 self.keep_side_thread_visible_after_cleanup_failure(
                     tui,
                     app_server,
@@ -562,6 +604,15 @@ impl App {
             self.restore_side_user_message(user_message.take());
             self.sync_side_thread_ui();
             self.chat_widget.add_error_message(message.to_string());
+            return Ok(AppRunControl::Continue);
+        }
+
+        if let Some((&side_thread_id, state)) = self.side_threads.iter().next()
+            && (parent_thread_id != state.parent_thread_id
+                || !self.discard_side_thread(app_server, side_thread_id).await)
+        {
+            self.restore_side_user_message(user_message.take());
+            self.sync_side_thread_ui();
             return Ok(AppRunControl::Continue);
         }
 

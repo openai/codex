@@ -4,6 +4,6 @@ expression: terminal.backend()
 ---
 "                                                                                "
 "                                                                                "
-"› Check recently modified functions for compatibility                           "
+"› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.6-sol   Side from main thread · ctrl + / to switch · ctrl + c to close  "
+"  gpt-5.6-sol                                                ctrl + / for side  "
