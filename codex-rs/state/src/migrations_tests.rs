@@ -36,8 +36,9 @@ async fn pinned_threads_migration_defaults_existing_and_legacy_rows_to_unpinned(
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
     let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let state_path = sqlite.state_db_path();
     let pool = sqlite
-        .open_read_write_pool(&state_db_path(&sqlite_home))
+        .open_read_write_pool(&state_path)
         .await
         .expect("sqlite database should open");
     migrator_through(/*version*/ 42)
