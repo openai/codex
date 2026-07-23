@@ -37,8 +37,11 @@ use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::McpStartupFailureReason;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::InProcessTransportFactory;
+use codex_rmcp_client::McpAuthState;
+use codex_rmcp_client::McpLoginRequirement;
 use codex_rmcp_client::RmcpClient;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -73,6 +76,75 @@ use tempfile::tempdir;
 use tokio::io::DuplexStream;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+
+impl McpConnectionSet {
+    fn new_uninitialized(
+        approval_policy: &Constrained<AskForApproval>,
+        permission_profile: &Constrained<PermissionProfile>,
+        prefix_mcp_tool_names: bool,
+    ) -> Self {
+        Self {
+            servers: HashMap::new(),
+            required_servers: Vec::new(),
+            tool_catalog_revision: Arc::new(RwLock::new(0)),
+            codex_apps_tools_override: RwLock::new(None),
+            codex_apps_refresh_lock: Mutex::new(()),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            prefix_mcp_tool_names,
+            elicitation_requests: ElicitationRequestManager::new(
+                approval_policy.value(),
+                permission_profile.get().clone(),
+                /*reviewer*/ None,
+                /*lifecycle*/ None,
+                ElicitationRequestRouter::default(),
+            ),
+        }
+    }
+
+    fn insert_test_client(&mut self, name: impl Into<String>, client: AsyncManagedClient) {
+        let name = name.into();
+        self.servers.insert(
+            name,
+            McpServerView {
+                tool_filter: ToolFilter::default(),
+                connection: Arc::new(McpServerConnection {
+                    identity: None,
+                    client,
+                }),
+                metadata: McpServerMetadata {
+                    environment_id: String::new(),
+                    pollutes_memory: true,
+                    origin: None,
+                    supports_parallel_tool_calls: false,
+                    default_tools_approval_mode: None,
+                    tool_approval_modes: HashMap::new(),
+                },
+                tool_timeout: None,
+            },
+        );
+    }
+
+    fn test_client(&self, name: &str) -> &AsyncManagedClient {
+        &self.servers[name].connection.client
+    }
+
+    fn set_test_server_metadata(&mut self, name: &str, metadata: McpServerMetadata) {
+        self.servers
+            .get_mut(name)
+            .expect("test server exists")
+            .metadata = metadata;
+    }
+
+    fn shares_test_connection_with(&self, other: &Self, name: &str) -> bool {
+        let Some(left) = self.servers.get(name) else {
+            return false;
+        };
+        let Some(right) = other.servers.get(name) else {
+            return false;
+        };
+        Arc::ptr_eq(&left.connection, &right.connection)
+    }
+}
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     ToolInfo {
