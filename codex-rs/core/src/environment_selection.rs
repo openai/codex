@@ -480,6 +480,9 @@ mod tests {
     use codex_exec_server::ExecServerRuntimePaths;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+    use codex_exec_server_test_support::environment_manager_without_environments;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
     use codex_protocol::protocol::TurnEnvironmentSelection;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
@@ -609,10 +612,13 @@ url = "ws://127.0.0.1:8765"
         .expect("write environments.toml");
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let cwd_uri = PathUri::from_abs_path(&cwd);
-        let manager =
-            EnvironmentManager::from_codex_home(temp_dir.path(), Some(test_runtime_paths()))
-                .await
-                .expect("environment manager");
+        let manager = EnvironmentManager::from_codex_home(
+            temp_dir.path(),
+            Some(test_runtime_paths()),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        )
+        .await
+        .expect("environment manager");
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd, std::slice::from_ref(&cwd)),
@@ -634,7 +640,7 @@ url = "ws://127.0.0.1:8765"
     #[tokio::test]
     async fn default_thread_environment_selections_empty_when_default_disabled() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::without_environments();
+        let manager = environment_manager_without_environments();
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd, std::slice::from_ref(&cwd)),
@@ -1062,7 +1068,7 @@ url = "ws://127.0.0.1:8765"
             Vec::new(),
             /*shell*/ None,
         );
-        let manager = Arc::new(EnvironmentManager::without_environments());
+        let manager = Arc::new(environment_manager_without_environments());
         manager
             .upsert_environment(
                 REMOTE_ENVIRONMENT_ID.to_string(),

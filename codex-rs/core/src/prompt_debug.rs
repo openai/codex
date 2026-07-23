@@ -52,6 +52,7 @@ pub async fn build_prompt_input(
             EnvironmentManager::from_codex_home(
                 config.codex_home.clone(),
                 Some(local_runtime_paths),
+                config.http_client_factory(),
             )
             .await
             .map_err(|err| CodexErr::Fatal(err.to_string()))?,

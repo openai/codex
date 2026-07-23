@@ -42,6 +42,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+codex-exec-server-test-support = { workspace = true }
 codex-plugin = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }

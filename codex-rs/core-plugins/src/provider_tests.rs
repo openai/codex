@@ -14,6 +14,7 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_plugin::PluginProvider;
 use codex_plugin::ResolvedPlugin;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -318,7 +319,7 @@ async fn unavailable_environment_does_not_fall_back_to_host_filesystem() {
     let plugin_root = temp_dir.path().join("host-plugin");
     write_manifest(&plugin_root, ".codex-plugin/plugin.json", MANIFEST_CONTENTS);
     let provider =
-        ExecutorPluginProvider::new(Arc::new(EnvironmentManager::without_environments()));
+        ExecutorPluginProvider::new(Arc::new(environment_manager_without_environments()));
 
     let err = provider
         .resolve(&selected_root("host-plugin", "missing", &plugin_root))

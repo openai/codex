@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::NoiseChannelPublicKey;
 use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
+use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
@@ -56,7 +56,7 @@ fn ready_info(root_id: &str, environment_id: &str) -> anyhow::Result<Environment
 
 #[tokio::test]
 async fn deferred_environment_waits_before_connecting() -> anyhow::Result<()> {
-    let manager = EnvironmentManager::without_environments();
+    let manager = environment_manager_without_environments();
     let provider = Arc::new(FailingNoiseConnectProvider::default());
     let registration =
         manager.register_deferred_noise_environment("tools".to_string(), provider.clone())?;
@@ -85,7 +85,7 @@ async fn deferred_environment_waits_before_connecting() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn failure_and_dropped_registration_are_terminal() -> anyhow::Result<()> {
-    let manager = EnvironmentManager::without_environments();
+    let manager = environment_manager_without_environments();
     let failed_provider = Arc::new(FailingNoiseConnectProvider::default());
     let failed = manager
         .register_deferred_noise_environment("failed".to_string(), failed_provider.clone())?;
@@ -118,7 +118,7 @@ async fn failure_and_dropped_registration_are_terminal() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn invalid_ready_info_is_terminal() -> anyhow::Result<()> {
-    let manager = EnvironmentManager::without_environments();
+    let manager = environment_manager_without_environments();
     let provider = Arc::new(FailingNoiseConnectProvider::default());
     let registration =
         manager.register_deferred_noise_environment("tools".to_string(), provider.clone())?;
@@ -141,7 +141,7 @@ async fn invalid_ready_info_is_terminal() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn late_completion_is_isolated_from_replacement() -> anyhow::Result<()> {
-    let manager = EnvironmentManager::without_environments();
+    let manager = environment_manager_without_environments();
     let old_provider = Arc::new(FailingNoiseConnectProvider::default());
     let old_registration =
         manager.register_deferred_noise_environment("tools".to_string(), old_provider.clone())?;
@@ -183,7 +183,7 @@ async fn late_completion_is_isolated_from_replacement() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn eager_noise_environment_connects_without_registration() -> anyhow::Result<()> {
-    let manager = EnvironmentManager::without_environments();
+    let manager = environment_manager_without_environments();
     let provider = Arc::new(FailingNoiseConnectProvider::default());
     manager.upsert_noise_environment("tools".to_string(), provider.clone())?;
     let environment = manager.get_environment("tools").expect("environment");

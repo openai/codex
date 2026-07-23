@@ -561,7 +561,9 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         config.auth_keyring_backend_kind(),
         auth.as_ref(),
         &McpRuntimeContext::new(
-            Arc::new(EnvironmentManager::without_environments()),
+            Arc::new(EnvironmentManager::without_environments(
+                config.http_client_factory(),
+            )),
             config.cwd.to_path_buf(),
         ),
     )

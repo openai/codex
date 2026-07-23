@@ -354,6 +354,7 @@ mod tests {
     use codex_config::McpServerConfig;
     use codex_config::McpServerTransportConfig;
     use codex_exec_server::EnvironmentManager;
+    use codex_exec_server_test_support::environment_manager_without_environments;
     use codex_utils_path_uri::LegacyAppPathString;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
@@ -475,7 +476,7 @@ mod tests {
     #[test]
     fn local_stdio_requires_local_stdio_availability() {
         let runtime_context = McpRuntimeContext::new(
-            Arc::new(EnvironmentManager::without_environments()),
+            Arc::new(environment_manager_without_environments()),
             PathBuf::from("/tmp"),
         );
 
@@ -494,7 +495,7 @@ mod tests {
     #[test]
     fn local_http_does_not_require_local_stdio_availability() {
         let runtime_context = McpRuntimeContext::new(
-            Arc::new(EnvironmentManager::without_environments()),
+            Arc::new(environment_manager_without_environments()),
             PathBuf::from("/tmp"),
         );
 
@@ -510,7 +511,7 @@ mod tests {
     #[test]
     fn unknown_explicit_environment_is_rejected() {
         let runtime_context = McpRuntimeContext::new(
-            Arc::new(EnvironmentManager::without_environments()),
+            Arc::new(environment_manager_without_environments()),
             PathBuf::from("/tmp"),
         );
 

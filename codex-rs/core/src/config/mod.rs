@@ -2927,13 +2927,22 @@ pub fn resolve_bootstrap_auth_route_config(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<AuthRouteConfig> {
+    resolve_bootstrap_http_client_factory(cfg, feature_requirements)
+        .map(AuthRouteConfig::from_http_client_factory)
+}
+
+/// Resolves shared HTTP routing for startup work that runs before final [`Config`] loading.
+pub fn resolve_bootstrap_http_client_factory(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<HttpClientFactory> {
     resolve_bootstrap_respect_system_proxy(cfg, feature_requirements).map(|respect_system_proxy| {
         let outbound_proxy_policy = if respect_system_proxy {
             OutboundProxyPolicy::RespectSystemProxy
         } else {
             OutboundProxyPolicy::ReqwestDefault
         };
-        AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(outbound_proxy_policy))
+        HttpClientFactory::new(outbound_proxy_policy)
     })
 }
 

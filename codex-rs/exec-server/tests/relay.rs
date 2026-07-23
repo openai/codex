@@ -16,7 +16,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_api::AuthProvider;
 use codex_exec_server::EnvironmentConnectionState;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
@@ -31,6 +30,7 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
+use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
@@ -156,7 +156,7 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
         executor_public_key: registered_executor_public_key(&registry).await?,
         calls: AtomicUsize::new(0),
     });
-    let manager = EnvironmentManager::without_environments();
+    let manager = environment_manager_without_environments();
     let registration = manager
         .register_deferred_noise_environment(ENVIRONMENT_ID.to_string(), provider.clone())?;
     let environment = manager

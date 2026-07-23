@@ -31,7 +31,7 @@ use codex_connectors::ConnectorRuntimeContext;
 use codex_connectors::ConnectorRuntimeContextKey;
 use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_connectors::ConnectorRuntimeManager;
-use codex_exec_server::EnvironmentManager;
+use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_login::CodexAuth;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
@@ -1344,7 +1344,7 @@ async fn hard_refresh_keeps_binding_override_local_when_shared_cache_loses_race(
 #[tokio::test(start_paused = true)]
 async fn tool_catalog_cache_sanitizes_tools_and_tracks_environment_generation() {
     let cache = McpToolCatalogCache::default();
-    let environment_manager = Arc::new(EnvironmentManager::without_environments());
+    let environment_manager = Arc::new(environment_manager_without_environments());
     let replace_environment = |url: &str| {
         environment_manager
             .upsert_environment(
@@ -1416,7 +1416,7 @@ async fn tool_catalog_cache_sanitizes_tools_and_tracks_environment_generation() 
 fn tool_catalog_cache_bypasses_remote_sourced_environment_variables() {
     let cache = McpToolCatalogCache::default();
     let runtime_context = McpRuntimeContext::new(
-        Arc::new(EnvironmentManager::without_environments()),
+        Arc::new(environment_manager_without_environments()),
         PathBuf::from("/tmp"),
     );
     let config: McpServerConfig = serde_json::from_value(serde_json::json!({
@@ -2292,7 +2292,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             tx_event: None,
             startup_cancellation_token: cancel_token.clone(),
             runtime_context: McpRuntimeContext::new(
-                Arc::new(EnvironmentManager::without_environments()),
+                Arc::new(environment_manager_without_environments()),
                 PathBuf::from("/tmp"),
             ),
             codex_apps_tools_cache: ConnectorRuntimeManager::<ToolInfo>::default(),
@@ -2533,7 +2533,7 @@ fn reusable_server_config(url: &str) -> McpServerConfig {
 
 fn reusable_server_runtime_context() -> McpRuntimeContext {
     McpRuntimeContext::new(
-        Arc::new(EnvironmentManager::without_environments()),
+        Arc::new(environment_manager_without_environments()),
         PathBuf::from("/tmp"),
     )
 }

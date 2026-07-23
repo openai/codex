@@ -2646,6 +2646,7 @@ dependencies = [
  "codex-core-plugins",
  "codex-core-skills",
  "codex-exec-server",
+ "codex-exec-server-test-support",
  "codex-execpolicy",
  "codex-extension-api",
  "codex-extension-items",
@@ -2783,6 +2784,7 @@ dependencies = [
  "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
+ "codex-exec-server-test-support",
  "codex-git-utils",
  "codex-hooks",
  "codex-http-client",
@@ -2914,6 +2916,7 @@ dependencies = [
  "clatter",
  "codex-api",
  "codex-exec-server-protocol",
+ "codex-exec-server-test-support",
  "codex-file-system",
  "codex-http-client",
  "codex-network-proxy",
@@ -2967,6 +2970,14 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "codex-exec-server-test-support"
+version = "0.0.0"
+dependencies = [
+ "codex-exec-server",
+ "codex-http-client",
 ]
 
 [[package]]
@@ -3391,6 +3402,7 @@ dependencies = [
  "codex-config",
  "codex-connectors",
  "codex-exec-server",
+ "codex-exec-server-test-support",
  "codex-login",
  "codex-model-provider",
  "codex-otel",

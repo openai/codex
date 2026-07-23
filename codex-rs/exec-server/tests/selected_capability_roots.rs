@@ -5,7 +5,7 @@ mod common;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use codex_exec_server::EnvironmentManager;
+use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
@@ -15,7 +15,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_capability_roots_use_captured_handle_after_replacement() -> anyhow::Result<()> {
     let mut executor = exec_server().await?;
-    let manager = EnvironmentManager::without_environments();
+    let manager = environment_manager_without_environments();
     let selected_root = SelectedCapabilityRoot {
         id: "demo@1".to_string(),
         location: CapabilityRootLocation::Environment {

@@ -480,13 +480,7 @@ pub async fn run_main_with_transport_options(
         arg0_paths.codex_self_exe.clone(),
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    let environment_manager = if loader_overrides.ignore_user_config {
-        EnvironmentManager::from_env(Some(local_runtime_paths)).await
-    } else {
-        EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
-    }
-    .map(Arc::new)
-    .map_err(std::io::Error::other)?;
+    let ignore_user_config = loader_overrides.ignore_user_config;
     let config_manager = ConfigManager::new(
         codex_home.to_path_buf(),
         cli_kv_overrides.clone(),
@@ -540,6 +534,18 @@ pub async fn run_main_with_transport_options(
             })?
         }
     };
+    let environment_manager = if ignore_user_config {
+        EnvironmentManager::from_env(Some(local_runtime_paths), config.http_client_factory()).await
+    } else {
+        EnvironmentManager::from_codex_home(
+            codex_home.clone(),
+            Some(local_runtime_paths),
+            config.http_client_factory(),
+        )
+        .await
+    }
+    .map(Arc::new)
+    .map_err(std::io::Error::other)?;
 
     let otel = codex_core::otel_init::build_provider(
         &config,

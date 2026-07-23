@@ -166,9 +166,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.codex_self_exe.clone(),
         config.codex_linux_sandbox_exe.clone(),
     )?;
-    let environment_manager =
-        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
-            .await?;
+    let environment_manager = EnvironmentManager::from_codex_home(
+        config.codex_home.clone(),
+        Some(local_runtime_paths),
+        config.http_client_factory(),
+    )
+    .await?;
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
