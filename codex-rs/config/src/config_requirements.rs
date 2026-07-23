@@ -754,6 +754,17 @@ impl ComputerUseRequirementsToml {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrowserUseRequirementsToml {
+    pub disable_auto_review: Option<bool>,
+}
+
+impl BrowserUseRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.disable_auto_review.is_none()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowsRequirementsToml {
     pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxModeToml>>,
     pub sandbox_private_desktop: Option<bool>,
@@ -879,6 +890,7 @@ pub struct ConfigRequirementsToml {
     pub allow_appshots: Option<bool>,
     pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
+    pub browser_use: Option<BrowserUseRequirementsToml>,
     pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
@@ -968,6 +980,7 @@ pub struct ConfigRequirementsWithSources {
     pub allow_appshots: Option<Sourced<bool>>,
     pub allow_remote_control: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
+    pub browser_use: Option<Sourced<BrowserUseRequirementsToml>>,
     pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
@@ -1019,6 +1032,7 @@ impl ConfigRequirementsWithSources {
             allow_appshots: _,
             allow_remote_control: _,
             computer_use: _,
+            browser_use: _,
             windows: _,
             feature_requirements: _,
             hooks: _,
@@ -1063,6 +1077,7 @@ impl ConfigRequirementsWithSources {
                 allow_appshots,
                 allow_remote_control,
                 computer_use,
+                browser_use,
                 windows,
                 feature_requirements,
                 hooks,
@@ -1105,6 +1120,7 @@ impl ConfigRequirementsWithSources {
             allow_appshots,
             allow_remote_control,
             computer_use,
+            browser_use,
             windows,
             feature_requirements,
             hooks,
@@ -1137,6 +1153,7 @@ impl ConfigRequirementsWithSources {
             allow_appshots: allow_appshots.map(|sourced| sourced.value),
             allow_remote_control: allow_remote_control.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
+            browser_use: browser_use.map(|sourced| sourced.value),
             windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
@@ -1241,6 +1258,10 @@ impl ConfigRequirementsToml {
                 .computer_use
                 .as_ref()
                 .is_none_or(ComputerUseRequirementsToml::is_empty)
+            && self
+                .browser_use
+                .as_ref()
+                .is_none_or(BrowserUseRequirementsToml::is_empty)
             && self
                 .windows
                 .as_ref()
@@ -1411,6 +1432,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allow_appshots,
             allow_remote_control,
             computer_use,
+            browser_use: _,
             windows,
             feature_requirements,
             hooks,
@@ -1893,6 +1915,7 @@ mod tests {
             allow_appshots,
             allow_remote_control,
             computer_use,
+            browser_use,
             windows,
             feature_requirements,
             hooks,
@@ -1936,6 +1959,7 @@ mod tests {
             allow_remote_control: allow_remote_control
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            browser_use: browser_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2194,6 +2218,7 @@ mod tests {
             allow_appshots: Some(false),
             allow_remote_control: Some(false),
             computer_use: Some(computer_use.clone()),
+            browser_use: None,
             windows: Some(windows.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
@@ -2251,6 +2276,7 @@ mod tests {
                     enforce_source.clone(),
                 )),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
+                browser_use: None,
                 windows: Some(Sourced::new(windows, enforce_source.clone())),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
@@ -2302,6 +2328,7 @@ mod tests {
                 allow_appshots: None,
                 allow_remote_control: None,
                 computer_use: None,
+                browser_use: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2359,6 +2386,7 @@ mod tests {
                 allow_appshots: None,
                 allow_remote_control: None,
                 computer_use: None,
+                browser_use: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,

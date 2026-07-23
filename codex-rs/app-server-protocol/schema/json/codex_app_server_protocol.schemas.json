@@ -7242,6 +7242,17 @@
         ],
         "type": "string"
       },
+      "BrowserUseRequirements": {
+        "properties": {
+          "disableAutoReview": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ByteRange": {
         "properties": {
           "end": {
@@ -8635,6 +8646,16 @@
             "type": [
               "array",
               "null"
+            ]
+          },
+          "browserUse": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/BrowserUseRequirements"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "checkForUpdateOnStartup": {

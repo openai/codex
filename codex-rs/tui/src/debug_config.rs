@@ -952,6 +952,7 @@ interrupt_message = false
             allow_appshots: Some(false),
             allow_remote_control: Some(false),
             computer_use: None,
+            browser_use: None,
             windows: Some(WindowsRequirementsToml {
                 allowed_sandbox_implementations: None,
                 sandbox_private_desktop: Some(false),
