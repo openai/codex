@@ -50,6 +50,7 @@ fn stores() -> &'static Mutex<HashMap<String, Arc<InMemoryThreadStore>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ItemSortKey;
     use crate::ListItemsParams;
     use crate::ListTurnsParams;
     use crate::SortDirection;
@@ -90,6 +91,8 @@ mod tests {
                 cursor: None,
                 page_size: 10,
                 sort_direction: SortDirection::Asc,
+                sort_key: ItemSortKey::CreatedAtOrdinal,
+                after_updated_at_ordinal: None,
             })
             .await
             .expect_err("default list_items should be unsupported");

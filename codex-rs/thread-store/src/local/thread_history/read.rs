@@ -28,7 +28,8 @@ mod tests;
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub(super) enum CursorScope {
     Turns,
-    Items,
+    ItemsByCreatedAtOrdinal,
+    ItemsByUpdatedAtOrdinal,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -126,16 +127,7 @@ pub(in crate::local) async fn list_items(
     validate_page_size(params.page_size)?;
     let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
     let pool = store.thread_history_db().await?;
-    let page = page_item_rows(
-        pool,
-        params.thread_id,
-        &lineage,
-        params.turn_id.as_deref(),
-        params.cursor.as_deref(),
-        params.page_size,
-        params.sort_direction,
-    )
-    .await?;
+    let page = page_item_rows(pool, &lineage, &params).await?;
 
     Ok(ItemPage {
         items: page.rows.into_iter().map(|row| row.item).collect(),
@@ -180,7 +172,7 @@ async fn load_summary_items(
 ) -> ThreadStoreResult<Vec<StoredThreadItem>> {
     let rows = sqlx::query(
         r#"
-SELECT turn_id, item_id, created_at_ms, item_json
+SELECT turn_id, item_id, updated_at_ordinal, created_at_ms, item_json
 FROM thread_items
 WHERE thread_id = ?
   AND turn_id = ?
@@ -289,9 +281,15 @@ pub(super) fn stored_thread_item_row_for_thread(
 }
 
 fn stored_thread_item(row: sqlx::sqlite::SqliteRow) -> ThreadStoreResult<StoredThreadItem> {
+    let updated_at_ordinal = row.try_get::<i64, _>("updated_at_ordinal")?;
+    let updated_at_ordinal =
+        u64::try_from(updated_at_ordinal).map_err(|_| ThreadStoreError::Internal {
+            message: format!("invalid stored item updated-at ordinal: {updated_at_ordinal}"),
+        })?;
     Ok(StoredThreadItem {
         turn_id: row.try_get("turn_id")?,
         item_id: row.try_get("item_id")?,
+        updated_at_ordinal,
         created_at_ms: row.try_get("created_at_ms")?,
         item_json: row.try_get::<String, _>("item_json")?.into_bytes(),
     })

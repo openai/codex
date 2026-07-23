@@ -1518,6 +1518,15 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
                         memory_citation: None,
                     }),
                 ),
+                paginated_completed_item(
+                    thread_id,
+                    "turn-1",
+                    CoreTurnItem::UserMessage(UserMessageItem {
+                        id: "steer-1".to_string(),
+                        client_id: Some("updated-steer".to_string()),
+                        content: Vec::new(),
+                    }),
+                ),
                 paginated_turn_completed("turn-1"),
                 paginated_turn_started("turn-2"),
                 paginated_completed_item(
@@ -1550,7 +1559,7 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
             },
             ThreadItem::UserMessage {
                 id: "steer-1".to_string(),
-                client_id: None,
+                client_id: Some("updated-steer".to_string()),
                 content: Vec::new(),
             },
             ThreadItem::AgentMessage {
