@@ -60,6 +60,7 @@ use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use codex_features::Feature;
 use codex_login::AuthManager;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -362,6 +363,16 @@ fn image_generation_available(turn_context: &TurnContext) -> bool {
         .features
         .get()
         .enabled(Feature::ImageGeneration)
+    {
+        return false;
+    }
+
+    if turn_context
+        .auth_manager
+        .as_deref()
+        .and_then(AuthManager::auth_cached)
+        .and_then(|auth| auth.account_plan_type())
+        == Some(PlanType::Free)
     {
         return false;
     }
