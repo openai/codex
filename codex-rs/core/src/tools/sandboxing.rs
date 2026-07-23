@@ -507,6 +507,7 @@ impl<'a> SandboxAttempt<'a> {
                 workspace_roots: self.workspace_roots.to_vec(),
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+                windows_sandbox_proxy_settings_mode: None,
                 use_legacy_landlock: self.use_legacy_landlock,
             });
             exec_request.exec_server_enforce_managed_network = self.enforce_managed_network;

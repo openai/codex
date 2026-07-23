@@ -52,6 +52,7 @@ struct PreparedWindowsSandboxRequest {
     windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     proxy_enforced: bool,
     network_proxy_restricting_sid: Option<String>,
+    proxy_settings_mode: WindowsSandboxProxySettingsMode,
     filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     use_private_desktop: bool,
 }
@@ -66,7 +67,7 @@ impl PreparedExecRequest {
                 windows_sandbox_level: request.windows_sandbox_level,
                 proxy_enforced: request.proxy_enforced,
                 network_proxy_restricting_sid: request.network_proxy_restricting_sid.as_deref(),
-                proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
+                proxy_settings_mode: request.proxy_settings_mode,
                 filesystem_overrides: request.filesystem_overrides.as_ref(),
                 use_private_desktop: request.use_private_desktop,
             })
@@ -114,6 +115,9 @@ pub(crate) async fn prepare_exec_request(
             windows_sandbox: None,
         });
     };
+    let windows_sandbox_proxy_settings_mode = sandbox_context
+        .windows_sandbox_proxy_settings_mode
+        .unwrap_or_default();
     let runtime_paths = runtime_paths
         .ok_or_else(|| invalid_params("sandbox runtime paths are not configured".to_string()))?;
     // TODO(jif): Transport permissions before orchestrator-local paths are materialized,
@@ -212,8 +216,7 @@ pub(crate) async fn prepare_exec_request(
     let (program, args) = (program.into(), args.to_vec());
     let transform_request = SandboxDirectSpawnTransformRequest {
         workspace_roots,
-        windows_sandbox_proxy_settings_mode:
-            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+        windows_sandbox_proxy_settings_mode,
         transform: SandboxTransformRequest {
             command: SandboxCommand {
                 program,
@@ -271,6 +274,7 @@ pub(crate) async fn prepare_exec_request(
             windows_sandbox_level: sandbox_context.windows_sandbox_level,
             proxy_enforced,
             network_proxy_restricting_sid,
+            proxy_settings_mode: windows_sandbox_proxy_settings_mode,
             filesystem_overrides,
             use_private_desktop: sandbox_context.windows_sandbox_private_desktop,
         })

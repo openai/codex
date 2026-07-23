@@ -177,8 +177,16 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         exec_server_network_proxy: None,
     };
 
-    let params =
-        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    let proxy_settings_mode = codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve;
+    let params_for_request = |request: &ExecRequest| {
+        exec_server_params_for_request(
+            /*process_id*/ 123,
+            request,
+            proxy_settings_mode,
+            /*tty*/ true,
+        )
+    };
+    let params = params_for_request(&request);
 
     assert_eq!(params.process_id.as_str(), "123");
     assert_eq!(params.cwd, request.cwd);
@@ -200,10 +208,15 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     request.exec_server_sandbox = Some(
         codex_exec_server::FileSystemSandboxContext::from_permission_profile(permission_profile),
     );
-    let first =
-        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
-    let second =
-        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+    let first = params_for_request(&request);
+    let second = params_for_request(&request);
+    assert_eq!(
+        first
+            .sandbox
+            .as_ref()
+            .and_then(|sandbox| sandbox.windows_sandbox_proxy_settings_mode),
+        Some(codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve)
+    );
     assert!(first.process_id.as_str().starts_with("123-"));
     assert!(second.process_id.as_str().starts_with("123-"));
     assert_ne!(first.process_id, second.process_id);

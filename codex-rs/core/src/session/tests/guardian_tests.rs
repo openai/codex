@@ -766,6 +766,8 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         external_time_provider: None,
         inherited_multi_agent_version: None,
         git_enrichment_policy: GitEnrichmentPolicy::Skip,
+        windows_sandbox_proxy_settings_mode:
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,
     })
     .await
     .expect("spawn guardian subagent");

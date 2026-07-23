@@ -283,6 +283,16 @@ pub enum WindowsSandboxLevel {
     Elevated,
 }
 
+/// Controls whether a Windows sandbox launch reconciles persistent proxy settings or preserves
+/// the settings established by another launch.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowsSandboxProxySettingsMode {
+    #[default]
+    Reconcile,
+    Preserve,
+}
+
 #[derive(
     Debug,
     Serialize,

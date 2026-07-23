@@ -743,6 +743,7 @@ mod tests {
     use codex_network_proxy::NetworkProxyConfig;
     use codex_network_proxy::RemoteNetworkProxyConfig;
     use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
+    use codex_protocol::config_types::WindowsSandboxProxySettingsMode;
     use codex_protocol::models::ManagedFileSystemPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::FileSystemAccessMode;
@@ -937,6 +938,17 @@ mod tests {
             serde_json::from_value::<FileSystemSandboxContext>(serialized)
                 .expect("deserialize sandbox"),
             sandbox
+        );
+        let preserve = FileSystemSandboxContext {
+            windows_sandbox_proxy_settings_mode: Some(WindowsSandboxProxySettingsMode::Preserve),
+            ..sandbox
+        };
+        let serialized = serde_json::to_value(&preserve).expect("serialize preserve mode");
+        assert_eq!(serialized["windowsSandboxProxySettingsMode"], "preserve");
+        assert_eq!(
+            serde_json::from_value::<FileSystemSandboxContext>(serialized)
+                .expect("deserialize preserve mode"),
+            preserve
         );
     }
 

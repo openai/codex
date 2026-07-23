@@ -35,14 +35,7 @@ impl fmt::Debug for WindowsSandboxCancellationToken {
     }
 }
 
-/// Controls whether a Windows sandbox launch reconciles persistent proxy
-/// firewall settings or preserves the settings established by another launch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WindowsSandboxProxySettingsMode {
-    #[default]
-    Reconcile,
-    Preserve,
-}
+pub use codex_protocol::config_types::WindowsSandboxProxySettingsMode;
 
 /// Network settings installed by an administrator during managed Windows sandbox setup.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

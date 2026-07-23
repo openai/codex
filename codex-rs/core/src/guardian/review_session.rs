@@ -680,6 +680,7 @@ async fn spawn_guardian_review_session(
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
         GitEnrichmentPolicy::Skip,
+        codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,
     ))
     .await?;
 
@@ -1252,6 +1253,31 @@ mod tests {
             external_cancel: None,
             deadline: tokio::time::Instant::now() + Duration::from_secs(30),
         }
+    }
+
+    #[tokio::test]
+    async fn spawned_guardian_session_preserves_windows_sandbox_proxy_settings() {
+        let params = test_review_params().await;
+        let manager = GuardianReviewSessionManager::default();
+        manager
+            .initialize(params.parent_session, params.parent_turn)
+            .await
+            .expect("initialize Guardian session");
+        let mode = manager
+            .state
+            .lock()
+            .await
+            .trunk
+            .as_ref()
+            .expect("Guardian session")
+            .session
+            .windows_sandbox_proxy_settings_mode;
+
+        assert_eq!(
+            mode,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve
+        );
+        manager.shutdown().await;
     }
 
     #[tokio::test]

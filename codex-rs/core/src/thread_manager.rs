@@ -1676,6 +1676,8 @@ impl ThreadManagerState {
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
             git_enrichment_policy: GitEnrichmentPolicy::Fresh,
+            windows_sandbox_proxy_settings_mode:
+                codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         }))
         .await?;
         let new_thread = self
