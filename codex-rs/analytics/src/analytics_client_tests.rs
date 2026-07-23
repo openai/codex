@@ -866,6 +866,8 @@ fn sample_command_execution_item_with_id(
 ) -> ThreadItem {
     ThreadItem::CommandExecution {
         id: id.to_string(),
+        plugin_id: None,
+        script_path: None,
         command: "echo hi".to_string(),
         cwd: test_path_buf("/tmp").abs().into(),
         process_id: Some("pid-1".to_string()),
@@ -883,16 +885,22 @@ fn sample_command_execution_item_with_actions(
     exit_code: Option<i32>,
     duration_ms: Option<i64>,
     command_actions: Vec<CommandAction>,
+    plugin_id: Option<&str>,
+    script_path: Option<&str>,
 ) -> ThreadItem {
     let mut item = sample_command_execution_item(status, exit_code, duration_ms);
     let ThreadItem::CommandExecution {
         command_actions: item_command_actions,
+        plugin_id: item_plugin_id,
+        script_path: item_script_path,
         ..
     } = &mut item
     else {
         unreachable!("sample command execution item should be CommandExecution");
     };
     *item_command_actions = command_actions;
+    *item_plugin_id = plugin_id.map(str::to_string);
+    *item_script_path = script_path.map(str::to_string);
     item
 }
 
@@ -1625,6 +1633,8 @@ fn command_execution_event_serializes_expected_shape() {
                 requested_additional_permissions: false,
                 requested_network_access: false,
             },
+            plugin_id: Some("sample@openai-curated".to_string()),
+            script_path: Some("scripts/run.py".to_string()),
             command_execution_source: CommandExecutionSource::Agent,
             exit_code: Some(0),
             command_total_action_count: 4,
@@ -1674,6 +1684,8 @@ fn command_execution_event_serializes_expected_shape() {
                 "failure_kind": null,
                 "requested_additional_permissions": false,
                 "requested_network_access": false,
+                "plugin_id": "sample@openai-curated",
+                "script_path": "scripts/run.py",
                 "command_execution_source": "agent",
                 "exit_code": 0,
                 "command_total_action_count": 4,
@@ -2446,6 +2458,8 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
                                 command: "cargo test".to_string(),
                             },
                         ],
+                        Some("sample@openai-curated"),
+                        Some("scripts/run.py"),
                     ),
                 },
             ))),
@@ -2461,6 +2475,11 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
     assert_eq!(payload[0]["event_params"]["turn_id"], "turn-1");
     assert_eq!(payload[0]["event_params"]["item_id"], "item-1");
     assert_eq!(payload[0]["event_params"]["tool_name"], "shell");
+    assert_eq!(
+        payload[0]["event_params"]["plugin_id"],
+        "sample@openai-curated"
+    );
+    assert_eq!(payload[0]["event_params"]["script_path"], "scripts/run.py");
     assert_eq!(
         payload[0]["event_params"]["command_execution_source"],
         "agent"

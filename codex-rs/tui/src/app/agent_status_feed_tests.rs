@@ -16,6 +16,8 @@ fn agent_status_uses_bounded_buffered_activity() {
                     .expect("absolute path")
                     .into(),
                 process_id: None,
+                plugin_id: None,
+                script_path: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
                 command_actions: Vec::new(),

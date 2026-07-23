@@ -133,6 +133,7 @@ use codex_login::default_client::originator;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::is_safe_plugin_relative_path;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
@@ -1799,6 +1800,8 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
     match item {
         ThreadItem::CommandExecution {
             id,
+            plugin_id,
+            script_path,
             source,
             status,
             command_actions,
@@ -1832,6 +1835,11 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                     event_type: "codex_command_execution_event",
                     event_params: CodexCommandExecutionEventParams {
                         base,
+                        plugin_id: plugin_id.clone(),
+                        script_path: safe_plugin_relative_script_path(
+                            plugin_id.as_deref(),
+                            script_path.as_deref(),
+                        ),
                         command_execution_source: *source,
                         exit_code: *exit_code,
                         command_total_action_count: action_counts.total,
@@ -2106,6 +2114,14 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
         }
         _ => None,
     }
+}
+
+fn safe_plugin_relative_script_path(
+    plugin_id: Option<&str>,
+    script_path: Option<&str>,
+) -> Option<String> {
+    let script_path = script_path.filter(|path| is_safe_plugin_relative_path(path))?;
+    plugin_id.map(|_| script_path.to_string())
 }
 
 struct ToolItemOutcome {
@@ -2886,6 +2902,25 @@ mod tests {
                 image: 1,
                 audio: 1,
             }
+        );
+    }
+
+    #[test]
+    fn command_execution_script_paths_reject_unsafe_values() {
+        assert_eq!(
+            safe_plugin_relative_script_path(
+                Some("sample@openai-curated"),
+                Some("/home/user/.codex/plugins/cache/openai-curated/sample/scripts/run.py"),
+            ),
+            None
+        );
+        assert_eq!(
+            safe_plugin_relative_script_path(Some("sample@openai-curated"), Some("scripts/run.py"),),
+            Some("scripts/run.py".to_string())
+        );
+        assert_eq!(
+            safe_plugin_relative_script_path(/*plugin_id*/ None, Some("scripts/run.py"),),
+            None
         );
     }
 }

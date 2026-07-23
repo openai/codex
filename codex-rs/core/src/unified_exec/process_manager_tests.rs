@@ -394,6 +394,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         &request,
         #[allow(deprecated)]
         turn.cwd.clone().into(),
+        /*plugin_attribution*/ None,
         transcript,
         "PRE_DENIAL_MARKER".to_string(),
         "Network access denied".to_string(),

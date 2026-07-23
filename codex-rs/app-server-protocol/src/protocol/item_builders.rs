@@ -79,6 +79,8 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
     let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd);
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
+        plugin_id: payload.plugin_id.clone(),
+        script_path: payload.script_path.clone(),
         command: shlex_join(&payload.command),
         cwd: payload.cwd.clone().into(),
         process_id: payload.process_id.clone(),
@@ -102,6 +104,8 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
 
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
+        plugin_id: payload.plugin_id.clone(),
+        script_path: payload.script_path.clone(),
         command: shlex_join(&payload.command),
         cwd: payload.cwd.clone().into(),
         process_id: payload.process_id.clone(),
@@ -175,6 +179,8 @@ pub fn build_item_from_guardian_event(
             }];
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
+                plugin_id: None,
+                script_path: None,
                 command,
                 cwd: cwd.clone().into(),
                 process_id: None,
@@ -211,6 +217,8 @@ pub fn build_item_from_guardian_event(
             };
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
+                plugin_id: None,
+                script_path: None,
                 command,
                 cwd: cwd.clone().into(),
                 process_id: None,

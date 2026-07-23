@@ -159,6 +159,8 @@ impl CommandExecutionItem {
     pub(crate) fn as_legacy_begin_event(&self, turn_id: String, started_at_ms: i64) -> EventMsg {
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: self.id.clone(),
+            plugin_id: self.plugin_id.clone(),
+            script_path: self.script_path.clone(),
             process_id: self.process_id.clone(),
             turn_id,
             started_at_ms,
@@ -183,6 +185,8 @@ impl CommandExecutionItem {
         };
         Some(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: self.id.clone(),
+            plugin_id: self.plugin_id.clone(),
+            script_path: self.script_path.clone(),
             process_id: self.process_id.clone(),
             turn_id,
             completed_at_ms,

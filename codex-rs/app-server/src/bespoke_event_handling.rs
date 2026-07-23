@@ -1355,6 +1355,8 @@ async fn start_command_execution_item(
             started_at_ms: now_unix_timestamp_ms(),
             item: ThreadItem::CommandExecution {
                 id: item_id,
+                plugin_id: None,
+                script_path: None,
                 command,
                 cwd,
                 process_id: None,
@@ -1399,6 +1401,8 @@ async fn complete_command_execution_item(
 
     let item = ThreadItem::CommandExecution {
         id: item_id,
+        plugin_id: None,
+        script_path: None,
         command,
         cwd,
         process_id,
@@ -2537,6 +2541,8 @@ mod tests {
                     payload.item,
                     ThreadItem::CommandExecution {
                         id: "cmd-1".to_string(),
+                        plugin_id: None,
+                        script_path: None,
                         command: completion_item.command.clone(),
                         cwd: completion_item.cwd.clone(),
                         process_id: None,

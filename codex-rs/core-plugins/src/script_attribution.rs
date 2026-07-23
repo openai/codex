@@ -32,6 +32,16 @@ pub struct PluginCommandAttribution {
     pub normalized_relative_path: String,
 }
 
+impl PluginCommandAttribution {
+    /// Returns the paired fields used at command protocol boundaries.
+    pub fn serialized_fields(&self) -> (String, String) {
+        (
+            self.plugin_id.as_key(),
+            self.normalized_relative_path.clone(),
+        )
+    }
+}
+
 /// Active first-party roots eligible for command attribution.
 /// Trusted means OpenAI-shipped synced code or a server-installed global
 /// remote plugin cache entry, not a local override.

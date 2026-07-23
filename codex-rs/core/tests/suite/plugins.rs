@@ -6,16 +6,22 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Result;
+use codex_core_plugins::store::PluginStore;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_plugin::PluginId;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_sse_once;
@@ -24,10 +30,14 @@ use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -39,6 +49,7 @@ const SAMPLE_PLUGIN_APP_NAMESPACE: &str = "mcp__codex_apps__google_calendar";
 const SAMPLE_PLUGIN_MCP_NAMESPACE: &str = "mcp__sample";
 const PLUGIN_APP_SEARCH_CALL_ID: &str = "plugin-app-search";
 const PLUGIN_MCP_SEARCH_CALL_ID: &str = "plugin-mcp-search";
+const REMOTE_PLUGIN_CONFIG_NAME: &str = "sample@openai-curated-remote";
 
 fn sample_plugin_root(home: &TempDir) -> std::path::PathBuf {
     home.path().join("plugins/cache/test/sample/local")
@@ -62,6 +73,34 @@ fn write_sample_plugin_manifest_and_config(home: &TempDir) -> std::path::PathBuf
     )
     .expect("write config");
     plugin_root
+}
+
+fn write_remote_plugin_script_and_config(home: &TempDir) -> std::path::PathBuf {
+    let plugin_id = PluginId::parse(REMOTE_PLUGIN_CONFIG_NAME).expect("plugin id");
+    let store = PluginStore::new(home.path().to_path_buf());
+    let plugin_root = store.plugin_root(&plugin_id, "1.2.3");
+    let script_path = plugin_root.join("scripts/run.sh");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .expect("create remote plugin manifest dir");
+    std::fs::create_dir_all(script_path.parent().expect("script parent"))
+        .expect("create remote plugin scripts dir");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample","version":"1.2.3"}"#,
+    )
+    .expect("write remote plugin manifest");
+    std::fs::write(&script_path, "echo remote attribution\n").expect("write remote plugin script");
+    store
+        .write_remote_plugin_id(&plugin_id, "plugins~Plugin_sample")
+        .expect("persist remote plugin id");
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "[features]\nplugins = true\n\n[plugins.\"{REMOTE_PLUGIN_CONFIG_NAME}\"]\nenabled = true\n"
+        ),
+    )
+    .expect("write remote plugin config");
+    script_path.into_path_buf()
 }
 
 fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
@@ -202,6 +241,100 @@ fn searched_plugin_tools(
         .cloned(),
         namespace_child_tool(&mcp_output, SAMPLE_PLUGIN_MCP_NAMESPACE, "echo").cloned(),
     )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persisted_remote_plugin_command_attribution_flows_through_turn_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "remote plugin attribution fixture uses a local Codex home cache"
+    );
+
+    let server = start_mock_server().await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let script_path = write_remote_plugin_script_and_config(codex_home.as_ref());
+    let script_path = script_path.to_string_lossy();
+    let command = shlex::try_join(["/bin/sh", script_path.as_ref()])?;
+    let call_id = "remote-plugin-command";
+    let arguments = serde_json::to_string(&serde_json::json!({
+        "command": command,
+        "login": false,
+    }))?;
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &arguments),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_model("gpt-5.2");
+    let test_codex = builder.build_with_auto_env(&server).await?;
+    let codex = Arc::clone(&test_codex.codex);
+    let cwd = test_codex.config.cwd.clone();
+    let session_model = test_codex.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
+    codex
+        .submit(Op::UserInput {
+            items: vec![codex_protocol::user_input::UserInput::Text {
+                text: "run the remote plugin script".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(cwd)),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let begin = wait_for_event_match(&codex, |event| match event {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let end = wait_for_event_match(&codex, |event| match event {
+        EventMsg::ExecCommandEnd(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    for (plugin_id, script_path) in [
+        (begin.plugin_id.as_deref(), begin.script_path.as_deref()),
+        (end.plugin_id.as_deref(), end.script_path.as_deref()),
+    ] {
+        assert_eq!(plugin_id, Some(REMOTE_PLUGIN_CONFIG_NAME));
+        assert_eq!(script_path, Some("scripts/run.sh"));
+    }
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

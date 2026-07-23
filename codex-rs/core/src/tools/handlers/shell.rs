@@ -156,7 +156,14 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     }
 
     let source = ExecCommandSource::Agent;
-    let emitter = ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone(), source);
+    let plugin_attribution =
+        turn.plugin_attribution_for_command(&exec_params.command, &exec_params.cwd);
+    let emitter = ToolEmitter::shell(
+        exec_params.command.clone(),
+        exec_params.cwd.clone(),
+        source,
+        plugin_attribution,
+    );
     let event_ctx = ToolEventCtx::new(
         session.as_ref(),
         turn.as_ref(),
