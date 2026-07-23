@@ -101,7 +101,8 @@ fn split_source_ref(source: &str) -> (String, Option<String>) {
     if let Some((base, ref_name)) = source.rsplit_once('#') {
         return (base.to_string(), non_empty_ref(ref_name));
     }
-    if !source.contains("://")
+    if !looks_like_local_path(source)
+        && !source.contains("://")
         && !is_ssh_git_url(source)
         && let Some((base, ref_name)) = source.rsplit_once('@')
     {

@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn marketplace_add_local_directory_source() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let source = codex_home.path().join("marketplace");
+    let source = codex_home.path().join("alice@example.com/marketplace");
     std::fs::create_dir_all(source.join(".agents/plugins"))?;
     std::fs::create_dir_all(source.join("plugins/sample/.codex-plugin"))?;
     std::fs::write(
@@ -33,7 +33,7 @@ async fn marketplace_add_local_directory_source() -> Result<()> {
 
     let request_id = mcp
         .send_marketplace_add_request(MarketplaceAddParams {
-            source: "./marketplace".to_string(),
+            source: "./alice@example.com/marketplace".to_string(),
             ref_name: None,
             sparse_paths: None,
         })
