@@ -312,8 +312,8 @@ WHERE thread_id = ?
         let item_id = item.item.id().to_string();
         let item_json = serde_json::to_string(&item.item).map_err(thread_history_error)?;
         // The same item can appear again with a newer snapshot. Replace its JSON, but keep the
-        // ordinal and creation timestamp from the first record so item ordering and age stay
-        // stable.
+        // creation ordinal and timestamp from the first record so item identity and age stay
+        // stable. Track the latest snapshot separately for incremental replay.
         sqlx::query(
             r#"
 INSERT INTO thread_items (
@@ -321,11 +321,13 @@ INSERT INTO thread_items (
     turn_id,
     item_id,
     rollout_ordinal,
+    updated_at_ordinal,
     created_at_ms,
     item_type,
     item_json
-) VALUES (?, ?, ?, ?, ?, json_extract(?, '$.type'), ?)
+) VALUES (?, ?, ?, ?, ?, ?, json_extract(?, '$.type'), ?)
 ON CONFLICT(thread_id, turn_id, item_id) DO UPDATE SET
+    updated_at_ordinal = excluded.updated_at_ordinal,
     item_type = excluded.item_type,
     item_json = excluded.item_json
             "#,
@@ -333,6 +335,7 @@ ON CONFLICT(thread_id, turn_id, item_id) DO UPDATE SET
         .bind(thread_id)
         .bind(item.turn_id.as_str())
         .bind(item_id.as_str())
+        .bind(rollout_ordinal)
         .bind(rollout_ordinal)
         .bind(created_at_ms)
         .bind(item_json.as_str())

@@ -31,6 +31,7 @@ pub use types::DeleteThreadsParams;
 pub use types::ExtraConfig;
 pub use types::GitInfoPatch;
 pub use types::ItemPage;
+pub use types::ItemSortKey;
 pub use types::ListItemsParams;
 pub use types::ListThreadsParams;
 pub use types::ListTurnsParams;

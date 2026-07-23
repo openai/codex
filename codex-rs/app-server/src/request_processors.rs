@@ -467,6 +467,7 @@ use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
 use codex_thread_store::DeleteThreadsParams as StoreDeleteThreadsParams;
 use codex_thread_store::GitInfoPatch as StoreGitInfoPatch;
+use codex_thread_store::ItemSortKey as StoreItemSortKey;
 use codex_thread_store::ListItemsParams as StoreListItemsParams;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::ListTurnsParams as StoreListTurnsParams;

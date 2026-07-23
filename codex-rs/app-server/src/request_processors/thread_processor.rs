@@ -2715,6 +2715,8 @@ impl ThreadRequestProcessor {
                     cursor: cursor.clone(),
                     page_size: THREAD_ITEMS_MAX_LIMIT,
                     sort_direction: StoreSortDirection::Asc,
+                    sort_key: StoreItemSortKey::CreatedAtOrdinal,
+                    after_updated_at_ordinal: None,
                 })
                 .await
                 .map_err(paginated_history_list_error)?;
@@ -2829,6 +2831,8 @@ impl ThreadRequestProcessor {
                 cursor: None,
                 page_size: 1,
                 sort_direction: StoreSortDirection::Desc,
+                sort_key: StoreItemSortKey::CreatedAtOrdinal,
+                after_updated_at_ordinal: None,
             })
             .await
             .map_err(paginated_history_list_error)?;
@@ -2864,6 +2868,8 @@ impl ThreadRequestProcessor {
                     SortDirection::Asc => StoreSortDirection::Asc,
                     SortDirection::Desc => StoreSortDirection::Desc,
                 },
+                sort_key: StoreItemSortKey::CreatedAtOrdinal,
+                after_updated_at_ordinal: None,
             })
             .await
             .map_err(|err| match err {

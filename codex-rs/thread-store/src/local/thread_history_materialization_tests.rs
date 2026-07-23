@@ -491,7 +491,7 @@ async fn subagent_prefix_advances_projection_without_materializing_history() {
 }
 
 #[tokio::test]
-async fn replayed_item_snapshot_updates_content_without_reordering() {
+async fn replayed_item_snapshot_preserves_creation_ordinal_and_advances_update_ordinal() {
     let home = TempDir::new().expect("temp dir");
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
     let thread_id = ThreadId::default();
@@ -545,9 +545,9 @@ async fn replayed_item_snapshot_updates_content_without_reordering() {
         .await
         .expect("append replayed item snapshot");
 
-    let item = sqlx::query_as::<_, (i64, i64, String)>(
+    let item = sqlx::query_as::<_, (i64, i64, i64, String)>(
         r#"
-SELECT rollout_ordinal, created_at_ms, item_json
+SELECT rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
 FROM thread_items
 WHERE thread_id = ? AND turn_id = ? AND item_id = ?
         "#,
@@ -558,10 +558,9 @@ WHERE thread_id = ? AND turn_id = ? AND item_id = ?
     .fetch_one(&pool)
     .await
     .expect("read projected item");
-    assert_eq!(item.0, 2);
-    assert_eq!(item.1, first_created_at_ms);
+    assert_eq!((item.0, item.1, item.2), (2, 3, first_created_at_ms));
     assert_eq!(
-        serde_json::from_str::<ThreadItem>(item.2.as_str()).expect("parse projected item"),
+        serde_json::from_str::<ThreadItem>(item.3.as_str()).expect("parse projected item"),
         ThreadItem::UserMessage {
             id: "user-1".to_string(),
             client_id: Some("updated".to_string()),
