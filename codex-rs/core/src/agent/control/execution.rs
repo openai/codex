@@ -1,6 +1,7 @@
 use super::AgentControl;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
@@ -68,7 +69,9 @@ impl AgentControl {
         if self.agent_execution_limiter.has_capacity() {
             Ok(())
         } else {
-            Err(CodexErr::AgentLimitReached { max_threads })
+            Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
+                max_threads,
+            }))
         }
     }
 

@@ -61,6 +61,7 @@ use crate::unified_exec::process::UnifiedExecProcess;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
@@ -1203,16 +1204,19 @@ impl UnifiedExecProcessManager {
             .await
             .map(|result| (result.output, result.deferred_network_approval))
             .map_err(|err| match err {
-                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
-                    let output = *output;
-                    let message = if output.aggregated_output.text.is_empty() {
-                        let exit_code = output.exit_code;
-                        format!("Process exited with code {exit_code}")
-                    } else {
-                        output.aggregated_output.text.clone()
-                    };
-                    UnifiedExecError::sandbox_denied(message, output)
-                }
+                ToolError::Codex(err) => match err.details() {
+                    CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
+                        let output = output.as_ref().clone();
+                        let message = if output.aggregated_output.text.is_empty() {
+                            let exit_code = output.exit_code;
+                            format!("Process exited with code {exit_code}")
+                        } else {
+                            output.aggregated_output.text.clone()
+                        };
+                        UnifiedExecError::sandbox_denied(message, output)
+                    }
+                    _ => UnifiedExecError::create_process(format!("{err:?}")),
+                },
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
     }

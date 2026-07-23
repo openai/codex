@@ -54,7 +54,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 
 use codex_features::Feature;
-use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
@@ -584,7 +584,9 @@ impl Session {
     ) {
         let (last_agent_message, abort_reason) = match task_result {
             Ok(last_agent_message) => (last_agent_message, None),
-            Err(CodexErr::TurnAborted) => (None, Some(TurnAbortReason::Interrupted)),
+            Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
+                (None, Some(TurnAbortReason::Interrupted))
+            }
             Err(err) => {
                 warn!(%err, "session task returned an unexpected error");
                 (None, None)

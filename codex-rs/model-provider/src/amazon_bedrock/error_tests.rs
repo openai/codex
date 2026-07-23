@@ -1,6 +1,6 @@
 use codex_api::ApiError;
 use codex_api::TransportError;
-use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::StatusCode;
@@ -29,7 +29,7 @@ fn expired_signature_has_actionable_guidance() {
         "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z",
     ));
 
-    let CodexErr::UnexpectedStatus(response) = &error else {
+    let CodexErrorDetails::UnexpectedStatus(response) = error.details() else {
         panic!("expected unexpected status error, got {error:?}");
     };
     assert_eq!(
@@ -51,7 +51,7 @@ fn other_unauthorized_errors_remain_generic() {
         "The security token included in the request is invalid",
     ));
 
-    let CodexErr::UnexpectedStatus(response) = &error else {
+    let CodexErrorDetails::UnexpectedStatus(response) = error.details() else {
         panic!("expected unexpected status error, got {error:?}");
     };
     assert_eq!(response.user_message, None);
@@ -70,7 +70,7 @@ fn signature_errors_with_other_statuses_remain_generic() {
         "Signature expired: old is now earlier than new",
     ));
 
-    let CodexErr::UnexpectedStatus(response) = &error else {
+    let CodexErrorDetails::UnexpectedStatus(response) = error.details() else {
         panic!("expected unexpected status error, got {error:?}");
     };
     assert_eq!(response.user_message, None);
