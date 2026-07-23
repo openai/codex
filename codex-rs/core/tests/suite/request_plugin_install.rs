@@ -592,6 +592,11 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
                 ev_assistant_message("msg-1", "done"),
                 ev_completed("resp-2"),
             ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-2", "catalog still current"),
+                ev_completed("resp-3"),
+            ]),
         ],
     )
     .await;
@@ -643,6 +648,19 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
             .iter()
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
         "the refreshed installed-plugin cache should filter the cached recommendation"
+    );
+    drop(requests);
+    test.codex.refresh_runtime_config(test.config.clone()).await;
+    test.submit_turn("check whether Calendar is still installed")
+        .await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[2]
+            .tool_by_name(CALENDAR_NAMESPACE, CALENDAR_CREATE_EVENT_TOOL)
+            .is_some(),
+        completed,
+        "an unrelated runtime publication must retain the refreshed Apps catalog"
     );
     Ok(())
 }

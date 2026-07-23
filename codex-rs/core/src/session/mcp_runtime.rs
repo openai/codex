@@ -100,7 +100,7 @@ impl Session {
         self.services.mcp_runtime.replace(input).await;
     }
 
-    async fn build_mcp_runtime_input(
+    pub(super) async fn build_mcp_runtime_input(
         &self,
         desired: &McpDesiredState,
         mcp_projection: McpRuntimeProjection,

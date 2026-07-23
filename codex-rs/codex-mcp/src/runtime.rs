@@ -141,13 +141,24 @@ impl McpRuntime {
     /// Reconciles configured servers and publishes their immutable runtime snapshot.
     pub async fn replace(&self, input: McpRuntimeInput) {
         let current = self.current.load_full();
+        self.publish(input, Some(current.connections.as_ref()))
+            .await;
+    }
+
+    /// Starts fresh connections and returns their complete, refreshed Apps catalog.
+    pub async fn replace_fresh(&self, input: McpRuntimeInput) -> anyhow::Result<Vec<ToolInfo>> {
+        self.publish(input, /*previous*/ None).await;
+        self.latest_hard_refresh_codex_apps_tools_cache().await
+    }
+
+    async fn publish(&self, input: McpRuntimeInput, previous: Option<&McpConnectionSet>) {
         let (publish, publication_gate) = McpPublicationGate::pending();
         let config = Arc::clone(&input.config);
         let plugins_available = input.plugins_available;
         let ready_selected_capability_roots = input.ready_selected_capability_roots.clone();
         let connections = Arc::new(
             McpConnectionSet::new(
-                Some(current.connections.as_ref()),
+                previous,
                 publication_gate,
                 input,
                 self.elicitation_router.clone(),
