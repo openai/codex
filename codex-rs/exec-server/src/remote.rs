@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
+use codex_http_client::HttpClientFactory;
 use futures::FutureExt;
 use http::HeaderMap;
 use http::HeaderName;
@@ -421,6 +422,7 @@ pub struct RemoteEnvironmentConfig {
     pub name: String,
     auth_provider: SharedAuthProvider,
     telemetry: ExecServerTelemetry,
+    http_client_factory: HttpClientFactory,
 }
 
 impl std::fmt::Debug for RemoteEnvironmentConfig {
@@ -439,6 +441,7 @@ impl RemoteEnvironmentConfig {
         base_url: String,
         environment_id: String,
         auth_provider: SharedAuthProvider,
+        http_client_factory: HttpClientFactory,
     ) -> Result<Self, ExecServerError> {
         let environment_id = normalize_environment_id(environment_id)?;
         Ok(Self {
@@ -447,6 +450,7 @@ impl RemoteEnvironmentConfig {
             name: "codex-exec-server".to_string(),
             auth_provider,
             telemetry: ExecServerTelemetry::default(),
+            http_client_factory,
         })
     }
 
@@ -472,8 +476,11 @@ pub async fn run_remote_environment(
         config.auth_provider.clone(),
         config.telemetry.clone(),
     )?;
-    let processor =
-        ConnectionProcessor::new_with_telemetry(runtime_paths, config.telemetry.clone());
+    let processor = ConnectionProcessor::new_with_telemetry(
+        runtime_paths,
+        config.telemetry.clone(),
+        config.http_client_factory.clone(),
+    );
     let identity = NoiseChannelIdentity::generate().map_err(|error| {
         ExecServerError::Protocol(format!("failed to generate Noise relay identity: {error}"))
     })?;
@@ -672,6 +679,7 @@ mod tests {
     use std::sync::Arc;
 
     use codex_api::AuthProvider;
+    use codex_http_client::OutboundProxyPolicy;
     use http::HeaderMap;
     use http::HeaderValue;
     use opentelemetry::trace::TracerProvider as _;
@@ -881,11 +889,28 @@ mod tests {
     }
 
     #[test]
+    fn remote_environment_config_preserves_http_client_factory_policy() {
+        let config = RemoteEnvironmentConfig::new(
+            "https://registry.example".to_string(),
+            "env-1".to_string(),
+            static_registry_auth_provider(),
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        )
+        .expect("config");
+
+        assert_eq!(
+            config.http_client_factory.outbound_proxy_policy(),
+            OutboundProxyPolicy::RespectSystemProxy
+        );
+    }
+
+    #[test]
     fn debug_output_redacts_auth_provider() {
         let config = RemoteEnvironmentConfig::new(
             "https://registry.example".to_string(),
             "env-1".to_string(),
             static_registry_auth_provider(),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         )
         .expect("config");
 

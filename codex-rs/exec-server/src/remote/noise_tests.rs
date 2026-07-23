@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::Result;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use http::HeaderMap;
 use http::HeaderValue;
 use tokio::io::AsyncReadExt;
@@ -59,6 +61,7 @@ async fn reconnect_reuses_registration_until_url_is_rejected() -> Result<()> {
         registry.uri(),
         "environment-requested".to_string(),
         static_registry_auth_provider(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )?;
     let environment_task = tokio::spawn(run_remote_environment(
         config,

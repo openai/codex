@@ -17,8 +17,11 @@ use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCNotification;
 use codex_exec_server_protocol::JSONRPCResponse;
 use codex_exec_server_protocol::RequestId;
+use common::SYSTEM_PROXY_REQUEST_URL_ENV;
+use common::SYSTEM_PROXY_URL_ENV;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
+use common::exec_server::exec_server_with_env;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -110,6 +113,61 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
     Ok(())
 }
 
+/// What this tests: a configured system-proxy factory survives the complete
+/// executor transport, processor, and handler chain for delegated HTTP.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_uses_configured_system_proxy() -> anyhow::Result<()> {
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_url = format!("http://{}", proxy_listener.local_addr()?);
+    let request_url = "http://exec-server-system-proxy.invalid/delegated?route=system";
+    let mut server = exec_server_with_env([
+        (SYSTEM_PROXY_REQUEST_URL_ENV, request_url),
+        (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
+        ("HTTP_PROXY", ""),
+        ("http_proxy", ""),
+        ("HTTPS_PROXY", ""),
+        ("https_proxy", ""),
+        ("ALL_PROXY", ""),
+        ("all_proxy", ""),
+        ("NO_PROXY", ""),
+        ("no_proxy", ""),
+    ])
+    .await?;
+    initialize_exec_server(&mut server).await?;
+
+    let http_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: request_url.to_string(),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Follow,
+                request_id: "system-proxy-request".to_string(),
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&proxy_listener).await?;
+    assert_eq!(
+        captured.request_line,
+        "GET http://exec-server-system-proxy.invalid/delegated?route=system HTTP/1.1"
+    );
+    respond_with_status_and_headers(captured.stream, "200 OK", &[], b"proxied-response").await?;
+
+    let response: HttpRequestResponse = wait_for_response(&mut server, http_request_id).await?;
+    assert_eq!(
+        (response.status, response.body.into_inner()),
+        (200, b"proxied-response".to_vec())
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
 /// What this tests: OAuth callers can inspect redirect responses without the
 /// executor following the Location header.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -159,6 +217,69 @@ async fn exec_server_http_request_can_stop_at_redirects() -> anyhow::Result<()> 
             .await
             .is_err(),
         "redirect target should not be requested"
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// What this tests: the executor follows redirects when the HTTP request
+/// explicitly selects the redirect-following client pool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_can_follow_redirects() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    initialize_exec_server(&mut server).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let http_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: format!("{base_url}/redirect"),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Follow,
+                request_id: "follow-redirect-request".to_string(),
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let redirect_request = accept_http_request(&listener).await?;
+    assert_eq!(redirect_request.request_line, "GET /redirect HTTP/1.1");
+    respond_with_status_and_headers(
+        redirect_request.stream,
+        "302 Found",
+        &[("location", &format!("{base_url}/final"))],
+        b"redirect",
+    )
+    .await?;
+
+    let final_request = accept_http_request(&listener).await?;
+    assert_eq!(final_request.request_line, "GET /final HTTP/1.1");
+    respond_with_status_and_headers(
+        final_request.stream,
+        "200 OK",
+        &[("x-mcp-test", "redirected")],
+        b"final-response-body",
+    )
+    .await?;
+
+    let response: HttpRequestResponse = wait_for_response(&mut server, http_request_id).await?;
+    assert_eq!(
+        (
+            response.status,
+            response_header(&response.headers, "x-mcp-test"),
+            response.body.into_inner(),
+        ),
+        (
+            200,
+            Some("redirected".to_string()),
+            b"final-response-body".to_vec(),
+        )
     );
 
     server.shutdown().await?;

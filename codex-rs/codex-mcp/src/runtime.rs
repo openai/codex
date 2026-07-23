@@ -295,6 +295,12 @@ impl McpRuntimeContext {
         self.local_stdio_fallback_cwd.clone()
     }
 
+    pub(crate) fn local_http_client(&self) -> Arc<dyn HttpClient> {
+        Arc::new(ReqwestHttpClient::new(
+            self.environment_manager.http_client_factory().clone(),
+        ))
+    }
+
     pub(crate) fn resolve_server_environment(
         &self,
         server_name: &str,
@@ -334,7 +340,7 @@ impl McpRuntimeContext {
         Ok(self
             .resolve_server_environment(server_name, config)?
             .map_or_else(
-                || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+                || self.local_http_client(),
                 |environment| environment.get_http_client(),
             ))
     }

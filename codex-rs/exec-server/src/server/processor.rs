@@ -21,28 +21,38 @@ use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
 use crate::telemetry::ConnectionTransport;
 use crate::telemetry::ExecServerTelemetry;
+use codex_http_client::HttpClientFactory;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
+    http_client_factory: HttpClientFactory,
 }
 
 impl ConnectionProcessor {
     #[cfg(test)]
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
-        Self::new_with_telemetry(runtime_paths, ExecServerTelemetry::default())
+        Self::new_with_telemetry(
+            runtime_paths,
+            ExecServerTelemetry::default(),
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
+        )
     }
 
     pub(crate) fn new_with_telemetry(
         runtime_paths: ExecServerRuntimePaths,
         telemetry: ExecServerTelemetry,
+        http_client_factory: HttpClientFactory,
     ) -> Self {
         Self {
             session_registry: SessionRegistry::new(telemetry.clone()),
             runtime_paths,
             telemetry,
+            http_client_factory,
         }
     }
 
@@ -56,6 +66,7 @@ impl ConnectionProcessor {
             Arc::clone(&self.session_registry),
             self.runtime_paths.clone(),
             self.telemetry.clone(),
+            self.http_client_factory.clone(),
             transport,
         )
         .await;
@@ -71,6 +82,7 @@ async fn run_connection(
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
+    http_client_factory: HttpClientFactory,
     transport: ConnectionTransport,
 ) {
     let _connection_metrics = telemetry.connection_started(transport);
@@ -90,6 +102,7 @@ async fn run_connection(
         session_registry,
         notifications,
         runtime_paths,
+        http_client_factory,
     ));
 
     let outbound_task = tokio::spawn(async move {
@@ -530,6 +543,9 @@ mod tests {
             registry,
             test_runtime_paths(),
             crate::ExecServerTelemetry::default(),
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
             crate::telemetry::ConnectionTransport::Stdio,
         ));
         (client_writer, BufReader::new(client_reader).lines(), task)

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
@@ -88,6 +90,7 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
         registry,
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ));
     let initialize_response = handler
         .initialize(InitializeParams {
@@ -166,6 +169,7 @@ async fn long_poll_read_fails_after_session_resume() {
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
         test_runtime_paths(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -206,6 +210,7 @@ async fn long_poll_read_fails_after_session_resume() {
         registry,
         RpcNotificationSender::new(second_tx),
         test_runtime_paths(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ));
     second_handler
         .initialize(InitializeParams {
@@ -239,6 +244,7 @@ async fn active_session_resume_is_rejected() {
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
         test_runtime_paths(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -253,6 +259,7 @@ async fn active_session_resume_is_rejected() {
         registry,
         RpcNotificationSender::new(second_tx),
         test_runtime_paths(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ));
     let err = second_handler
         .initialize(InitializeParams {
@@ -281,6 +288,7 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
         SessionRegistry::new(crate::ExecServerTelemetry::default()),
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ));
     handler
         .initialize(InitializeParams {

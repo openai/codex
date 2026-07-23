@@ -45,8 +45,6 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeContext;
 use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_exec_server::Environment;
-use codex_exec_server::HttpClient;
-use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -1023,7 +1021,7 @@ async fn make_rmcp_client(
             bearer_token_env_var,
         } => {
             let http_client = resolved_environment.as_ref().map_or_else(
-                || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+                || runtime_context.local_http_client(),
                 |environment| environment.get_http_client(),
             );
             let http_client = maybe_with_openai_docs_source_attribution(&url, http_client);

@@ -18,6 +18,7 @@ base64 = { workspace = true }
 codex-api = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-http-client = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }

@@ -62,6 +62,9 @@ async fn stdio_listen_transport_serves_initialize() {
         server_writer,
         test_runtime_paths(),
         crate::ExecServerTelemetry::default(),
+        codex_http_client::HttpClientFactory::new(
+            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+        ),
     ));
     let mut client_lines = BufReader::new(client_reader).lines();
 

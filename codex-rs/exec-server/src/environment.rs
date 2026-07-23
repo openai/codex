@@ -139,6 +139,7 @@ impl EnvironmentManager {
             )])),
             local_environment: Some(Arc::new(Environment::default_for_tests())),
             local_runtime_paths: None,
+            // Test-only construction has no application config from which to resolve proxy policy.
             http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         }
     }
@@ -163,6 +164,7 @@ impl EnvironmentManager {
         match Self::from_snapshot(
             provider.snapshot_inner(),
             local_runtime_paths,
+            // Test-only construction has no application config from which to resolve proxy policy.
             HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         ) {
             Ok(manager) => manager,
@@ -249,6 +251,7 @@ impl EnvironmentManager {
         match Self::from_snapshot(
             snapshot,
             Some(local_runtime_paths),
+            // Test-only construction has no application config from which to resolve proxy policy.
             HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         ) {
             Ok(manager) => manager,
@@ -274,7 +277,10 @@ impl EnvironmentManager {
                     "local environment requires configured runtime paths".to_string(),
                 )
             })?;
-            let local_environment = Arc::new(Environment::local(local_runtime_paths));
+            let local_environment = Arc::new(Environment::local(
+                local_runtime_paths,
+                http_client_factory.clone(),
+            ));
             environment_map.insert(
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Arc::clone(&local_environment),
@@ -619,7 +625,10 @@ impl Environment {
             startup_task: Arc::new(Mutex::new(None)),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
-            http_client: Arc::new(ReqwestHttpClient),
+            // Test-only construction has no application config from which to resolve proxy policy.
+            http_client: Arc::new(ReqwestHttpClient::new(HttpClientFactory::new(
+                OutboundProxyPolicy::ReqwestDefault,
+            ))),
             local_runtime_paths: None,
         }
     }
@@ -661,13 +670,20 @@ impl Environment {
         Ok(match exec_server_url {
             Some(exec_server_url) => Self::remote_inner(exec_server_url, local_runtime_paths),
             None => match local_runtime_paths {
-                Some(local_runtime_paths) => Self::local(local_runtime_paths),
+                Some(local_runtime_paths) => Self::local(
+                    local_runtime_paths,
+                    // This legacy constructor has no resolved application proxy configuration.
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                ),
                 None => Self::default_for_tests(),
             },
         })
     }
 
-    pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
+    pub(crate) fn local(
+        local_runtime_paths: ExecServerRuntimePaths,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
         Self {
             remote_client: None,
             ready_info: None,
@@ -678,7 +694,7 @@ impl Environment {
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
             )),
-            http_client: Arc::new(ReqwestHttpClient),
+            http_client: Arc::new(ReqwestHttpClient::new(http_client_factory)),
             local_runtime_paths: Some(local_runtime_paths),
         }
     }
@@ -1548,7 +1564,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_environment_passes_runtime_paths_to_exec_backend() {
-        let environment = Environment::local(test_runtime_paths());
+        let environment = Environment::local(test_runtime_paths(), legacy_http_client_factory());
         #[cfg(unix)]
         let uri = "file://server/share/checkout";
         #[cfg(windows)]
