@@ -155,6 +155,8 @@ pub struct McpConfig {
     /// Whether model-visible MCP tool namespaces should keep the legacy
     /// `mcp__` prefix.
     pub prefix_mcp_tool_names: bool,
+    /// MCP servers whose model-visible tool namespaces omit the `mcp__` prefix.
+    pub non_prefixed_mcp_tool_servers: Vec<String>,
     /// Client-side elicitation capabilities advertised during MCP initialization.
     pub client_elicitation_capability: ElicitationCapability,
     /// Resolved MCP registrations keyed by logical server name.

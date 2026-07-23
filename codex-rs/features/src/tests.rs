@@ -445,11 +445,53 @@ non_code_mode_only = true
 }
 
 #[test]
+fn non_prefixed_mcp_tool_names_feature_config_deserializes_boolean_toggle() {
+    let features: FeaturesToml = toml::from_str("non_prefixed_mcp_tool_names = true")
+        .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("non_prefixed_mcp_tool_names".to_string(), true)])
+    );
+    assert_eq!(
+        features.non_prefixed_mcp_tool_names,
+        Some(FeatureToml::Enabled(true))
+    );
+}
+
+#[test]
+fn non_prefixed_mcp_tool_names_feature_config_deserializes_table() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[non_prefixed_mcp_tool_names]
+enabled = true
+server_names = ["history", "notes"]
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("non_prefixed_mcp_tool_names".to_string(), true)])
+    );
+    assert_eq!(
+        features.non_prefixed_mcp_tool_names,
+        Some(FeatureToml::Config(
+            crate::NonPrefixedMcpToolNamesConfigToml {
+                enabled: Some(true),
+                server_names: Some(vec!["history".to_string(), "notes".to_string()]),
+            }
+        ))
+    );
+}
+
+#[test]
 fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
     features.enable(Feature::NetworkProxy);
+    features.enable(Feature::NonPrefixedMcpToolNames);
     features.enable(Feature::RespectSystemProxy);
 
     let mut features_toml = FeaturesToml {
@@ -463,6 +505,12 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         })),
+        non_prefixed_mcp_tool_names: Some(FeatureToml::Config(
+            crate::NonPrefixedMcpToolNamesConfigToml {
+                enabled: Some(false),
+                server_names: Some(vec!["history".to_string(), "notes".to_string()]),
+            },
+        )),
         entries: BTreeMap::new(),
         ..Default::default()
     };
@@ -493,6 +541,15 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         }))
+    );
+    assert_eq!(
+        features_toml.non_prefixed_mcp_tool_names,
+        Some(FeatureToml::Config(
+            crate::NonPrefixedMcpToolNamesConfigToml {
+                enabled: Some(true),
+                server_names: Some(vec!["history".to_string(), "notes".to_string()]),
+            }
+        ))
     );
     let replayed = Features::from_sources(
         FeatureConfigSource {

@@ -36,6 +36,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         use_legacy_landlock: false,
         apps_enabled: false,
         prefix_mcp_tool_names: true,
+        non_prefixed_mcp_tool_servers: Vec::new(),
         client_elicitation_capability: ElicitationCapability::default(),
         mcp_server_catalog: ResolvedMcpCatalog::default(),
         connector_snapshot: codex_connectors::ConnectorSnapshot::default(),

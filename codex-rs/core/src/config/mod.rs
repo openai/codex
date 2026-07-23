@@ -829,6 +829,9 @@ pub struct Config {
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
+    /// When present, only these MCP servers omit the legacy `mcp__` namespace prefix.
+    pub non_prefixed_mcp_tool_servers: Option<Vec<String>>,
+
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
@@ -1641,6 +1644,16 @@ impl Config {
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
             prefix_mcp_tool_names: self.prefix_mcp_tool_names(),
+            non_prefixed_mcp_tool_servers: if self
+                .features
+                .enabled(Feature::NonPrefixedMcpToolNames)
+            {
+                self.non_prefixed_mcp_tool_servers
+                    .clone()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability {
                     form: Some(FormElicitationCapability::default()),
@@ -1661,6 +1674,7 @@ impl Config {
 
     pub(crate) fn prefix_mcp_tool_names(&self) -> bool {
         !self.features.enabled(Feature::NonPrefixedMcpToolNames)
+            || self.non_prefixed_mcp_tool_servers.is_some()
     }
 
     pub async fn rebuild_preserving_session_layers(
@@ -3203,6 +3217,17 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let non_prefixed_mcp_tool_servers = if features.enabled(Feature::NonPrefixedMcpToolNames) {
+            cfg.features
+                .as_ref()
+                .and_then(|features| features.non_prefixed_mcp_tool_names.as_ref())
+                .and_then(|feature| match feature {
+                    FeatureToml::Enabled(_) => None,
+                    FeatureToml::Config(config) => config.server_names.clone(),
+                })
+        } else {
+            None
+        };
         let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
@@ -3960,6 +3985,7 @@ impl Config {
                 env!("CARGO_PKG_VERSION"),
             ),
             mcp_servers,
+            non_prefixed_mcp_tool_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
