@@ -5,9 +5,12 @@ use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use reqwest::header::USER_AGENT;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
+
+const MCP_USER_AGENT: &str = concat!("codex-mcp-client/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) fn create_env_for_mcp_server(
     extra_env: Option<HashMap<OsString, OsString>>,
@@ -62,6 +65,7 @@ pub(crate) fn build_default_headers(
     env_http_headers: Option<HashMap<String, String>>,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(MCP_USER_AGENT));
 
     if let Some(static_headers) = http_headers {
         for (name, value) in static_headers {
