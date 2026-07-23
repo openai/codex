@@ -1,0 +1,17 @@
+[package]
+name = "codex-exec-server-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-exec-server = { workspace = true }
+codex-http-client = { workspace = true }

@@ -13,7 +13,7 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::load_config_toml_with_layer_stack;
 use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
-use crate::legacy_core::config::resolve_bootstrap_auth_route_config;
+use crate::legacy_core::config::resolve_bootstrap_http_client_factory;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -26,6 +26,7 @@ use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_login::AuthRouteConfig;
 use codex_protocol::ThreadId;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_home_dir::find_codex_home;
@@ -295,14 +296,13 @@ async fn start_app_server_for_archive_command(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )
     .wrap_err("failed to resolve local runtime paths")?;
-    let environment_manager = EnvironmentManager::from_env(Some(local_runtime_paths))
+    let prepared_environment_manager = EnvironmentManager::prepare_from_env()
         .await
-        .map(Arc::new)
-        .wrap_err("failed to initialize environment manager")?;
+        .wrap_err("failed to discover execution environments")?;
     let config_cwd = super::config_cwd_for_app_server_target(
         cli.cwd.as_deref(),
         &app_server_target,
-        &environment_manager,
+        prepared_environment_manager.default_environment_is_remote(),
     )
     .wrap_err("failed to resolve config cwd")?;
 
@@ -332,7 +332,7 @@ async fn start_app_server_for_archive_command(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let auth_route_config = resolve_bootstrap_auth_route_config(
+    let http_client_factory = resolve_bootstrap_http_client_factory(
         config_toml,
         bootstrap_config
             .config_layer_stack
@@ -340,6 +340,12 @@ async fn start_app_server_for_archive_command(
             .feature_requirements
             .as_ref(),
     )?;
+    let environment_manager = Arc::new(
+        prepared_environment_manager
+            .build(Some(local_runtime_paths), http_client_factory.clone())
+            .wrap_err("failed to initialize environment manager")?,
+    );
+    let auth_route_config = AuthRouteConfig::from_http_client_factory(http_client_factory);
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,

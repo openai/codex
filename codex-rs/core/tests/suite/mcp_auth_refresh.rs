@@ -4,6 +4,7 @@ use anyhow::Result;
 use codex_config::McpServerTransportConfig;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
+use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
@@ -95,7 +96,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         tx_event: None,
         startup_cancellation_token: CancellationToken::new(),
         runtime_context: McpRuntimeContext::new(
-            Arc::new(codex_exec_server::EnvironmentManager::without_environments()),
+            Arc::new(environment_manager_without_environments()),
             home.path().to_path_buf(),
         ),
         codex_apps_tools_cache: CodexAppsToolsCache::default(),

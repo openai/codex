@@ -9,7 +9,7 @@ use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::ConfigTomlLoadResult;
 use crate::legacy_core::config::load_config_toml_with_layer_stack;
 use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
-use crate::legacy_core::config::resolve_bootstrap_auth_route_config;
+use crate::legacy_core::config::resolve_bootstrap_http_client_factory;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::session_resume::ResolveCwdOutcome;
@@ -47,6 +47,7 @@ use codex_config::types::ResumeCwdMode;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
+use codex_login::AuthRouteConfig;
 use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -760,9 +761,9 @@ fn latest_session_lookup_params(
 fn config_cwd_for_app_server_target(
     cwd: Option<&Path>,
     app_server_target: &AppServerTarget,
-    environment_manager: &EnvironmentManager,
+    default_environment_is_remote: bool,
 ) -> std::io::Result<Option<AbsolutePathBuf>> {
-    if uses_remote_workspace_or_environment(app_server_target, environment_manager) {
+    if app_server_target.uses_remote_workspace() || default_environment_is_remote {
         return Ok(None);
     }
 
@@ -989,17 +990,19 @@ pub async fn run_main(
         arg0_paths.codex_self_exe.clone(),
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    let environment_manager =
+    let prepared_environment_manager =
         if should_load_configured_environments(&loader_overrides, &app_server_target) {
-            EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
+            EnvironmentManager::prepare_from_codex_home(&codex_home).await
         } else {
-            EnvironmentManager::from_env(Some(local_runtime_paths)).await
+            EnvironmentManager::prepare_from_env().await
         }
-        .map(Arc::new)
         .map_err(std::io::Error::other)?;
     let cwd = cli.cwd.clone();
-    let config_cwd =
-        config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
+    let config_cwd = config_cwd_for_app_server_target(
+        cwd.as_deref(),
+        &app_server_target,
+        prepared_environment_manager.default_environment_is_remote(),
+    )?;
     let mut loader_overrides = loader_overrides;
     if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
         let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2);
@@ -1022,7 +1025,7 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let auth_route_config = resolve_bootstrap_auth_route_config(
+    let bootstrap_http_client_factory = resolve_bootstrap_http_client_factory(
         bootstrap_config_toml,
         bootstrap_config
             .config_layer_stack
@@ -1030,6 +1033,8 @@ pub async fn run_main(
             .feature_requirements
             .as_ref(),
     )?;
+    let auth_route_config =
+        AuthRouteConfig::from_http_client_factory(bootstrap_http_client_factory);
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -1129,6 +1134,21 @@ pub async fn run_main(
         strict_config,
     )
     .await;
+
+    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+        config.codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+        config.chatgpt_base_url.clone(),
+        config.auth_route_config(),
+    )
+    .await;
+    let environment_manager = Arc::new(
+        prepared_environment_manager
+            .build(Some(local_runtime_paths), config.http_client_factory())
+            .map_err(std::io::Error::other)?,
+    );
 
     remove_legacy_tui_log_file(config.codex_home.as_path());
 
@@ -2135,6 +2155,77 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn startup_services_use_final_cloud_managed_http_policy() -> color_eyre::Result<()> {
+        for (configured_respect_system_proxy, managed_respect_system_proxy) in
+            [(true, false), (false, true)]
+        {
+            let codex_home = TempDir::new()?;
+            std::fs::write(
+                codex_home.path().join("config.toml"),
+                format!("[features]\nrespect_system_proxy = {configured_respect_system_proxy}\n"),
+            )?;
+            let prepared_environment_manager =
+                EnvironmentManager::prepare_from_codex_home(codex_home.path()).await?;
+            let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+            let bootstrap_config = load_config_toml_with_layer_stack(
+                codex_home.path(),
+                /*cwd*/ None,
+                Vec::new(),
+                codex_config::ConfigLoadOptions {
+                    loader_overrides: loader_overrides.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let bootstrap_http_client_factory = resolve_bootstrap_http_client_factory(
+                &bootstrap_config.config_toml,
+                bootstrap_config
+                    .config_layer_stack
+                    .requirements()
+                    .feature_requirements
+                    .as_ref(),
+            )?;
+            let cloud_config_bundle =
+                codex_config::test_support::CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                    format!("[features]\nrespect_system_proxy = {managed_respect_system_proxy}\n"),
+                );
+            let config = ConfigBuilder::default()
+                .codex_home(codex_home.path().to_path_buf())
+                .loader_overrides(loader_overrides)
+                .cloud_config_bundle(cloud_config_bundle)
+                .build()
+                .await?;
+            let runtime_paths = ExecServerRuntimePaths::new(
+                std::env::current_exe()?,
+                /*codex_linux_sandbox_exe*/ None,
+            )?;
+            let environment_manager = prepared_environment_manager
+                .build(Some(runtime_paths), config.http_client_factory())?;
+
+            assert_ne!(
+                bootstrap_http_client_factory.outbound_proxy_policy(),
+                config.http_client_factory().outbound_proxy_policy()
+            );
+            assert_eq!(
+                environment_manager
+                    .http_client_factory()
+                    .outbound_proxy_policy(),
+                config.http_client_factory().outbound_proxy_policy()
+            );
+            assert_eq!(
+                config
+                    .auth_route_config()
+                    .http_client_factory()
+                    .outbound_proxy_policy(),
+                config.http_client_factory().outbound_proxy_policy()
+            );
+            assert_eq!(config.respect_system_proxy, managed_respect_system_proxy);
+        }
+
+        Ok(())
+    }
+
     async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
@@ -2875,8 +2966,13 @@ mod tests {
         };
         let environment_manager = EnvironmentManager::default_for_tests();
 
-        let config_cwd =
-            config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
+        let config_cwd = config_cwd_for_app_server_target(
+            Some(remote_only_cwd),
+            &target,
+            environment_manager
+                .default_environment()
+                .is_some_and(|environment| environment.is_remote()),
+        )?;
 
         assert_eq!(config_cwd, None);
         Ok(())
@@ -2889,8 +2985,13 @@ mod tests {
         let target = AppServerTarget::Embedded;
         let environment_manager = EnvironmentManager::default_for_tests();
 
-        let config_cwd =
-            config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
+        let config_cwd = config_cwd_for_app_server_target(
+            Some(temp_dir.path()),
+            &target,
+            environment_manager
+                .default_environment()
+                .is_some_and(|environment| environment.is_remote()),
+        )?;
 
         assert_eq!(
             config_cwd,
@@ -2912,8 +3013,13 @@ mod tests {
         };
         let environment_manager = EnvironmentManager::default_for_tests();
 
-        let config_cwd =
-            config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
+        let config_cwd = config_cwd_for_app_server_target(
+            Some(temp_dir.path()),
+            &target,
+            environment_manager
+                .default_environment()
+                .is_some_and(|environment| environment.is_remote()),
+        )?;
 
         assert_eq!(
             config_cwd,
@@ -2932,8 +3038,14 @@ mod tests {
         let target = AppServerTarget::Embedded;
         let environment_manager = EnvironmentManager::default_for_tests();
 
-        let err = config_cwd_for_app_server_target(Some(&missing), &target, &environment_manager)
-            .expect_err("missing embedded cwd should fail");
+        let err = config_cwd_for_app_server_target(
+            Some(&missing),
+            &target,
+            environment_manager
+                .default_environment()
+                .is_some_and(|environment| environment.is_remote()),
+        )
+        .expect_err("missing embedded cwd should fail");
 
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         Ok(())
@@ -2957,8 +3069,13 @@ mod tests {
         )
         .await;
 
-        let config_cwd =
-            config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
+        let config_cwd = config_cwd_for_app_server_target(
+            Some(remote_only_cwd),
+            &target,
+            environment_manager
+                .default_environment()
+                .is_some_and(|environment| environment.is_remote()),
+        )?;
 
         assert_eq!(config_cwd, None);
         Ok(())
