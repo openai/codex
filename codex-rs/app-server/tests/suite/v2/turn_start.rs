@@ -4137,6 +4137,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
+        .with_approval_policy("untrusted")
         .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::Plugins)
         .disable_feature(Feature::RemotePlugin)
@@ -4169,13 +4170,13 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         .await?;
 
     for method in ["item/started", "item/completed"] {
-        timeout(DEFAULT_READ_TIMEOUT, async {
+        let status = timeout(DEFAULT_READ_TIMEOUT, async {
             loop {
                 let notification = mcp.read_stream_until_notification_message(method).await?;
                 let params = notification.params.expect("item notification params");
                 let item_json = params.get("item").expect("item notification item").clone();
                 let item = serde_json::from_value::<ThreadItem>(item_json.clone())?;
-                if matches!(item, ThreadItem::CommandExecution { .. }) {
+                if let ThreadItem::CommandExecution { status, .. } = item {
                     let emitted_script_path = item_json
                         .get("scriptPath")
                         .and_then(serde_json::Value::as_str)
@@ -4192,11 +4193,32 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
                         !emitted_script_path.contains("plugins/cache"),
                         "scriptPath must not serialize a plugin cache path"
                     );
-                    return Ok::<(), anyhow::Error>(());
+                    return Ok::<CommandExecutionStatus, anyhow::Error>(status);
                 }
             }
         })
         .await??;
+        if method == "item/started" {
+            let server_req = timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_request_message(),
+            )
+            .await??;
+            let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
+            else {
+                panic!("expected CommandExecutionRequestApproval request");
+            };
+            assert_eq!(params.item_id, "plugin-command");
+            mcp.send_response(
+                request_id,
+                serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                    decision: CommandExecutionApprovalDecision::Decline,
+                })?,
+            )
+            .await?;
+        } else {
+            assert_eq!(status, CommandExecutionStatus::Declined);
+        }
     }
 
     timeout(

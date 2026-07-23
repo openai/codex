@@ -507,6 +507,7 @@ impl CoreShellActionProvider {
                         /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,
                         Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+                        /*plugin_attribution_override*/ None,
                     )
                     .await
             })

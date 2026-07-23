@@ -5,7 +5,10 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
+use codex_core_plugins::PluginCommandAttribution;
 use codex_extension_api::LoadedUserInstructions;
+use codex_plugin::PluginId;
+use codex_protocol::items::is_safe_plugin_relative_path;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -34,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianReviewOptions;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
@@ -492,6 +496,8 @@ async fn handle_exec_approval(
     let approval_id_for_op = event.effective_approval_id();
     let ExecApprovalRequestEvent {
         call_id,
+        plugin_id,
+        script_path,
         approval_id,
         environment_id,
         command,
@@ -503,6 +509,15 @@ async fn handle_exec_approval(
         available_decisions,
         ..
     } = event;
+    let plugin_attribution = plugin_id
+        .zip(script_path)
+        .and_then(|(plugin_id, script_path)| {
+            let plugin_id = PluginId::parse(&plugin_id).ok()?;
+            is_safe_plugin_relative_path(&script_path).then_some(PluginCommandAttribution {
+                plugin_id,
+                normalized_relative_path: script_path,
+            })
+        });
     let decision = if routes_approval_to_guardian(parent_ctx) {
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_approval_request_review(
@@ -522,8 +537,11 @@ async fn handle_exec_approval(
                 justification: None,
             },
             reason,
-            GuardianApprovalRequestSource::DelegatedSubagent,
-            review_cancel.clone(),
+            GuardianReviewOptions {
+                plugin_attribution_override: plugin_attribution.clone(),
+                approval_request_source: GuardianApprovalRequestSource::DelegatedSubagent,
+                external_cancel: Some(review_cancel.clone()),
+            },
         );
         await_approval_with_cancel(
             receive_approval_review(review_rx),
@@ -547,6 +565,7 @@ async fn handle_exec_approval(
                 proposed_execpolicy_amendment,
                 additional_permissions,
                 available_decisions,
+                plugin_attribution,
             ),
             parent_session,
             &approval_id_for_op,
@@ -630,8 +649,11 @@ async fn handle_patch_approval(
                 patch,
             },
             reason.clone(),
-            GuardianApprovalRequestSource::DelegatedSubagent,
-            review_cancel.clone(),
+            GuardianReviewOptions {
+                plugin_attribution_override: None,
+                approval_request_source: GuardianApprovalRequestSource::DelegatedSubagent,
+                external_cancel: Some(review_cancel.clone()),
+            },
         );
         Some(
             await_approval_with_cancel(
@@ -746,8 +768,11 @@ async fn maybe_auto_review_mcp_request_user_input(
         new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
-        GuardianApprovalRequestSource::DelegatedSubagent,
-        review_cancel.clone(),
+        GuardianReviewOptions {
+            plugin_attribution_override: None,
+            approval_request_source: GuardianApprovalRequestSource::DelegatedSubagent,
+            external_cancel: Some(review_cancel.clone()),
+        },
     );
     let decision = await_approval_with_cancel(
         receive_approval_review(review_rx),

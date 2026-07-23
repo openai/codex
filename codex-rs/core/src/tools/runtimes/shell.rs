@@ -170,6 +170,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                             .cloned(),
                         req.additional_permissions.clone(),
                         available_decisions,
+                        /*plugin_attribution_override*/ None,
                     )
                     .await
             })

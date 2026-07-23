@@ -152,6 +152,10 @@ impl Serialize for ToolRuntimePayload<'_> {
 struct ExecCommandBeginTracePayload<'a> {
     call_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script_path: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     process_id: Option<&'a str>,
     turn_id: &'a str,
     started_at_ms: i64,
@@ -167,8 +171,8 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
     fn from(event: &'a ExecCommandBeginEvent) -> Self {
         let ExecCommandBeginEvent {
             call_id,
-            plugin_id: _,
-            script_path: _,
+            plugin_id,
+            script_path,
             process_id,
             turn_id,
             started_at_ms,
@@ -180,6 +184,8 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
         } = event;
         Self {
             call_id,
+            plugin_id: plugin_id.as_deref(),
+            script_path: script_path.as_deref(),
             process_id: process_id.as_deref(),
             turn_id,
             started_at_ms: *started_at_ms,
@@ -199,6 +205,10 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
 #[derive(Serialize)]
 struct ExecCommandEndTracePayload<'a> {
     call_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script_path: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     process_id: Option<&'a str>,
     turn_id: &'a str,
@@ -222,8 +232,8 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
     fn from(event: &'a ExecCommandEndEvent) -> Self {
         let ExecCommandEndEvent {
             call_id,
-            plugin_id: _,
-            script_path: _,
+            plugin_id,
+            script_path,
             process_id,
             turn_id,
             completed_at_ms,
@@ -242,6 +252,8 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
         } = event;
         Self {
             call_id,
+            plugin_id: plugin_id.as_deref(),
+            script_path: script_path.as_deref(),
             process_id: process_id.as_deref(),
             turn_id,
             completed_at_ms: *completed_at_ms,
