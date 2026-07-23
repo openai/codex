@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -12,13 +11,14 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
-use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
-use axum::routing::get;
+use axum::routing::post;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppMetadata;
 use codex_app_server_protocol::AppTemplateSummary;
 use codex_app_server_protocol::AppTemplateUnavailableReason;
+use codex_app_server_protocol::AppsReadParams;
+use codex_app_server_protocol::AppsReadResponse;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -50,6 +50,7 @@ use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_json;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -240,32 +241,19 @@ apps = true
         .respond_with(ResponseTemplate::new(200).set_body_string(installed_body))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/connectors/directory/list"))
-        .and(query_param("external_logos", "true"))
+    Mock::given(method("POST"))
+        .and(path("/backend-api/ps/apps/batch"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
+        .and(header("oai-product-sku", "codex"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "apps": [
-                AppInfo {
-                    id: "example-app".to_string(),
-                    name: "Example App".to_string(),
-                    description: Some("Example app connector".to_string()),
-                    logo_url: Some("https://example.com/example.png".to_string()),
-                    logo_url_dark: None,
-                    icon_assets: None,
-                    icon_dark_assets: None,
-                    distribution_channel: Some("featured".to_string()),
-                    branding: None,
-                    app_metadata: None,
-                    labels: None,
-                    install_url: None,
-                    is_accessible: false,
-                    is_enabled: true,
-                    plugin_display_names: Vec::new(),
-                }
-            ],
-            "next_token": null
+            "apps": [{
+                "id": "example-app",
+                "name": "Example App",
+                "description": "Example app connector",
+                "icon_url": "https://example.com/example.png",
+                "tools": null
+            }]
         })))
         .mount(&server)
         .await;
@@ -1656,41 +1644,16 @@ enabled = false
 }
 
 #[tokio::test]
-async fn plugin_read_returns_app_metadata_category() -> Result<()> {
-    let connectors = vec![
-        AppInfo {
-            id: "alpha".to_string(),
-            name: "Alpha".to_string(),
-            description: Some("Alpha connector".to_string()),
-            logo_url: Some("https://example.com/alpha.png".to_string()),
-            logo_url_dark: None,
-            icon_assets: None,
-            icon_dark_assets: None,
-            distribution_channel: Some("featured".to_string()),
-            branding: None,
-            app_metadata: Some(AppMetadata {
-                review: None,
-                categories: Some(vec!["Productivity".to_string()]),
-                sub_categories: None,
-                seo_description: None,
-                screenshots: None,
-                developer: None,
-                version: None,
-                version_id: None,
-                version_notes: None,
-                first_party_requires_install: None,
-                show_in_composer_when_unlinked: None,
-            }),
-            labels: None,
-            install_url: None,
-            is_accessible: false,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        },
-        AppInfo {
-            id: "beta".to_string(),
-            name: "Beta".to_string(),
-            description: Some("Beta connector".to_string()),
+async fn plugin_read_batches_large_app_metadata_requests() -> Result<()> {
+    let app_ids = (0..101)
+        .map(|index| format!("app-{index:03}"))
+        .collect::<Vec<_>>();
+    let connectors = app_ids
+        .iter()
+        .map(|app_id| AppInfo {
+            id: app_id.clone(),
+            name: format!("App {app_id}"),
+            description: Some(format!("{app_id} connector")),
             logo_url: None,
             logo_url_dark: None,
             icon_assets: None,
@@ -1703,8 +1666,8 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
-        },
-    ];
+        })
+        .collect::<Vec<_>>();
     let (server_url, server_handle) = start_apps_server(connectors).await?;
 
     let codex_home = TempDir::new()?;
@@ -1725,15 +1688,20 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
         "sample-plugin",
         "./sample-plugin",
     )?;
-    write_plugin_source(repo_root.path(), "sample-plugin", &["alpha", "beta"])?;
+    write_plugin_source(
+        repo_root.path(),
+        "sample-plugin",
+        &app_ids.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .build()
         .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -1742,22 +1710,139 @@ async fn plugin_read_returns_app_metadata_category() -> Result<()> {
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
-
-    let response: PluginReadResponse =
-        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+    let mut expected_app_ids = app_ids.iter().map(String::as_str).collect::<Vec<_>>();
+    expected_app_ids.sort_unstable();
 
     assert_eq!(
         response
             .plugin
             .apps
             .iter()
-            .map(|app| (app.id.as_str(), app.category.as_deref()))
+            .map(|app| app.id.as_str())
             .collect::<Vec<_>>(),
-        vec![("alpha", Some("Productivity")), ("beta", None)]
+        expected_app_ids
     );
 
     server_handle.abort();
     let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_stops_batching_after_app_metadata_failure() -> Result<()> {
+    let app_ids = (0..101)
+        .map(|index| format!("app-{index:03}"))
+        .collect::<Vec<_>>();
+    let server = MockServer::start().await;
+    // Warm one app in the failing chunk and one in the skipped chunk, then fail exactly one refresh.
+    Mock::given(method("POST"))
+        .and(path("/ps/apps/batch"))
+        .and(body_json(json!({
+            "app_ids": ["app-000", "app-100"],
+            "include_tools": false,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "apps": [
+                {"id": "app-000", "name": "Cached first", "description": "First cached app", "tools": null},
+                {"id": "app-100", "name": "Cached last", "description": "Last cached app", "tools": null},
+            ]
+        })))
+        .expect(1)
+        .with_priority(/*p*/ 1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/ps/apps/batch"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .with_priority(/*p*/ 2)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server.uri())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+    )?;
+    write_plugin_source(
+        repo_root.path(),
+        "sample-plugin",
+        &app_ids.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_apps_read_request(AppsReadParams {
+            app_ids: vec!["app-000".to_string(), "app-100".to_string()],
+            include_tools: false,
+        })
+        .await?;
+    let _: AppsReadResponse = timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+    let mut expected_apps = app_ids
+        .iter()
+        .map(|app_id| match app_id.as_str() {
+            "app-000" => ("app-000", "Cached first", Some("First cached app")),
+            "app-100" => ("app-100", "Cached last", Some("Last cached app")),
+            app_id => (app_id, app_id, None),
+        })
+        .collect::<Vec<_>>();
+    expected_apps.sort_unstable();
+
+    assert_eq!(
+        response
+            .plugin
+            .apps
+            .iter()
+            .map(|app| (
+                app.id.as_str(),
+                app.name.as_str(),
+                app.description.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        expected_apps
+    );
+
     Ok(())
 }
 
@@ -2117,24 +2202,16 @@ plugins = true
 
 #[derive(Clone)]
 struct AppsServerState {
-    response: Arc<StdMutex<serde_json::Value>>,
+    connectors: Vec<AppInfo>,
 }
 
 async fn start_apps_server(connectors: Vec<AppInfo>) -> Result<(String, JoinHandle<()>)> {
-    let state = Arc::new(AppsServerState {
-        response: Arc::new(StdMutex::new(
-            json!({ "apps": connectors, "next_token": null }),
-        )),
-    });
+    let state = Arc::new(AppsServerState { connectors });
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let router = Router::new()
-        .route("/connectors/directory/list", get(list_directory_connectors))
-        .route(
-            "/connectors/directory/list_workspace",
-            get(list_directory_connectors),
-        )
+        .route("/ps/apps/batch", post(batch_apps))
         .with_state(state);
 
     let handle = tokio::spawn(async move {
@@ -2144,10 +2221,10 @@ async fn start_apps_server(connectors: Vec<AppInfo>) -> Result<(String, JoinHand
     Ok((format!("http://{addr}"), handle))
 }
 
-async fn list_directory_connectors(
+async fn batch_apps(
     State(state): State<Arc<AppsServerState>>,
     headers: HeaderMap,
-    uri: Uri,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<impl axum::response::IntoResponse, StatusCode> {
     let bearer_ok = headers
         .get(AUTHORIZATION)
@@ -2157,21 +2234,40 @@ async fn list_directory_connectors(
         .get("chatgpt-account-id")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == "account-123");
-    let external_logos_ok = uri
-        .query()
-        .is_some_and(|query| query.split('&').any(|pair| pair == "external_logos=true"));
+    let product_sku_ok = headers
+        .get("oai-product-sku")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "codex");
 
-    if !bearer_ok || !account_ok {
+    if !bearer_ok || !account_ok || !product_sku_ok {
         Err(StatusCode::UNAUTHORIZED)
-    } else if !external_logos_ok {
-        Err(StatusCode::BAD_REQUEST)
     } else {
-        let response = state
-            .response
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        Ok(Json(response))
+        let app_ids = body
+            .get("app_ids")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(StatusCode::BAD_REQUEST)?;
+        if app_ids.len() > 100 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let apps = state
+            .connectors
+            .iter()
+            .filter(|connector| {
+                app_ids
+                    .iter()
+                    .any(|app_id| app_id.as_str() == Some(connector.id.as_str()))
+            })
+            .map(|connector| {
+                json!({
+                    "id": connector.id,
+                    "name": connector.name,
+                    "description": connector.description,
+                    "icon_url": connector.logo_url,
+                    "tools": null
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(Json(json!({ "apps": apps })))
     }
 }
 

@@ -89,11 +89,17 @@ pub(crate) fn connector_metadata_to_api(metadata: ConnectorMetadata) -> ApiConne
                         name,
                         title,
                         description,
+                        is_enabled,
+                        disabled_reason,
+                        is_read_only,
                     } = tool;
                     ApiAppToolSummary {
                         name,
                         title,
                         description,
+                        is_enabled,
+                        disabled_reason,
+                        is_read_only,
                     }
                 })
                 .collect()

@@ -190,6 +190,11 @@ pub struct AppToolSummary {
     pub name: String,
     pub title: Option<String>,
     pub description: String,
+    #[serde(default = "default_enabled")]
+    pub is_enabled: bool,
+    pub disabled_reason: Option<String>,
+    #[serde(default)]
+    pub is_read_only: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
