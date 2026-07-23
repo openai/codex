@@ -269,6 +269,12 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     CommandExecution {
         id: String,
+        /// Trusted first-party plugin id when this command resolves to one plugin script.
+        #[serde(default)]
+        plugin_id: Option<String>,
+        /// Safe plugin-relative path when this command resolves to one plugin script.
+        #[serde(default)]
+        script_path: Option<String>,
         /// The command to be executed.
         command: String,
         /// The command's working directory.
@@ -836,6 +842,8 @@ impl From<CoreTurnItem> for ThreadItem {
             },
             CoreTurnItem::CommandExecution(command) => ThreadItem::CommandExecution {
                 id: command.id,
+                plugin_id: command.plugin_id,
+                script_path: command.script_path,
                 command: shlex_join(&command.command),
                 cwd: command.cwd.clone().into(),
                 process_id: command.process_id,

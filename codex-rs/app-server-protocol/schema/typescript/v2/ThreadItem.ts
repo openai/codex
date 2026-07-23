@@ -29,6 +29,14 @@ import type { UserInput } from "./UserInput";
 
 export type ThreadItem = { "type": "userMessage", id: string, clientId: string | null, content: Array<UserInput>, } | { "type": "hookPrompt", id: string, fragments: Array<HookPromptFragment>, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, memoryCitation: MemoryCitation | null, } | { "type": "plan", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, } | { "type": "commandExecution", id: string,
 /**
+ * Trusted first-party plugin id when this command resolves to one plugin script.
+ */
+pluginId: string | null,
+/**
+ * Safe plugin-relative path when this command resolves to one plugin script.
+ */
+scriptPath: string | null,
+/**
  * The command to be executed.
  */
 command: string,

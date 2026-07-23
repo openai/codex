@@ -174,7 +174,7 @@ stream_max_retries = 0
         ),
     )?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    app.config.sqlite_home = codex_home.path().to_path_buf();
+    app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     app.config.model = Some(CURRENT_MODEL.to_string());
     app.config.model_provider_id = MODEL_PROVIDER_ID.to_string();
     app.config.model_provider = ModelProviderInfo {

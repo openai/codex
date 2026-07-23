@@ -1,6 +1,8 @@
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
+use codex_core_plugins::PluginCommandAttribution;
+use codex_core_plugins::TrustedPluginRoots;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
@@ -171,6 +173,16 @@ impl TurnContext {
                 developer_instructions: self.collaboration_mode_developer_instructions.clone(),
             },
         }
+    }
+
+    pub(crate) fn plugin_attribution_for_command(
+        &self,
+        command: &[String],
+        cwd: &AbsolutePathBuf,
+    ) -> Option<PluginCommandAttribution> {
+        self.extension_data
+            .get::<TrustedPluginRoots>()?
+            .resolve_attribution(command, cwd)
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -742,6 +754,10 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&plugins_input)
             .await;
+        let trusted_plugin_roots = TrustedPluginRoots::from_plugin_load_outcome(
+            &plugin_outcome,
+            per_turn_config.codex_home.as_path(),
+        );
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let plugin_skill_snapshots = self
             .services
@@ -785,6 +801,7 @@ impl Session {
             sub_id,
             skills_snapshot,
         );
+        turn_context.extension_data.insert(trusted_plugin_roots);
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

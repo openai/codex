@@ -167,6 +167,8 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
     fn from(event: &'a ExecCommandBeginEvent) -> Self {
         let ExecCommandBeginEvent {
             call_id,
+            plugin_id: _,
+            script_path: _,
             process_id,
             turn_id,
             started_at_ms,
@@ -220,6 +222,8 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
     fn from(event: &'a ExecCommandEndEvent) -> Self {
         let ExecCommandEndEvent {
             call_id,
+            plugin_id: _,
+            script_path: _,
             process_id,
             turn_id,
             completed_at_ms,

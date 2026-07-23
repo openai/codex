@@ -3516,6 +3516,14 @@ pub enum ExecCommandStatus {
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Trusted first-party plugin attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
+    /// Safe plugin-relative path attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub script_path: Option<String>,
     /// Identifier for the underlying PTY process (when available).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -3542,6 +3550,14 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Trusted first-party plugin attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
+    /// Safe plugin-relative path attributed to this command, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub script_path: Option<String>,
     /// Identifier for the underlying PTY process (when available).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -5454,6 +5470,8 @@ mod tests {
             started_at_ms: 10,
             item: TurnItem::CommandExecution(CommandExecutionItem {
                 id: "exec-1".into(),
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 process_id: Some("pid-1".into()),
                 command: vec!["echo".into(), "done".into()],
                 cwd: cwd.clone(),
@@ -5477,6 +5495,8 @@ mod tests {
             completed_at_ms: 20,
             item: TurnItem::CommandExecution(CommandExecutionItem {
                 id: "exec-1".into(),
+                plugin_id: Some("sample@openai-curated".into()),
+                script_path: Some("scripts/run.py".into()),
                 process_id: Some("pid-1".into()),
                 command: vec!["echo".into(), "done".into()],
                 cwd,
@@ -5499,10 +5519,15 @@ mod tests {
             started.as_legacy_events(/*show_raw_agent_reasoning*/ false).as_slice(),
             [EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
+                plugin_id,
+                script_path,
                 turn_id,
                 started_at_ms: 10,
                 ..
-            })] if call_id == "exec-1" && turn_id == "turn-1"
+            })] if call_id == "exec-1"
+                && plugin_id.as_deref() == Some("sample@openai-curated")
+                && script_path.as_deref() == Some("scripts/run.py")
+                && turn_id == "turn-1"
         ));
         assert!(matches!(
             completed
@@ -5510,11 +5535,17 @@ mod tests {
                 .as_slice(),
             [EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
+                plugin_id,
+                script_path,
                 turn_id,
                 completed_at_ms: 20,
                 aggregated_output,
                 ..
-            })] if call_id == "exec-1" && turn_id == "turn-1" && aggregated_output == "done\n"
+            })] if call_id == "exec-1"
+                && plugin_id.as_deref() == Some("sample@openai-curated")
+                && script_path.as_deref() == Some("scripts/run.py")
+                && turn_id == "turn-1"
+                && aggregated_output == "done\n"
         ));
     }
 

@@ -160,6 +160,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         vec!["proof".to_string()],
         cwd,
         /*process_id*/ 123,
+        /*plugin_attribution*/ None,
         transcript,
         Instant::now(),
         Some(network_denial_monitor),

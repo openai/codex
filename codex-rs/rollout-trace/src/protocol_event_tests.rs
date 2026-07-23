@@ -56,6 +56,8 @@ fn exec_command_trace_payloads_use_inferred_native_cwd() -> anyhow::Result<()> {
     // Windows and POSIX paths on every platform.
     let begin = EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
         call_id: "call-begin".to_string(),
+        plugin_id: None,
+        script_path: None,
         process_id: Some("process-1".to_string()),
         turn_id: "turn-1".to_string(),
         started_at_ms: 1234,
@@ -67,6 +69,8 @@ fn exec_command_trace_payloads_use_inferred_native_cwd() -> anyhow::Result<()> {
     });
     let end = EventMsg::ExecCommandEnd(ExecCommandEndEvent {
         call_id: "call-end".to_string(),
+        plugin_id: None,
+        script_path: None,
         process_id: None,
         turn_id: "turn-1".to_string(),
         completed_at_ms: 2345,

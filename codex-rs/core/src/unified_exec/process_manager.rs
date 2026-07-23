@@ -58,6 +58,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_core_plugins::PluginCommandAttribution;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
@@ -326,6 +327,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
     context: &UnifiedExecContext,
     request: &ExecCommandRequest,
     cwd: PathUri,
+    plugin_attribution: Option<PluginCommandAttribution>,
     transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     fallback_output: String,
     message: String,
@@ -342,6 +344,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
         request.command.clone(),
         cwd,
         Some(request.process_id.to_string()),
+        plugin_attribution,
         transcript,
         fallback_output,
         message,
@@ -445,11 +448,17 @@ impl UnifiedExecProcessManager {
             &context.call_id,
             /*turn_diff_tracker*/ None,
         );
+        let plugin_attribution = cwd.to_abs_path().ok().and_then(|cwd| {
+            context
+                .turn
+                .plugin_attribution_for_command(&request.command, &cwd)
+        });
         let emitter = ToolEmitter::unified_exec(
             &request.command,
             cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
+            plugin_attribution.clone(),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -466,6 +475,7 @@ impl UnifiedExecProcessManager {
                 &request.command,
                 request.hook_command.clone(),
                 cwd.clone(),
+                plugin_attribution.clone(),
                 start,
                 request.process_id,
                 request.tty,
@@ -528,6 +538,7 @@ impl UnifiedExecProcessManager {
                 context,
                 &request,
                 cwd.clone(),
+                plugin_attribution.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -548,6 +559,7 @@ impl UnifiedExecProcessManager {
                 context,
                 &request,
                 cwd.clone(),
+                plugin_attribution.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -607,6 +619,7 @@ impl UnifiedExecProcessManager {
                     context,
                     &request,
                     cwd.clone(),
+                    plugin_attribution.clone(),
                     Arc::clone(&transcript),
                     text.clone(),
                     message.clone(),
@@ -625,6 +638,7 @@ impl UnifiedExecProcessManager {
                 request.command.clone(),
                 cwd.clone(),
                 Some(process_id.to_string()),
+                plugin_attribution.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 exit,
@@ -929,6 +943,7 @@ impl UnifiedExecProcessManager {
         command: &[String],
         hook_command: String,
         cwd: PathUri,
+        plugin_attribution: Option<PluginCommandAttribution>,
         started_at: Instant,
         process_id: i32,
         tty: bool,
@@ -970,6 +985,7 @@ impl UnifiedExecProcessManager {
             command.to_vec(),
             cwd,
             process_id,
+            plugin_attribution,
             transcript,
             started_at,
             network_denial_monitor,
