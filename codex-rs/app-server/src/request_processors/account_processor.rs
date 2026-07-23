@@ -258,7 +258,12 @@ impl AccountRequestProcessor {
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
-            crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
+            if let Err(err) =
+                crate::mcp_refresh::reload_mcp_config(&thread_manager, &config_manager).await
+            {
+                warn!(%err, "failed to reload MCP configuration after account or plugin change");
+                crate::mcp_refresh::invalidate_loaded_threads(&thread_manager).await;
+            }
         });
     }
 

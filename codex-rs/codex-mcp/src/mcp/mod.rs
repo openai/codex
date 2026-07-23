@@ -19,11 +19,13 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_config::ConfigLayerStack;
 use codex_config::Constrained;
 use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeManager;
@@ -38,6 +40,7 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
+use codex_utils_path_uri::PathUri;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
@@ -105,13 +108,10 @@ pub struct McpPermissionPromptAutoApproveContext {
 
 /// MCP runtime settings derived from `codex_core::config::Config`.
 ///
-/// This struct should contain only long-lived configuration values that the
-/// `codex-mcp` crate needs to construct server transports, enforce MCP
-/// approval/sandbox policy, locate OAuth state, and merge plugin-provided MCP
-/// servers. Request-scoped or auth-scoped state should not be stored here;
-/// thread those values explicitly into runtime entry points such as
-/// [`effective_mcp_servers`] and snapshot collection helpers so config objects
-/// do not go stale when auth changes.
+/// Each published runtime and prepared call owns one immutable copy of these
+/// settings, so its connection, approval policy, and sandbox authority cannot
+/// change independently. Auth remains separate and is supplied explicitly to
+/// runtime entry points such as [`effective_mcp_servers`].
 #[derive(Debug, Clone)]
 pub struct McpConfig {
     /// Base URL for ChatGPT-hosted app MCP servers, copied from the root config.
@@ -132,6 +132,14 @@ pub struct McpConfig {
     pub skill_mcp_dependency_install_enabled: bool,
     /// Approval policy used for MCP tool calls and MCP elicitation requests.
     pub approval_policy: Constrained<AskForApproval>,
+    /// Permission profile captured with the connections and approval policy.
+    pub permission_profile: PermissionProfile,
+    /// Configuration layers used to evaluate Apps tool policy and reviewer selection.
+    pub config_layer_stack: ConfigLayerStack,
+    /// Default reviewer used when an Apps tool has no reviewer override.
+    pub approvals_reviewer: ApprovalsReviewer,
+    /// Working directories for the exact environment handles used by this runtime.
+    pub environment_cwds: HashMap<String, PathUri>,
     /// Optional path to `codex-linux-sandbox` for sandboxed MCP tool execution.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     /// Whether to use legacy Landlock behavior in the MCP sandbox state.
@@ -334,6 +342,7 @@ pub async fn read_mcp_resource(
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         crate::elicitation::ElicitationRequestRouter::default(),
+        crate::runtime::McpPublicationGate::already_published(),
     )
     .await;
 
@@ -388,7 +397,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let server_names = mcp_servers.keys().cloned().collect();
 
     let cancel_token = CancellationToken::new();
-    let mcp_connection_manager = McpConnectionSet::new(
+    let mcp_connection_set = McpConnectionSet::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
@@ -411,11 +420,12 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         /*elicitation_reviewer*/ None,
         /*elicitation_lifecycle*/ None,
         crate::elicitation::ElicitationRequestRouter::default(),
+        crate::runtime::McpPublicationGate::already_published(),
     )
     .await;
 
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
-        &mcp_connection_manager,
+        &mcp_connection_set,
         auth_status_entries,
         server_names,
         detail,
@@ -642,27 +652,27 @@ fn convert_mcp_resource_templates(
 }
 
 async fn collect_mcp_server_status_snapshot_from_manager(
-    mcp_connection_manager: &McpConnectionSet,
+    mcp_connection_set: &McpConnectionSet,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
     server_names: Vec<String>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let ((server_infos, tools), resources, resource_templates) = tokio::join!(
         async {
-            let server_infos = mcp_connection_manager.list_available_server_infos().await;
-            let tools = mcp_connection_manager.list_all_tools().await;
+            let server_infos = mcp_connection_set.list_available_server_infos().await;
+            let tools = mcp_connection_set.list_all_tools().await;
             (server_infos, tools)
         },
         async {
             if detail.include_resources() {
-                mcp_connection_manager.list_all_resources(|_| true).await
+                mcp_connection_set.list_all_resources(|_| true).await
             } else {
                 HashMap::new()
             }
         },
         async {
             if detail.include_resources() {
-                mcp_connection_manager
+                mcp_connection_set
                     .list_all_resource_templates(|_| true)
                     .await
             } else {

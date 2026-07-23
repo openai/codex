@@ -32,7 +32,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -231,11 +230,6 @@ pub(super) async fn user_input_or_turn_inner(
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
             current_context.session_telemetry.user_prompt(&items);
-            sess.refresh_mcp_servers_if_requested(
-                &current_context,
-                Some(sess.mcp_elicitation_reviewer()),
-            )
-            .await;
             let additional_context_input = {
                 let mut state = sess.state.lock().await;
                 state.additional_context.merge(additional_context)
@@ -427,9 +421,8 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
     sess.notify_dynamic_tool_response(&id, response).await;
 }
 
-pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
-    let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
-    *guard = Some(refresh_config);
+pub fn refresh_mcp_servers(sess: &Session) {
+    sess.mark_mcp_runtime_dirty();
 }
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
@@ -592,6 +585,8 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
+    let _refresh = sess.mcp_refresh_lock.acquire().await;
+    sess.mcp_refresh_lock.close();
     sess.services.mcp_runtime.shutdown().await;
     sess.guardian_review_session.shutdown().await;
 
@@ -664,8 +659,6 @@ pub async fn review(
 ) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
-        .await;
-    sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
     #[allow(deprecated)]
     match resolve_review_request(review_request, &turn_context.cwd) {
@@ -784,8 +777,12 @@ pub(super) async fn submission_loop(
                     dynamic_tool_response(&sess, id, response).await;
                     false
                 }
-                Op::RefreshMcpServers { config } => {
-                    refresh_mcp_servers(&sess, config).await;
+                Op::RefreshMcpServers => {
+                    refresh_mcp_servers(&sess);
+                    false
+                }
+                Op::ReloadMcpConfig { config } => {
+                    sess.refresh_mcp_config(config).await;
                     false
                 }
                 Op::ReloadUserConfig => {

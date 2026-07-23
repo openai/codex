@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -35,18 +36,25 @@ impl McpConnectionSet {
         for (server_name, managed_client) in &self.clients {
             managed_client.reconnect_failed_startup().await;
             let has_cached_tools = managed_client.has_cached_tools();
-            let startup_complete = managed_client
-                .startup_complete
-                .load(std::sync::atomic::Ordering::Acquire);
-            let Some(server_tools) = managed_client
-                .listed_tools()
-                .instrument(trace_span!(
-                    "list_tools_for_server",
-                    server_name = %server_name,
-                    has_cached_tools,
-                    startup_complete
-                ))
-                .await
+            let startup_complete = managed_client.startup_complete.load(Ordering::Acquire);
+            let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                self.codex_apps_tools_override.read().await.clone()
+            } else {
+                None
+            };
+            let Some(server_tools) = async {
+                match catalog_override {
+                    Some(tools) => Some(managed_client.prepare_tools(tools)),
+                    None => managed_client.listed_tools().await,
+                }
+            }
+            .instrument(trace_span!(
+                "list_tools_for_server",
+                server_name = %server_name,
+                has_cached_tools,
+                startup_complete
+            ))
+            .await
             else {
                 unavailable_server_count += 1;
                 trace!(
@@ -74,23 +82,11 @@ impl McpConnectionSet {
         tools
     }
 
-    /// Returns one tool from the current live connection.
-    pub async fn tool_info(&self, server: &str, tool: &str) -> Option<ToolInfo> {
-        let client = self.clients.get(server)?;
-        let managed_client = client.client().await.ok()?;
-        let tool = client
-            .prepare_tools(managed_client.listed_tools())
-            .into_iter()
-            .find(|tool_info| tool_info.tool.name == tool)?;
-        Some(self.with_server_metadata(tool))
-    }
-
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "catalog capture must remain serialized with catalog replacement"
     )]
-    /// Captures the ready clients, their exact tools, and the supplied runtime metadata.
-    pub async fn capture_binding_with_metadata(
+    pub(crate) async fn capture_binding_with_metadata(
         self: &Arc<Self>,
         config: Arc<crate::McpConfig>,
         plugins_available: bool,
@@ -127,10 +123,14 @@ impl McpConnectionSet {
         let mut tools = Vec::with_capacity(listed_tools.len());
         let mut calls = std::collections::HashMap::with_capacity(listed_tools.len());
         for tool_info in listed_tools {
+            if !crate::tool_is_model_visible(&tool_info) {
+                continue;
+            }
             let Some(client) = clients.client(&tool_info.server_name) else {
                 continue;
             };
-            let Some(call) = self.prepare_call(&tool_info, client, *revision) else {
+            let Some(call) = self.prepare_call(&tool_info, client, Arc::clone(&config), *revision)
+            else {
                 trace!(
                     server_name = %tool_info.server_name,
                     tool_name = %tool_info.tool.name,
@@ -161,12 +161,14 @@ impl McpConnectionSet {
         self: &Arc<Self>,
         tool_info: &ToolInfo,
         client: Arc<ManagedClient>,
+        config: Arc<crate::McpConfig>,
         tool_catalog_revision: u64,
     ) -> Option<PreparedMcpCall> {
         let server_name = &tool_info.server_name;
         Some(PreparedMcpCall::new(
             Arc::clone(self),
             client,
+            config,
             tool_catalog_revision,
             Arc::clone(&self.tool_catalog_revision),
             tool_info.clone(),
@@ -177,16 +179,12 @@ impl McpConnectionSet {
         ))
     }
 
-    /// Force-refresh codex apps tools by bypassing the in-process cache.
-    ///
-    /// On success, the refreshed tools replace shared cache contents when the
-    /// cache is enabled and the latest filtered tools are returned directly to
-    /// the caller. On failure, existing shared cache contents remain unchanged.
+    /// Force-refresh Codex Apps tools and publish one new exact catalog revision.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "catalog publication must remain serialized with captured tool calls"
     )]
-    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
+    pub(crate) async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let _refresh = self.codex_apps_refresh_lock.lock().await;
         let refresh_start = Instant::now();
         let managed_client = self

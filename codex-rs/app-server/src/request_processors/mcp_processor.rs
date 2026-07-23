@@ -78,7 +78,7 @@ impl McpRequestProcessor {
         &self,
         _params: Option<()>,
     ) -> Result<McpServerRefreshResponse, JSONRPCErrorError> {
-        crate::mcp_refresh::queue_strict_refresh(&self.thread_manager, &self.config_manager)
+        crate::mcp_refresh::reload_mcp_config(&self.thread_manager, &self.config_manager)
             .await
             .map_err(|err| internal_error(format!("failed to refresh MCP servers: {err}")))?;
         Ok(McpServerRefreshResponse {})
@@ -125,8 +125,9 @@ impl McpRequestProcessor {
         let (mcp_config, runtime_context) = match thread_id.as_deref() {
             Some(thread_id) => {
                 let (_, thread) = self.load_thread(thread_id).await?;
-                let runtime = thread.current_mcp_runtime().await;
-                (runtime.config().clone(), runtime.runtime_context().clone())
+                let (config, runtime_context) =
+                    thread.current_mcp_config_and_runtime_context().await;
+                ((*config).clone(), runtime_context)
             }
             None => {
                 let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
@@ -249,8 +250,8 @@ impl McpRequestProcessor {
         let (mcp_config, runtime_context) = match thread {
             Some(thread) => {
                 let mcp_config = thread.runtime_mcp_config(&config).await;
-                let runtime = thread.current_mcp_runtime().await;
-                (mcp_config, runtime.runtime_context().clone())
+                let (_, runtime_context) = thread.current_mcp_config_and_runtime_context().await;
+                (mcp_config, runtime_context)
             }
             None => {
                 let mcp_config = mcp_manager.runtime_config(&config).await;

@@ -61,14 +61,14 @@ impl McpResourceClient {
 
     /// Returns the identity of the connection set used by this client.
     pub fn cache_key(&self) -> McpResourceClientCacheKey {
-        McpResourceClientCacheKey(Arc::downgrade(&self.runtime.snapshot()))
+        McpResourceClientCacheKey(Arc::downgrade(&self.runtime.latest_connections()))
     }
 
     /// Returns whether this client can address the named server.
     ///
     /// This does not wait for server startup.
     pub async fn has_server(&self, server: &str) -> bool {
-        self.runtime.snapshot().contains_server(server)
+        self.runtime.latest_connections().contains_server(server)
     }
 
     /// Lists one resource page from the named server.
@@ -81,7 +81,7 @@ impl McpResourceClient {
             cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
         let result = self
             .runtime
-            .snapshot()
+            .latest_connections()
             .list_resources(server, params)
             .await?;
         let resources = result
@@ -100,7 +100,7 @@ impl McpResourceClient {
         let params = ReadResourceRequestParams::new(uri.to_string());
         let result = self
             .runtime
-            .snapshot()
+            .latest_connections()
             .read_resource(server, params)
             .await?;
         let contents = result

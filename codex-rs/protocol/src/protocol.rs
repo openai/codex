@@ -192,12 +192,10 @@ pub struct W3cTraceContext {
     pub tracestate: Option<String>,
 }
 
-/// Config payload for refreshing MCP servers.
+/// Resolved MCP inputs to apply through a thread's submission queue.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpServerRefreshConfig {
-    /// Complete runtime server map after source and thread-scoped resolution.
     pub mcp_servers: Value,
-    /// OAuth credential store mode to use with this server snapshot.
     pub mcp_oauth_credentials_store_mode: Value,
     pub auth_keyring_backend_kind: Value,
 }
@@ -641,7 +639,10 @@ pub enum Op {
     },
 
     /// Request MCP servers to reinitialize and refresh cached tool lists.
-    RefreshMcpServers { config: McpServerRefreshConfig },
+    RefreshMcpServers,
+
+    /// Replace the thread's resolved MCP configuration before its next turn.
+    ReloadMcpConfig { config: McpServerRefreshConfig },
 
     /// Reload user config layer overrides for the active session.
     ///
@@ -882,7 +883,8 @@ impl Op {
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
-            Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
+            Self::RefreshMcpServers => "refresh_mcp_servers",
+            Self::ReloadMcpConfig { .. } => "reload_mcp_config",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",

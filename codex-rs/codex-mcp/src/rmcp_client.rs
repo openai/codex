@@ -478,19 +478,6 @@ impl AsyncManagedClient {
                     ),
             )
         });
-        if codex_apps_tools_cache_context
-            .as_ref()
-            .is_some_and(ConnectorRuntimeContext::has_current_tools)
-            || tool_catalog_cache_context
-                .as_ref()
-                .is_some_and(McpToolCatalogCacheContext::has_tools)
-        {
-            let startup_task = client.clone();
-            tokio::spawn(async move {
-                let _ = startup_task.await;
-            });
-        }
-
         Self {
             client,
             is_codex_apps_mcp_server,

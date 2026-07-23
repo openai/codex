@@ -148,6 +148,7 @@ impl fmt::Debug for McpBinding {
 pub struct PreparedMcpCall {
     _connections: Arc<McpConnectionSet>,
     client: Arc<ManagedClient>,
+    config: Arc<McpConfig>,
     catalog_revision: u64,
     catalog_revision_source: Arc<RwLock<u64>>,
     tool_info: ToolInfo,
@@ -165,6 +166,7 @@ impl PreparedMcpCall {
     pub(crate) fn new(
         connections: Arc<McpConnectionSet>,
         client: Arc<ManagedClient>,
+        config: Arc<McpConfig>,
         catalog_revision: u64,
         catalog_revision_source: Arc<RwLock<u64>>,
         tool_info: ToolInfo,
@@ -176,6 +178,7 @@ impl PreparedMcpCall {
         Self {
             _connections: connections,
             client,
+            config,
             catalog_revision,
             catalog_revision_source,
             tool_info,
@@ -188,6 +191,11 @@ impl PreparedMcpCall {
 
     pub fn tool_info(&self) -> &ToolInfo {
         &self.tool_info
+    }
+
+    /// Returns the configuration and approval authority captured with this client.
+    pub fn config(&self) -> &McpConfig {
+        &self.config
     }
 
     pub fn server_name(&self) -> &str {

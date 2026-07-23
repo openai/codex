@@ -20,11 +20,7 @@ async fn process_compacted_history_with_test_session(
         crate::session::step_context::StepContext::for_test(Arc::clone(&turn_context));
     let world_state = Arc::new(session.build_world_state_for_step(&step_context).await);
     let initial_context = session
-        .build_initial_context_with_world_state_and_mcp(
-            &turn_context,
-            world_state.as_ref(),
-            step_context.mcp.as_ref(),
-        )
+        .build_initial_context_with_world_state(&turn_context, world_state.as_ref())
         .await;
     let initial_context_injection = InitialContextInjection::BeforeLastUserMessage {
         world_state,

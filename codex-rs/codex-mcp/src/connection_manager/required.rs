@@ -10,9 +10,9 @@ use crate::rmcp_client::StartupOutcomeError;
 impl McpConnectionSet {
     /// Waits for every required server and reports their startup failures together.
     ///
-    /// Callers must make the manager reachable to request handlers before awaiting this method,
-    /// because server initialization may require client elicitation.
-    pub async fn validate_required_servers(&self) -> Result<()> {
+    /// The manager must already be reachable through [`crate::McpRuntime`] so
+    /// startup-time elicitation can resolve while validation waits.
+    pub(crate) async fn validate_required_servers(&self) -> Result<()> {
         let failures = async {
             let mut failures = Vec::new();
             for server_name in &self.required_servers {
@@ -55,7 +55,7 @@ impl McpConnectionSet {
     }
 }
 
-pub(super) fn startup_outcome_error_message(error: StartupOutcomeError) -> String {
+fn startup_outcome_error_message(error: StartupOutcomeError) -> String {
     match error {
         StartupOutcomeError::Cancelled => "MCP startup cancelled".to_string(),
         StartupOutcomeError::Failed { error, .. } => error,

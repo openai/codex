@@ -32,16 +32,11 @@ pub(crate) fn effective_plugins_changed_callback(
         thread_manager.skills_service().clear_cache();
 
         let refresh_thread_manager = Arc::clone(&thread_manager);
-        let refresh_config_manager = config_manager.clone();
         tokio::spawn(async move {
             if refresh_thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
-            crate::mcp_refresh::queue_best_effort_refresh(
-                &refresh_thread_manager,
-                &refresh_config_manager,
-            )
-            .await;
+            crate::mcp_refresh::invalidate_loaded_threads(&refresh_thread_manager).await;
         });
 
         if change.materialized_remote_plugins.is_empty() {

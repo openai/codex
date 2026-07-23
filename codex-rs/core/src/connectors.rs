@@ -15,7 +15,6 @@ use codex_connectors::apps_config_from_layer_stack;
 use codex_connectors::connector_runtime_context_key;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
-use codex_protocol::models::PermissionProfile;
 use codex_tools::DiscoverableTool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -33,12 +32,14 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_mcp::McpConnectionSet;
+use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
+use codex_mcp::McpRuntimeInput;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::tool_plugin_provenance;
+use codex_protocol::models::PermissionProfile;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
@@ -211,7 +212,10 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let mcp_config = mcp_manager.runtime_config(config).await;
+    let mut mcp_config = mcp_manager.runtime_config(config).await;
+    // Discovery has no active turn or reviewer and must never inherit execution authority.
+    mcp_config.permission_profile = PermissionProfile::default();
+    let mcp_config = Arc::new(mcp_config);
     let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
@@ -238,37 +242,31 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let codex_apps_auth_manager =
         codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
             .then(|| Arc::clone(&auth_manager));
-    let mcp_connection_manager = McpConnectionSet::new(
-        &mcp_servers,
-        config.mcp_oauth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-        &config.permissions.approval_policy,
-        INITIAL_SUBMIT_ID.to_owned(),
-        /*tx_event*/ None,
-        cancel_token.clone(),
-        PermissionProfile::default(),
+    let mcp_runtime = McpRuntime::new(McpRuntimeInput {
+        config: Arc::clone(&mcp_config),
+        plugins_available: false,
+        ready_selected_capability_roots: Vec::new(),
+        mcp_servers: mcp_servers.clone(),
+        submit_id: INITIAL_SUBMIT_ID.to_owned(),
+        tx_event: None,
+        startup_cancellation_token: cancel_token.clone(),
         // Connector discovery is threadless. Use an actually configured env if
         // one exists, but do not reintroduce the old hidden-local fallback.
         runtime_context,
-        config.codex_home.to_path_buf(),
-        mcp_manager.codex_apps_tools_cache(),
-        mcp_manager.tool_catalog_cache(),
-        connector_runtime_context_key(auth.as_ref()),
-        mcp_config.prefix_mcp_tool_names,
-        mcp_config.client_elicitation_capability,
-        /*supports_openai_form_elicitation*/ false,
-        ToolPluginProvenance::default(),
-        auth.as_ref(),
+        codex_apps_tools_cache: mcp_manager.codex_apps_tools_cache(),
+        tool_catalog_cache: mcp_manager.tool_catalog_cache(),
+        codex_apps_tools_cache_key: connector_runtime_context_key(auth.as_ref()),
+        supports_openai_form_elicitation: false,
+        auth: auth.clone(),
         codex_apps_auth_manager,
-        /*elicitation_reviewer*/ None,
-        /*elicitation_lifecycle*/ None,
-        codex_mcp::ElicitationRequestRouter::default(),
-    )
+        elicitation_reviewer: None,
+        elicitation_lifecycle: None,
+    })
     .await;
 
     let refreshed_tools = if force_refetch {
-        match mcp_connection_manager
-            .hard_refresh_codex_apps_tools_cache()
+        match mcp_runtime
+            .latest_hard_refresh_codex_apps_tools_cache()
             .await
         {
             Ok(tools) => Some(tools),
@@ -287,14 +285,14 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let mut tools = if let Some(tools) = refreshed_tools {
         tools
     } else {
-        mcp_connection_manager.list_all_tools().await
+        mcp_runtime.latest_list_all_tools().await
     };
     let mut should_reload_tools = false;
     let codex_apps_ready = if refreshed_tools_succeeded {
         true
     } else if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
-        let immediate_ready = mcp_connection_manager
-            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
+        let immediate_ready = mcp_runtime
+            .latest_wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
             .await;
         if immediate_ready {
             true
@@ -303,8 +301,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 .configured_config()
                 .and_then(|config| config.startup_timeout_sec)
                 .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
-            let ready = mcp_connection_manager
-                .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+            let ready = mcp_runtime
+                .latest_wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
                 .await;
             should_reload_tools = ready;
             ready
@@ -315,7 +313,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         false
     };
     if should_reload_tools {
-        tools = mcp_connection_manager.list_all_tools().await;
+        tools = mcp_runtime.latest_list_all_tools().await;
     }
     if codex_apps_ready {
         cancel_token.cancel();
@@ -327,7 +325,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     }
     let accessible_connectors =
         with_app_plugin_sources(accessible_connectors, &tool_plugin_provenance);
-    mcp_connection_manager.shutdown().await;
+    mcp_runtime.shutdown().await;
     Ok(AccessibleConnectorsStatus {
         connectors: accessible_connectors,
         codex_apps_ready,
@@ -531,8 +529,22 @@ pub(crate) fn mcp_approvals_reviewer(
     server_name: &str,
     connector_id: Option<&str>,
 ) -> ApprovalsReviewer {
+    mcp_approvals_reviewer_from_layers(
+        &config.config_layer_stack,
+        config.approvals_reviewer,
+        server_name,
+        connector_id,
+    )
+}
+
+pub(crate) fn mcp_approvals_reviewer_from_layers(
+    config_layer_stack: &codex_config::ConfigLayerStack,
+    default_reviewer: ApprovalsReviewer,
+    server_name: &str,
+    connector_id: Option<&str>,
+) -> ApprovalsReviewer {
     let app_reviewer = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        apps_config_from_layer_stack(&config.config_layer_stack).and_then(|apps_config| {
+        apps_config_from_layer_stack(config_layer_stack).and_then(|apps_config| {
             connector_id
                 .and_then(|connector_id| apps_config.apps.get(connector_id))
                 .and_then(|app| app.approvals_reviewer)
@@ -547,8 +559,7 @@ pub(crate) fn mcp_approvals_reviewer(
     };
 
     if let Some(reviewer) = app_reviewer
-        && config
-            .config_layer_stack
+        && config_layer_stack
             .requirements()
             .approvals_reviewer
             .can_set(&reviewer)
@@ -557,7 +568,7 @@ pub(crate) fn mcp_approvals_reviewer(
         return reviewer;
     }
 
-    config.approvals_reviewer
+    default_reviewer
 }
 
 #[cfg(test)]

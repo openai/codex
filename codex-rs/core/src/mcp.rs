@@ -30,6 +30,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
 /// MCP configuration and capability availability derived from the same inputs.
+#[derive(Clone)]
 pub(crate) struct McpRuntimeProjection {
     pub(crate) config: McpConfig,
     pub(crate) plugins_available: bool,
