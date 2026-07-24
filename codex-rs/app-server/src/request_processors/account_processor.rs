@@ -259,11 +259,8 @@ impl AccountRequestProcessor {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_service().clear_cache();
-            if let Err(err) =
-                crate::mcp_refresh::reload_mcp_config(&thread_manager, &config_manager).await
-            {
-                warn!(%err, "failed to reload MCP configuration after account or plugin change");
-            }
+            crate::mcp_refresh::reload_mcp_config_best_effort(&thread_manager, &config_manager)
+                .await;
             thread_manager.invalidate_mcp_runtimes().await;
         });
     }
