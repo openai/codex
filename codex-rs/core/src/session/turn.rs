@@ -1397,6 +1397,10 @@ pub(crate) async fn built_tools(
             tool_runtimes: mcp_tool_runtimes,
             tool_suggest_candidates,
             extension_tool_executors: extension_tool_executors(sess),
+            wait_for_environment_tool_config: sess
+                .services
+                .thread_extension_data
+                .get::<crate::WaitForEnvironmentToolConfig>(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
         &sess.services.tool_search_handler_cache,

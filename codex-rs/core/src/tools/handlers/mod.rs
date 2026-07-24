@@ -78,6 +78,7 @@ pub(crate) use unified_exec::ExecCommandHandlerOptions;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;
 pub(crate) use wait_for_environment::WaitForEnvironmentHandler;
+pub use wait_for_environment::WaitForEnvironmentToolConfig;
 
 pub(crate) fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where

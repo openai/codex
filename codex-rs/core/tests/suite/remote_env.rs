@@ -3,7 +3,9 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::ApprovalsReviewer;
+use codex_core::WaitForEnvironmentToolConfig;
 use codex_core::compact::SUMMARIZATION_PROMPT;
+use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
@@ -16,6 +18,10 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -66,6 +72,7 @@ use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_target_windows;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
@@ -97,6 +104,34 @@ use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+
+const WAIT_FOR_ENVIRONMENT_TEST_TOOL_DESCRIPTION: &str = "Test wait tool description";
+const WAIT_FOR_ENVIRONMENT_TEST_ENVIRONMENT_ID_DESCRIPTION: &str =
+    "Test environment ID description";
+
+struct WaitForEnvironmentTestExtension;
+
+impl ThreadLifecycleContributor<Config> for WaitForEnvironmentTestExtension {
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            input.thread_store.insert(WaitForEnvironmentToolConfig {
+                tool_description: WAIT_FOR_ENVIRONMENT_TEST_TOOL_DESCRIPTION.to_string(),
+                environment_id_description: WAIT_FOR_ENVIRONMENT_TEST_ENVIRONMENT_ID_DESCRIPTION
+                    .to_string(),
+            });
+        })
+    }
+}
+
+fn test_codex_with_wait_for_environment() -> TestCodexBuilder {
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(WaitForEnvironmentTestExtension));
+    test_codex().with_extensions(Arc::new(extensions.build()))
+}
+
 async fn unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
@@ -338,36 +373,52 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn step_world_state_does_not_duplicate_initial_environment_context() -> Result<()> {
+async fn step_world_state_gates_deferred_prompt_independently_of_host_config() -> Result<()> {
     for deferred_executor_enabled in [false, true] {
-        let server = start_mock_server().await;
-        let response_mock = mount_sse_once(
-            &server,
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_assistant_message("msg-1", "done"),
-                ev_completed("resp-1"),
-            ]),
-        )
-        .await;
-        let mut builder = test_codex().with_config(move |config| {
-            if deferred_executor_enabled {
-                assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            }
-        });
-        let test = builder.build(&server).await?;
+        for host_config_present in [false, true] {
+            let server = start_mock_server().await;
+            let response_mock = mount_sse_once(
+                &server,
+                sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-1"),
+                ]),
+            )
+            .await;
+            let builder = if host_config_present {
+                test_codex_with_wait_for_environment()
+            } else {
+                test_codex()
+            };
+            let mut builder = builder.with_config(move |config| {
+                if deferred_executor_enabled {
+                    assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+                }
+            });
+            let test = builder.build(&server).await?;
 
-        test.submit_turn("report the environment").await?;
+            test.submit_turn("report the environment").await?;
 
-        let user_context = response_mock.single_request().message_input_texts("user");
-        assert_eq!(
-            user_context
-                .iter()
-                .filter(|text| text.contains("<environment_context>"))
-                .count(),
-            1,
-            "deferred executor enabled: {deferred_executor_enabled}",
-        );
+            let request = response_mock.single_request();
+            let user_context = request.message_input_texts("user");
+            assert_eq!(
+                user_context
+                    .iter()
+                    .filter(|text| text.contains("<environment_context>"))
+                    .count(),
+                1,
+                "deferred executor enabled: {deferred_executor_enabled}; host config present: {host_config_present}",
+            );
+            assert_eq!(
+                environment_instructions_occurrences(&request),
+                usize::from(deferred_executor_enabled),
+            );
+            assert_eq!(
+                tool_names(&request.body_json()).contains(&"wait_for_environment".to_string()),
+                deferred_executor_enabled,
+            );
+        }
     }
 
     Ok(())
@@ -679,7 +730,7 @@ async fn deferred_executor_starts_noise_connection_after_registration() -> Resul
         ],
     )
     .await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex_with_wait_for_environment().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
         assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
         assert!(config.features.enable(Feature::UnifiedExec).is_ok());
@@ -726,9 +777,26 @@ async fn deferred_executor_starts_noise_connection_after_registration() -> Resul
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
-    let starting_tools = tool_names(&requests[0].body_json());
+    let starting_request_body = requests[0].body_json();
+    let starting_tools = tool_names(&starting_request_body);
     assert!(starting_tools.contains(&"wait_for_environment".to_string()));
     assert!(!starting_tools.contains(&"exec_command".to_string()));
+    let wait_tool = starting_request_body["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "wait_for_environment")
+        })
+        .context("wait_for_environment tool schema should be present")?;
+    assert_eq!(
+        wait_tool["description"].as_str(),
+        Some(WAIT_FOR_ENVIRONMENT_TEST_TOOL_DESCRIPTION)
+    );
+    assert_eq!(
+        wait_tool["parameters"]["properties"]["environment_id"]["description"].as_str(),
+        Some(WAIT_FOR_ENVIRONMENT_TEST_ENVIRONMENT_ID_DESCRIPTION)
+    );
     let (wait_output, _) = requests[1]
         .function_call_output_content_and_success(wait_call_id)
         .context("wait_for_environment output should be present")?;
@@ -776,7 +844,7 @@ async fn deferred_executor_loads_agents_md_when_environment_becomes_ready() -> R
         ],
     )
     .await;
-    let mut builder = test_codex()
+    let mut builder = test_codex_with_wait_for_environment()
         .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
         .with_config(|config| {
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
@@ -872,7 +940,7 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
         ],
     )
     .await;
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex_with_wait_for_environment().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
         assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
         assert!(config.features.enable(Feature::UnifiedExec).is_ok());
@@ -983,7 +1051,7 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
         ],
     )
     .await;
-    let mut builder = test_codex()
+    let mut builder = test_codex_with_wait_for_environment()
         .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
         .with_config(|config| {
             config.project_doc_max_bytes = 0;

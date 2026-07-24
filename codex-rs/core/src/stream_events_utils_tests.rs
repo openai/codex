@@ -284,6 +284,7 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
             tool_suggest_candidates: None,
             tool_runtimes: Vec::new(),
             extension_tool_executors: Vec::new(),
+            wait_for_environment_tool_config: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
         &Default::default(),

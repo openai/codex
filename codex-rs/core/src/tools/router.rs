@@ -44,6 +44,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
     pub(crate) tool_suggest_candidates: Option<ToolSuggestCandidates>,
     pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
+    pub(crate) wait_for_environment_tool_config: Option<Arc<crate::WaitForEnvironmentToolConfig>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
