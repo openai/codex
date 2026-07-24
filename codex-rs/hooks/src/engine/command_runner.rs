@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -83,6 +84,7 @@ pub(crate) async fn run_command(
 
     if let Some(mut stdin) = child.stdin.take()
         && let Err(err) = stdin.write_all(input_json.as_bytes()).await
+        && err.kind() != ErrorKind::BrokenPipe
     {
         let _ = child.kill().await;
         return finish_command_run(
@@ -208,6 +210,6 @@ fn default_shell_command() -> Command {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 #[path = "command_runner_tests.rs"]
 mod tests;
