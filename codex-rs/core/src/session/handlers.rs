@@ -422,6 +422,7 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
 }
 
 pub fn refresh_mcp_servers(sess: &Session) {
+    sess.services.mcp_runtime.reconnect_on_next_refresh();
     sess.request_mcp_runtime_refresh();
 }
 

@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
@@ -70,6 +72,7 @@ pub struct McpRuntimeInput {
 /// their exact connections and configuration for as long as they are needed.
 pub struct McpRuntime {
     current: ArcSwap<PublishedMcpRuntime>,
+    reconnect_pending: AtomicBool,
     elicitation_router: ElicitationRequestRouter,
 }
 
@@ -80,6 +83,19 @@ struct PublishedMcpRuntime {
     auth_token: Option<String>,
     plugins_available: bool,
     ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
+}
+
+struct McpReconnectGuard<'a> {
+    pending: &'a AtomicBool,
+    claimed: bool,
+}
+
+impl Drop for McpReconnectGuard<'_> {
+    fn drop(&mut self) {
+        if self.claimed {
+            self.pending.store(true, Ordering::Release);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -132,6 +148,7 @@ impl McpRuntime {
                 plugins_available: false,
                 ready_selected_capability_roots: Vec::new(),
             }),
+            reconnect_pending: AtomicBool::new(false),
             elicitation_router: ElicitationRequestRouter::default(),
         }
     }
@@ -145,8 +162,16 @@ impl McpRuntime {
     /// Reconciles configured servers and publishes their immutable runtime snapshot.
     pub async fn replace(&self, input: McpRuntimeInput) {
         let current = self.current.load_full();
-        self.publish(input, Some(current.connections.as_ref()))
-            .await;
+        let mut reconnect = McpReconnectGuard {
+            pending: &self.reconnect_pending,
+            claimed: self.reconnect_pending.swap(false, Ordering::AcqRel),
+        };
+        self.publish(
+            input,
+            (!reconnect.claimed).then_some(current.connections.as_ref()),
+        )
+        .await;
+        reconnect.claimed = false;
     }
 
     /// Starts fresh connections and returns their complete, refreshed Apps catalog.
@@ -180,6 +205,11 @@ impl McpRuntime {
             ready_selected_capability_roots,
         }));
         let _ = publish.send(true);
+    }
+
+    /// Ensures the next refresh creates fresh connections for every configured server.
+    pub fn reconnect_on_next_refresh(&self) {
+        self.reconnect_pending.store(true, Ordering::Release);
     }
 
     /// Captures the latest published configuration and live client handles.

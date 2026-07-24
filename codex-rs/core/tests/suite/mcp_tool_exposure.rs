@@ -833,15 +833,41 @@ async fn later_follow_up_uses_background_recovered_apps_after_mid_thread_startup
 
     tokio::fs::remove_dir_all(test.codex_home_path().join("cache/codex_apps_tools")).await?;
     startup_control.fail_next_initialize_attempts(/*attempts*/ 1);
-    test.codex
-        .set_openai_form_elicitation_support(/*supported*/ true)
-        .await?;
     test.codex.submit(Op::RefreshMcpServers).await?;
-    test.submit_turn("use Calendar after transient Apps startup failures")
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "use Calendar after transient Apps startup failures".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
         .await?;
     tokio::time::timeout(Duration::from_secs(5), async {
-        while startup_control.initialize_attempts() < 3 {
-            tokio::time::sleep(Duration::from_millis(1)).await;
+        let mut turn_complete = false;
+        let mut apps_ready = false;
+        while !turn_complete || !apps_ready {
+            let event = test
+                .codex
+                .next_event()
+                .await
+                .expect("event stream should stay open");
+            match event.msg {
+                EventMsg::TurnComplete(_) => turn_complete = true,
+                EventMsg::McpStartupUpdate(update)
+                    if update.server == CODEX_APPS_MCP_SERVER_NAME
+                        && matches!(
+                            update.status,
+                            codex_protocol::protocol::McpStartupStatus::Ready
+                        ) =>
+                {
+                    apps_ready = true;
+                }
+                _ => {}
+            }
         }
     })
     .await
