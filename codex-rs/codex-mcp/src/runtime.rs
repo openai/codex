@@ -240,6 +240,11 @@ impl McpRuntime {
         }
     }
 
+    /// Returns the latest published configuration without waiting for clients.
+    pub fn current_config(&self) -> Option<Arc<McpConfig>> {
+        self.current.load().config.clone()
+    }
+
     pub fn current_ready_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
         self.current.load().ready_selected_capability_roots.clone()
     }
