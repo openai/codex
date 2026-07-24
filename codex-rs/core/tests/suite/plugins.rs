@@ -15,6 +15,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::responses::ResponseMock;
@@ -43,8 +44,10 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const SAMPLE_PLUGIN_CONFIG_NAME: &str = "sample@test";
+const SAMPLE_REMOTE_PLUGIN_CONFIG_NAME: &str = "sample@openai-curated-remote";
 const SAMPLE_PLUGIN_DISPLAY_NAME: &str = "sample";
 const SAMPLE_PLUGIN_DESCRIPTION: &str = "inspect sample data";
+const SAMPLE_REMOTE_PLUGIN_ID: &str = "plugins~Plugin_sample";
 const SAMPLE_PLUGIN_APP_NAMESPACE: &str = "mcp__codex_apps__google_calendar";
 const SAMPLE_PLUGIN_MCP_NAMESPACE: &str = "mcp__sample";
 const PLUGIN_APP_SEARCH_CALL_ID: &str = "plugin-app-search";
@@ -56,7 +59,18 @@ fn sample_plugin_root(home: &TempDir) -> std::path::PathBuf {
 }
 
 fn write_sample_plugin_manifest_and_config(home: &TempDir) -> std::path::PathBuf {
-    let plugin_root = sample_plugin_root(home);
+    write_sample_plugin_manifest_and_config_at_root(
+        home,
+        sample_plugin_root(home),
+        SAMPLE_PLUGIN_CONFIG_NAME,
+    )
+}
+
+fn write_sample_plugin_manifest_and_config_at_root(
+    home: &TempDir,
+    plugin_root: std::path::PathBuf,
+    plugin_config_name: &str,
+) -> std::path::PathBuf {
     std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
@@ -68,7 +82,7 @@ fn write_sample_plugin_manifest_and_config(home: &TempDir) -> std::path::PathBuf
     std::fs::write(
         home.path().join("config.toml"),
         format!(
-            "[features]\nplugins = true\n\n[plugins.\"{SAMPLE_PLUGIN_CONFIG_NAME}\"]\nenabled = true\n"
+            "[features]\nplugins = true\n\n[plugins.\"{plugin_config_name}\"]\nenabled = true\n"
         ),
     )
     .expect("write config");
@@ -104,7 +118,21 @@ fn write_remote_plugin_script_and_config(home: &TempDir) -> std::path::PathBuf {
 }
 
 fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
-    let plugin_root = write_sample_plugin_manifest_and_config(home);
+    write_sample_plugin_skill(write_sample_plugin_manifest_and_config(home))
+}
+
+fn write_remote_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
+    let plugin_root = home
+        .path()
+        .join("plugins/cache/openai-curated-remote/sample/local");
+    write_sample_plugin_skill(write_sample_plugin_manifest_and_config_at_root(
+        home,
+        plugin_root,
+        SAMPLE_REMOTE_PLUGIN_CONFIG_NAME,
+    ))
+}
+
+fn write_sample_plugin_skill(plugin_root: std::path::PathBuf) -> std::path::PathBuf {
     let skill_dir = plugin_root.join("skills/sample-search");
     std::fs::create_dir_all(skill_dir.as_path()).expect("create plugin skill dir");
     std::fs::write(
@@ -664,31 +692,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let plugin_event = loop {
-        let requests = server.received_requests().await.unwrap_or_default();
-        if let Some(event) = requests
-            .into_iter()
-            .filter(|request| request.url.path() == "/codex/analytics-events/events")
-            .find_map(|request| {
-                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
-                payload["events"].as_array().and_then(|events| {
-                    events
-                        .iter()
-                        .find(|event| event["event_type"] == "codex_plugin_used")
-                        .cloned()
-                })
-            })
-        {
-            break event;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for plugin analytics request");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-
-    let event = plugin_event;
+    let event = wait_for_analytics_event(&server, "codex_plugin_used").await;
     assert_eq!(event["event_params"]["plugin_id"], "sample@test");
     assert_eq!(event["event_params"]["plugin_name"], "sample");
     assert_eq!(event["event_params"]["marketplace_name"], "test");
@@ -711,4 +715,137 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     assert!(event["event_params"]["turn_id"].as_str().is_some());
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_plugin_skill_invocation_tracks_remote_plugin_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let _resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = std::fs::canonicalize(write_remote_plugin_skill_plugin(codex_home.as_ref()))?;
+    persist_sample_remote_plugin_id(codex_home.as_ref());
+    let test_codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
+    let codex = Arc::clone(&test_codex.codex);
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Skill {
+                name: "sample:sample-search".into(),
+                path: skill_path,
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let event = wait_for_analytics_event(&server, "skill_invocation").await;
+    assert_eq!(
+        event["event_params"]["plugin_id"],
+        SAMPLE_REMOTE_PLUGIN_CONFIG_NAME
+    );
+    assert_eq!(
+        event["event_params"]["remote_plugin_id"],
+        SAMPLE_REMOTE_PLUGIN_ID
+    );
+    assert_eq!(event["event_params"]["invoke_type"], "explicit");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn implicit_plugin_skill_invocation_tracks_remote_plugin_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = write_remote_plugin_skill_plugin(codex_home.as_ref());
+    persist_sample_remote_plugin_id(codex_home.as_ref());
+    let command_args = serde_json::json!({
+        "command": format!("cat {}", skill_path.display()),
+        "login": false,
+    })
+    .to_string();
+    let _resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call("call-1", "shell_command", &command_args),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test_codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
+    let codex = Arc::clone(&test_codex.codex);
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "inspect the sample skill".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let event = wait_for_analytics_event(&server, "skill_invocation").await;
+    assert_eq!(
+        event["event_params"]["plugin_id"],
+        SAMPLE_REMOTE_PLUGIN_CONFIG_NAME
+    );
+    assert_eq!(
+        event["event_params"]["remote_plugin_id"],
+        SAMPLE_REMOTE_PLUGIN_ID
+    );
+    assert_eq!(event["event_params"]["invoke_type"], "implicit");
+
+    Ok(())
+}
+
+fn persist_sample_remote_plugin_id(home: &TempDir) {
+    let plugin_id =
+        PluginId::parse(SAMPLE_REMOTE_PLUGIN_CONFIG_NAME).expect("remote plugin id should parse");
+    PluginStore::new(home.path().to_path_buf())
+        .write_remote_plugin_id(&plugin_id, SAMPLE_REMOTE_PLUGIN_ID)
+        .expect("persist remote plugin id");
+}
+
+async fn wait_for_analytics_event(server: &MockServer, event_type: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(event) = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .find_map(|request| {
+                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+                payload["events"].as_array().and_then(|events| {
+                    events
+                        .iter()
+                        .find(|event| event["event_type"] == event_type)
+                        .cloned()
+                })
+            })
+        {
+            break event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {event_type} analytics request");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

@@ -759,6 +759,7 @@ impl AnalyticsReducer {
                         repo_url,
                         skill_scope: Some(skill_scope.to_string()),
                         plugin_id: invocation.plugin_id,
+                        remote_plugin_id: invocation.remote_plugin_id,
                     },
                 },
             ));

@@ -115,6 +115,7 @@ fn sample_skill_track_event(thread_id: &str, plugin_id: Option<&str>) -> TrackEv
             product_client_id: None,
             skill_scope: None,
             plugin_id: plugin_id.map(str::to_string),
+            remote_plugin_id: None,
             repo_url: None,
             thread_id: Some(thread_id.to_string()),
             turn_id: Some("turn-1".to_string()),
