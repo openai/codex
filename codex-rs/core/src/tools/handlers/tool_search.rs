@@ -3,6 +3,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
 use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::tool_search_spec::ToolSearchSourceListing;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
@@ -24,6 +25,7 @@ use tracing::instrument;
 
 pub struct ToolSearchHandler {
     search_infos: Vec<ToolSearchInfo>,
+    source_listing: ToolSearchSourceListing,
     spec: ToolSpec,
     search_engine: SearchEngine<usize>,
 }
@@ -35,20 +37,26 @@ pub(crate) struct ToolSearchHandlerCache {
 
 impl ToolSearchHandlerCache {
     #[instrument(level = "trace", skip_all, fields(search_info_count = search_infos.len()))]
-    pub(crate) fn get_or_build(&self, search_infos: Vec<ToolSearchInfo>) -> Arc<ToolSearchHandler> {
+    pub(crate) fn get_or_build(
+        &self,
+        search_infos: Vec<ToolSearchInfo>,
+        source_listing: ToolSearchSourceListing,
+    ) -> Arc<ToolSearchHandler> {
         {
             let cached = self.cached();
             if let Some(cached) = cached.as_ref()
                 && cached.search_infos == search_infos
+                && cached.source_listing == source_listing
             {
                 return Arc::clone(cached);
             }
         }
 
-        let handler = Arc::new(ToolSearchHandler::new(search_infos));
+        let handler = Arc::new(ToolSearchHandler::new(search_infos, source_listing));
         let mut cached = self.cached();
         if let Some(cached) = cached.as_ref()
             && cached.search_infos == handler.search_infos
+            && cached.source_listing == handler.source_listing
         {
             return Arc::clone(cached);
         }
@@ -71,12 +79,19 @@ impl ToolSearchHandler {
         skip_all,
         fields(search_info_count = search_infos.len())
     )]
-    pub(crate) fn new(search_infos: Vec<ToolSearchInfo>) -> Self {
+    pub(crate) fn new(
+        search_infos: Vec<ToolSearchInfo>,
+        source_listing: ToolSearchSourceListing,
+    ) -> Self {
         let search_source_infos = search_infos
             .iter()
             .filter_map(|search_info| search_info.source_info.clone())
             .collect::<Vec<_>>();
-        let spec = create_tool_search_tool(&search_source_infos, TOOL_SEARCH_DEFAULT_LIMIT);
+        let spec = create_tool_search_tool(
+            &search_source_infos,
+            TOOL_SEARCH_DEFAULT_LIMIT,
+            source_listing,
+        );
         let documents: Vec<Document<usize>> = search_infos
             .iter()
             .map(|search_info| search_info.entry.search_text.clone())
@@ -88,6 +103,7 @@ impl ToolSearchHandler {
 
         Self {
             search_infos,
+            source_listing,
             spec,
             search_engine,
         }
@@ -205,16 +221,20 @@ mod tests {
                 .expect("MCP handler should return search info"),
         ];
 
-        let first = cache.get_or_build(search_infos.clone());
-        let second = cache.get_or_build(search_infos.clone());
+        let first = cache.get_or_build(search_infos.clone(), ToolSearchSourceListing::Include);
+        let second = cache.get_or_build(search_infos.clone(), ToolSearchSourceListing::Include);
         assert!(Arc::ptr_eq(&first, &second));
+
+        let without_sources =
+            cache.get_or_build(search_infos.clone(), ToolSearchSourceListing::Omit);
+        assert!(!Arc::ptr_eq(&first, &without_sources));
 
         let mut changed_search_infos = search_infos;
         changed_search_infos[0]
             .entry
             .search_text
             .push_str(" changed");
-        let changed = cache.get_or_build(changed_search_infos);
+        let changed = cache.get_or_build(changed_search_infos, ToolSearchSourceListing::Omit);
         assert!(!Arc::ptr_eq(&first, &changed));
     }
 
@@ -257,7 +277,7 @@ mod tests {
                 .search_info()
                 .expect("dynamic handler should return search info")
         }));
-        let handler = ToolSearchHandler::new(search_infos);
+        let handler = ToolSearchHandler::new(search_infos, ToolSearchSourceListing::Include);
         let results = [
             &handler.search_infos[0].entry,
             &handler.search_infos[2].entry,

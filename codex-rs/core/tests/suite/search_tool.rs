@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
@@ -386,6 +387,57 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
     assert!(
         !description.contains("remainder of the current session/thread"),
         "tool_search description should not mention legacy client-side persistence: {description:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_tool_omits_sources_when_deferred_tool_world_state_is_enabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .enable(Feature::DeferredToolWorldState)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "list tools",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let request = mock.single_request();
+    let body = request.body_json();
+    let description = tool_search_description(&body).expect("tool_search description should exist");
+    assert!(
+        !SEARCH_TOOL_DESCRIPTION_SNIPPETS
+            .iter()
+            .any(|snippet| description.contains(snippet)),
+        "tool_search should not repeat sources already advertised in world state: {description:?}"
+    );
+    assert!(
+        request
+            .message_input_texts("developer")
+            .into_iter()
+            .any(|text| text.contains(SEARCH_CALENDAR_NAMESPACE)),
+        "world state should advertise the deferred Calendar namespace"
     );
 
     Ok(())
