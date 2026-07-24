@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
+use codex_utils_plugins::SkillDiscoveryMode;
 
 use crate::AppConnectorId;
 use crate::AppDeclaration;
@@ -137,6 +138,7 @@ impl<M: Clone> PluginLoadOutcome<M> {
                         plugin_id: plugin.config_name.clone(),
                         plugin_namespace: plugin_namespace.clone(),
                         plugin_root: plugin.root.clone(),
+                        discovery_mode: SkillDiscoveryMode::Recursive,
                     });
                 }
             }
@@ -258,6 +260,7 @@ mod tests {
                 plugin_id: "zeta@test".to_string(),
                 plugin_namespace: "zeta".to_string(),
                 plugin_root: test_path("zeta@test"),
+                discovery_mode: SkillDiscoveryMode::Recursive,
             }]
         );
     }

@@ -212,6 +212,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
             plugin_id: None,
             plugin_namespace: None,
             plugin_root: None,
+            discovery_mode: Default::default(),
         }],
         /*plugin_skill_snapshots*/ None,
         Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),

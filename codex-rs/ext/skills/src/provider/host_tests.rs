@@ -38,6 +38,7 @@ async fn host_catalog_entries_carry_their_prompt_scope() -> Result<(), Box<dyn s
             plugin_id: None,
             plugin_namespace: None,
             plugin_root: None,
+            discovery_mode: Default::default(),
         }],
         /*plugin_skill_snapshots*/ None,
         Arc::new(Semaphore::new(1)),
