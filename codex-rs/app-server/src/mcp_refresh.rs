@@ -2,12 +2,10 @@ use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_protocol::ThreadId;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use std::io;
 use std::sync::Arc;
-use tracing::warn;
 
 pub(crate) async fn reload_mcp_config(
     thread_manager: &Arc<ThreadManager>,
@@ -38,21 +36,6 @@ pub(crate) async fn reload_mcp_config(
     Ok(())
 }
 
-pub(crate) async fn invalidate_loaded_threads(thread_manager: &Arc<ThreadManager>) {
-    for thread_id in thread_manager.list_thread_ids().await {
-        let thread = match thread_manager.get_thread(thread_id).await {
-            Ok(thread) => thread,
-            Err(err) => {
-                warn!("failed to load thread {thread_id} for MCP refresh: {err}");
-                continue;
-            }
-        };
-        if let Err(err) = queue_invalidation(thread_id, thread).await {
-            warn!("{err}");
-        }
-    }
-}
-
 async fn load_refresh_config(
     thread: &CodexThread,
     config_manager: &ConfigManager,
@@ -77,18 +60,6 @@ async fn build_refresh_config(
         auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())
             .map_err(io::Error::other)?,
     })
-}
-
-async fn queue_invalidation(thread_id: ThreadId, thread: Arc<CodexThread>) -> io::Result<()> {
-    thread
-        .submit(Op::RefreshMcpServers)
-        .await
-        .map(|_| ())
-        .map_err(|err| {
-            io::Error::other(format!(
-                "failed to queue MCP refresh for thread {thread_id}: {err}"
-            ))
-        })
 }
 
 #[cfg(test)]
@@ -155,7 +126,7 @@ mod tests {
     async fn invalidation_does_not_reload_thread_config() -> anyhow::Result<()> {
         let (_temp_dir, thread_manager, _config_manager, loader) = refresh_test_state().await?;
 
-        invalidate_loaded_threads(&thread_manager).await;
+        thread_manager.invalidate_mcp_runtimes().await;
 
         assert_eq!(loader.good_loads.load(Ordering::Relaxed), 0);
         assert_eq!(loader.bad_loads.load(Ordering::Relaxed), 0);
