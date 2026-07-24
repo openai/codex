@@ -4,9 +4,16 @@ use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolSearchSourceListing {
+    Include,
+    Omit,
+}
+
 pub(crate) fn create_tool_search_tool(
     searchable_sources: &[ToolSearchSourceInfo],
     default_limit: usize,
+    source_listing: ToolSearchSourceListing,
 ) -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -21,33 +28,41 @@ pub(crate) fn create_tool_search_tool(
         ),
     ]);
 
-    let mut source_descriptions = BTreeMap::new();
-    for source in searchable_sources {
-        source_descriptions
-            .entry(source.name.clone())
-            .and_modify(|existing: &mut Option<String>| {
-                if existing.is_none() {
-                    *existing = source.description.clone();
-                }
-            })
-            .or_insert(source.description.clone());
-    }
+    let source_section = match source_listing {
+        ToolSearchSourceListing::Include => {
+            let mut source_descriptions = BTreeMap::new();
+            for source in searchable_sources {
+                source_descriptions
+                    .entry(source.name.clone())
+                    .and_modify(|existing: &mut Option<String>| {
+                        if existing.is_none() {
+                            *existing = source.description.clone();
+                        }
+                    })
+                    .or_insert(source.description.clone());
+            }
 
-    let source_descriptions = if source_descriptions.is_empty() {
-        "None currently enabled.".to_string()
-    } else {
-        source_descriptions
-            .into_iter()
-            .map(|(name, description)| match description {
-                Some(description) => format!("- {name}: {description}"),
-                None => format!("- {name}"),
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+            let source_descriptions = if source_descriptions.is_empty() {
+                "None currently enabled.".to_string()
+            } else {
+                source_descriptions
+                    .into_iter()
+                    .map(|(name, description)| match description {
+                        Some(description) => format!("- {name}: {description}"),
+                        None => format!("- {name}"),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            format!(
+                "\n\nYou have access to tools from the following sources:\n{source_descriptions}\n"
+            )
+        }
+        ToolSearchSourceListing::Omit => "\n\n".to_string(),
     };
 
     let description = format!(
-        "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following sources:\n{source_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required tools. For MCP tool discovery, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates`."
+        "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.{source_section}Some of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required tools. For MCP tool discovery, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates`."
     );
 
     ToolSpec::ToolSearch {
@@ -90,6 +105,7 @@ mod tests {
                     },
                 ],
                 /*default_limit*/ 8,
+                ToolSearchSourceListing::Include,
             ),
             ToolSpec::ToolSearch {
                 execution: "client".to_string(),
@@ -109,5 +125,23 @@ mod tests {
                     ]), Some(vec!["query".to_string()]), Some(false.into())),
             }
         );
+    }
+
+    #[test]
+    fn create_tool_search_tool_omits_sources_when_world_state_advertises_them() {
+        let ToolSpec::ToolSearch { description, .. } = create_tool_search_tool(
+            &[ToolSearchSourceInfo {
+                name: "Google Drive".to_string(),
+                description: Some("Search files and documents.".to_string()),
+            }],
+            /*default_limit*/ 8,
+            ToolSearchSourceListing::Omit,
+        ) else {
+            panic!("expected tool search spec");
+        };
+
+        assert!(!description.contains("You have access to tools from the following sources"));
+        assert!(!description.contains("Google Drive"));
+        assert!(description.contains("use this tool (`tool_search`) to search"));
     }
 }
