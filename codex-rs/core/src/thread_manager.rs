@@ -1694,6 +1694,15 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        let source_changed_during_startup = Arc::new(AtomicBool::new(false));
+        {
+            let mut starting = self
+                .starting_mcp_runtimes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            starting.retain(|runtime| runtime.strong_count() != 0);
+            starting.push(Arc::downgrade(&source_changed_during_startup));
+        }
         let (session, io) = Box::pin(Session::spawn(SessionSpawnArgs {
             config,
             allow_provider_model_fallback,

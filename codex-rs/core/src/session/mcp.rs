@@ -581,15 +581,46 @@ async fn review_guardian_mcp_elicitation(
         return Ok(None);
     };
 
-    let approvals_reviewer = crate::connectors::mcp_approvals_reviewer(
-        turn_context.config.as_ref(),
+    let Some(mcp_config) = session.services.mcp_runtime.current_config() else {
+        return Ok(None);
+    };
+    let approval_policy = mcp_config.approval_policy.value();
+    match approval_policy {
+        AskForApproval::Never => {
+            if codex_mcp::mcp_permission_prompt_is_auto_approved(
+                approval_policy,
+                &mcp_config.permission_profile,
+                codex_mcp::McpPermissionPromptAutoApproveContext::default(),
+            ) && matches!(
+                &request.elicitation,
+                Elicitation::Mcp(
+                    rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                        requested_schema,
+                        ..
+                    }
+                ) if requested_schema.properties.is_empty()
+            ) {
+                return Ok(Some(ElicitationResponse {
+                    action: ElicitationAction::Accept,
+                    content: Some(serde_json::json!({})),
+                    meta: None,
+                }));
+            }
+            return Ok(Some(mcp_elicitation_decline_without_message()));
+        }
+        AskForApproval::Granular(config) if !config.allows_mcp_elicitations() => {
+            return Ok(Some(mcp_elicitation_decline_without_message()));
+        }
+        AskForApproval::OnRequest | AskForApproval::UnlessTrusted | AskForApproval::Granular(_) => {
+        }
+    }
+    let approvals_reviewer = crate::connectors::mcp_approvals_reviewer_from_layers(
+        &mcp_config.config_layer_stack,
+        mcp_config.approvals_reviewer,
         request.server_name.as_str(),
         elicitation_connector_id(&request.elicitation),
     );
-    if !crate::guardian::routes_approval_to_guardian_with_reviewer(
-        turn_context.as_ref(),
-        approvals_reviewer,
-    ) {
+    if !crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer) {
         return Ok(None);
     }
 
