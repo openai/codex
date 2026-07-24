@@ -8,6 +8,10 @@ use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
+use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
+use codex_core_skills::loader::SkillRoot;
+use codex_core_skills::loader::load_skills_from_roots;
+use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
@@ -53,6 +57,7 @@ use codex_skills_extension::provider::SkillSearchRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
+use tokio::sync::Semaphore;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -1025,6 +1030,98 @@ async fn executor_catalog_emits_at_most_four_warnings() -> TestResult {
         vec!["warning-0", "warning-1", "warning-2", "warning-3"]
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResult {
+    let test_root = test_codex_home();
+    let root = test_root.join(
+        "plugins/cache/openai-curated/example/hash1234567890/skills-with-a-very-long-shared-prefix",
+    );
+    for index in 0..12 {
+        let skill_dir = root.join(format!("skill-{index:02}"));
+        std::fs::create_dir_all(&skill_dir)?;
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: skill-{index:02}\ndescription: Fix lint errors.\n---\n# Skill {index:02}\n"
+            ),
+        )?;
+    }
+    let root = AbsolutePathBuf::try_from(std::fs::canonicalize(root)?)?;
+    let rendered_root = root.to_string_lossy().replace('\\', "/");
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: root,
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+            plugin_namespace: None,
+            plugin_root: None,
+            discovery_mode: Default::default(),
+        }],
+        /*plugin_skill_snapshots*/ None,
+        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+    )
+    .await;
+    assert_eq!(outcome.errors, Vec::new());
+    assert_eq!(outcome.skills.len(), 12);
+
+    let mut builder = ExtensionRegistryBuilder::new();
+    install(&mut builder, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let mut config = default_config();
+    config.bundled_skills_enabled = false;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let mut model_info = model_info_from_slug("test-model");
+    model_info.context_window = Some(10_000);
+    thread_store.insert(model_info);
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
+
+    let fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &turn_store,
+        )
+        .await;
+    let catalog = fragments
+        .iter()
+        .find(|fragment| fragment.role() == "developer")
+        .ok_or("host catalog should render")?
+        .render();
+
+    assert!(
+        catalog.contains(&format!("- `r0` = `{rendered_root}`")),
+        "{catalog}"
+    );
+    assert!(catalog.contains("(file: r0/skill-00/SKILL.md)"));
+    assert!(catalog.contains("(file: r0/skill-11/SKILL.md)"));
+    assert!(!catalog.contains("additional skills omitted"));
+
+    std::fs::remove_dir_all(test_root)?;
     Ok(())
 }
 

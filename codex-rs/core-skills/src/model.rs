@@ -56,6 +56,11 @@ impl SkillLoadOutcome {
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
 
+    /// Returns the discovery root that supplied a loaded skill path.
+    pub fn skill_root_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
+        self.skill_root_by_path.get(path)
+    }
+
     pub(crate) fn file_system_for_skill(
         &self,
         skill: &SkillMetadata,

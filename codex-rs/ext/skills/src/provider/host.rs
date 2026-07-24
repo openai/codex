@@ -98,7 +98,11 @@ fn catalog_from_outcome(outcome: &SkillLoadOutcome) -> SkillCatalog {
     };
 
     for (skill, enabled) in outcome.skills_with_enabled() {
-        catalog.push_entry(catalog_entry_from_skill(skill, enabled));
+        let mut entry = catalog_entry_from_skill(skill, enabled);
+        if let Some(root) = outcome.skill_root_for_path(&skill.path_to_skills_md) {
+            entry = entry.with_display_path_root(root.to_string_lossy().replace('\\', "/"));
+        }
+        catalog.push_entry(entry);
     }
 
     catalog

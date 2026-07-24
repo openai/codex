@@ -13,7 +13,8 @@ use tokio::sync::Semaphore;
 use super::catalog_from_outcome;
 
 #[tokio::test]
-async fn host_catalog_entries_carry_their_prompt_scope() -> Result<(), Box<dyn std::error::Error>> {
+async fn host_catalog_entries_carry_their_render_metadata() -> Result<(), Box<dyn std::error::Error>>
+{
     let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let root = std::env::temp_dir().join(format!(
         "codex-skills-extension-host-provider-{}-{unique}",
@@ -48,7 +49,16 @@ async fn host_catalog_entries_carry_their_prompt_scope() -> Result<(), Box<dyn s
     let catalog = catalog_from_outcome(&outcome);
 
     assert_eq!(catalog.entries.len(), 1);
-    assert_eq!(catalog.entries[0].prompt_scope(), Some(SkillScope::User));
+    assert_eq!(
+        (
+            catalog.entries[0].display_path_root(),
+            catalog.entries[0].prompt_scope(),
+        ),
+        (
+            Some(root.to_string_lossy().replace('\\', "/").as_str()),
+            Some(SkillScope::User),
+        )
+    );
 
     std::fs::remove_dir_all(root.as_path())?;
     Ok(())

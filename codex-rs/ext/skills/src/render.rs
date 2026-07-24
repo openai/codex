@@ -1,5 +1,11 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
 
+use codex_core_skills::render_available_skills_body;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_string::approx_token_count;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -167,6 +173,13 @@ impl SkillMetadataBudget {
             Self::Characters(_) => chars,
         }
     }
+
+    fn cost(self, text: &str) -> usize {
+        match self {
+            Self::Tokens(_) => approx_token_count(text),
+            Self::Characters(_) => text.chars().count(),
+        }
+    }
 }
 
 struct SkillLine<'a> {
@@ -178,11 +191,19 @@ struct SkillLine<'a> {
 
 impl<'a> SkillLine<'a> {
     fn new(entry: &'a SkillCatalogEntry, policy: SkillCatalogRenderPolicy) -> Self {
+        Self::with_locator(entry, policy, entry.rendered_path().to_string())
+    }
+
+    fn with_locator(
+        entry: &'a SkillCatalogEntry,
+        policy: SkillCatalogRenderPolicy,
+        locator: String,
+    ) -> Self {
         let description = policy.description(entry);
         Self {
             name: entry.name.as_str(),
             description: truncate_catalog_skill_description(description),
-            locator: entry.rendered_path().to_string(),
+            locator,
             locator_kind: match &entry.authority.kind {
                 SkillSourceKind::Host => "file",
                 SkillSourceKind::Executor => "environment resource",
@@ -422,7 +443,14 @@ fn sum_description_truncation(rendered: &[RenderedSkillLine]) -> (usize, usize) 
         })
 }
 
+struct RenderedCatalog {
+    skill_root_lines: Vec<String>,
+    skill_lines: Vec<String>,
+    report: SkillRenderReport,
+}
+
 pub(crate) struct AvailableSkillsRender {
+    skill_root_lines: Vec<String>,
     skill_lines: Vec<String>,
     pub(crate) report: SkillRenderReport,
 }
@@ -434,6 +462,7 @@ impl AvailableSkillsRender {
     ) -> Option<AvailableSkillsInstructions> {
         (!self.skill_lines.is_empty()).then(|| {
             AvailableSkillsInstructions::from_skill_lines(
+                self.skill_root_lines,
                 self.skill_lines,
                 include_skills_usage_instructions,
             )
@@ -457,14 +486,43 @@ pub(crate) fn render_available_skills(
         .filter(|entry| entry.enabled && entry.prompt_visible)
         .collect::<Vec<_>>();
     policy.order_entries(&mut entries);
-    let skill_lines = entries
-        .iter()
-        .map(|entry| SkillLine::new(entry, policy))
-        .collect::<Vec<_>>();
-    if skill_lines.is_empty() {
+    if entries.is_empty() {
         return None;
     }
 
+    let absolute = render_catalog(
+        entries
+            .iter()
+            .map(|entry| SkillLine::new(entry, policy))
+            .collect(),
+        budget,
+        Vec::new(),
+        policy,
+    );
+    let selected =
+        if absolute.report.omitted_count == 0 && absolute.report.truncated_description_chars == 0 {
+            absolute
+        } else if let Some(aliased) = build_aliased_catalog(&entries, policy, budget)
+            && aliased_render_is_better(&aliased, &absolute, budget)
+        {
+            aliased
+        } else {
+            absolute
+        };
+
+    Some(AvailableSkillsRender {
+        skill_root_lines: selected.skill_root_lines,
+        skill_lines: selected.skill_lines,
+        report: selected.report,
+    })
+}
+
+fn render_catalog(
+    skill_lines: Vec<SkillLine<'_>>,
+    budget: SkillMetadataBudget,
+    skill_root_lines: Vec<String>,
+    policy: SkillCatalogRenderPolicy,
+) -> RenderedCatalog {
     let total_count = skill_lines.len();
     let RenderedSkillLines {
         lines: mut rendered_lines,
@@ -494,7 +552,8 @@ pub(crate) fn render_available_skills(
         }
     }
 
-    Some(AvailableSkillsRender {
+    RenderedCatalog {
+        skill_root_lines,
         skill_lines: rendered_lines
             .into_iter()
             .map(|rendered| rendered.line)
@@ -506,7 +565,7 @@ pub(crate) fn render_available_skills(
             truncated_description_chars,
             truncated_description_count,
         },
-    })
+    }
 }
 
 #[cfg(test)]
@@ -518,6 +577,220 @@ fn available_skills_fragment(
 ) -> Option<AvailableSkillsInstructions> {
     render_available_skills(catalog, policy, budget)?
         .into_fragment(include_skills_usage_instructions)
+}
+
+struct AliasPlan {
+    skill_root_lines: Vec<String>,
+    alias_root_by_display_root: HashMap<String, String>,
+    root_aliases: HashMap<String, String>,
+    table_cost: usize,
+}
+
+fn build_aliased_catalog(
+    entries: &[&SkillCatalogEntry],
+    policy: SkillCatalogRenderPolicy,
+    budget: SkillMetadataBudget,
+) -> Option<RenderedCatalog> {
+    let plan = build_alias_plan(entries, budget)?;
+    if plan.table_cost >= budget.limit() {
+        return None;
+    }
+
+    let adjusted_limit = budget.limit().saturating_sub(plan.table_cost);
+    let adjusted_budget = match budget {
+        SkillMetadataBudget::Tokens(_) => SkillMetadataBudget::Tokens(adjusted_limit),
+        SkillMetadataBudget::Characters(_) => SkillMetadataBudget::Characters(adjusted_limit),
+    };
+    let skill_lines = entries
+        .iter()
+        .map(|entry| {
+            SkillLine::with_locator(entry, policy, render_skill_path_with_aliases(entry, &plan))
+        })
+        .collect();
+    Some(render_catalog(
+        skill_lines,
+        adjusted_budget,
+        plan.skill_root_lines,
+        policy,
+    ))
+}
+
+fn build_alias_plan(
+    entries: &[&SkillCatalogEntry],
+    budget: SkillMetadataBudget,
+) -> Option<AliasPlan> {
+    // The shared alias prompt only describes host filesystem skills.
+    if entries
+        .iter()
+        .any(|entry| entry.authority.kind != SkillSourceKind::Host)
+    {
+        return None;
+    }
+
+    let plugin_version_skill_counts = plugin_version_skill_counts_for_entries(entries);
+    let mut alias_root_by_display_root = HashMap::new();
+    let mut alias_roots = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        if entry.authority.kind != SkillSourceKind::Host {
+            continue;
+        }
+        let Some(display_root) = entry.display_path_root() else {
+            continue;
+        };
+        let alias_root =
+            alias_root_for_display_root(Path::new(display_root), &plugin_version_skill_counts)
+                .to_string_lossy()
+                .replace('\\', "/");
+        alias_root_by_display_root.insert(display_root.to_string(), alias_root.clone());
+        if seen.insert(alias_root.clone()) {
+            alias_roots.push(alias_root);
+        }
+    }
+    if alias_roots.is_empty() {
+        return None;
+    }
+
+    let root_aliases = alias_roots
+        .iter()
+        .enumerate()
+        .map(|(index, root)| (root.clone(), format!("r{index}")))
+        .collect();
+    let skill_root_lines = alias_roots
+        .iter()
+        .enumerate()
+        .map(|(index, root)| format!("- `r{index}` = `{root}`"))
+        .collect::<Vec<_>>();
+    let table_cost = aliased_metadata_overhead_cost(budget, &skill_root_lines);
+    Some(AliasPlan {
+        skill_root_lines,
+        alias_root_by_display_root,
+        root_aliases,
+        table_cost,
+    })
+}
+
+fn plugin_version_skill_counts_for_entries(
+    entries: &[&SkillCatalogEntry],
+) -> HashMap<PathBuf, usize> {
+    let mut counts = HashMap::new();
+    for root in entries.iter().filter_map(|entry| {
+        (entry.authority.kind == SkillSourceKind::Host)
+            .then(|| entry.display_path_root())
+            .flatten()
+    }) {
+        if let Some(plugin_version_base) = plugin_version_base(Path::new(root)) {
+            let count = counts.entry(plugin_version_base).or_insert(0usize);
+            *count = count.saturating_add(1);
+        }
+    }
+    counts
+}
+
+fn alias_root_for_display_root(
+    root: &Path,
+    plugin_version_skill_counts: &HashMap<PathBuf, usize>,
+) -> PathBuf {
+    let Some(plugin_version_base) = plugin_version_base(root) else {
+        return root.to_path_buf();
+    };
+    let skill_count = plugin_version_skill_counts
+        .get(&plugin_version_base)
+        .copied()
+        .unwrap_or_default();
+    if skill_count > 1 {
+        root.to_path_buf()
+    } else {
+        plugin_marketplace_base(root).unwrap_or_else(|| root.to_path_buf())
+    }
+}
+
+fn plugin_marketplace_base(path: &Path) -> Option<PathBuf> {
+    let mut candidate = path;
+    while let Some(parent) = candidate.parent() {
+        if parent.file_name()?.to_str()? == "cache"
+            && parent.parent()?.file_name()?.to_str()? == "plugins"
+        {
+            return Some(candidate.to_path_buf());
+        }
+        candidate = parent;
+    }
+    None
+}
+
+fn plugin_version_base(path: &Path) -> Option<PathBuf> {
+    let marketplace_base = plugin_marketplace_base(path)?;
+    let mut relative_components = path.strip_prefix(&marketplace_base).ok()?.components();
+    let plugin = match relative_components.next()? {
+        Component::Normal(plugin) => plugin,
+        _ => return None,
+    };
+    let version = match relative_components.next()? {
+        Component::Normal(version) => version,
+        _ => return None,
+    };
+    Some(marketplace_base.join(plugin).join(version))
+}
+
+fn render_skill_path_with_aliases(entry: &SkillCatalogEntry, plan: &AliasPlan) -> String {
+    if entry.authority.kind != SkillSourceKind::Host {
+        return entry.rendered_path().to_string();
+    }
+    let Some(display_root) = entry.display_path_root() else {
+        return entry.rendered_path().to_string();
+    };
+    let Some(alias_root) = plan.alias_root_by_display_root.get(display_root) else {
+        return entry.rendered_path().to_string();
+    };
+    let Some(alias) = plan.root_aliases.get(alias_root) else {
+        return entry.rendered_path().to_string();
+    };
+    let Ok(relative_path) = Path::new(entry.rendered_path()).strip_prefix(alias_root) else {
+        return entry.rendered_path().to_string();
+    };
+    let relative_path = relative_path.to_string_lossy().replace('\\', "/");
+    format!("{alias}/{relative_path}")
+}
+
+fn aliased_metadata_overhead_cost(
+    budget: SkillMetadataBudget,
+    skill_root_lines: &[String],
+) -> usize {
+    let empty_skill_lines: &[String] = &[];
+    let absolute_body = render_available_skills_body(&[], empty_skill_lines);
+    let aliased_body = render_available_skills_body(skill_root_lines, empty_skill_lines);
+    budget
+        .cost(&aliased_body)
+        .saturating_sub(budget.cost(&absolute_body))
+}
+
+fn aliased_render_is_better(
+    aliased: &RenderedCatalog,
+    absolute: &RenderedCatalog,
+    budget: SkillMetadataBudget,
+) -> bool {
+    if aliased.report.included_count != absolute.report.included_count {
+        return aliased.report.included_count > absolute.report.included_count;
+    }
+    if aliased.report.truncated_description_chars != absolute.report.truncated_description_chars {
+        return aliased.report.truncated_description_chars
+            < absolute.report.truncated_description_chars;
+    }
+    rendered_catalog_cost(budget, aliased) < rendered_catalog_cost(budget, absolute)
+}
+
+fn rendered_catalog_cost(budget: SkillMetadataBudget, rendered: &RenderedCatalog) -> usize {
+    let metadata_cost = if rendered.skill_root_lines.is_empty() {
+        0
+    } else {
+        aliased_metadata_overhead_cost(budget, &rendered.skill_root_lines)
+    };
+    rendered
+        .skill_lines
+        .iter()
+        .fold(metadata_cost, |used, line| {
+            used.saturating_add(metadata_line_cost(budget, line))
+        })
 }
 
 fn omission_marker(omitted: usize) -> String {
