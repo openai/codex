@@ -181,6 +181,183 @@ fn catalog_budget_uses_capped_context_percentage_or_character_fallback() {
 }
 
 #[test]
+fn path_aliases_are_not_used_without_budget_pressure() {
+    let root = "/Users/test/.codex/plugins/cache/openai-curated/example/hash/skills";
+    let catalog = SkillCatalog {
+        entries: vec![
+            entry("alpha", "Alpha skill.", /*short_description*/ None)
+                .with_display_path(format!("{root}/alpha/SKILL.md"))
+                .with_display_path_root(root),
+            entry("beta", "Beta skill.", /*short_description*/ None)
+                .with_display_path(format!("{root}/beta/SKILL.md"))
+                .with_display_path_root(root),
+        ],
+        warnings: Vec::new(),
+    };
+
+    let fragment = available_skills_fragment(
+        &catalog,
+        /*include_skills_usage_instructions*/ false,
+        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillMetadataBudget::Characters(usize::MAX),
+    )
+    .expect("catalog should render");
+
+    assert!(!fragment.body().contains("### Skill roots"));
+    assert!(
+        fragment
+            .body()
+            .contains(&format!("(file: {root}/alpha/SKILL.md)"))
+    );
+}
+
+#[test]
+fn path_aliases_retain_every_skill_under_budget_pressure() {
+    let root = "/Users/test/.codex/plugins/cache/openai-curated/example/hash1234567890/skills-with-a-very-long-shared-prefix";
+    let entries = (0..12)
+        .map(|index| {
+            let name = format!("shared-root-skill-{index}");
+            entry(&name, "Description.", /*short_description*/ None)
+                .with_display_path(format!("{root}/skill-{index}/SKILL.md"))
+                .with_display_path_root(root)
+        })
+        .collect::<Vec<_>>();
+    let catalog = SkillCatalog {
+        entries,
+        warnings: Vec::new(),
+    };
+    let visible_entries = catalog.entries.iter().collect::<Vec<_>>();
+    let plan = build_alias_plan(
+        &visible_entries,
+        SkillMetadataBudget::Characters(usize::MAX),
+    )
+    .expect("alias plan should build");
+    let alias_minimum = visible_entries.iter().fold(plan.table_cost, |cost, entry| {
+        cost.saturating_add(
+            SkillLine::with_locator(
+                entry,
+                SkillCatalogRenderPolicy::ExtensionCompatible,
+                render_skill_path_with_aliases(entry, &plan),
+            )
+            .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
+        )
+    });
+    let absolute_minimum = visible_entries.iter().fold(0usize, |cost, entry| {
+        cost.saturating_add(
+            SkillLine::new(entry, SkillCatalogRenderPolicy::ExtensionCompatible)
+                .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
+        )
+    });
+    assert!(alias_minimum < absolute_minimum);
+
+    let fragment = available_skills_fragment(
+        &catalog,
+        /*include_skills_usage_instructions*/ true,
+        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillMetadataBudget::Characters(alias_minimum),
+    )
+    .expect("catalog should render");
+    let body = fragment.body();
+
+    assert!(body.contains(&format!("- `r0` = `{root}`")));
+    assert!(body.contains("(file: r0/skill-0/SKILL.md)"));
+    assert!(body.contains("(file: r0/skill-11/SKILL.md)"));
+    assert!(body.contains("Skill bodies live on disk at the listed paths after expanding"));
+    assert!(!body.contains("additional skills omitted"));
+}
+
+#[test]
+fn mixed_catalogs_keep_absolute_authority_aware_rendering_under_budget_pressure() {
+    let root = "/Users/test/.codex/plugins/cache/openai-curated/example/hash1234567890/skills-with-a-very-long-shared-prefix";
+    let mut entries = (0..12)
+        .map(|index| {
+            let name = format!("host-skill-{index}");
+            entry(&name, "Description.", /*short_description*/ None)
+                .with_display_path(format!("{root}/skill-{index}/SKILL.md"))
+                .with_display_path_root(root)
+        })
+        .collect::<Vec<_>>();
+    entries.push(
+        SkillCatalogEntry::new(
+            SkillPackageId("executor-skill".to_string()),
+            SkillAuthority::new(SkillSourceKind::Executor, "env-1"),
+            "executor-skill",
+            "Description.",
+            SkillResourceId::new("skill://executor/demo/SKILL.md"),
+        )
+        .with_display_path("skill://executor/demo/SKILL.md"),
+    );
+    let catalog = SkillCatalog {
+        entries,
+        warnings: Vec::new(),
+    };
+    let visible_entries = catalog.entries.iter().collect::<Vec<_>>();
+    let absolute_minimum = visible_entries.iter().fold(0usize, |cost, entry| {
+        cost.saturating_add(
+            SkillLine::new(entry, SkillCatalogRenderPolicy::ExtensionCompatible)
+                .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
+        )
+    });
+
+    assert!(
+        build_alias_plan(
+            &visible_entries,
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .is_none()
+    );
+
+    let fragment = available_skills_fragment(
+        &catalog,
+        /*include_skills_usage_instructions*/ true,
+        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillMetadataBudget::Characters(absolute_minimum),
+    )
+    .expect("catalog should render");
+    let body = fragment.body();
+
+    assert!(!body.contains("### Skill roots"));
+    assert!(body.contains(&format!("(file: {root}/skill-0/SKILL.md)")));
+    assert!(body.contains("(environment resource: skill://executor/demo/SKILL.md)"));
+    assert!(body.contains("For a `file` entry, open the listed path."));
+    assert!(!body.contains("additional skills omitted"));
+}
+
+#[test]
+fn singleton_plugin_versions_share_the_marketplace_alias_root() {
+    let github_root = "/Users/test/.codex/plugins/cache/openai-curated/github/hash123/skills";
+    let slack_root = "/Users/test/.codex/plugins/cache/openai-curated/slack/hash456/skills";
+    let entries = [
+        entry("github", "GitHub skill.", /*short_description*/ None)
+            .with_display_path(format!("{github_root}/github/SKILL.md"))
+            .with_display_path_root(github_root),
+        entry("slack", "Slack skill.", /*short_description*/ None)
+            .with_display_path(format!("{slack_root}/slack/SKILL.md"))
+            .with_display_path_root(slack_root),
+    ];
+    let visible_entries = entries.iter().collect::<Vec<_>>();
+
+    let plan = build_alias_plan(
+        &visible_entries,
+        SkillMetadataBudget::Characters(usize::MAX),
+    )
+    .expect("alias plan should build");
+
+    assert_eq!(
+        plan.skill_root_lines,
+        vec!["- `r0` = `/Users/test/.codex/plugins/cache/openai-curated`".to_string()]
+    );
+    assert_eq!(
+        render_skill_path_with_aliases(&entries[0], &plan),
+        "r0/github/hash123/skills/github/SKILL.md"
+    );
+    assert_eq!(
+        render_skill_path_with_aliases(&entries[1], &plan),
+        "r0/slack/hash456/skills/slack/SKILL.md"
+    );
+}
+
+#[test]
 fn omission_notice_follows_render_policy_and_is_charged_to_catalog_budget() {
     let catalog = SkillCatalog {
         entries: (0..20)

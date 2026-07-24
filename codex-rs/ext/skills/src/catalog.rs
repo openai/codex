@@ -140,6 +140,7 @@ pub struct SkillCatalogEntry {
     pub short_description: Option<String>,
     pub main_prompt: SkillResourceId,
     pub display_path: Option<String>,
+    display_path_root: Option<String>,
     prompt_scope: Option<SkillScope>,
     pub dependencies: Option<SkillDependencies>,
     pub enabled: bool,
@@ -162,6 +163,7 @@ impl SkillCatalogEntry {
             short_description: None,
             main_prompt,
             display_path: None,
+            display_path_root: None,
             prompt_scope: None,
             dependencies: None,
             enabled: true,
@@ -176,6 +178,12 @@ impl SkillCatalogEntry {
 
     pub fn with_display_path(mut self, display_path: impl Into<String>) -> Self {
         self.display_path = Some(display_path.into());
+        self
+    }
+
+    /// Sets the shared filesystem prefix that may be compacted in model-visible paths.
+    pub fn with_display_path_root(mut self, display_path_root: impl Into<String>) -> Self {
+        self.display_path_root = Some(display_path_root.into());
         self
     }
 
@@ -203,6 +211,10 @@ impl SkillCatalogEntry {
         self.display_path
             .as_deref()
             .unwrap_or_else(|| self.main_prompt.as_str())
+    }
+
+    pub(crate) fn display_path_root(&self) -> Option<&str> {
+        self.display_path_root.as_deref()
     }
 
     pub(crate) fn prompt_scope(&self) -> Option<SkillScope> {
