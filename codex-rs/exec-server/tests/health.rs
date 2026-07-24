@@ -20,8 +20,12 @@ async fn exec_server_serves_readyz_alongside_websocket_endpoint() -> anyhow::Res
         .strip_prefix("ws://")
         .expect("websocket URL should use ws://");
 
-    let response = reqwest::get(format!("http://{http_base_url}/readyz")).await?;
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let client = codex_http_client::HttpClientBuilder::new().build_direct()?;
+    let response = client
+        .get(format!("http://{http_base_url}/readyz"))
+        .send()
+        .await?;
+    assert_eq!(response.status(), http::StatusCode::OK);
 
     server.shutdown().await?;
     Ok(())

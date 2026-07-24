@@ -17,7 +17,7 @@ use codex_connectors::ConnectorRuntimeManager;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::HttpClient;
-use codex_exec_server::ReqwestHttpClient;
+use codex_exec_server::RouteAwareHttpClient;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -307,7 +307,7 @@ impl McpRuntimeContext {
     }
 
     pub(crate) fn local_http_client(&self) -> Arc<dyn HttpClient> {
-        Arc::new(ReqwestHttpClient::new(
+        Arc::new(RouteAwareHttpClient::new(
             self.environment_manager.http_client_factory().clone(),
         ))
     }

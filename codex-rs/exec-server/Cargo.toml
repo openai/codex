@@ -31,7 +31,6 @@ codex-utils-rustls-provider = { workspace = true }
 codex-websocket-client = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -51,6 +50,7 @@ tokio = { workspace = true, features = [
 tokio-util = { workspace = true, features = ["io", "rt"] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]

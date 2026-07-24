@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
+use codex_http_client::HttpError;
+use codex_http_client::HttpResponse;
 use futures::StreamExt;
-use reqwest::Response;
 use serde_json::Value;
 use serde_json::from_value;
 use tokio::runtime::Handle;
@@ -55,7 +56,7 @@ pub(super) struct HttpBodyStreamRegistration {
 
 enum HttpResponseBodyStreamInner {
     Local {
-        body: Pin<Box<dyn futures::Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+        body: Pin<Box<dyn futures::Stream<Item = Result<Bytes, HttpError>> + Send>>,
     },
     Remote {
         inner: Arc<Inner>,
@@ -77,7 +78,7 @@ pub struct HttpResponseBodyStream {
 }
 
 impl HttpResponseBodyStream {
-    pub(super) fn local(response: Response) -> Self {
+    pub(super) fn local(response: HttpResponse) -> Self {
         Self {
             inner: HttpResponseBodyStreamInner::Local {
                 body: Box::pin(response.bytes_stream()),

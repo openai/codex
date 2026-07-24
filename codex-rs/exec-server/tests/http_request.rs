@@ -113,6 +113,48 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
     Ok(())
 }
 
+/// What this tests: delegated HTTP accepts URLs with client-side fragments and
+/// does not include those fragments in the request sent over the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_omits_url_fragment() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    initialize_exec_server(&mut server).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!(
+        "http://{}/mcp?case=fragment#client-section",
+        listener.local_addr()?
+    );
+    let http_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url,
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Follow,
+                request_id: "fragment-request".to_string(),
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&listener).await?;
+    assert_eq!(captured.request_line, "GET /mcp?case=fragment HTTP/1.1");
+    respond_with_status_and_headers(captured.stream, "200 OK", &[], b"fragment-response").await?;
+
+    let response: HttpRequestResponse = wait_for_response(&mut server, http_request_id).await?;
+    assert_eq!(
+        (response.status, response.body.into_inner()),
+        (200, b"fragment-response".to_vec())
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
 /// What this tests: a configured system-proxy factory survives the complete
 /// executor transport, processor, and handler chain for delegated HTTP.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -162,6 +204,68 @@ async fn exec_server_http_request_uses_configured_system_proxy() -> anyhow::Resu
     assert_eq!(
         (response.status, response.body.into_inner()),
         (200, b"proxied-response".to_vec())
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// What this tests: delegated HTTP preserves WHATWG IDNA normalization before
+/// selecting a configured system-proxy route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_normalizes_unicode_hostname() -> anyhow::Result<()> {
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_url = format!("http://{}", proxy_listener.local_addr()?);
+    let request_url = "http://münich.invalid/mcp?route=unicode";
+    let normalized_url = "http://xn--mnich-kva.invalid/mcp?route=unicode";
+    let mut server = exec_server_with_env([
+        (SYSTEM_PROXY_REQUEST_URL_ENV, normalized_url),
+        (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
+        ("HTTP_PROXY", ""),
+        ("http_proxy", ""),
+        ("HTTPS_PROXY", ""),
+        ("https_proxy", ""),
+        ("ALL_PROXY", ""),
+        ("all_proxy", ""),
+        ("NO_PROXY", ""),
+        ("no_proxy", ""),
+    ])
+    .await?;
+    initialize_exec_server(&mut server).await?;
+
+    let http_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: request_url.to_string(),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Follow,
+                request_id: "unicode-hostname-request".to_string(),
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&proxy_listener).await?;
+    assert_eq!(
+        (
+            captured.request_line.as_str(),
+            captured.headers.get("host").map(String::as_str),
+        ),
+        (
+            "GET http://xn--mnich-kva.invalid/mcp?route=unicode HTTP/1.1",
+            Some("xn--mnich-kva.invalid"),
+        )
+    );
+    respond_with_status_and_headers(captured.stream, "200 OK", &[], b"unicode-response").await?;
+
+    let response: HttpRequestResponse = wait_for_response(&mut server, http_request_id).await?;
+    assert_eq!(
+        (response.status, response.body.into_inner()),
+        (200, b"unicode-response".to_vec())
     );
 
     server.shutdown().await?;
@@ -662,7 +766,7 @@ fn is_expected_peer_disconnect(err: &anyhow::Error) -> bool {
     })
 }
 
-/// Writes a chunked HTTP response so reqwest must drive the streaming path.
+/// Writes a chunked HTTP response so the shared client must drive the streaming path.
 async fn respond_with_chunked_body(
     mut stream: TcpStream,
     headers: &[(&str, &str)],

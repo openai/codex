@@ -1,5 +1,5 @@
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderValue;
+use http::HeaderMap;
+use http::HeaderValue;
 
 pub(crate) fn current_trace_context_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();

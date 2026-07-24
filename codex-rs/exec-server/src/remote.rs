@@ -12,7 +12,7 @@ use futures::FutureExt;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
-use reqwest::StatusCode;
+use http::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;

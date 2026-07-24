@@ -47,7 +47,7 @@ pub use capability_discovery_cache::ExecutorCapabilityDiscoveryCache;
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
 pub use client::http_client::HttpResponseBodyStream;
-pub use client::http_client::ReqwestHttpClient;
+pub use client::http_client::RouteAwareHttpClient;
 pub use client_api::ExecServerClientConnectOptions;
 pub use client_api::HttpClient;
 pub use client_api::NoiseRendezvousConnectArgs;

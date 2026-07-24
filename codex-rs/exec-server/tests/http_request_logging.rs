@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use codex_exec_server::HttpClient;
 use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
-use codex_exec_server::ReqwestHttpClient;
+use codex_exec_server::RouteAwareHttpClient;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use pretty_assertions::assert_eq;
@@ -34,7 +34,7 @@ async fn delegated_http_success_logs_do_not_expose_sensitive_request_or_response
     let _guard = tracing::subscriber::set_default(subscriber);
     tracing::debug!(target: "codex_exec_server", "log capture sentinel");
     let client =
-        ReqwestHttpClient::new(HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault));
+        RouteAwareHttpClient::new(HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault));
 
     for (redirect_policy, status, query_secret, cookie_secret, location_secret) in [
         (
@@ -128,7 +128,7 @@ async fn delegated_http_failure_warning_redacts_request_url() -> anyhow::Result<
     let unavailable_address = unavailable_server.local_addr()?;
     drop(unavailable_server);
     let client =
-        ReqwestHttpClient::new(HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault));
+        RouteAwareHttpClient::new(HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault));
 
     let error = client
         .http_request(HttpRequestParams {
