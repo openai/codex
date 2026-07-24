@@ -11,6 +11,9 @@ mod message;
 mod payload;
 mod types;
 
+/// Maximum number of unresolved delegate callbacks allowed per host connection.
+pub const MAX_PENDING_DELEGATE_CALLS: usize = 1_024;
+
 pub use codec::EncodedFrame;
 pub use codec::FramedReader;
 pub use codec::FramedWriter;

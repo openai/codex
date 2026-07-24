@@ -233,6 +233,7 @@ async fn explicit_remote_control_startup_fails_when_disabled_by_requirements() -
                 plugin_startup_tasks: PluginStartupTasks::Skip,
                 remote_control_startup_mode: RemoteControlStartupMode::EnabledEphemeral,
                 install_shutdown_signal_handler: false,
+                ..Default::default()
             },
         ),
     )

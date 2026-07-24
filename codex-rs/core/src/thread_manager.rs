@@ -396,6 +396,18 @@ impl ThreadManager {
         }
     }
 
+    /// Replaces the process-wide provider before this manager is shared with threads.
+    pub fn with_code_mode_session_provider(
+        mut self,
+        provider: Arc<dyn CodeModeSessionProvider>,
+    ) -> Self {
+        let Some(state) = Arc::get_mut(&mut self.state) else {
+            unreachable!("code-mode session provider must be set before thread manager is shared");
+        };
+        state.code_mode_session_provider = provider;
+        self
+    }
+
     pub(crate) fn with_code_mode_host_program_for_tests(mut self, host_program: PathBuf) -> Self {
         let Some(state) = Arc::get_mut(&mut self.state) else {
             unreachable!("new thread manager state should not be shared");

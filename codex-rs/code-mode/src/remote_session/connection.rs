@@ -21,9 +21,13 @@ use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::FramedReader;
 use codex_code_mode_protocol::host::FramedWriter;
 use codex_code_mode_protocol::host::HostToClient;
+use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_http_client::HttpClientFactory;
+use codex_websocket_client::WebSocketConnector;
+use futures::StreamExt;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
@@ -31,6 +35,8 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::warn;
@@ -42,12 +48,16 @@ use self::driver::DriverLifecycle;
 pub(super) use self::driver::RemoteSession;
 pub(super) use self::driver::SessionCleanup;
 use self::reader::drive_reader;
+use self::transport::ConnectionReader;
+use self::transport::ConnectionWriter;
 
 mod driver;
 mod reader;
+mod transport;
 
 const IPC_CHANNEL_CAPACITY: usize = 128;
 const HOST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_WEBSOCKET_FRAME_BYTES: usize = MAX_FRAME_BYTES + std::mem::size_of::<u32>();
 
 pub(super) enum ConnectionError {
     Spawn {
@@ -96,7 +106,7 @@ struct CallerCancellation {
 }
 
 struct ConnectionSupervisor {
-    child: Child,
+    owner: ConnectionOwner,
     event_tx: mpsc::Sender<DriverEvent>,
     cancellation: CancellationToken,
     alive: Arc<AtomicBool>,
@@ -104,6 +114,11 @@ struct ConnectionSupervisor {
     driver_task: JoinHandle<()>,
     reader_task: JoinHandle<Result<(), String>>,
     writer_task: JoinHandle<Result<(), String>>,
+}
+
+enum ConnectionOwner {
+    Process(Box<Child>),
+    WebSocket,
 }
 
 impl CallerCancellation {
@@ -171,8 +186,60 @@ impl Connection {
             .stdout
             .take()
             .ok_or_else(|| ConnectionError::Other("spawned code-mode host has no stdout".into()))?;
-        let mut reader = FramedReader::new(stdout);
-        let mut writer = FramedWriter::new(stdin);
+
+        Self::establish(
+            ConnectionReader::Stdio(FramedReader::new(stdout)),
+            ConnectionWriter::Stdio(FramedWriter::new(stdin)),
+            ConnectionOwner::Process(Box::new(child)),
+        )
+        .await
+    }
+
+    pub(super) async fn connect_websocket(
+        websocket_url: &str,
+        http_client_factory: &HttpClientFactory,
+    ) -> Result<Self, ConnectionError> {
+        let request = websocket_url.into_client_request().map_err(|error| {
+            ConnectionError::Other(format!(
+                "failed to build code-mode host websocket request: {error}"
+            ))
+        })?;
+        let connector = WebSocketConnector::new(http_client_factory).map_err(|error| {
+            ConnectionError::Other(format!(
+                "failed to configure code-mode host websocket TLS: {error}"
+            ))
+        })?;
+        let websocket_config = WebSocketConfig::default()
+            .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
+            .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
+        let (websocket, _) = tokio::time::timeout(
+            HOST_HANDSHAKE_TIMEOUT,
+            connector.connect(request, websocket_config),
+        )
+        .await
+        .map_err(|_| {
+            ConnectionError::Other("timed out connecting to the code-mode host websocket".into())
+        })?
+        .map_err(|error| {
+            ConnectionError::Other(format!(
+                "failed to connect to the code-mode host websocket: {error}"
+            ))
+        })?;
+        let (writer, reader) = websocket.split();
+
+        Self::establish(
+            ConnectionReader::WebSocket(reader),
+            ConnectionWriter::WebSocket(writer),
+            ConnectionOwner::WebSocket,
+        )
+        .await
+    }
+
+    async fn establish(
+        mut reader: ConnectionReader,
+        mut writer: ConnectionWriter,
+        mut owner: ConnectionOwner,
+    ) -> Result<Self, ConnectionError> {
         let handshake = async {
             let hello = ClientHello::new(
                 SupportedProtocolVersions::try_new([ProtocolVersion::V1])
@@ -186,7 +253,7 @@ impl Connection {
                 .await
                 .map_err(|err| format!("failed to write code-mode host hello: {err}"))?;
             match reader
-                .read::<HostToClient>()
+                .read()
                 .await
                 .map_err(|err| format!("failed to read code-mode host hello: {err}"))?
             {
@@ -207,14 +274,16 @@ impl Connection {
         let handshake_result = match tokio::time::timeout(HOST_HANDSHAKE_TIMEOUT, handshake).await {
             Ok(result) => result,
             Err(_) => {
-                kill_and_reap(&mut child).await;
+                let _ = writer.close().await;
+                owner.close().await;
                 return Err(ConnectionError::Other(
                     "timed out negotiating with the code-mode host".into(),
                 ));
             }
         };
         if let Err(err) = handshake_result {
-            kill_and_reap(&mut child).await;
+            let _ = writer.close().await;
+            owner.close().await;
             return Err(ConnectionError::Other(err));
         }
 
@@ -229,12 +298,21 @@ impl Connection {
         let writer_task = tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = writer_cancellation.cancelled() => return Ok(()),
+                    _ = writer_cancellation.cancelled() => {
+                        return writer
+                            .close()
+                            .await
+                            .map_err(|error| format!("failed to close code-mode host connection: {error}"));
+                    }
                     frame = outgoing_rx.recv() => {
                         let Some(frame) = frame else {
                             return Err("code-mode host outgoing stream closed".to_string());
                         };
-                        if let Err(err) = writer.write_frame(&frame).await {
+                        let result = tokio::select! {
+                            _ = writer_cancellation.cancelled() => return Ok(()),
+                            result = writer.write_frame(frame) => result,
+                        };
+                        if let Err(err) = result {
                             return Err(format!("failed to write code-mode host message: {err}"));
                         }
                     }
@@ -263,7 +341,7 @@ impl Connection {
         let driver_task = tokio::spawn(driver.run());
         tokio::spawn(
             ConnectionSupervisor {
-                child,
+                owner,
                 event_tx,
                 cancellation: cancellation.clone(),
                 alive: Arc::clone(&alive),
@@ -428,7 +506,7 @@ impl Drop for Connection {
 
 impl ConnectionSupervisor {
     async fn run(mut self) {
-        let mut child_exited = false;
+        let mut owner_exited = false;
         let reason = tokio::select! {
             biased;
             _ = self.cancellation.cancelled() => failure_message(&self.failure),
@@ -438,19 +516,35 @@ impl ConnectionSupervisor {
             },
             result = &mut self.reader_task => task_failure("reader", result),
             result = &mut self.writer_task => task_failure("writer", result),
-            result = self.child.wait() => {
-                child_exited = true;
-                match result {
-                    Ok(status) => format!("code-mode host exited with status {status}"),
-                    Err(err) => format!("failed waiting for code-mode host: {err}"),
-                }
+            reason = self.owner.wait() => {
+                owner_exited = true;
+                reason
             }
         };
         mark_connection_dead(&self.alive, &self.failure, reason.clone());
         let _ = self.event_tx.try_send(DriverEvent::Failed(reason));
         self.cancellation.cancel();
-        if !child_exited {
-            kill_and_reap(&mut self.child).await;
+        if !owner_exited {
+            self.owner.close().await;
+        }
+    }
+}
+
+impl ConnectionOwner {
+    async fn wait(&mut self) -> String {
+        match self {
+            Self::Process(child) => match child.wait().await {
+                Ok(status) => format!("code-mode host exited with status {status}"),
+                Err(error) => format!("failed waiting for code-mode host: {error}"),
+            },
+            Self::WebSocket => std::future::pending().await,
+        }
+    }
+
+    async fn close(&mut self) {
+        match self {
+            Self::Process(child) => kill_and_reap(child).await,
+            Self::WebSocket => {}
         }
     }
 }

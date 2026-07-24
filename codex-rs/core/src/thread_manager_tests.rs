@@ -428,12 +428,14 @@ async fn code_mode_session_provider_is_shared_across_threads() {
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
+    let provider: Arc<dyn CodeModeSessionProvider> = Arc::new(InProcessCodeModeSessionProvider);
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .with_code_mode_session_provider(Arc::clone(&provider));
     let first = manager
         .start_thread(StartThreadOptions::new(config.clone()))
         .await
@@ -456,6 +458,7 @@ async fn code_mode_session_provider_is_shared_across_threads() {
         .code_mode_service
         .session_provider();
     assert!(Arc::ptr_eq(&first_provider, &second_provider));
+    assert!(Arc::ptr_eq(&first_provider, &provider));
     assert!(Arc::ptr_eq(
         &first_provider,
         &manager.state.code_mode_session_provider

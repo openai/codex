@@ -13,6 +13,7 @@ use codex_code_mode_protocol::host::DelegateRequestId;
 use codex_code_mode_protocol::host::DelegateResponse;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::HostToClient;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::WireResult;
@@ -25,7 +26,6 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 const CELL_MESSAGE_CAPACITY: usize = 128;
-const MAX_PENDING_DELEGATE_CALLS: usize = 256;
 
 pub(super) struct HostPeer {
     outgoing_tx: mpsc::Sender<EncodedFrame>,

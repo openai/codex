@@ -13,6 +13,7 @@ use codex_code_mode_protocol::host::DelegateRequest;
 use codex_code_mode_protocol::host::DelegateRequestId;
 use codex_code_mode_protocol::host::DelegateResponse;
 use codex_code_mode_protocol::host::EncodedFrame;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::WireCellId;
 use codex_code_mode_protocol::host::WireResult;
@@ -65,6 +66,11 @@ enum DelegateTask {
     },
 }
 
+enum DelegateStartError {
+    Duplicate(DelegateRequestId),
+    CapacityExceeded,
+}
+
 pub(super) struct DelegateEffects {
     pub(super) response: Option<(DelegateRequestId, Result<DelegateResponse, String>)>,
     pub(super) closed_cells: Vec<CellOwner>,
@@ -102,16 +108,19 @@ impl DelegateRuntime {
         }
     }
 
-    pub(super) fn start(
+    fn start(
         &mut self,
         id: DelegateRequestId,
         target: DelegateTarget,
         request: DelegateRequest,
-    ) -> Result<(), String> {
+    ) -> Result<(), DelegateStartError> {
         if self.calls.contains_key(&id) || self.seen_requests.contains(&id) {
-            return Err(format!("duplicate code-mode delegate request ID {id:?}"));
+            return Err(DelegateStartError::Duplicate(id));
         }
         self.remember_request(id);
+        if self.calls.len() >= MAX_PENDING_DELEGATE_CALLS {
+            return Err(DelegateStartError::CapacityExceeded);
+        }
         let cancellation = CancellationToken::new();
         let task_request = match request {
             DelegateRequest::InvokeTool { invocation } => {
@@ -257,11 +266,19 @@ impl ConnectionDriver {
                 return false;
             }
         };
-        if let Err(err) = self.delegates.start(id, target, request) {
-            self.fail(err);
-            return false;
+        match self.delegates.start(id, target, request) {
+            Ok(()) => true,
+            Err(DelegateStartError::Duplicate(id)) => {
+                self.fail(format!("duplicate code-mode delegate request ID {id:?}"));
+                false
+            }
+            Err(DelegateStartError::CapacityExceeded) => self.send_delegate_response(
+                id,
+                Err(format!(
+                    "code-mode host exceeded the limit of {MAX_PENDING_DELEGATE_CALLS} pending delegate calls"
+                )),
+            ),
         }
-        true
     }
 
     pub(super) fn complete_delegate(
