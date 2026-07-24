@@ -6,6 +6,7 @@ use anyhow::Result;
 use codex_core::StartThreadOptions;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
+use codex_core::config::ThreadStoreConfig;
 use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -28,6 +29,7 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::InMemoryThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::TestTargetOs;
 use core_test_support::hooks::trust_discovered_hooks;
@@ -772,9 +774,14 @@ raise SystemExit(2)
     Ok(())
 }
 
-fn write_session_start_hook_recording_transcript(home: &Path) -> Result<()> {
+fn write_session_start_hook_recording_transcript(home: &Path, stop: bool) -> Result<()> {
     let script_path = home.join("session_start_hook.py");
     let log_path = home.join("session_start_hook_log.jsonl");
+    let stop_output = if stop {
+        r#"print(json.dumps({"continue": False, "stopReason": "integration assertion complete"}))"#
+    } else {
+        ""
+    };
     let script = format!(
         r#"import json
 from pathlib import Path
@@ -782,15 +789,18 @@ import sys
 
 payload = json.load(sys.stdin)
 transcript_path = payload.get("transcript_path")
-record = {{
-    "transcript_path": transcript_path,
-    "exists": Path(transcript_path).exists() if transcript_path else False,
-}}
+if transcript_path is not None and not Path(transcript_path).is_file():
+    raise RuntimeError(
+        f"transcript did not exist when the hook ran: {{transcript_path}}"
+    )
 
 with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(record) + "\n")
+    handle.write(json.dumps(payload) + "\n")
+
+{stop_output}
 "#,
         log_path = log_path.display(),
+        stop_output = stop_output,
     );
     let hooks = serde_json::json!({
         "hooks": {
@@ -1328,7 +1338,7 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            write_session_start_hook_recording_transcript(home)
+            write_session_start_hook_recording_transcript(home, /*stop*/ false)
                 .expect("failed to write session start hook test fixture");
         })
         .with_config(trust_discovered_hooks);
@@ -1338,14 +1348,42 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
 
     let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(
-        hook_inputs[0]
-            .get("transcript_path")
-            .and_then(Value::as_str)
-            .map(str::is_empty),
-        Some(false)
+    let transcript_path = hook_inputs[0]["transcript_path"]
+        .as_str()
+        .expect("local session start hook transcript_path should be a string");
+    assert!(
+        Path::new(transcript_path).exists(),
+        "local session start hook transcript_path should be materialized",
     );
-    assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_hook_skips_persistence_for_non_local_thread_store() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let store_id = uuid::Uuid::new_v4().to_string();
+    let store = InMemoryThreadStore::for_id(store_id.clone());
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_session_start_hook_recording_transcript(home, /*stop*/ true)
+                .expect("failed to write session start hook test fixture");
+        })
+        .with_config(move |config| {
+            config.experimental_thread_store = ThreadStoreConfig::InMemory { id: store_id };
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the non-local session start hook")
+        .await?;
+
+    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["transcript_path"], Value::Null);
+    assert_eq!(store.calls().await.persist_thread, 0);
 
     Ok(())
 }
