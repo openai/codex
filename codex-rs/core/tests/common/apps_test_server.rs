@@ -8,9 +8,11 @@ use codex_models_manager::bundled_models_response;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -54,6 +56,8 @@ const CALENDAR_LIST_EVENTS_RESOURCE_URI: &str = "connector://calendar/tools/cale
 pub const DOCUMENT_EXTRACT_TEXT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_extract_text";
 
+type AppsStartupInitializeGate = Arc<Mutex<Option<mpsc::Receiver<()>>>>;
+
 #[derive(Clone)]
 pub struct AppsTestServer {
     pub chatgpt_base_url: String,
@@ -63,6 +67,7 @@ pub struct AppsTestServer {
 pub struct AppsTestServerStartupControl {
     initialize_attempts: Arc<AtomicUsize>,
     remaining_initialize_failures: Arc<AtomicUsize>,
+    successful_initialize_gate: AppsStartupInitializeGate,
 }
 
 impl AppsTestServerStartupControl {
@@ -73,6 +78,16 @@ impl AppsTestServerStartupControl {
 
     pub fn initialize_attempts(&self) -> usize {
         self.initialize_attempts.load(Ordering::SeqCst)
+    }
+
+    /// Holds one successful startup without turning recovery into a fresh runtime refresh.
+    pub fn hold_next_successful_initialize(&self) -> mpsc::Sender<()> {
+        let (release, gate) = mpsc::channel();
+        *self
+            .successful_initialize_gate
+            .lock()
+            .expect("Apps initialization gate lock should not be poisoned") = Some(gate);
+        release
     }
 }
 
@@ -177,6 +192,7 @@ impl AppsTestServer {
         let control = AppsTestServerStartupControl {
             initialize_attempts: Arc::new(AtomicUsize::new(0)),
             remaining_initialize_failures: Arc::new(AtomicUsize::new(0)),
+            successful_initialize_gate: Arc::new(Mutex::new(None)),
         };
         mount_streamable_http_json_rpc_with_startup_control(
             server,
@@ -188,6 +204,7 @@ impl AppsTestServer {
             AppsTestToolsListBehavior::AlwaysAvailable,
             Some(Arc::clone(&control.initialize_attempts)),
             Some(Arc::clone(&control.remaining_initialize_failures)),
+            Some(Arc::clone(&control.successful_initialize_gate)),
         )
         .await;
         Ok((
@@ -413,6 +430,7 @@ async fn mount_streamable_http_json_rpc_at_path(
         tools_list_behavior,
         /*initialize_attempts*/ None,
         /*remaining_initialize_failures*/ None,
+        /*successful_initialize_gate*/ None,
     )
     .await;
 }
@@ -428,6 +446,7 @@ async fn mount_streamable_http_json_rpc_with_startup_control(
     tools_list_behavior: AppsTestToolsListBehavior,
     initialize_attempts: Option<Arc<AtomicUsize>>,
     remaining_initialize_failures: Option<Arc<AtomicUsize>>,
+    successful_initialize_gate: Option<AppsStartupInitializeGate>,
 ) {
     Mock::given(method("POST"))
         .and(path_regex(mcp_path_regex))
@@ -439,6 +458,7 @@ async fn mount_streamable_http_json_rpc_with_startup_control(
             tools_list_behavior,
             initialize_attempts,
             remaining_initialize_failures,
+            successful_initialize_gate,
         })
         .mount(server)
         .await;
@@ -452,6 +472,7 @@ struct CodexAppsJsonRpcResponder {
     tools_list_behavior: AppsTestToolsListBehavior,
     initialize_attempts: Option<Arc<AtomicUsize>>,
     remaining_initialize_failures: Option<Arc<AtomicUsize>>,
+    successful_initialize_gate: Option<AppsStartupInitializeGate>,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -489,6 +510,20 @@ impl Respond for CodexAppsJsonRpcResponder {
                 {
                     return ResponseTemplate::new(400).set_body_json(json!({
                         "error": "simulated non-retryable Apps MCP startup failure",
+                    }));
+                }
+                let gate = self.successful_initialize_gate.as_ref().and_then(|gate| {
+                    gate.lock()
+                        .expect("Apps initialization gate lock should not be poisoned")
+                        .take()
+                });
+                // This responder's dedicated mock server stays paused while the test controls
+                // when this existing client's background retry may finish.
+                if let Some(gate) = gate
+                    && gate.recv().is_err()
+                {
+                    return ResponseTemplate::new(500).set_body_json(json!({
+                        "error": "Apps initialization gate was dropped before release",
                     }));
                 }
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
