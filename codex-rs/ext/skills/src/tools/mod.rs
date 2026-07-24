@@ -1,3 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use codex_extension_api::FunctionCallError;
@@ -18,6 +21,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use tokio::sync::OnceCell;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -38,12 +42,17 @@ pub(crate) fn skill_tools(
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
+    orchestrator_available: bool,
+    executor_query: Option<SkillListQuery>,
     shadow_selection: Arc<ShadowSelectionExperiment>,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let context = SkillToolContext {
         providers,
         mcp_resources,
         thread_state,
+        orchestrator_available,
+        executor_query,
+        executor_catalog: Arc::new(OnceCell::new()),
         shadow_selection,
     };
     vec![
@@ -59,19 +68,26 @@ struct SkillToolContext {
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
+    orchestrator_available: bool,
+    executor_query: Option<SkillListQuery>,
+    executor_catalog: Arc<OnceCell<SkillCatalog>>,
     shadow_selection: Arc<ShadowSelectionExperiment>,
 }
 
 impl SkillToolContext {
-    async fn catalog(&self, turn_id: &str, authority: SkillToolAuthority) -> SkillCatalog {
+    async fn catalog(&self, turn_id: &str, authority: SkillToolAuthoritySelector) -> SkillCatalog {
         match authority {
-            SkillToolAuthority::Orchestrator => {
+            SkillToolAuthoritySelector::Orchestrator => {
+                if !self.orchestrator_available {
+                    return SkillCatalog::default();
+                }
                 self.thread_state
                     .orchestrator_catalog_snapshot(
                         self.mcp_resources.as_deref(),
                         self.providers.list_orchestrator_for_turn(SkillListQuery {
                             turn_id: turn_id.to_string(),
                             executor_roots: Vec::new(),
+                            resolved_executor_roots: Vec::new(),
                             host_snapshot: None,
                             include_host_skills: false,
                             include_bundled_skills: false,
@@ -82,30 +98,73 @@ impl SkillToolContext {
                     )
                     .await
             }
+            SkillToolAuthoritySelector::Executor => {
+                let Some(mut query) = self.executor_query.clone() else {
+                    return SkillCatalog::default();
+                };
+                query.turn_id = turn_id.to_string();
+                self.executor_catalog
+                    .get_or_init(|| self.providers.list_executor_for_turn(query))
+                    .await
+                    .clone()
+            }
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum SkillToolAuthoritySelector {
+    Orchestrator,
+    Executor,
+}
+
+impl SkillToolAuthoritySelector {
+    fn matches(self, authority: &SkillAuthority) -> bool {
+        match self {
+            Self::Orchestrator => authority.kind == SkillSourceKind::Orchestrator,
+            Self::Executor => authority.kind == SkillSourceKind::Executor,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum SkillToolAuthority {
     Orchestrator,
+    Executor { id: String },
 }
 
 impl SkillToolAuthority {
-    fn from_authority(authority: &SkillAuthority) -> Option<Self> {
-        if authority
-            != &SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME)
-        {
-            return None;
+    fn selector(&self) -> SkillToolAuthoritySelector {
+        match self {
+            Self::Orchestrator => SkillToolAuthoritySelector::Orchestrator,
+            Self::Executor { .. } => SkillToolAuthoritySelector::Executor,
         }
-        Some(Self::Orchestrator)
     }
 
-    fn into_authority(self) -> SkillAuthority {
+    fn from_authority(authority: &SkillAuthority) -> Option<Self> {
+        match &authority.kind {
+            SkillSourceKind::Orchestrator if authority.id == CODEX_APPS_MCP_SERVER_NAME => {
+                Some(Self::Orchestrator)
+            }
+            SkillSourceKind::Executor => Some(Self::Executor {
+                id: authority.id.clone(),
+            }),
+            SkillSourceKind::Host | SkillSourceKind::Orchestrator | SkillSourceKind::Custom(_) => {
+                None
+            }
+        }
+    }
+
+    fn matches(&self, authority: &SkillAuthority) -> bool {
         match self {
             Self::Orchestrator => {
-                SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME)
+                authority.kind == SkillSourceKind::Orchestrator
+                    && authority.id == CODEX_APPS_MCP_SERVER_NAME
+            }
+            Self::Executor { id } => {
+                authority.kind == SkillSourceKind::Executor && authority.id == *id
             }
         }
     }
@@ -158,9 +217,50 @@ fn is_bounded_handle(value: &str, max_bytes: usize) -> bool {
     !value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control)
 }
 
-fn external_json_output<T: Serialize>(value: &T) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+fn pagination_cursor(value: &(impl Hash + ?Sized), offset: usize) -> String {
+    format!("{:016x}:{offset}", value_fingerprint(value))
+}
+
+fn parse_pagination_cursor(
+    cursor: Option<&str>,
+    value: &(impl Hash + ?Sized),
+    tool: &str,
+) -> Result<usize, FunctionCallError> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+    let invalid = || FunctionCallError::RespondToModel(format!("{tool} cursor is invalid"));
+    let (fingerprint, offset) = cursor.split_once(':').ok_or_else(invalid)?;
+    if u64::from_str_radix(fingerprint, 16).ok() != Some(value_fingerprint(value)) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{tool} cursor is stale; restart from the first page"
+        )));
+    }
+    offset.parse::<usize>().map_err(|_| invalid())
+}
+
+fn value_fingerprint(value: &(impl Hash + ?Sized)) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn serialized_len(value: &impl Serialize) -> Result<usize, FunctionCallError> {
+    serde_json::to_vec(value)
+        .map(|value| value.len())
+        .map_err(|err| FunctionCallError::Fatal(err.to_string()))
+}
+
+fn skill_json_output<T: Serialize>(
+    value: &T,
+    authority: SkillToolAuthoritySelector,
+) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
     let value = serde_json::to_value(value).map_err(|err| {
         FunctionCallError::Fatal(format!("failed to serialize tool output: {err}"))
     })?;
-    Ok(Box::new(JsonToolOutput::new(value).with_external_context()))
+    let output = JsonToolOutput::new(value);
+    Ok(match authority {
+        SkillToolAuthoritySelector::Orchestrator => Box::new(output.with_external_context()),
+        SkillToolAuthoritySelector::Executor => Box::new(output),
+    })
 }

@@ -560,20 +560,30 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
 }
 
 #[tokio::test]
-async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResult {
+async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult {
     let description = "x".repeat(1_025);
+    let opaque_suffix = "\\".repeat(1_500);
     let mut entry = test_entry(
         SkillSourceKind::Orchestrator,
         "codex_apps",
-        "orchestrator/long-description",
-        "skill://orchestrator/long-description/SKILL.md",
+        &format!("orchestrator/{opaque_suffix}"),
+        &format!("skill://orchestrator/{opaque_suffix}/SKILL.md"),
     );
     entry.description = description.clone();
     let providers =
         SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
-                entries: vec![entry],
-                warnings: Vec::new(),
+                entries: vec![
+                    entry,
+                    test_entry(
+                        SkillSourceKind::Orchestrator,
+                        "codex_apps",
+                        "orchestrator/hidden",
+                        "skill://orchestrator/hidden/SKILL.md",
+                    )
+                    .hidden_from_prompt(),
+                ],
+                warnings: vec!["w".repeat(256); 4],
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
             list_calls: None,
@@ -627,6 +637,9 @@ async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResu
         .as_str()
         .ok_or("skills.list response should include a description")?;
 
+    assert_eq!(response["skills"].as_array().map(Vec::len), Some(1));
+    assert_eq!(response["warnings"].as_array().map(Vec::len), Some(4));
+    assert_eq!(response["next_cursor"], serde_json::Value::Null);
     assert_eq!(rendered_description, "x".repeat(1_021) + "...");
     assert_ne!(rendered_description, description);
 

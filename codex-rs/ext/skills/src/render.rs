@@ -483,7 +483,7 @@ pub(crate) fn render_available_skills(
     let mut entries = catalog
         .entries
         .iter()
-        .filter(|entry| entry.enabled && entry.prompt_visible)
+        .filter(|entry| entry.is_model_visible())
         .collect::<Vec<_>>();
     policy.order_entries(&mut entries);
     if entries.is_empty() {

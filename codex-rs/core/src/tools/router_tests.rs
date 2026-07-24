@@ -410,7 +410,10 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         ToolRouterParams {
             tool_suggest_candidates: None,
             tool_runtimes: Vec::new(),
-            extension_tool_executors: extension_tool_executors(&session),
+            extension_tool_executors: extension_tool_executors(
+                &session,
+                &codex_extension_api::ExtensionData::new(turn.sub_id.clone()),
+            ),
             wait_for_environment_tool_config: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
