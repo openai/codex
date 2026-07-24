@@ -597,11 +597,76 @@ jobs:
               --report-dir "${report_dir}/${binary}"
           done
 
+      - name: Fetch, sign, and notarize pinned macOS helpers
+        if: ${{ matrix.bundle == 'primary' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          signed_root="${GITHUB_WORKSPACE}/signed-resources/${TARGET}"
+          zsh_manifest="${RUNNER_TEMP}/codex-zsh-${TARGET}"
+          mkdir -p "$signed_root"
+          curl -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            -o "$zsh_manifest"
+
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 - "$TARGET" "$signed_root" "$zsh_manifest" <<'PY'
+          import shutil
+          import sys
+          from pathlib import Path
+
+          from codex_package.ripgrep import fetch_rg
+          from codex_package.targets import TARGET_SPECS
+          from codex_package.zsh import resolve_zsh_bin
+
+          spec = TARGET_SPECS[sys.argv[1]]
+          signed_root = Path(sys.argv[2])
+          zsh_bin = resolve_zsh_bin(spec, Path(sys.argv[3]))
+          if zsh_bin is None:
+              raise RuntimeError(f"Pinned zsh release is missing {spec.target}")
+          shutil.copy2(fetch_rg(spec), signed_root / "rg")
+          shutil.copy2(zsh_bin, signed_root / "zsh")
+          PY
+
+          for resource in rg zsh; do
+            binary="${signed_root}/${resource}"
+            report_dir="${GITHUB_WORKSPACE}/macos-binary-signing-verification/${TARGET}/${resource}"
+            mkdir -p "$report_dir"
+            chmod 0755 "$binary"
+            .github/scripts/macos-signing/sign_macos_code.sh \
+              --target "$binary" \
+              --identity unused \
+              --deep false \
+              --identifier "com.openai.codex.${resource}" \
+              --options runtime \
+              --timestamp true
+
+            rcodesign print-signature-info "$binary" \
+              >"${report_dir}/signature-info.yaml"
+
+            .github/scripts/macos-signing/notarize_macos_binary_with_rcodesign.sh \
+              --binary "$binary" \
+              --report-dir "$report_dir"
+          done
+
       - name: Upload signed macOS binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ matrix.artifact_name }}-signed-binaries
           path: signed-macos/${{ matrix.target }}/*
+          if-no-files-found: error
+
+      - name: Upload signed macOS helpers
+        if: ${{ matrix.bundle == 'primary' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.target }}-signed-resources
+          path: signed-resources/${{ matrix.target }}/*
           if-no-files-found: error
 
       - name: Upload binary signing verification
@@ -659,6 +724,12 @@ jobs:
           name: ${{ matrix.artifact_name }}-signed-binaries
           path: codex-rs/target/${{ matrix.target }}/release
 
+      - name: Download signed macOS helpers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.target }}-signed-resources
+          path: codex-rs/signed-resources/${{ matrix.target }}
+
       - name: Verify signed macOS binaries
         shell: bash
         run: |
@@ -667,6 +738,12 @@ jobs:
             binary_path="target/${{ matrix.target }}/release/${binary}"
             chmod 0755 "$binary_path"
             codesign --verify --strict --verbose=2 "$binary_path"
+          done
+
+          for resource in rg zsh; do
+            resource_path="signed-resources/${{ matrix.target }}/${resource}"
+            chmod 0755 "$resource_path"
+            codesign --verify --strict --verbose=2 "$resource_path"
           done
 
       - name: Build unsigned macOS DMG
@@ -730,14 +807,6 @@ jobs:
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
           done
 
-      - name: Download packaged zsh manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
-            -o "${RUNNER_TEMP}/codex-zsh"
-
       - name: Build Codex package archive
         shell: bash
         env:
@@ -750,7 +819,8 @@ jobs:
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+            --rg-bin "signed-resources/${TARGET}/rg" \
+            --zsh-bin "signed-resources/${TARGET}/zsh"
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}
@@ -1055,6 +1125,23 @@ jobs:
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
           verify_signed_binary "${package_dir}/bin/${package_entrypoint}" "$package_entrypoint"
           verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
+
+          for resource in \
+            "${package_dir}/codex-path/rg" \
+            "${package_dir}/codex-resources/zsh/bin/zsh"
+          do
+            chmod 0755 "$resource"
+            lipo "$resource" -verify_arch "$expected_arch"
+            codesign --verify --strict --verbose=2 "$resource"
+            entitlements="$(mktemp)"
+            codesign -d --entitlements :- "$resource" >"$entitlements"
+            if [[ -s "$entitlements" ]]; then
+              echo "Bundled helper $resource must not have code-signing entitlements." >&2
+              plutil -p "$entitlements" >&2
+              exit 1
+            fi
+            rm -f "$entitlements"
+          done
 
           if [[ "${{ matrix.verify_dmg }}" != "true" ]]; then
             exit 0

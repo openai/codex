@@ -98,13 +98,19 @@ def parse_args() -> argparse.Namespace:
             "targets, bwrap is built with Cargo."
         ),
     )
-    parser.add_argument(
+    zsh_source = parser.add_mutually_exclusive_group()
+    zsh_source.add_argument(
         "--zsh-manifest",
         type=Path,
         help=(
             "Optional DotSlash manifest for the patched zsh fork instead of "
             "scripts/codex_package/codex-zsh."
         ),
+    )
+    zsh_source.add_argument(
+        "--zsh-bin",
+        type=Path,
+        help="Optional prebuilt zsh executable instead of fetching from a manifest.",
     )
     parser.add_argument(
         "--codex-command-runner-bin",
@@ -182,7 +188,7 @@ def main() -> int:
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
-        zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest),
+        zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest, zsh_bin=args.zsh_bin),
         bwrap_bin=source_outputs.bwrap_bin,
         codex_command_runner_bin=source_outputs.codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,

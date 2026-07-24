@@ -16,6 +16,20 @@ from codex_package.zsh import resolve_zsh_bin
 
 
 class ResolveZshBinTest(unittest.TestCase):
+    def test_uses_prebuilt_executable_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            signed_zsh = Path(temp_dir) / "signed-zsh"
+            signed_zsh.write_bytes(b"signed zsh binary")
+            signed_zsh.chmod(0o755)
+
+            with patch("codex_package.zsh.fetch_dotslash_executable") as fetch:
+                zsh_bin = resolve_zsh_bin(
+                    TARGET_SPECS["aarch64-apple-darwin"], zsh_bin=signed_zsh
+                )
+
+            self.assertEqual(zsh_bin, signed_zsh.resolve())
+            fetch.assert_not_called()
+
     def test_uses_manifest_override(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

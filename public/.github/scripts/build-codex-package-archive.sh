@@ -10,6 +10,8 @@ Usage: build-codex-package-archive.sh \
   --archive-dir <dir> \
   [--bwrap-bin <path>] \
   [--code-mode-host-bin <path>] \
+  [--rg-bin <path>] \
+  [--zsh-bin <path>] \
   [--zsh-manifest <path>] \
   [--codex-command-runner-bin <path>] \
   [--codex-windows-sandbox-setup-bin <path>] \
@@ -54,6 +56,14 @@ while [[ $# -gt 0 ]]; do
     --code-mode-host-bin)
       resource_args+=(--code-mode-host-bin "${2:?--code-mode-host-bin requires a value}")
       code_mode_host_bin_provided="true"
+      shift 2
+      ;;
+    --rg-bin)
+      resource_args+=(--rg-bin "${2:?--rg-bin requires a value}")
+      shift 2
+      ;;
+    --zsh-bin)
+      resource_args+=(--zsh-bin "${2:?--zsh-bin requires a value}")
       shift 2
       ;;
     --zsh-manifest)

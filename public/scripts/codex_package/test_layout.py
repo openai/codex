@@ -15,6 +15,56 @@ from codex_package.targets import TARGET_SPECS
 
 
 class PackageLayoutTest(unittest.TestCase):
+    def test_macos_package_preserves_prebuilt_resource_binaries(self) -> None:
+        for variant_name in ("codex", "codex-app-server"):
+            for target in ("aarch64-apple-darwin", "x86_64-apple-darwin"):
+                with self.subTest(variant=variant_name, target=target):
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        root = Path(temp_dir)
+                        package_dir = root / "package"
+                        package_dir.mkdir()
+                        rg_bin = touch_executable(root / "signed-rg")
+                        zsh_bin = touch_executable(root / "signed-zsh")
+                        rg_bin.write_bytes(b"signed ripgrep binary")
+                        zsh_bin.write_bytes(b"signed zsh binary")
+                        variant = PACKAGE_VARIANTS[variant_name]
+                        spec = TARGET_SPECS[target]
+                        inputs = PackageInputs(
+                            entrypoint_bin=touch_executable(
+                                root / variant.executable_stem
+                            ),
+                            code_mode_host_bin=touch_executable(
+                                root / "codex-code-mode-host"
+                            ),
+                            rg_bin=rg_bin,
+                            zsh_bin=zsh_bin,
+                            bwrap_bin=None,
+                            codex_command_runner_bin=None,
+                            codex_windows_sandbox_setup_bin=None,
+                        )
+
+                        build_package_dir(package_dir, "1.2.3", variant, spec, inputs)
+                        validate_package_dir(
+                            package_dir, variant, spec, include_zsh=True
+                        )
+
+                        self.assertEqual(
+                            {
+                                "rg": (package_dir / "codex-path" / "rg").read_bytes(),
+                                "zsh": (
+                                    package_dir
+                                    / "codex-resources"
+                                    / "zsh"
+                                    / "bin"
+                                    / "zsh"
+                                ).read_bytes(),
+                            },
+                            {
+                                "rg": b"signed ripgrep binary",
+                                "zsh": b"signed zsh binary",
+                            },
+                        )
+
     def test_app_server_package_places_code_mode_host_beside_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
