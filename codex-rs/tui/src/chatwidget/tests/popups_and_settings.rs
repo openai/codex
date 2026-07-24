@@ -1045,6 +1045,7 @@ async fn plugin_detail_popup_shows_local_share_context_as_read_only_snapshot() {
             creator_account_user_id: None,
             creator_name: Some("Test User".to_string()),
             share_principals: None,
+            can_publish_to_workspace: None,
         }),
         ..plugins_test_summary(
             "plugin-docs",
@@ -1326,6 +1327,7 @@ async fn plugins_popup_remote_detail_tracks_physical_and_policy_install_state() 
             creator_account_user_id: None,
             creator_name: None,
             share_principals: None,
+            can_publish_to_workspace: None,
         }),
         ..plugins_test_summary(
             "plugin-docs",

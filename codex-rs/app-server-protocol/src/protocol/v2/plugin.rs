@@ -254,6 +254,8 @@ pub struct PluginShareSaveParams {
 pub struct PluginShareSaveResponse {
     pub remote_plugin_id: String,
     pub share_url: String,
+    #[serde(default)]
+    pub can_publish_to_workspace: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -662,6 +664,8 @@ pub struct PluginShareContext {
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
     pub share_principals: Option<Vec<PluginSharePrincipal>>,
+    #[serde(default)]
+    pub can_publish_to_workspace: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

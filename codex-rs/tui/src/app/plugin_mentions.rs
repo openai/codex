@@ -156,6 +156,7 @@ mod tests {
                 creator_account_user_id: None,
                 creator_name: Some("Test User".to_string()),
                 share_principals: None,
+                can_publish_to_workspace: None,
             }),
             ..plugin_summary(name)
         }

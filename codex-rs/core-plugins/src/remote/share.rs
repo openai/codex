@@ -25,6 +25,7 @@ pub use checkout::checkout_remote_plugin_share;
 pub struct RemotePluginShareSaveResult {
     pub remote_plugin_id: String,
     pub share_url: Option<String>,
+    pub can_publish_to_workspace: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -123,6 +124,8 @@ struct RemoteWorkspacePluginCreateRequest {
 struct RemoteWorkspacePluginCreateResponse {
     plugin_id: String,
     share_url: Option<String>,
+    #[serde(default)]
+    can_publish_to_workspace: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -201,6 +204,7 @@ pub async fn save_remote_plugin_share(
     Ok(RemotePluginShareSaveResult {
         remote_plugin_id: response.plugin_id,
         share_url: response.share_url,
+        can_publish_to_workspace: response.can_publish_to_workspace,
     })
 }
 

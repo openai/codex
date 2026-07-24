@@ -241,6 +241,20 @@ fn scheduled_task_metadata_distinguishes_unavailable_from_empty() {
     assert_eq!(with_empty_metadata.scheduled_tasks, Some(Vec::new()));
 }
 
+#[test]
+fn workspace_share_context_preserves_publish_capability() {
+    let mut plugin = directory_plugin("plugin-workspace", "workspace plugin");
+    plugin.scope = RemotePluginScope::Workspace;
+    plugin.discoverability = Some(RemotePluginShareDiscoverability::Private);
+    plugin.can_publish_to_workspace = Some(true);
+
+    let context = remote_plugin_share_context(&plugin)
+        .expect("workspace plugin should be valid")
+        .expect("workspace plugin should have share context");
+
+    assert_eq!(context.can_publish_to_workspace, Some(true));
+}
+
 fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
     RemotePluginDirectoryItem {
         id: id.to_string(),
@@ -251,6 +265,7 @@ fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
         creator_name: None,
         share_url: None,
         share_principals: None,
+        can_publish_to_workspace: None,
         installation_policy: PluginInstallPolicy::Available,
         installation_policy_source: None,
         must_show_installation_interstitial: None,

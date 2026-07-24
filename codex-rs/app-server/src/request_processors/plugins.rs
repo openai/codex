@@ -157,6 +157,7 @@ fn share_context_for_source(
                 creator_account_user_id: None,
                 creator_name: None,
                 share_principals: None,
+                can_publish_to_workspace: None,
             }),
         MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. } => None,
     }
@@ -1054,6 +1055,8 @@ impl PluginRequestProcessor {
                                     Some(remote_plugin_share_context_to_info(remote_share_context))
                                 } else {
                                     let remote_version = remote_share_context.remote_version;
+                                    let can_publish_to_workspace =
+                                        remote_share_context.can_publish_to_workspace;
                                     let remote_plugin_id = context.remote_plugin_id.clone();
                                     warn!(
                                         remote_plugin_id = %remote_plugin_id,
@@ -1061,6 +1064,7 @@ impl PluginRequestProcessor {
                                     );
                                     Some(PluginShareContext {
                                         remote_version,
+                                        can_publish_to_workspace,
                                         ..context
                                     })
                                 }
@@ -1288,6 +1292,7 @@ impl PluginRequestProcessor {
         Ok(PluginShareSaveResponse {
             remote_plugin_id,
             share_url: result.share_url.unwrap_or_default(),
+            can_publish_to_workspace: result.can_publish_to_workspace,
         })
     }
 
@@ -2211,6 +2216,7 @@ fn remote_plugin_share_context_to_info(
                 .map(plugin_share_principal_from_remote)
                 .collect()
         }),
+        can_publish_to_workspace: context.can_publish_to_workspace,
     }
 }
 

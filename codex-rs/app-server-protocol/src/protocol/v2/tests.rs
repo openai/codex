@@ -3701,11 +3701,13 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
         serde_json::to_value(PluginShareSaveResponse {
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             share_url: String::new(),
+            can_publish_to_workspace: Some(true),
         })
         .unwrap(),
         json!({
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
             "shareUrl": "",
+            "canPublishToWorkspace": true,
         }),
     );
 

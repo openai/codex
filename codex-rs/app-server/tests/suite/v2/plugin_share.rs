@@ -95,6 +95,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "plugin_id": "plugins_123",
             "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+            "can_publish_to_workspace": true,
         })))
         .expect(1)
         .mount(&server)
@@ -123,6 +124,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         PluginShareSaveResponse {
             remote_plugin_id: "plugins_123".to_string(),
             share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+            can_publish_to_workspace: Some(true),
         }
     );
 
@@ -278,6 +280,7 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
         PluginShareSaveResponse {
             remote_plugin_id: "plugins_123".to_string(),
             share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+            can_publish_to_workspace: None,
         }
     );
     Ok(())
@@ -1361,6 +1364,7 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "name": "demo-plugin",
         "scope": "WORKSPACE",
         "discoverability": "PRIVATE",
+        "can_publish_to_workspace": true,
         "share_url": "https://chatgpt.example/plugins/share/share-key-1",
         "share_principals": [
             {
@@ -1454,6 +1458,7 @@ fn expected_share_context(plugin_id: &str) -> PluginShareContext {
                 name: "Reader".to_string(),
             },
         ]),
+        can_publish_to_workspace: Some(true),
     }
 }
 
