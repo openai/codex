@@ -11,6 +11,8 @@ use codex_exec_server::FsOpenParams;
 use codex_exec_server::FsReadBlockParams;
 use codex_exec_server::FsReadBlockResponse;
 use codex_exec_server::RemoteExecServerConnectArgs;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -234,6 +236,7 @@ async fn read_block_supports_non_sequential_offsets_and_lengths() -> Result<()> 
     let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
         server.websocket_url().to_string(),
         "file-stream-protocol-test".to_string(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ))
     .await?;
     let tmp = TempDir::new()?;
@@ -296,6 +299,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
     let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
         server.websocket_url().to_string(),
         "file-stream-protocol-test".to_string(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ))
     .await?;
     let tmp = TempDir::new()?;
@@ -356,6 +360,7 @@ async fn open_rejects_handle_ids_longer_than_32_bytes() -> Result<()> {
     let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
         server.websocket_url().to_string(),
         "file-stream-protocol-test".to_string(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ))
     .await?;
     let tmp = TempDir::new()?;

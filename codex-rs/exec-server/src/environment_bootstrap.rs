@@ -33,8 +33,7 @@ impl PreparedEnvironmentManager {
                 EnvironmentDefault::EnvironmentId(default_id) => snapshot
                     .environments
                     .iter()
-                    .find(|(environment_id, _)| environment_id == default_id)
-                    .is_some_and(|(_, environment)| environment.is_remote()),
+                    .any(|(environment_id, _)| environment_id == default_id),
             },
         }
     }

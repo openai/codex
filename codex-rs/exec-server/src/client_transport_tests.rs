@@ -99,8 +99,14 @@ async fn initial_noise_connection_refreshes_bundle_after_unauthorized_handshake(
     let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
     let identity = NoiseChannelIdentity::generate()?;
 
-    let _connection =
-        ExecServerClient::open_initial_noise_rendezvous_connection(&provider, &identity).await?;
+    let _connection = ExecServerClient::open_initial_noise_rendezvous_connection(
+        &provider,
+        &identity,
+        codex_http_client::HttpClientFactory::new(
+            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+        ),
+    )
+    .await?;
 
     assert_eq!(
         sequence.returned_urls(),

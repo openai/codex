@@ -8,7 +8,6 @@ use serde::Deserialize;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::DefaultEnvironmentProvider;
-use crate::Environment;
 use crate::EnvironmentProvider;
 use crate::EnvironmentProviderFuture;
 use crate::ExecServerError;
@@ -94,19 +93,8 @@ impl TomlEnvironmentProvider {
     }
 
     async fn snapshot(&self) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
-        let mut environments = Vec::with_capacity(self.environments.len());
-        for (id, transport_params) in &self.environments {
-            environments.push((
-                id.clone(),
-                Environment::remote_with_transport(
-                    transport_params.clone(),
-                    /*local_runtime_paths*/ None,
-                ),
-            ));
-        }
-
         Ok(EnvironmentProviderSnapshot {
-            environments,
+            environments: self.environments.clone(),
             default: self.default.clone(),
             include_local: self.include_local,
         })
@@ -389,8 +377,14 @@ mod tests {
 
         assert!(include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
-        assert!(environments["devbox"].is_remote());
-        assert!(environments["ssh-dev"].is_remote());
+        assert!(matches!(
+            &environments["devbox"],
+            ExecServerTransportParams::WebSocketUrl { .. }
+        ));
+        assert!(matches!(
+            &environments["ssh-dev"],
+            ExecServerTransportParams::StdioCommand { .. }
+        ));
         assert_eq!(
             default,
             EnvironmentDefault::EnvironmentId("ssh-dev".to_string())

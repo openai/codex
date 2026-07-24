@@ -16,6 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_api::AuthProvider;
 use codex_exec_server::EnvironmentConnectionState;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
@@ -30,9 +31,9 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
-use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::cache_system_proxy_route_for_test;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
@@ -46,13 +47,18 @@ use prost::Message as ProstMessage;
 use relay_proto::RelayMessageFrame;
 use relay_proto::relay_message_frame;
 use tempfile::TempDir;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_util::task::AbortOnDropHandle;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -114,7 +120,46 @@ impl NoiseRendezvousConnectProvider for FreshBundleNoiseConnectProvider {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let rendezvous_url = format!("ws://{}", listener.local_addr()?);
+    let rendezvous_address = listener.local_addr()?;
+    let environment_rendezvous_url =
+        "ws://environment-noise-relay-system-proxy.invalid:8765/relay?role=environment";
+    let harness_rendezvous_url =
+        "ws://harness-noise-relay-system-proxy.invalid:8765/relay?role=harness";
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_url = format!("http://{}", proxy_listener.local_addr()?);
+    for rendezvous_url in [environment_rendezvous_url, harness_rendezvous_url] {
+        let proxy_resolution_url = rendezvous_url.replacen("ws://", "http://", /*count*/ 1);
+        cache_system_proxy_route_for_test(&proxy_resolution_url, proxy_url.clone());
+    }
+    let (proxy_request_tx, mut proxy_request_rx) = mpsc::unbounded_channel();
+    let _proxy_task = AbortOnDropHandle::new(tokio::spawn(async move {
+        let mut proxy_connections = JoinSet::new();
+        while let Ok((mut client, _)) = proxy_listener.accept().await {
+            let proxy_request_tx = proxy_request_tx.clone();
+            proxy_connections.spawn(async move {
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    client.read_exact(&mut byte).await?;
+                    request.push(byte[0]);
+                }
+                let request_line = String::from_utf8(request)?
+                    .lines()
+                    .next()
+                    .context("system proxy should receive a CONNECT request")?
+                    .to_string();
+                proxy_request_tx
+                    .send(request_line)
+                    .map_err(|_| anyhow::anyhow!("system proxy request receiver was dropped"))?;
+                let mut target = TcpStream::connect(rendezvous_address).await?;
+                client
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await?;
+                tokio::io::copy_bidirectional(&mut client, &mut target).await?;
+                Ok::<(), anyhow::Error>(())
+            });
+        }
+    }));
     let registry = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(format!(
@@ -122,7 +167,7 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "environment_id": ENVIRONMENT_ID,
-            "url": format!("{rendezvous_url}/relay?role=environment"),
+            "url": environment_rendezvous_url,
             "security_profile": "noise_hybrid_ik_v1",
             "executor_registration_id": EXECUTOR_REGISTRATION_ID,
         })))
@@ -142,11 +187,12 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
 
     let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
     let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
+    let http_client_factory = HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy);
     let config = RemoteEnvironmentConfig::new(
         registry.uri(),
         ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        http_client_factory.clone(),
     )?;
     let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,
@@ -154,12 +200,19 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
     ));
 
     let environment_websocket = accept_websocket(&listener, "environment").await?;
+    let environment_proxy_request =
+        "CONNECT environment-noise-relay-system-proxy.invalid:8765 HTTP/1.1";
+    let harness_proxy_request = "CONNECT harness-noise-relay-system-proxy.invalid:8765 HTTP/1.1";
+    assert_eq!(
+        timeout(TEST_TIMEOUT, proxy_request_rx.recv()).await?,
+        Some(environment_proxy_request.to_string())
+    );
     let provider = Arc::new(FreshBundleNoiseConnectProvider {
-        websocket_url: format!("{rendezvous_url}/relay?role=harness"),
+        websocket_url: harness_rendezvous_url.to_string(),
         executor_public_key: registered_executor_public_key(&registry).await?,
         calls: AtomicUsize::new(0),
     });
-    let manager = environment_manager_without_environments();
+    let manager = EnvironmentManager::without_environments(http_client_factory);
     let registration = manager
         .register_deferred_noise_environment(ENVIRONMENT_ID.to_string(), provider.clone())?;
     let environment = manager
@@ -181,6 +234,10 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
         selected_capability_roots: selected_capability_roots.clone(),
     }))?;
     let harness_websocket = accept_websocket(&listener, "harness").await?;
+    assert_eq!(
+        timeout(TEST_TIMEOUT, proxy_request_rx.recv()).await?,
+        Some(harness_proxy_request.to_string())
+    );
     let first_relay = tokio::spawn(proxy_relay_frames(
         environment_websocket,
         harness_websocket,
@@ -207,6 +264,22 @@ async fn deferred_noise_environment_connects_and_reconnects_with_fresh_bundle() 
     );
     let first_reconnected_websocket = accept_websocket(&listener, "reconnected peer").await?;
     let second_reconnected_websocket = accept_websocket(&listener, "reconnected peer").await?;
+    let mut reconnect_proxy_requests = vec![
+        timeout(TEST_TIMEOUT, proxy_request_rx.recv())
+            .await?
+            .context("first reconnected peer should use the system proxy")?,
+        timeout(TEST_TIMEOUT, proxy_request_rx.recv())
+            .await?
+            .context("second reconnected peer should use the system proxy")?,
+    ];
+    reconnect_proxy_requests.sort();
+    assert_eq!(
+        reconnect_proxy_requests,
+        vec![
+            environment_proxy_request.to_string(),
+            harness_proxy_request.to_string(),
+        ]
+    );
     let second_relay = tokio::spawn(proxy_relay_frames(
         first_reconnected_websocket,
         second_reconnected_websocket,
@@ -300,6 +373,9 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         connect_timeout: TEST_TIMEOUT,
         initialize_timeout: TEST_TIMEOUT,
         resume_session_id: None,
+        http_client_factory: codex_http_client::HttpClientFactory::new(
+            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+        ),
     };
     let client_task =
         tokio::spawn(async move { ExecServerClient::connect_noise_rendezvous(client_args).await });

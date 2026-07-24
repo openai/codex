@@ -1,19 +1,20 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::Environment;
 use crate::ExecServerError;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
+use crate::client_api::ExecServerTransportParams;
 use crate::environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment::REMOTE_ENVIRONMENT_ID;
 
-/// Lists the concrete environments available to Codex.
+/// Lists the remote environment transports available to Codex.
 ///
 /// Implementations own a startup snapshot containing both the available
-/// environment list in configured order and the default environment
-/// selection. Providers should only return provider-owned remote environments;
-/// `include_local` controls whether `EnvironmentManager` should add the local
-/// environment to the snapshot.
+/// environment transport list in configured order and the default environment
+/// selection. Providers return transport descriptions before the effective HTTP
+/// policy is available; `include_local` controls whether `EnvironmentManager`
+/// should add the local environment when the snapshot is built.
 pub trait EnvironmentProvider: Send + Sync {
     /// Returns the provider-owned environment startup snapshot.
     fn snapshot(&self) -> EnvironmentProviderFuture<'_>;
@@ -22,11 +23,22 @@ pub trait EnvironmentProvider: Send + Sync {
 pub type EnvironmentProviderFuture<'a> =
     Pin<Box<dyn Future<Output = Result<EnvironmentProviderSnapshot, ExecServerError>> + Send + 'a>>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EnvironmentProviderSnapshot {
-    pub environments: Vec<(String, Environment)>,
+    pub(crate) environments: Vec<(String, ExecServerTransportParams)>,
     pub default: EnvironmentDefault,
     pub include_local: bool,
+}
+
+impl std::fmt::Debug for EnvironmentProviderSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let environment_ids: Vec<_> = self.environments.iter().map(|(id, _)| id).collect();
+        f.debug_struct("EnvironmentProviderSnapshot")
+            .field("environments", &environment_ids)
+            .field("default", &self.default)
+            .field("include_local", &self.include_local)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,7 +71,10 @@ impl DefaultEnvironmentProvider {
         if let Some(exec_server_url) = exec_server_url {
             environments.push((
                 REMOTE_ENVIRONMENT_ID.to_string(),
-                Environment::remote_inner(exec_server_url, /*local_runtime_paths*/ None),
+                ExecServerTransportParams::websocket_url(
+                    exec_server_url,
+                    DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+                ),
             ));
         }
 
@@ -175,8 +190,11 @@ mod tests {
 
         assert!(!include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
-        let remote_environment = &environments[REMOTE_ENVIRONMENT_ID];
-        assert!(remote_environment.is_remote());
+        assert!(matches!(
+            &environments[REMOTE_ENVIRONMENT_ID],
+            ExecServerTransportParams::WebSocketUrl { websocket_url, .. }
+                if websocket_url == "ws://127.0.0.1:8765"
+        ));
         assert_eq!(
             default,
             EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string())

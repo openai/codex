@@ -112,6 +112,7 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
+use codex_http_client::HttpClientFactory;
 
 pub(crate) mod http_client;
 #[path = "client_recovery.rs"]
@@ -157,13 +158,18 @@ impl From<StdioExecServerConnectArgs> for ExecServerClientConnectOptions {
 }
 
 impl RemoteExecServerConnectArgs {
-    pub fn new(websocket_url: String, client_name: String) -> Self {
+    pub fn new(
+        websocket_url: String,
+        client_name: String,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
         Self {
             websocket_url,
             client_name,
             connect_timeout: CONNECT_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,
             resume_session_id: None,
+            http_client_factory,
         }
     }
 }
@@ -288,7 +294,8 @@ type ConnectionAttempt = OnceCell<ConnectionResult>;
 
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
-    transport_params: ExecServerTransportParams,
+    pub(crate) transport_params: ExecServerTransportParams,
+    http_client_factory: HttpClientFactory,
     recovery_policy: RecoveryPolicy,
     // Saves the first startup result so callers share it and failures remain final.
     startup: Arc<ConnectionAttempt>,
@@ -299,9 +306,13 @@ pub(crate) struct LazyRemoteExecServerClient {
 }
 
 impl LazyRemoteExecServerClient {
-    pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
+    pub(crate) fn new(
+        transport_params: ExecServerTransportParams,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
         Self {
             transport_params,
+            http_client_factory,
             recovery_policy: RecoveryPolicy::Wait,
             startup: Arc::new(ConnectionAttempt::new()),
             current_client: Arc::new(StdMutex::new(None)),
@@ -499,9 +510,12 @@ impl LazyRemoteExecServerClient {
     }
 
     async fn connect_once(&self) -> ConnectionResult {
-        let result = ExecServerClient::connect_for_transport(self.transport_params.clone())
-            .await
-            .map_err(Arc::new);
+        let result = ExecServerClient::connect_for_transport(
+            self.transport_params.clone(),
+            self.http_client_factory.clone(),
+        )
+        .await
+        .map_err(Arc::new);
         if let Ok(client) = &result {
             client
                 .attach_environment_connection_state(self.environment_connection_state_tx.clone());
@@ -547,6 +561,8 @@ pub enum ExecServerError {
         #[source]
         source: tokio_tungstenite::tungstenite::Error,
     },
+    #[error("failed to configure exec-server websocket: {0}")]
+    WebSocketConfiguration(String),
     #[error("timed out waiting for exec-server initialize handshake after {timeout:?}")]
     InitializeTimedOut { timeout: Duration },
     #[error("exec-server transport closed")]
@@ -1493,6 +1509,8 @@ mod tests {
     use codex_exec_server_protocol::JSONRPCMessage;
     use codex_exec_server_protocol::JSONRPCNotification;
     use codex_exec_server_protocol::JSONRPCResponse;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
     use codex_utils_path_uri::PathUri;
     use futures::SinkExt;
     use futures::StreamExt;
@@ -1809,6 +1827,9 @@ mod tests {
                 },
                 initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
             },
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
         )
         .await
         .expect("stdio transport should connect");
@@ -2221,11 +2242,14 @@ mod tests {
             finish_rx.await.expect("test should finish");
         });
 
-        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
-            connect_timeout: Duration::from_secs(1),
-            initialize_timeout: Duration::from_secs(1),
-        });
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout: Duration::from_secs(1),
+                initialize_timeout: Duration::from_secs(1),
+            },
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
         let stable_client = client.get().await.expect("client should connect");
         timeout(Duration::from_secs(1), resumed_rx)
             .await
@@ -2328,11 +2352,14 @@ mod tests {
             finish_rx.await.expect("test should finish");
         });
 
-        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
-            connect_timeout: Duration::from_secs(1),
-            initialize_timeout: Duration::from_secs(1),
-        });
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout: Duration::from_secs(1),
+                initialize_timeout: Duration::from_secs(1),
+            },
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
         let stable_client = client.get().await.expect("client should connect");
         let session = stable_client
             .register_session(&ProcessId::from("proc-write"))
@@ -2427,6 +2454,9 @@ mod tests {
                 connect_timeout: Duration::from_secs(1),
                 initialize_timeout: Duration::from_secs(1),
                 resume_session_id: Some("session-1".to_string()),
+                http_client_factory: codex_http_client::HttpClientFactory::new(
+                    codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+                ),
             }),
         )
         .await
@@ -2463,11 +2493,14 @@ mod tests {
                 .await
                 .expect("client should close after the test");
         });
-        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
-            connect_timeout: Duration::from_secs(1),
-            initialize_timeout: Duration::from_secs(1),
-        });
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout: Duration::from_secs(1),
+                initialize_timeout: Duration::from_secs(1),
+            },
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
 
         assert!(!client.startup_finished());
         let _startup_task = client.start_connecting();
@@ -2489,15 +2522,18 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_stdio_startup_failure_is_remembered() {
-        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::StdioCommand {
-            command: StdioExecServerCommand {
-                program: "codex-missing-exec-server-for-test".to_string(),
-                args: Vec::new(),
-                env: HashMap::new(),
-                cwd: None,
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "codex-missing-exec-server-for-test".to_string(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                },
+                initialize_timeout: Duration::from_secs(1),
             },
-            initialize_timeout: Duration::from_secs(1),
-        });
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
 
         assert!(client.start_connecting().is_none());
         assert!(!client.startup_finished());
@@ -2576,11 +2612,14 @@ mod tests {
                 .await
                 .expect("client should close after the test");
         });
-        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
-            websocket_url,
-            connect_timeout: Duration::from_secs(1),
-            initialize_timeout: Duration::from_secs(1),
-        });
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout: Duration::from_secs(1),
+                initialize_timeout: Duration::from_secs(1),
+            },
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
 
         let initial = client.get().await.expect("startup should connect");
         timeout(Duration::from_secs(1), async {
