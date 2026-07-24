@@ -58,6 +58,10 @@ mod transport;
 const IPC_CHANNEL_CAPACITY: usize = 128;
 const HOST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_WEBSOCKET_FRAME_BYTES: usize = MAX_FRAME_BYTES + std::mem::size_of::<u32>();
+// Host spawn errors become model-visible tool output. Bound configured paths
+// while preserving the executable-bearing suffix needed to diagnose failures.
+const MAX_DISPLAYED_HOST_PROGRAM_BYTES: usize = 512;
+const TRUNCATED_HOST_PROGRAM_PREFIX: &str = "...";
 
 pub(super) enum ConnectionError {
     Spawn {
@@ -82,11 +86,27 @@ impl fmt::Display for ConnectionError {
             Self::Spawn {
                 host_program,
                 error,
-            } => write!(
-                formatter,
-                "failed to spawn code-mode host {}: {error}",
-                host_program.display()
-            ),
+            } => {
+                let host_program = host_program.to_string_lossy();
+                if host_program.len() <= MAX_DISPLAYED_HOST_PROGRAM_BYTES {
+                    return write!(
+                        formatter,
+                        "failed to spawn code-mode host {host_program}: {error}"
+                    );
+                }
+
+                let mut suffix_start = host_program.len()
+                    - (MAX_DISPLAYED_HOST_PROGRAM_BYTES - TRUNCATED_HOST_PROGRAM_PREFIX.len());
+                while !host_program.is_char_boundary(suffix_start) {
+                    suffix_start += 1;
+                }
+
+                write!(
+                    formatter,
+                    "failed to spawn code-mode host {TRUNCATED_HOST_PROGRAM_PREFIX}{}: {error}",
+                    &host_program[suffix_start..]
+                )
+            }
             Self::Other(message) => formatter.write_str(message),
         }
     }

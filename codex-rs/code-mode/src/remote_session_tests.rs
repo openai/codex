@@ -32,6 +32,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::ProcessOwnedCodeModeSession;
 use super::ProcessOwnedCodeModeSessionProvider;
 use super::WebSocketCodeModeSessionProvider;
+use super::connection::ConnectionError;
 use super::resolve_host_program;
 use crate::NoopCodeModeSessionDelegate;
 
@@ -91,6 +92,41 @@ fn host_program_falls_back_to_its_name_when_main_executable_is_unknown() {
         ),
         PathBuf::from(executable_name)
     );
+}
+
+#[test]
+fn missing_host_error_limits_the_displayed_path_to_512_bytes() {
+    let executable = "codex-code-mode-host-does-not-exist";
+    let host_program = format!("{}{executable}", "missing-directory/".repeat(/*n*/ 64));
+    let expected_suffix = &host_program[host_program.len() - (512 - "...".len())..];
+    let error = ConnectionError::Spawn {
+        host_program: PathBuf::from(&host_program),
+        error: io::Error::new(io::ErrorKind::NotFound, "host unavailable"),
+    };
+
+    assert_eq!(
+        error.to_string(),
+        format!("failed to spawn code-mode host ...{expected_suffix}: host unavailable")
+    );
+}
+
+#[test]
+fn missing_host_error_preserves_utf8_boundaries_when_truncating_the_path() {
+    let executable = "codex-code-mode-host-does-not-exist";
+    let host_program = format!("{}{executable}", "🦀".repeat(/*n*/ 256));
+    let error = ConnectionError::Spawn {
+        host_program: PathBuf::from(host_program),
+        error: io::Error::new(io::ErrorKind::NotFound, "host unavailable"),
+    }
+    .to_string();
+    let displayed_path = error
+        .strip_prefix("failed to spawn code-mode host ")
+        .and_then(|message| message.strip_suffix(": host unavailable"))
+        .expect("missing-host error should contain the displayed host path");
+
+    assert!(displayed_path.starts_with("..."));
+    assert!(displayed_path.ends_with(executable));
+    assert!(displayed_path.len() <= 512);
 }
 
 #[tokio::test]
@@ -271,6 +307,23 @@ async fn websocket_provider_executes_over_shared_connector() {
         .await
         .expect("websocket test host should disconnect promptly")
         .expect("websocket test host task should succeed");
+}
+
+#[tokio::test]
+async fn provider_returns_missing_host_error_when_in_process_fallback_is_disabled() {
+    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(
+        "codex-code-mode-host-does-not-exist".into(),
+    )
+    .without_in_process_fallback();
+
+    let error = provider
+        .create_session(Arc::new(NoopCodeModeSessionDelegate))
+        .await
+        .err()
+        .expect("missing host should fail when in-process fallback is disabled");
+
+    assert!(error.contains("failed to spawn code-mode host codex-code-mode-host-does-not-exist"));
+    assert!(provider.process_host().is_some());
 }
 
 #[tokio::test]

@@ -38,6 +38,7 @@ type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
 /// Creates code-mode sessions backed by one lazily spawned process host.
 pub struct ProcessOwnedCodeModeSessionProvider {
     state: StdMutex<ProviderState>,
+    allow_in_process_fallback: bool,
 }
 
 /// Creates code-mode sessions backed by one shared remote WebSocket connection.
@@ -56,7 +57,13 @@ impl ProcessOwnedCodeModeSessionProvider {
             state: StdMutex::new(ProviderState::OwnedProcess(Arc::new(
                 OwnedCodeModeHost::new(host_program),
             ))),
+            allow_in_process_fallback: true,
         }
+    }
+
+    pub fn without_in_process_fallback(mut self) -> Self {
+        self.allow_in_process_fallback = false;
+        self
     }
 
     fn process_host(&self) -> Option<Arc<OwnedCodeModeHost>> {
@@ -91,7 +98,7 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
 
             match process_host.connection().await {
                 Ok(_) => {}
-                Err(error) if error.host_program_not_found() => {
+                Err(error) if error.host_program_not_found() && self.allow_in_process_fallback => {
                     *self
                         .state
                         .lock()

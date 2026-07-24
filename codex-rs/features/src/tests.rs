@@ -86,6 +86,42 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
+fn code_mode_host_feature_config_preserves_boolean_toggle() {
+    let features: FeaturesToml =
+        toml::from_str("code_mode_host = false").expect("features table should deserialize");
+
+    assert_eq!(features.code_mode_host, Some(FeatureToml::Enabled(false)));
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("code_mode_host".to_string(), false)])
+    );
+}
+
+#[test]
+fn code_mode_host_feature_config_deserializes_fallback_setting() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[code_mode_host]
+enabled = true
+disable_in_process_fallback = true
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.code_mode_host,
+        Some(FeatureToml::Config(crate::CodeModeHostConfigToml {
+            enabled: Some(true),
+            disable_in_process_fallback: Some(true),
+        }))
+    );
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("code_mode_host".to_string(), true)])
+    );
+}
+
+#[test]
 fn from_sources_ignores_removed_terminal_resize_reflow_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([(
         "terminal_resize_reflow".to_string(),
@@ -495,6 +531,10 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     features.enable(Feature::RespectSystemProxy);
 
     let mut features_toml = FeaturesToml {
+        code_mode_host: Some(FeatureToml::Config(crate::CodeModeHostConfigToml {
+            enabled: Some(false),
+            disable_in_process_fallback: Some(true),
+        })),
         multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: Some(false),
             min_wait_timeout_ms: Some(2500),
@@ -526,6 +566,13 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             spec.key
         );
     }
+    assert_eq!(
+        features_toml.code_mode_host,
+        Some(FeatureToml::Config(crate::CodeModeHostConfigToml {
+            enabled: Some(true),
+            disable_in_process_fallback: Some(true),
+        }))
+    );
     assert_eq!(
         features_toml.multi_agent_v2,
         Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {

@@ -385,6 +385,19 @@
       },
       "type": "object"
     },
+    "CodeModeHostConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "disable_in_process_fallback": {
+          "description": "Fail instead of running embedded V8 when the standalone host is unavailable.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -462,7 +475,7 @@
               "type": "boolean"
             },
             "code_mode_host": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
             },
             "code_mode_only": {
               "type": "boolean"
@@ -980,6 +993,16 @@
         },
         {
           "$ref": "#/definitions/CodeModeConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_CodeModeHostConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CodeModeHostConfigToml"
         }
       ]
     },
@@ -5002,7 +5025,7 @@
           "type": "boolean"
         },
         "code_mode_host": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
         },
         "code_mode_only": {
           "type": "boolean"

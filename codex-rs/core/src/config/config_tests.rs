@@ -537,6 +537,10 @@ async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
 enabled = true
 excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
 direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
+
+[features.code_mode_host]
+enabled = true
+disable_in_process_fallback = true
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -555,7 +559,9 @@ direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
         config.code_mode.direct_only_tool_namespaces,
         vec!["mcp__history".to_string(), "mcp__notes".to_string()]
     );
+    assert!(config.code_mode.disable_in_process_fallback);
     assert!(config.features.enabled(Feature::CodeMode));
+    assert!(config.features.enabled(Feature::CodeModeHost));
     Ok(())
 }
 

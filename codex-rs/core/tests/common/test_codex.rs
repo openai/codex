@@ -650,6 +650,7 @@ impl TestCodexBuilder {
             codex_core::test_support::with_code_mode_host_program(
                 thread_manager,
                 code_mode_host_program,
+                &config,
             )
         } else {
             thread_manager

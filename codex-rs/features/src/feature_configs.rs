@@ -31,6 +31,26 @@ impl FeatureConfig for CodeModeConfigToml {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct CodeModeHostConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Fail instead of running embedded V8 when the standalone host is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_in_process_fallback: Option<bool>,
+}
+
+impl FeatureConfig for CodeModeHostConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NonPrefixedMcpToolNamesConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,

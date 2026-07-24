@@ -374,6 +374,17 @@ impl ThreadManager {
             config.bundled_skills_enabled(),
             restriction_product,
         ));
+        let code_mode_session_provider: Arc<dyn CodeModeSessionProvider> =
+            if config.features.enabled(Feature::CodeModeHost) {
+                let provider = ProcessOwnedCodeModeSessionProvider::default();
+                if config.code_mode.disable_in_process_fallback {
+                    Arc::new(provider.without_in_process_fallback())
+                } else {
+                    Arc::new(provider)
+                }
+            } else {
+                Arc::new(InProcessCodeModeSessionProvider)
+            };
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -384,11 +395,7 @@ impl ThreadManager {
                 skills_service,
                 plugins_manager,
                 mcp_manager,
-                code_mode_session_provider: if config.features.enabled(Feature::CodeModeHost) {
-                    Arc::new(ProcessOwnedCodeModeSessionProvider::default())
-                } else {
-                    Arc::new(InProcessCodeModeSessionProvider)
-                },
+                code_mode_session_provider,
                 extensions,
                 user_instructions_provider,
                 thread_store,
@@ -418,13 +425,20 @@ impl ThreadManager {
         self
     }
 
-    pub(crate) fn with_code_mode_host_program_for_tests(mut self, host_program: PathBuf) -> Self {
+    pub(crate) fn with_code_mode_host_program_for_tests(
+        mut self,
+        host_program: PathBuf,
+        config: &Config,
+    ) -> Self {
         let Some(state) = Arc::get_mut(&mut self.state) else {
             unreachable!("new thread manager state should not be shared");
         };
-        state.code_mode_session_provider = Arc::new(
-            ProcessOwnedCodeModeSessionProvider::with_host_program(host_program),
-        );
+        let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(host_program);
+        state.code_mode_session_provider = if config.code_mode.disable_in_process_fallback {
+            Arc::new(provider.without_in_process_fallback())
+        } else {
+            Arc::new(provider)
+        };
         self
     }
 
