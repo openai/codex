@@ -3066,9 +3066,10 @@ mod tests {
 
     #[test]
     fn delete_force_requires_uuid() {
-        assert!(delete_action("123e4567-e89b-12d3-a456-426614174000", true).is_ok());
+        assert!(delete_action("123e4567-e89b-12d3-a456-426614174000", /*force*/ true).is_ok());
 
-        let err = delete_action("my-thread", true).expect_err("name should require prompt");
+        let err =
+            delete_action("my-thread", /*force*/ true).expect_err("name should require prompt");
         assert_eq!(
             err.to_string(),
             "--force requires a session UUID; names must be confirmed interactively"
