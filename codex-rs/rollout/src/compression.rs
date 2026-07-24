@@ -89,20 +89,24 @@ pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result
         std::fs::create_dir_all(parent)?;
     }
     let result: io::Result<()> = (|| {
-        let permissions = std::fs::metadata(compressed_path.as_path())?.permissions();
+        let metadata = std::fs::metadata(compressed_path.as_path())?;
+        let permissions = metadata.permissions();
+        let mut output = create_file_with_permissions(temp_path.as_path(), &permissions)?;
         {
             let input = File::open(compressed_path.as_path())?;
             let mut decoder = zstd::stream::read::Decoder::new(input)?;
-            let mut output = create_file_with_permissions(temp_path.as_path(), &permissions)?;
             io::copy(&mut decoder, &mut output)?;
-            output.flush()?;
-            output.sync_all()?;
         }
+        output.flush()?;
+        output.sync_all()?;
         match std::fs::hard_link(temp_path.as_path(), plain_path.as_path()) {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
             Err(_) => persist_temp_file_noclobber(temp_path.as_path(), plain_path.as_path())?,
         }
+        output.set_times(std::fs::FileTimes::new().set_modified(metadata.modified()?))?;
+        output.sync_all()?;
+        drop(output);
         let _ = std::fs::remove_file(temp_path.as_path());
         match std::fs::remove_file(compressed_path.as_path()) {
             Ok(()) => {}

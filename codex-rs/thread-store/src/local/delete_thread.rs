@@ -29,6 +29,7 @@ pub(super) async fn delete_thread(
     params: DeleteThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    let _lifecycle_guard = store.live_writer_locks.lock_lifecycle(thread_id).await;
     let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let reference_index = scan_reference_index(store).await?;
     if reference_index.reference_count(thread_id) > 0 {
@@ -50,6 +51,10 @@ pub(super) async fn delete_threads(
     let deletion_set: HashSet<_> = thread_ids.iter().copied().collect();
     let mut lock_thread_ids: Vec<_> = deletion_set.iter().copied().collect();
     lock_thread_ids.sort_unstable_by_key(ToString::to_string);
+    let mut _lifecycle_guards = Vec::with_capacity(lock_thread_ids.len());
+    for thread_id in &lock_thread_ids {
+        _lifecycle_guards.push(store.live_writer_locks.lock_lifecycle(*thread_id).await);
+    }
     let mut _live_writer_guards = Vec::with_capacity(lock_thread_ids.len());
     for &thread_id in &lock_thread_ids {
         _live_writer_guards.push(store.live_writer_locks.lock(thread_id).await);

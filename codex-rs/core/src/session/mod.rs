@@ -115,6 +115,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -413,6 +414,15 @@ pub(crate) enum GitEnrichmentPolicy {
     Skip,
 }
 
+/// Controls which fork history belongs in the newly created thread's own rollout.
+pub(crate) enum ForkPersistence {
+    Copied,
+    Referenced {
+        history_base: Option<HistoryPosition>,
+        inherited_item_count: usize,
+    },
+}
+
 pub(crate) struct SessionSpawnArgs {
     pub(crate) config: Config,
     pub(crate) allow_provider_model_fallback: bool,
@@ -428,6 +438,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) requested_history_mode: Option<ThreadHistoryMode>,
+    pub(crate) fork_persistence: ForkPersistence,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -523,6 +534,7 @@ impl Session {
             extensions,
             conversation_history,
             requested_history_mode,
+            fork_persistence,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -716,6 +728,7 @@ impl Session {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            fork_persistence,
             session_source_clone,
             skills_service,
             plugins_manager,
@@ -1352,16 +1365,29 @@ impl Session {
 
                 let thread_settings_applied =
                     RolloutItem::EventMsg(handlers::thread_settings_applied_event(self).await);
-                if is_paginated_subagent {
-                    // Paginated subagents persist inherited model context while creating the live
-                    // thread so the copied prefix is not observed as child-owned metadata.
-                    self.persist_rollout_items(&[thread_settings_applied]).await;
-                } else {
-                    // Keep the copied prefix and the child's effective settings in one append so a
-                    // cold resume cannot observe inherited settings as the child's latest value.
-                    rollout_items.push(thread_settings_applied);
-                    self.persist_rollout_items(&rollout_items).await;
+                match &self.fork_persistence {
+                    ForkPersistence::Referenced {
+                        inherited_item_count,
+                        ..
+                    } => {
+                        // Ancestor records remain behind history_base; only effective child
+                        // settings and boundaries synthesized by snapshot processing are local.
+                        rollout_items.drain(..*inherited_item_count);
+                        rollout_items.insert(0, thread_settings_applied);
+                    }
+                    ForkPersistence::Copied if is_paginated_subagent => {
+                        // Paginated subagents already persist inherited context when their live
+                        // thread is created.
+                        rollout_items.clear();
+                        rollout_items.push(thread_settings_applied);
+                    }
+                    ForkPersistence::Copied => {
+                        // Keep the copied prefix and effective child settings in one append so a
+                        // cold resume cannot observe inherited settings as the latest value.
+                        rollout_items.push(thread_settings_applied);
+                    }
                 }
+                self.persist_rollout_items(&rollout_items).await;
 
                 // Forked threads should remain file-backed immediately after startup.
                 self.ensure_rollout_materialized().await;

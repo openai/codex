@@ -15,6 +15,8 @@ use crate::ListItemsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
+use crate::PrepareForkParams;
+use crate::PreparedFork;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
@@ -91,6 +93,17 @@ pub trait ThreadStore: Any + Send + Sync {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
                 operation: "load_latest_model_context",
+            })
+        })
+    }
+
+    /// Freezes source history and model context used to initialize a referenced fork.
+    ///
+    /// Stores without reference-backed fork support can retain this default implementation.
+    fn prepare_fork(&self, _params: PrepareForkParams) -> ThreadStoreFuture<'_, PreparedFork> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "prepare_fork",
             })
         })
     }

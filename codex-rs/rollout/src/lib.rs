@@ -39,6 +39,13 @@ pub use compression::existing_rollout_path;
 pub use compression::open_rollout_line_reader;
 pub use compression::plain_rollout_path;
 pub use compression::spawn_rollout_compression_worker;
+
+/// Materializes a compressed rollout as plain JSONL before another rollout references it.
+pub async fn materialize_rollout_for_reference(
+    path: &std::path::Path,
+) -> std::io::Result<std::path::PathBuf> {
+    compression::materialize_rollout_for_append(path).await
+}
 pub use config::Config;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;

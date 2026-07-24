@@ -6,6 +6,7 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::path::Path;
 
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -20,10 +21,15 @@ pub(crate) enum RolloutOrdinalState {
 }
 
 impl RolloutOrdinalState {
-    pub(crate) fn for_new_rollout(history_mode: ThreadHistoryMode) -> Self {
+    pub(crate) fn for_new_rollout(
+        history_mode: ThreadHistoryMode,
+        history_base: Option<HistoryPosition>,
+    ) -> Self {
         match history_mode {
             ThreadHistoryMode::Legacy => Self::Legacy,
-            ThreadHistoryMode::Paginated => Self::Paginated { next: Some(0) },
+            ThreadHistoryMode::Paginated => Self::Paginated {
+                next: Some(history_base.map_or(0, |base| base.end_ordinal_exclusive)),
+            },
         }
     }
 

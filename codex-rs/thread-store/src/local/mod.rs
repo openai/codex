@@ -5,6 +5,7 @@ mod helpers;
 mod list_threads;
 mod live_writer;
 mod model_context;
+mod paginated_fork;
 mod read_thread;
 // This lands before the reader PRs that consume the shared lineage resolver.
 #[allow(dead_code)]
@@ -31,6 +32,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::OwnedMutexGuard;
+use tokio::sync::OwnedRwLockReadGuard;
+use tokio::sync::OwnedRwLockWriteGuard;
+use tokio::sync::RwLock;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -43,6 +47,8 @@ use crate::ListItemsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
+use crate::PrepareForkParams;
+use crate::PreparedFork;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
@@ -99,19 +105,55 @@ struct LiveRecorderEntry {
 struct LiveWriterLocks {
     // Keep per-thread locks after a writer goes idle. Removing one while another caller is about
     // to acquire it could let two operations for the same thread run at once.
-    by_thread: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
+    by_thread: Mutex<HashMap<ThreadId, Arc<ThreadCoordination>>>,
+}
+
+#[derive(Default)]
+struct ThreadCoordination {
+    // Serialize writes and capture consistent fork snapshots.
+    writer: Arc<Mutex<()>>,
+    // Forks hold a shared lease until their child reference is durable; deletion, archive, and
+    // unarchive require exclusive access. Keeping this separate from `writer` lets the source
+    // accept writes during child initialization, including MCP startup that can take 30 seconds.
+    // Operations that need both locks must acquire `lifecycle` before `writer`.
+    lifecycle: Arc<RwLock<()>>,
 }
 
 impl LiveWriterLocks {
-    async fn lock(&self, thread_id: ThreadId) -> OwnedMutexGuard<()> {
-        let lock = self
-            .by_thread
+    async fn coordination(&self, thread_id: ThreadId) -> Arc<ThreadCoordination> {
+        self.by_thread
             .lock()
             .await
             .entry(thread_id)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone();
-        lock.lock_owned().await
+            .or_default()
+            .clone()
+    }
+
+    async fn lock(&self, thread_id: ThreadId) -> OwnedMutexGuard<()> {
+        self.coordination(thread_id)
+            .await
+            .writer
+            .clone()
+            .lock_owned()
+            .await
+    }
+
+    async fn reserve_lifecycle(&self, thread_id: ThreadId) -> OwnedRwLockReadGuard<()> {
+        self.coordination(thread_id)
+            .await
+            .lifecycle
+            .clone()
+            .read_owned()
+            .await
+    }
+
+    async fn lock_lifecycle(&self, thread_id: ThreadId) -> OwnedRwLockWriteGuard<()> {
+        self.coordination(thread_id)
+            .await
+            .lifecycle
+            .clone()
+            .write_owned()
+            .await
     }
 }
 
@@ -386,6 +428,10 @@ impl ThreadStore for LocalThreadStore {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredModelContext> {
         Box::pin(async move { model_context::load_latest_model_context(self, params).await })
+    }
+
+    fn prepare_fork(&self, params: PrepareForkParams) -> ThreadStoreFuture<'_, PreparedFork> {
+        Box::pin(async move { paginated_fork::prepare(self, params).await })
     }
 
     fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreFuture<'_, StoredThread> {
@@ -1313,6 +1359,15 @@ mod tests {
                 RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "Hello from user"
             )
         }));
+
+        let error = store
+            .prepare_fork(PrepareForkParams {
+                thread_id,
+                boundary: crate::ForkBoundary::Latest,
+            })
+            .await
+            .expect_err("external rollouts cannot be referenced by thread id");
+        assert!(error.to_string().contains("must be in Codex home"));
     }
 
     #[tokio::test]
@@ -1575,6 +1630,7 @@ mod tests {
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: ThreadHistoryMode::Legacy,
+            history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: uuid::Uuid::now_v7().to_string(),
             metadata: thread_metadata(),

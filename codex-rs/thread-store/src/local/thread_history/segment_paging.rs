@@ -48,7 +48,9 @@ pub(super) async fn page_turn_rows(
 ) -> ThreadStoreResult<SegmentPage<StoredTurnRow>> {
     let cursor = parse_cursor(cursor, requested_thread_id, CursorScope::Turns)?;
     let mut rows = Vec::new();
-    for (segment, segment_cursor) in segments_from_cursor(lineage, direction, cursor.as_ref())? {
+    for (segment_index, segment, segment_cursor) in
+        segments_from_cursor(lineage, direction, cursor.as_ref())?
+    {
         let remaining = remaining_limit(page_size, rows.len())?;
         if remaining == 0 {
             break;
@@ -71,6 +73,19 @@ WHERE thread_id =
         );
         query.push_bind(segment.thread_id().to_string());
         push_segment_range(&mut query, segment)?;
+        for newer_segment in &lineage.segments()[segment_index + 1..] {
+            query
+                .push(" AND NOT EXISTS (SELECT 1 FROM thread_turns AS newer_turn WHERE newer_turn.thread_id = ")
+                .push_bind(newer_segment.thread_id().to_string())
+                .push(" AND newer_turn.turn_id = thread_turns.turn_id AND newer_turn.rollout_ordinal >= ")
+                .push_bind(sqlite_integer(newer_segment.start_ordinal())?);
+            if let Some(end_ordinal) = newer_segment.end_ordinal() {
+                query
+                    .push(" AND newer_turn.rollout_ordinal < ")
+                    .push_bind(sqlite_integer(end_ordinal)?);
+            }
+            query.push(")");
+        }
         push_cursor_clause(&mut query, direction, segment_cursor)?;
         push_order_and_limit(&mut query, direction, remaining);
         rows.extend(
@@ -113,7 +128,7 @@ pub(super) async fn page_item_rows(
         CursorScope::ItemsByCreatedAtOrdinal,
     )?;
     let mut rows = Vec::new();
-    for (segment, segment_cursor) in
+    for (_, segment, segment_cursor) in
         segments_from_cursor(lineage, params.sort_direction, cursor.as_ref())?
     {
         let remaining = remaining_limit(params.page_size, rows.len())?;
@@ -168,12 +183,6 @@ async fn page_updated_item_rows(
         params.thread_id,
         CursorScope::ItemsByUpdatedAtOrdinal,
     )?;
-    if cursor
-        .as_ref()
-        .is_some_and(|cursor| cursor.physical_thread_id != params.thread_id)
-    {
-        return Err(invalid_cursor("unknown physical segment"));
-    }
     let mut query = QueryBuilder::<Sqlite>::new(
         r#"
 SELECT turn_id, item_id, updated_at_ordinal AS rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
@@ -230,22 +239,15 @@ fn segments_from_cursor<'a>(
     lineage: &'a RolloutLineage,
     direction: SortDirection,
     cursor: Option<&'a HistoryCursor>,
-) -> ThreadStoreResult<Vec<(&'a RolloutLineageSegment, Option<&'a HistoryCursor>)>> {
+) -> ThreadStoreResult<Vec<(usize, &'a RolloutLineageSegment, Option<&'a HistoryCursor>)>> {
     let segments = lineage.segments();
     let cursor_index = cursor
         .map(|cursor| {
-            segments
-                .iter()
-                .position(|segment| segment.thread_id() == cursor.physical_thread_id)
-                .ok_or_else(|| invalid_cursor("unknown physical segment"))
+            lineage
+                .segment_index_for_ordinal(cursor.rollout_ordinal)
+                .ok_or_else(|| invalid_cursor("position outside thread lineage"))
         })
         .transpose()?;
-    if let Some(cursor) = cursor
-        && let Some(index) = cursor_index
-        && !cursor_in_segment(cursor, &segments[index])
-    {
-        return Err(invalid_cursor("position outside physical segment"));
-    }
     let indexes: Vec<usize> = match direction {
         SortDirection::Asc => (cursor_index.unwrap_or(0)..segments.len()).collect(),
         SortDirection::Desc => {
@@ -261,17 +263,9 @@ fn segments_from_cursor<'a>(
             } else {
                 None
             };
-            (&segments[index], segment_cursor)
+            (index, &segments[index], segment_cursor)
         })
         .collect())
-}
-
-fn cursor_in_segment(cursor: &HistoryCursor, segment: &RolloutLineageSegment) -> bool {
-    let ordinal = cursor.rollout_ordinal;
-    ordinal >= segment.start_ordinal()
-        && segment
-            .end_ordinal()
-            .is_none_or(|end_ordinal| ordinal < end_ordinal)
 }
 
 fn push_segment_range(
@@ -344,7 +338,7 @@ fn finish_page<T: HasPosition>(
             serialize_cursor(
                 requested_thread_id,
                 scope.clone(),
-                row.position(),
+                row.position().rollout_ordinal,
                 /*include_anchor*/ true,
             )
         })
@@ -355,7 +349,7 @@ fn finish_page<T: HasPosition>(
                 serialize_cursor(
                     requested_thread_id,
                     scope,
-                    row.position(),
+                    row.position().rollout_ordinal,
                     /*include_anchor*/ false,
                 )
             })

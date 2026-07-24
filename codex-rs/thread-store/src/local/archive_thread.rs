@@ -22,6 +22,10 @@ pub(super) async fn archive_threads(
     lock_thread_ids.extend(thread_ids.iter().copied());
     lock_thread_ids.sort_unstable_by_key(ToString::to_string);
     lock_thread_ids.dedup();
+    let mut _lifecycle_guards = Vec::with_capacity(lock_thread_ids.len());
+    for thread_id in &lock_thread_ids {
+        _lifecycle_guards.push(store.live_writer_locks.lock_lifecycle(*thread_id).await);
+    }
     let mut _live_writer_guards = Vec::with_capacity(lock_thread_ids.len());
     for thread_id in &lock_thread_ids {
         _live_writer_guards.push(store.live_writer_locks.lock(*thread_id).await);
@@ -109,6 +113,8 @@ pub(super) async fn archive_thread(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
@@ -127,6 +133,40 @@ mod tests {
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_session_file;
     use crate::local::test_support::write_session_file_with_history_mode;
+
+    #[tokio::test]
+    async fn archive_waits_for_fork_reservation_without_holding_writer_lock() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = Uuid::from_u128(205);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T12-00-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("session file");
+        let reservation = store.live_writer_locks.reserve_lifecycle(thread_id).await;
+        let mut archive = Box::pin(store.archive_thread(ArchiveThreadParams { thread_id }));
+
+        tokio::select! {
+            biased;
+            result = &mut archive => panic!("archive completed while the source was reserved: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        let writer_guard = tokio::time::timeout(
+            Duration::from_secs(1),
+            store.live_writer_locks.lock(thread_id),
+        )
+        .await
+        .expect("pending archive should not hold the writer lock");
+        drop(writer_guard);
+        drop(reservation);
+
+        archive.await.expect("archive reserved thread");
+        assert!(!active_path.exists());
+    }
 
     #[tokio::test]
     async fn archive_threads_rejects_owned_descendants_before_archiving_anything() {
