@@ -10,7 +10,7 @@ use crate::loader::load_plugin_apps_from_manifest;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
 use crate::loader::load_plugin_mcp_servers_from_manifest;
-use crate::loader::load_plugin_skills;
+use crate::loader::load_plugin_skills_with_identity;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
 use crate::loader::materialize_marketplace_plugin_source;
@@ -51,6 +51,9 @@ use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
+use crate::remote_plugin_id_resolver::RemoteInstalledPluginsSnapshot;
+use crate::remote_plugin_id_resolver::RemotePluginIdResolver;
+use crate::remote_plugin_id_resolver::persisted_remote_plugin_id_for_installation;
 use crate::startup_sync::curated_plugins_api_marketplace_path;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::startup_sync::read_curated_plugins_sha;
@@ -91,6 +94,7 @@ use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -643,7 +647,7 @@ impl PluginsManager {
         let plugin_skill_snapshots = PluginSkillSnapshots::for_plugin_load();
         let plugins = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(),
+            self.remote_installed_plugins_snapshot(),
             &self.store,
             Some(&plugin_skill_snapshots),
             self.restriction_product,
@@ -729,7 +733,7 @@ impl PluginsManager {
         }
         let plugins = load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(),
+            self.remote_installed_plugins_snapshot(),
             &self.store,
             /*plugin_skill_snapshots*/ None,
             self.restriction_product,
@@ -818,35 +822,37 @@ impl PluginsManager {
         remote_installed_plugins_to_config(plugins, &self.store)
     }
 
-    fn remote_plugin_id_for(&self, plugin_id: &PluginId) -> Option<String> {
-        let cached_remote_plugin_id = {
-            let cache = match self.remote_installed_plugins_cache.read() {
-                Ok(cache) => cache,
-                Err(err) => err.into_inner(),
-            };
-            cache.as_ref().and_then(|plugins| {
-                plugins.iter().find_map(|plugin| {
-                    (plugin.name == plugin_id.plugin_name
-                        && plugin.marketplace_name == plugin_id.marketplace_name)
-                        .then(|| plugin.id.clone())
-                })
-            })
+    fn remote_installed_plugins_snapshot(&self) -> RemoteInstalledPluginsSnapshot {
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
         };
-        if cached_remote_plugin_id.is_some() {
-            return cached_remote_plugin_id;
-        }
+        let Some(plugins) = cache.as_ref() else {
+            return RemoteInstalledPluginsSnapshot::default();
+        };
 
-        match self.store.remote_plugin_id(plugin_id) {
-            Ok(remote_plugin_id) => remote_plugin_id,
-            Err(err) => {
-                tracing::warn!(
-                    plugin_id = %plugin_id.as_key(),
-                    error = %err,
-                    "failed to read persisted remote plugin identity"
-                );
-                None
-            }
+        RemoteInstalledPluginsSnapshot {
+            configs: remote_installed_plugins_to_config(plugins, &self.store),
+            remote_plugin_id_resolver: RemotePluginIdResolver::new(plugins),
         }
+    }
+
+    fn remote_plugin_id_for(&self, plugin_id: &PluginId) -> Option<String> {
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        if let Some(plugins) = cache.as_ref() {
+            return plugins.iter().find_map(|plugin| {
+                (plugin.name == plugin_id.plugin_name
+                    && plugin.marketplace_name == plugin_id.marketplace_name)
+                    .then(|| plugin.id.clone())
+            });
+        }
+        drop(cache);
+
+        let installation = self.store.active_plugin_installation(plugin_id)?;
+        persisted_remote_plugin_id_for_installation(&installation)
     }
 
     pub async fn telemetry_metadata_for_installed_plugin(
@@ -1958,9 +1964,13 @@ impl PluginsManager {
             manifest.interface.clone(),
             marketplace_category,
         );
-        let resolved_skills = load_plugin_skills(
+        let plugin_identity = PluginIdentity {
+            plugin_id: plugin_id.as_key(),
+            remote_plugin_id: self.remote_plugin_id_for(&plugin_id),
+        };
+        let resolved_skills = load_plugin_skills_with_identity(
             &source_path,
-            &plugin_id,
+            &plugin_identity,
             &manifest,
             self.restriction_product,
             &codex_core_skills::config_rules::skill_config_rules_from_stack(

@@ -8,6 +8,7 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
 use tokio::sync::Semaphore;
 use tracing::info;
@@ -280,8 +281,16 @@ impl SkillsService {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(AbsolutePathBuf, u8, Option<String>, Option<String>)>,
+    roots: Vec<ConfigSkillRootCacheKey>,
     skill_config_rules: SkillConfigRules,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConfigSkillRootCacheKey {
+    path: AbsolutePathBuf,
+    scope_rank: u8,
+    plugin_identity: Option<PluginIdentity>,
+    plugin_namespace: Option<String>,
 }
 
 pub fn bundled_skills_enabled_from_stack(
@@ -320,12 +329,12 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (
-                    root.path.clone(),
+                ConfigSkillRootCacheKey {
+                    path: root.path.clone(),
                     scope_rank,
-                    root.plugin_id.clone(),
-                    root.plugin_namespace.clone(),
-                )
+                    plugin_identity: root.plugin_identity.clone(),
+                    plugin_namespace: root.plugin_namespace.clone(),
+                }
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),

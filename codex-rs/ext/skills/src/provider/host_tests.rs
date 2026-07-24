@@ -36,7 +36,7 @@ async fn host_catalog_entries_carry_their_render_metadata() -> Result<(), Box<dy
             path: root.clone(),
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: None,
+            plugin_identity: None,
             plugin_namespace: None,
             plugin_root: None,
             discovery_mode: Default::default(),

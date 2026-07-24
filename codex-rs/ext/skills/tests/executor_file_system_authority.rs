@@ -209,7 +209,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
                 canonical_root: PathUri::from_abs_path(&canonical_root),
                 has_plugin_manifest: false,
             }),
-            plugin_id: None,
+            plugin_identity: None,
             plugin_namespace: None,
             plugin_root: None,
             discovery_mode: Default::default(),

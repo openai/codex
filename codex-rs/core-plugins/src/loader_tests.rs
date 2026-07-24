@@ -159,7 +159,7 @@ enabled = true
 
     let full = load_plugins_from_layer_stack(
         &stack,
-        HashMap::new(),
+        RemoteInstalledPluginsSnapshot::default(),
         &store,
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),

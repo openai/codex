@@ -6,7 +6,7 @@ pub enum PluginIdError {
     Invalid(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PluginId {
     pub plugin_name: String,
     pub marketplace_name: String,

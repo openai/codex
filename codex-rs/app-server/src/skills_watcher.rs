@@ -115,7 +115,7 @@ impl SkillsWatcher {
             .await
             .into_iter()
             // Plugin roots are invalidated by plugin lifecycle operations.
-            .filter(|root| root.plugin_id.is_none())
+            .filter(|root| root.plugin_identity.is_none())
             .map(|root| WatchPath {
                 path: root.path.into_path_buf(),
                 recursive: true,

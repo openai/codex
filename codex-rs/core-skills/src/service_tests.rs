@@ -11,6 +11,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
 use pretty_assertions::assert_eq;
@@ -70,7 +71,10 @@ fn plugin_skill_root_for_skill_path(
         .expect("plugin skills root should live under a plugin root");
     PluginSkillRoot {
         path: skills_root.abs(),
-        plugin_id: plugin_id.to_string(),
+        plugin_identity: PluginIdentity {
+            plugin_id: plugin_id.to_string(),
+            remote_plugin_id: None,
+        },
         plugin_namespace: plugin_namespace.to_string(),
         plugin_root: plugin_root.abs(),
         discovery_mode: SkillDiscoveryMode::Recursive,
@@ -91,6 +95,7 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
             .expect("skill path should canonicalize"),
         scope: SkillScope::User,
         plugin_id: None,
+        remote_plugin_id: None,
     }
 }
 
@@ -228,6 +233,53 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
         skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
     assert_eq!(outcome2.errors, outcome1.errors);
     assert_eq!(outcome2.skills, outcome1.skills);
+}
+
+#[tokio::test]
+async fn skills_for_config_refreshes_cache_when_remote_plugin_id_changes() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_plugin_skill(
+        &codex_home,
+        "test",
+        "sample",
+        "sample-search",
+        "sample-search",
+        "search sample data",
+    );
+    let config_layer_stack = config_stack(&codex_home, "");
+    let mut plugin_skill_root =
+        plugin_skill_root_for_skill_path(&skill_path, "sample@test", "sample");
+    let skills_service = SkillsService::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    skills_for_config_with_stack(
+        &skills_service,
+        &cwd,
+        &config_layer_stack,
+        &[plugin_skill_root.clone()],
+    )
+    .await;
+
+    plugin_skill_root.plugin_identity.remote_plugin_id = Some("plugins~Plugin_sample".to_string());
+    let refreshed = skills_for_config_with_stack(
+        &skills_service,
+        &cwd,
+        &config_layer_stack,
+        &[plugin_skill_root],
+    )
+    .await;
+
+    assert_eq!(
+        refreshed
+            .skills
+            .iter()
+            .find(|skill| skill.name == "sample:sample-search")
+            .and_then(|skill| skill.remote_plugin_id.as_deref()),
+        Some("plugins~Plugin_sample")
+    );
 }
 
 #[tokio::test]

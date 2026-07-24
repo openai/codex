@@ -56,14 +56,14 @@ where
                 .await
                 .unwrap_or_else(|_| unreachable!());
             let cache_key = match (
-                root.plugin_id.clone(),
+                root.plugin_identity.clone(),
                 root.plugin_namespace.clone(),
                 root.plugin_root.clone(),
             ) {
-                (Some(plugin_id), Some(plugin_namespace), Some(plugin_root)) => {
+                (Some(plugin_identity), Some(plugin_namespace), Some(plugin_root)) => {
                     Some(PluginSkillRoot {
                         path: root.path.clone(),
-                        plugin_id,
+                        plugin_identity,
                         plugin_namespace,
                         plugin_root,
                         discovery_mode: root.discovery_mode,

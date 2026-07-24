@@ -109,6 +109,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
         path_to_skills_md: skill_path,
         scope: SkillScope::User,
         plugin_id: None,
+        remote_plugin_id: None,
     });
     let loaded_skills = Arc::new(outcome);
     let skill_prompt_path = skill_path_string.replace('\\', "/");
@@ -1069,7 +1070,7 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
             path: root,
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: None,
+            plugin_identity: None,
             plugin_namespace: None,
             plugin_root: None,
             discovery_mode: Default::default(),

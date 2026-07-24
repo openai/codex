@@ -469,7 +469,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
             path: host_root.abs(),
             scope: SkillScope::User,
             file_system,
-            plugin_id: None,
+            plugin_identity: None,
             plugin_namespace: None,
             plugin_root: None,
             discovery_mode: codex_utils_plugins::SkillDiscoveryMode::Recursive,
@@ -504,6 +504,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
                 path_to_skills_md: first_skill_path,
                 scope: SkillScope::User,
                 plugin_id: None,
+                remote_plugin_id: None,
             },
             SkillMetadata {
                 name: "linked:second".to_string(),
@@ -515,6 +516,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
                 path_to_skills_md: second_skill_path,
                 scope: SkillScope::User,
                 plugin_id: None,
+                remote_plugin_id: None,
             },
         ]
     );

@@ -15,6 +15,8 @@ use crate::marketplace_policy::configured_plugins_from_stack;
 use crate::npm_source::materialize_npm_plugin_source;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
+use crate::remote_plugin_id_resolver::RemoteInstalledPluginsSnapshot;
+use crate::remote_plugin_id_resolver::RemotePluginIdResolver;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use crate::store::plugin_version_for_source_with_fallback_manifest;
@@ -45,6 +47,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillConfigRules;
 use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::SkillDiscoveryMode;
 use codex_utils_plugins::find_plugin_manifest_path;
 use serde_json::Value as JsonValue;
@@ -78,6 +81,7 @@ enum PluginLoadScope<'a> {
         restriction_product: Option<Product>,
         skill_config_rules: &'a SkillConfigRules,
         plugin_skill_snapshots: Option<&'a PluginSkillSnapshots>,
+        remote_plugin_id_resolver: &'a RemotePluginIdResolver,
         root_scan_slots: Arc<Semaphore>,
     },
     HooksOnly,
@@ -117,7 +121,7 @@ pub(crate) fn log_plugin_load_errors(plugins: &[LoadedPlugin<McpServerConfig>]) 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
-    extra_plugins: HashMap<String, PluginConfig>,
+    remote_installed_plugins_snapshot: RemoteInstalledPluginsSnapshot,
     store: &PluginStore,
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
     restriction_product: Option<Product>,
@@ -125,6 +129,10 @@ pub(crate) async fn load_plugins_from_layer_stack(
     root_scan_slots: Arc<Semaphore>,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
+    let RemoteInstalledPluginsSnapshot {
+        configs: extra_plugins,
+        remote_plugin_id_resolver,
+    } = remote_installed_plugins_snapshot;
     load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
         extra_plugins,
@@ -134,6 +142,7 @@ pub(crate) async fn load_plugins_from_layer_stack(
             restriction_product,
             skill_config_rules: &skill_config_rules,
             plugin_skill_snapshots,
+            remote_plugin_id_resolver: &remote_plugin_id_resolver,
             root_scan_slots,
         },
     )
@@ -753,18 +762,20 @@ async fn load_plugin(
     scope: &PluginLoadScope<'_>,
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
-    let active_plugin_root = plugin_id
+    let active_plugin_installation = plugin_id
         .as_ref()
         .ok()
-        .and_then(|plugin_id| store.active_plugin_root(plugin_id));
-    let root = active_plugin_root
-        .clone()
+        .and_then(|plugin_id| store.active_plugin_installation(plugin_id));
+    let root = active_plugin_installation
+        .as_ref()
+        .map(|installation| installation.root.clone())
         .unwrap_or_else(|| match &plugin_id {
             Ok(plugin_id) => store.plugin_base_root(plugin_id),
             Err(_) => store.root().clone(),
         });
     let mut loaded_plugin = LoadedPlugin {
         config_name,
+        remote_plugin_id: None,
         manifest_name: None,
         plugin_namespace: None,
         manifest_description: None,
@@ -784,19 +795,29 @@ async fn load_plugin(
         return loaded_plugin;
     }
 
-    let (loaded_plugin_id, plugin_root) = match plugin_id {
+    let (loaded_plugin_id, installation) = match plugin_id {
         Ok(plugin_id) => {
-            let Some(plugin_root) = active_plugin_root else {
+            let Some(installation) = active_plugin_installation else {
                 loaded_plugin.error = Some("plugin is not installed".to_string());
                 return loaded_plugin;
             };
-            (plugin_id, plugin_root)
+            (plugin_id, installation)
         }
         Err(err) => {
             loaded_plugin.error = Some(err.to_string());
             return loaded_plugin;
         }
     };
+
+    loaded_plugin.remote_plugin_id = match scope {
+        PluginLoadScope::AllCapabilities {
+            remote_plugin_id_resolver,
+            ..
+        } => remote_plugin_id_resolver.remote_plugin_id_for_installation(&installation),
+        PluginLoadScope::HooksOnly => None,
+    };
+
+    let plugin_root = installation.root;
 
     if !plugin_root.as_path().is_dir() {
         loaded_plugin.error = Some("path does not exist or is not a directory".to_string());
@@ -815,14 +836,19 @@ async fn load_plugin(
             restriction_product,
             skill_config_rules,
             plugin_skill_snapshots,
+            remote_plugin_id_resolver: _,
             root_scan_slots,
         } => {
             loaded_plugin.manifest_name = Some(manifest.display_name().to_string());
             loaded_plugin.manifest_description = manifest.description.clone();
             loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
-            let resolved_skills = load_plugin_skills(
+            let plugin_identity = PluginIdentity {
+                plugin_id: loaded_plugin_id.as_key(),
+                remote_plugin_id: loaded_plugin.remote_plugin_id.clone(),
+            };
+            let resolved_skills = load_plugin_skills_with_identity(
                 &plugin_root,
-                &loaded_plugin_id,
+                &plugin_identity,
                 &manifest,
                 *restriction_product,
                 skill_config_rules,
@@ -927,9 +953,34 @@ pub async fn load_plugin_skills(
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
     root_scan_slots: Arc<Semaphore>,
 ) -> ResolvedPluginSkills {
+    let plugin_identity = PluginIdentity {
+        plugin_id: plugin_id.as_key(),
+        remote_plugin_id: None,
+    };
+    load_plugin_skills_with_identity(
+        plugin_root,
+        &plugin_identity,
+        manifest,
+        restriction_product,
+        skill_config_rules,
+        plugin_skill_snapshots,
+        root_scan_slots,
+    )
+    .await
+}
+
+pub(crate) async fn load_plugin_skills_with_identity(
+    plugin_root: &AbsolutePathBuf,
+    plugin_identity: &PluginIdentity,
+    manifest: &PluginManifest,
+    restriction_product: Option<Product>,
+    skill_config_rules: &SkillConfigRules,
+    plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
+    root_scan_slots: Arc<Semaphore>,
+) -> ResolvedPluginSkills {
     load_plugin_skill_inventory(
         plugin_root,
-        plugin_id,
+        plugin_identity,
         manifest,
         restriction_product,
         plugin_skill_snapshots,
@@ -941,7 +992,7 @@ pub async fn load_plugin_skills(
 
 pub(crate) async fn load_plugin_skill_inventory(
     plugin_root: &AbsolutePathBuf,
-    plugin_id: &PluginId,
+    plugin_identity: &PluginIdentity,
     manifest: &PluginManifest,
     restriction_product: Option<Product>,
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
@@ -953,7 +1004,7 @@ pub(crate) async fn load_plugin_skill_inventory(
             path,
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: Some(plugin_id.as_key()),
+            plugin_identity: Some(plugin_identity.clone()),
             plugin_namespace: Some(manifest.name.clone()),
             plugin_root: Some(plugin_root.clone()),
             discovery_mode: SkillDiscoveryMode::Recursive,

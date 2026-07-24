@@ -17,6 +17,7 @@ mod provider;
 pub mod remote;
 pub mod remote_bundle;
 pub mod remote_legacy;
+mod remote_plugin_id_resolver;
 mod script_attribution;
 pub mod startup_sync;
 pub mod store;

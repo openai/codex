@@ -23,6 +23,7 @@ fn path(path: &Path) -> AbsolutePathBuf {
 fn loaded_plugin(config_name: &str, root: &Path, enabled: bool) -> LoadedPlugin {
     LoadedPlugin {
         config_name: config_name.to_string(),
+        remote_plugin_id: None,
         manifest_name: None,
         plugin_namespace: None,
         manifest_description: None,

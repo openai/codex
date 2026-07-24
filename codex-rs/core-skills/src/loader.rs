@@ -30,6 +30,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
 use dirs::home_dir;
@@ -195,7 +196,7 @@ pub struct SkillRoot {
     pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub file_system: Arc<dyn ExecutorFileSystem>,
-    pub plugin_id: Option<String>,
+    pub plugin_identity: Option<PluginIdentity>,
     pub plugin_namespace: Option<String>,
     pub plugin_root: Option<AbsolutePathBuf>,
     pub discovery_mode: SkillDiscoveryMode,
@@ -269,7 +270,7 @@ async fn skill_roots_with_home_dir(
         path: root.path,
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: Some(root.plugin_id),
+        plugin_identity: Some(root.plugin_identity),
         plugin_namespace: Some(root.plugin_namespace),
         plugin_root: Some(root.plugin_root),
         discovery_mode: root.discovery_mode,
@@ -278,7 +279,7 @@ async fn skill_roots_with_home_dir(
         path,
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
+        plugin_identity: None,
         plugin_namespace: None,
         plugin_root: None,
         discovery_mode: SkillDiscoveryMode::Recursive,
@@ -310,7 +311,7 @@ fn skill_roots_from_layer_stack_inner(
                         path: config_folder.join(SKILLS_DIR_NAME),
                         scope: SkillScope::Repo,
                         file_system: Arc::clone(repo_fs),
-                        plugin_id: None,
+                        plugin_identity: None,
                         plugin_namespace: None,
                         plugin_root: None,
                         discovery_mode: SkillDiscoveryMode::Recursive,
@@ -324,7 +325,7 @@ fn skill_roots_from_layer_stack_inner(
                     path: config_folder.join(SKILLS_DIR_NAME),
                     scope: SkillScope::User,
                     file_system: Arc::clone(&LOCAL_FS),
-                    plugin_id: None,
+                    plugin_identity: None,
                     plugin_namespace: None,
                     plugin_root: None,
                     discovery_mode: SkillDiscoveryMode::Recursive,
@@ -336,7 +337,7 @@ fn skill_roots_from_layer_stack_inner(
                         path: home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
                         scope: SkillScope::User,
                         file_system: Arc::clone(&LOCAL_FS),
-                        plugin_id: None,
+                        plugin_identity: None,
                         plugin_namespace: None,
                         plugin_root: None,
                         discovery_mode: SkillDiscoveryMode::Recursive,
@@ -349,7 +350,7 @@ fn skill_roots_from_layer_stack_inner(
                     path: system_cache_root_dir(&config_folder),
                     scope: SkillScope::System,
                     file_system: Arc::clone(&LOCAL_FS),
-                    plugin_id: None,
+                    plugin_identity: None,
                     plugin_namespace: None,
                     plugin_root: None,
                     discovery_mode: SkillDiscoveryMode::Recursive,
@@ -362,7 +363,7 @@ fn skill_roots_from_layer_stack_inner(
                     path: config_folder.join(SKILLS_DIR_NAME),
                     scope: SkillScope::Admin,
                     file_system: Arc::clone(&LOCAL_FS),
-                    plugin_id: None,
+                    plugin_identity: None,
                     plugin_namespace: None,
                     plugin_root: None,
                     discovery_mode: SkillDiscoveryMode::Recursive,
@@ -408,7 +409,7 @@ async fn repo_agents_skill_roots(
                 path: agents_skills,
                 scope: SkillScope::Repo,
                 file_system: Arc::clone(&fs),
-                plugin_id: None,
+                plugin_identity: None,
                 plugin_namespace: None,
                 plugin_root: None,
                 discovery_mode: SkillDiscoveryMode::Recursive,
@@ -530,6 +531,7 @@ async fn load_skills_under_root(
     outcome: &mut SkillLoadOutcome,
 ) {
     let fs = skill_root.file_system.as_ref();
+    let plugin_identity = skill_root.plugin_identity.as_ref();
     let plugin_root = match skill_root.plugin_root.as_ref() {
         Some(plugin_root) => Some(canonicalize_for_skill_identity(fs, plugin_root).await),
         None => None,
@@ -659,7 +661,7 @@ async fn load_skills_under_root(
                     &skill.path,
                     &skill.path_uri,
                     skill_root.scope,
-                    skill_root.plugin_id.as_deref(),
+                    plugin_identity,
                     plugin_root,
                 )
                 .await
@@ -696,7 +698,7 @@ async fn parse_skill_file(
     path: &AbsolutePathBuf,
     path_uri: &PathUri,
     scope: SkillScope,
-    plugin_id: Option<&str>,
+    plugin_identity: Option<&PluginIdentity>,
     plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, SkillParseError> {
     let metadata_path = path_uri
@@ -734,7 +736,8 @@ async fn parse_skill_file(
         policy,
         path_to_skills_md: path.clone(),
         scope,
-        plugin_id: plugin_id.map(str::to_string),
+        plugin_id: plugin_identity.map(|identity| identity.plugin_id.clone()),
+        remote_plugin_id: plugin_identity.and_then(|identity| identity.remote_plugin_id.clone()),
     })
 }
 

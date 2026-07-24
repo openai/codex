@@ -26,10 +26,17 @@ pub enum SkillDiscoveryMode {
     DirectChildren,
 }
 
+/// The local identifier and optional remote identifier for a plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PluginIdentity {
+    pub plugin_id: String,
+    pub remote_plugin_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PluginSkillRoot {
     pub path: AbsolutePathBuf,
-    pub plugin_id: String,
+    pub plugin_identity: PluginIdentity,
     pub plugin_namespace: String,
     pub plugin_root: AbsolutePathBuf,
     pub discovery_mode: SkillDiscoveryMode,
