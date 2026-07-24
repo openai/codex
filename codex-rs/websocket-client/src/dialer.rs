@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_http_client::OutboundProxyRoute;
+use codex_http_client::build_rustls_client_config_with_custom_ca;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use rustls::ClientConfig;
@@ -28,15 +29,18 @@ use tokio_tungstenite::tungstenite::proxy::ProxyConfig;
 
 use crate::AsyncIo;
 use crate::ConnectionInner;
+use crate::TcpNodelay;
 
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
 
 pub(crate) async fn connect(
     request: Request,
     config: WebSocketConfig,
-    tls_config: Arc<ClientConfig>,
+    tls_config: Option<Arc<ClientConfig>>,
     proxy_route: OutboundProxyRoute,
+    tcp_nodelay: TcpNodelay,
 ) -> Result<(ConnectionInner, Response), WebSocketError> {
+    let disable_nagle = tcp_nodelay == TcpNodelay::Enabled;
     let proxy_url = match proxy_route {
         OutboundProxyRoute::TransportDefault => {
             // The workspace enables tokio-tungstenite's `proxy` feature, so its default dialer
@@ -44,8 +48,8 @@ pub(crate) async fn connect(
             let (stream, response) = connect_async_tls_with_config(
                 request,
                 Some(config),
-                false, // Preserve Tungstenite's recommended Nagle default.
-                Some(Connector::Rustls(tls_config)),
+                disable_nagle,
+                tls_config.map(Connector::Rustls),
             )
             .await?;
             return Ok((ConnectionInner::TransportDefault(stream), response));
@@ -65,8 +69,8 @@ pub(crate) async fn connect(
             match connect_async_tls_with_config(
                 request.clone(),
                 Some(config),
-                false, // Preserve Tungstenite's recommended Nagle default.
-                Some(Connector::Rustls(Arc::clone(&tls_config))),
+                disable_nagle,
+                tls_config.clone().map(Connector::Rustls),
             )
             .await
             {
@@ -84,7 +88,7 @@ pub(crate) async fn connect(
             let host = websocket_host(&request)?;
             let port = websocket_port(&request)?;
             Box::new(
-                connect_tcp(host_port(host, port))
+                connect_tcp(host_port(host, port), tcp_nodelay)
                     .await
                     .map_err(WebSocketError::Io)?,
             )
@@ -93,13 +97,18 @@ pub(crate) async fn connect(
             let proxy = ProxyEndpoint::parse(&url)?;
             let host = websocket_host(&request)?;
             let port = websocket_port(&request)?;
-            let stream = connect_tcp(proxy.config.authority())
+            let stream = connect_tcp(proxy.config.authority(), tcp_nodelay)
                 .await
                 .map_err(WebSocketError::Io)?;
             let stream: Box<dyn AsyncIo> = if proxy.tls {
+                let proxy_tls_config = match &tls_config {
+                    Some(tls_config) => Arc::clone(tls_config),
+                    None => build_rustls_client_config_with_custom_ca()
+                        .map_err(|error| WebSocketError::Io(error.into()))?,
+                };
                 let server_name = ServerName::try_from(proxy.config.host.clone())
                     .map_err(|_| WebSocketError::Tls(TlsError::InvalidDnsName))?;
-                let stream = TlsConnector::from(Arc::clone(&tls_config))
+                let stream = TlsConnector::from(proxy_tls_config)
                     .connect(server_name, stream)
                     .await
                     .map_err(WebSocketError::Io)?;
@@ -115,7 +124,7 @@ pub(crate) async fn connect(
         request,
         stream,
         Some(config),
-        Some(Connector::Rustls(tls_config)),
+        tls_config.map(Connector::Rustls),
     )
     .await?;
     Ok((ConnectionInner::Routed(stream), response))
@@ -183,9 +192,13 @@ fn host_port(host: &str, port: u16) -> String {
     }
 }
 
-async fn connect_tcp(address: String) -> io::Result<TcpStream> {
+async fn connect_tcp(address: String, tcp_nodelay: TcpNodelay) -> io::Result<TcpStream> {
     let addresses = tokio::net::lookup_host(address).await?.collect::<Vec<_>>();
-    connect_happy_eyeballs(addresses, TcpStream::connect).await
+    let stream = connect_happy_eyeballs(addresses, TcpStream::connect).await?;
+    if tcp_nodelay == TcpNodelay::Enabled {
+        stream.set_nodelay(/*nodelay*/ true)?;
+    }
+    Ok(stream)
 }
 
 async fn connect_happy_eyeballs<T, F, Fut>(

@@ -18,6 +18,7 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::time::timeout;
+#[cfg(test)]
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
@@ -385,9 +386,10 @@ impl JsonRpcConnection {
         }
     }
 
-    pub(crate) fn from_websocket<S>(stream: WebSocketStream<S>, connection_label: String) -> Self
+    pub(crate) fn from_websocket<T, E>(stream: T, connection_label: String) -> Self
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
     {
         Self::from_websocket_stream(stream, connection_label, /*ping_interval*/ None)
     }

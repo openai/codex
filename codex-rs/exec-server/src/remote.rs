@@ -15,15 +15,15 @@ use http::HeaderValue;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::connect_async_with_config;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+use codex_websocket_client::WebSocketConnection;
+use codex_websocket_client::WebSocketConnector;
+use codex_websocket_client::WebSocketTlsMode;
 
 use crate::EnvironmentRegistryConnectRequest;
 use crate::EnvironmentRegistryConnectResponse;
@@ -514,7 +514,13 @@ pub async fn run_remote_environment(
         .await?;
 
     loop {
-        match connect_rendezvous(&response.url, &config.telemetry).await {
+        match connect_rendezvous(
+            &response.url,
+            &config.telemetry,
+            &config.http_client_factory,
+        )
+        .await
+        {
             Ok(websocket) => {
                 backoff = Duration::from_secs(1);
                 let executor_registration_id = response.executor_registration_id.clone();
@@ -587,25 +593,24 @@ pub async fn run_remote_environment(
 async fn connect_rendezvous(
     url: &str,
     telemetry: &ExecServerTelemetry,
-) -> Result<
-    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-    tokio_tungstenite::tungstenite::Error,
-> {
+    http_client_factory: &HttpClientFactory,
+) -> Result<WebSocketConnection, tokio_tungstenite::tungstenite::Error> {
     let started_at = Instant::now();
     let result = async {
         let mut request = url.into_client_request()?;
         request
             .headers_mut()
             .extend(current_trace_context_headers());
-        connect_async_with_config(
-            request,
-            Some(noise_relay_websocket_config()),
-            // Rendezvous sends small, latency-sensitive frames, so avoid Nagle's coalescing delay.
-            /*disable_nagle*/
-            true,
+        let connector = WebSocketConnector::new_with_tls_mode(
+            http_client_factory,
+            WebSocketTlsMode::TungsteniteDefault,
         )
-        .await
-        .map(|(websocket, _)| websocket)
+        .map_err(|error| tokio_tungstenite::tungstenite::Error::Io(std::io::Error::other(error)))?;
+        connector
+            .with_tcp_nodelay()
+            .connect(request, noise_relay_websocket_config())
+            .await
+            .map(|(websocket, _)| websocket)
     }
     .await;
     let result_name = if result.is_ok() { "success" } else { "error" };

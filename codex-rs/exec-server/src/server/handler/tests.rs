@@ -83,6 +83,10 @@ fn test_runtime_paths() -> ExecServerRuntimePaths {
     .expect("runtime paths")
 }
 
+fn test_http_client_factory() -> HttpClientFactory {
+    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+}
+
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
     let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
@@ -90,7 +94,7 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
         registry,
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        test_http_client_factory(),
     ));
     let initialize_response = handler
         .initialize(InitializeParams {
@@ -169,7 +173,7 @@ async fn long_poll_read_fails_after_session_resume() {
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
         test_runtime_paths(),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        test_http_client_factory(),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -210,7 +214,7 @@ async fn long_poll_read_fails_after_session_resume() {
         registry,
         RpcNotificationSender::new(second_tx),
         test_runtime_paths(),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        test_http_client_factory(),
     ));
     second_handler
         .initialize(InitializeParams {
@@ -244,7 +248,7 @@ async fn active_session_resume_is_rejected() {
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
         test_runtime_paths(),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        test_http_client_factory(),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -259,7 +263,7 @@ async fn active_session_resume_is_rejected() {
         registry,
         RpcNotificationSender::new(second_tx),
         test_runtime_paths(),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        test_http_client_factory(),
     ));
     let err = second_handler
         .initialize(InitializeParams {
@@ -288,7 +292,7 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
         SessionRegistry::new(crate::ExecServerTelemetry::default()),
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        test_http_client_factory(),
     ));
     handler
         .initialize(InitializeParams {

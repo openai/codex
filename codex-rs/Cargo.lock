@@ -2929,6 +2929,7 @@ dependencies = [
  "codex-utils-path-uri",
  "codex-utils-pty",
  "codex-utils-rustls-provider",
+ "codex-websocket-client",
  "ctor 0.6.3",
  "futures",
  "http 1.4.0",

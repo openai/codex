@@ -23,6 +23,8 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecServerClient;
 use codex_exec_server::HttpClient;
 use codex_exec_server::RemoteExecServerConnectArgs;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::RmcpClient;
@@ -345,6 +347,7 @@ pub(crate) async fn spawn_exec_server() -> anyhow::Result<ExecServerProcess> {
     let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
         websocket_url,
         "rmcp-client-remote-http-test".to_string(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ))
     .await?;
 

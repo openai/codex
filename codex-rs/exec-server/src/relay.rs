@@ -7,13 +7,10 @@ use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
 use prost::Message as ProstMessage;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 use tracing::info;
@@ -465,8 +462,8 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
 /// Parsing the first Noise message authenticates the harness key. Only a
 /// successful registry check turns that pending handshake into a virtual stream.
 #[tracing::instrument(level = "debug", skip_all, fields(noise_side = "executor"))]
-pub(crate) async fn run_multiplexed_environment<S, V>(
-    stream: WebSocketStream<S>,
+pub(crate) async fn run_multiplexed_environment<T, E, V>(
+    stream: T,
     processor: ConnectionProcessor,
     environment_id: String,
     executor_registration_id: String,
@@ -474,7 +471,8 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
     validator: V,
 ) -> RendezvousDisconnectReason
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
+    E: std::fmt::Display + Send + 'static,
     V: HarnessKeyValidator + Clone + 'static,
 {
     debug!(
