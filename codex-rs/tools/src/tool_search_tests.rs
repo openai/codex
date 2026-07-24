@@ -3,7 +3,7 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 #[test]
-fn default_search_text_uses_model_visible_namespace_metadata_once() {
+fn default_search_text_uses_descriptions_and_schema_property_names() {
     let mut schedule_schema = JsonSchema::object(
         BTreeMap::from([(
             "timezone".to_string(),
@@ -43,6 +43,18 @@ fn default_search_text_uses_model_visible_namespace_metadata_once() {
 
     assert_eq!(
         search_info.entry.search_text,
-        "codex_app Manage Codex automations. automation_update automation update Create or update automations. Automation options. mode Update mode. schedule Schedule settings. timezone IANA timezone."
+        "Manage Codex automations. Create or update automations. mode schedule timezone"
+    );
+    assert_eq!(
+        search_info.entry.identity,
+        ToolSearchIdentity {
+            canonical_aliases: vec![
+                "codex_app.automation_update".to_string(),
+                "codex_app__automation_update".to_string(),
+                "codex_appautomation_update".to_string(),
+            ],
+            tool_aliases: vec!["automation_update".to_string()],
+            source_aliases: vec!["codex_app".to_string()],
+        }
     );
 }
