@@ -11,6 +11,7 @@ use crate::context::world_state::MultiAgentModeState;
 use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
+use crate::context::world_state::ToolsState;
 use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
@@ -105,6 +106,15 @@ impl Session {
         world_state.add_section(PluginsInstructionsState::new(
             step_context.mcp.plugins_available(),
         ));
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::DeferredToolWorldState)
+        {
+            world_state.add_section(ToolsState::new(
+                step_context.tool_router.deferred_tool_namespaces(),
+            ));
+        }
         let environments = step_context.environments.to_selections();
         let ready_selected_capability_roots = step_context
             .selected_capability_roots

@@ -9,6 +9,7 @@ mod plugins_instructions;
 mod realtime;
 #[cfg(test)]
 mod test_support;
+mod tools;
 
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
@@ -35,6 +36,7 @@ pub(crate) use multi_agent_mode::MultiAgentModeState;
 pub(crate) use permissions::PermissionsState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 pub(crate) use realtime::RealtimeState;
+pub(crate) use tools::ToolsState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn snapshot(&self) -> Option<Value>;
@@ -53,6 +55,9 @@ trait ErasedWorldStateSection: Send + Sync {
 
 impl<S: WorldStateSection> ErasedWorldStateSection for S {
     fn snapshot(&self) -> Option<Value> {
+        if !WorldStateSection::should_persist(self) {
+            return None;
+        }
         let mut snapshot = match serde_json::to_value(WorldStateSection::snapshot(self)) {
             Ok(snapshot) => snapshot,
             Err(err) => {
@@ -196,6 +201,11 @@ pub(crate) trait WorldStateSection: Send + Sync + 'static {
     type Snapshot: DeserializeOwned + Serialize;
 
     fn snapshot(&self) -> Self::Snapshot;
+
+    /// Whether the section contributes comparison state to persisted rollouts.
+    fn should_persist(&self) -> bool {
+        true
+    }
 
     fn matches_legacy_fragment(_role: &str, _text: &str) -> bool {
         false

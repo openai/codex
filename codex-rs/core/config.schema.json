@@ -497,6 +497,9 @@
             "deferred_executor": {
               "type": "boolean"
             },
+            "deferred_tool_world_state": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -5032,6 +5035,9 @@
           "type": "boolean"
         },
         "deferred_executor": {
+          "type": "boolean"
+        },
+        "deferred_tool_world_state": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {

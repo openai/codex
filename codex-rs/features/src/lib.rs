@@ -169,6 +169,8 @@ pub enum Feature {
     ToolSearch,
     /// Removed compatibility flag. MCP tools are always deferred when tool_search is available.
     ToolSearchAlwaysDeferMcpTools,
+    /// Describe deferred tool namespaces in the model-visible world state.
+    DeferredToolWorldState,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
     /// Enable discoverable tool suggestions for apps.
@@ -1121,6 +1123,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "tool_search_always_defer_mcp_tools",
         stage: Stage::Removed,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DeferredToolWorldState,
+        key: "deferred_tool_world_state",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::NonPrefixedMcpToolNames,

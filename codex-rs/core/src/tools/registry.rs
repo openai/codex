@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -343,6 +344,33 @@ impl ToolRegistry {
             tools_by_name.insert(name, tool);
         }
         Self::new(tools_by_name)
+    }
+
+    pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
+        let mut namespaces = BTreeMap::<String, String>::new();
+        for (name, tool) in &self.tools {
+            if tool.exposure() != ToolExposure::Deferred {
+                continue;
+            }
+            let Some(namespace) = &name.namespace else {
+                continue;
+            };
+            let existing_description = namespaces.entry(namespace.clone()).or_default();
+            if !existing_description.trim().is_empty() {
+                continue;
+            }
+            let description = match tool.spec() {
+                ToolSpec::Namespace(namespace) => namespace.description,
+                ToolSpec::Function(_)
+                | ToolSpec::Freeform(_)
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. } => String::new(),
+            };
+            if !description.trim().is_empty() {
+                *existing_description = description;
+            }
+        }
+        namespaces
     }
 
     #[cfg(test)]

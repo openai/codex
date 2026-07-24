@@ -1,0 +1,46 @@
+---
+source: core/tests/suite/mcp_tool_exposure.rs
+expression: "format_labeled_requests_snapshot(\"Initially available deferred tools remain unchanged until disabling Calendar removes them.\",\n&[(\"Initially available\", &requests[0]),\n(\"Unchanged follow-up\", &requests[1]), (\"Removed and empty\", &requests[2]),],)"
+---
+Scenario: Initially available deferred tools remain unchanged until disabling Calendar removes them.
+
+## Initially available
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+         Deferred tool namespaces:
+         - mcp__codex_apps__calendar: Plan events and manage your calendar.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inspect initially available deferred tools
+
+## Unchanged follow-up
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+         Deferred tool namespaces:
+         - mcp__codex_apps__calendar: Plan events and manage your calendar.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inspect initially available deferred tools
+03:message/assistant:done
+04:message/user:inspect unchanged deferred tools
+
+## Removed and empty
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+         Deferred tool namespaces:
+         - mcp__codex_apps__calendar: Plan events and manage your calendar.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inspect initially available deferred tools
+03:message/assistant:done
+04:message/user:inspect unchanged deferred tools
+05:message/assistant:done
+06:message/developer:<tools>
+Removed deferred tool namespaces:
+- mcp__codex_apps__calendar: Plan events and manage your calendar.
+No deferred tool namespaces remain.
+</tools>
+07:message/user:inspect removed deferred tools

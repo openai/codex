@@ -9,6 +9,7 @@ use crate::responses::strip_response_item_ids_from_json;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::TOOLS_OPEN_TAG;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContextSnapshotRenderMode {
@@ -151,7 +152,10 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                     let parts = rendered_parts
                         .iter()
                         .enumerate()
-                        .map(|(part_idx, part)| format!("    [{:02}] {part}", part_idx + 1))
+                        .map(|(part_idx, part)| {
+                            let part = part.replace('\n', "\n         ");
+                            format!("    [{:02}] {part}", part_idx + 1)
+                        })
                         .collect::<Vec<String>>()
                         .join("\n");
                     format!("{idx:02}:message/{role}:\n{parts}")
@@ -356,6 +360,10 @@ fn format_changed_lines_diff(
 }
 
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
+    if text.starts_with(TOOLS_OPEN_TAG) {
+        return normalize_snapshot_line_endings(&canonicalize_snapshot_text(text));
+    }
+
     match options.render_mode {
         ContextSnapshotRenderMode::RedactedText => {
             normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)).replace('\n', "\\n")
@@ -600,6 +608,32 @@ mod tests {
         );
 
         assert_eq!(rendered, "00:message/developer:<PERMISSIONS_INSTRUCTIONS>");
+    }
+
+    #[test]
+    fn tools_context_uses_readable_multiline_snapshot_text() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "developer",
+            "content": [
+                { "type": "input_text", "text": "<permissions instructions>...</permissions instructions>" },
+                {
+                    "type": "input_text",
+                    "text": "<tools>\nDeferred tool namespaces:\n- multi_agent_v1: Tools for spawning and managing sub-agents.\n</tools>"
+                }
+            ]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default()
+                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 32 }),
+        );
+
+        assert_eq!(
+            rendered,
+            "00:message/developer[2]:\n    [01] <PERMISSIONS_INSTRUCTIONS>\n    [02] <tools>\n         Deferred tool namespaces:\n         - multi_agent_v1: Tools for spawning and managing sub-agents.\n         </tools>"
+        );
     }
 
     #[test]

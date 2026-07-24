@@ -1,0 +1,28 @@
+---
+source: core/tests/suite/mcp_tool_exposure.rs
+expression: "format_labeled_requests_snapshot(\"Persisted deferred tools remain unchanged after resuming the thread.\",\n&[(\"Before resume\", &requests[0]), (\"After resume\", &requests[1]),],)"
+---
+Scenario: Persisted deferred tools remain unchanged after resuming the thread.
+
+## Before resume
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+         Deferred tool namespaces:
+         - mcp__codex_apps__calendar: Plan events and manage your calendar.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inspect deferred tools before resume
+
+## After resume
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+         Deferred tool namespaces:
+         - mcp__codex_apps__calendar: Plan events and manage your calendar.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inspect deferred tools before resume
+03:message/assistant:done
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:inspect unchanged deferred tools after resume

@@ -1,0 +1,31 @@
+---
+source: core/tests/suite/mcp_tool_exposure.rs
+expression: "format_labeled_requests_snapshot(\"Deferred namespaces appear after Apps recovers between sampling requests.\",\n&[(\"Apps unavailable\", &requests[0]), (\"Apps recovered\", &requests[1]),],)"
+---
+Scenario: Deferred namespaces appear after Apps recovers between sampling requests.
+
+## Apps unavailable
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+         Deferred tool namespaces:
+         - multi_agent_v1: Tools for spawning and managing sub-agents.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:use an app after it recovers
+
+## Apps recovered
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+         Deferred tool namespaces:
+         - multi_agent_v1: Tools for spawning and managing sub-agents.
+         </tools>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:use an app after it recovers
+03:function_call/request_user_input
+04:function_call_output:{"answers":{"continue":{"answers":["Yes (Recommended)"]}}}
+05:message/developer:<tools>
+Added deferred tool namespaces:
+- mcp__codex_apps__calendar: Plan events and manage your calendar.
+</tools>
