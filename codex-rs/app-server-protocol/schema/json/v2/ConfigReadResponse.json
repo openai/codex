@@ -237,6 +237,14 @@
         }
       ]
     },
+    "CloudManagedLayer": {
+      "description": "Position of a fragment within the cloud-managed configuration contract.",
+      "enum": [
+        "baseline",
+        "systemOverlay"
+      ],
+      "type": "string"
+    },
     "Config": {
       "additionalProperties": true,
       "properties": {
@@ -553,6 +561,42 @@
             "type"
           ],
           "title": "EnterpriseManagedConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "Config fragment delivered through the cloud-managed layer contract.",
+          "properties": {
+            "id": {
+              "description": "Stable identifier for the delivered fragment.",
+              "type": "string"
+            },
+            "layer": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CloudManagedLayer"
+                }
+              ],
+              "description": "Precedence tier that contains the fragment."
+            },
+            "name": {
+              "description": "Human-readable name for diagnostics and source attribution.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "cloudManaged"
+              ],
+              "title": "CloudManagedConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "layer",
+            "name",
+            "type"
+          ],
+          "title": "CloudManagedConfigLayerSource",
           "type": "object"
         },
         {
