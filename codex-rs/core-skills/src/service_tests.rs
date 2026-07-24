@@ -12,6 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
 use codex_utils_plugins::PluginSkillRoot;
+use codex_utils_plugins::SkillDiscoveryMode;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::fs;
@@ -72,6 +73,7 @@ fn plugin_skill_root_for_skill_path(
         plugin_id: plugin_id.to_string(),
         plugin_namespace: plugin_namespace.to_string(),
         plugin_root: plugin_root.abs(),
+        discovery_mode: SkillDiscoveryMode::Recursive,
     }
 }
 

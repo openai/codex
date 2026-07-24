@@ -121,6 +121,7 @@ pub async fn load_environment_skills_from_root(
         SkillDiscoveryOptions {
             directory_symlinks: DirectorySymlinkPolicy::Follow,
             hidden_directories: HiddenDirectoryPolicy::Include,
+            mode: codex_utils_plugins::SkillDiscoveryMode::Recursive,
         },
     )
     .await;

@@ -472,6 +472,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
             plugin_id: None,
             plugin_namespace: None,
             plugin_root: None,
+            discovery_mode: codex_utils_plugins::SkillDiscoveryMode::Recursive,
         }],
         /*plugin_skill_snapshots*/ None,
         Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),

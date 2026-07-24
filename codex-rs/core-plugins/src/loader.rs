@@ -45,6 +45,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillConfigRules;
 use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::SkillDiscoveryMode;
 use codex_utils_plugins::find_plugin_manifest_path;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -955,6 +956,7 @@ pub(crate) async fn load_plugin_skill_inventory(
             plugin_id: Some(plugin_id.as_key()),
             plugin_namespace: Some(manifest.name.clone()),
             plugin_root: Some(plugin_root.clone()),
+            discovery_mode: SkillDiscoveryMode::Recursive,
         })
         .collect::<Vec<_>>();
     let outcome = load_skills_from_roots(roots, plugin_skill_snapshots, root_scan_slots).await;

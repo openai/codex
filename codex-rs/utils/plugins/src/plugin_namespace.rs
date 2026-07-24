@@ -7,6 +7,35 @@ use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
 
+pub const AGENT_PLUGIN_MANIFEST_RELATIVE_PATH: &str = "plugin.json";
+pub const AGENT_PLUGIN_SCHEMA_URI: &str =
+    "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+pub const SUPPORTED_AGENT_PLUGIN_SCHEMA_URIS: &[&str] = &[AGENT_PLUGIN_SCHEMA_URI];
+pub const AGENT_PLUGIN_SCHEMA_PREFIX: &str = "https://agent-plugins.org/schemas/";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentPluginSchemaStatus {
+    Supported,
+    Unsupported,
+    Unrelated,
+}
+
+pub fn agent_plugin_schema_status(contents: &str) -> AgentPluginSchemaStatus {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
+        return AgentPluginSchemaStatus::Unrelated;
+    };
+    let Some(schema) = value.get("$schema").and_then(serde_json::Value::as_str) else {
+        return AgentPluginSchemaStatus::Unrelated;
+    };
+    if SUPPORTED_AGENT_PLUGIN_SCHEMA_URIS.contains(&schema) {
+        AgentPluginSchemaStatus::Supported
+    } else if schema.starts_with(AGENT_PLUGIN_SCHEMA_PREFIX) {
+        AgentPluginSchemaStatus::Unsupported
+    } else {
+        AgentPluginSchemaStatus::Unrelated
+    }
+}
+
 pub fn find_plugin_manifest_path(plugin_root: &Path) -> Option<PathBuf> {
     DISCOVERABLE_PLUGIN_MANIFEST_PATHS
         .iter()
@@ -145,5 +174,38 @@ mod tests {
             Some("sample".to_string())
         );
         assert_eq!(find_plugin_manifest_path(&plugin_root), Some(manifest_path));
+    }
+
+    #[test]
+    fn ignores_unrelated_root_plugin_manifest_before_legacy_fallback() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("plugins/sample");
+        let legacy_path = plugin_root.join(".codex-plugin/plugin.json");
+        fs::create_dir_all(legacy_path.parent().expect("parent")).expect("mkdir");
+        fs::write(plugin_root.join("plugin.json"), r#"{"name":"npm-package"}"#)
+            .expect("write unrelated root");
+        fs::write(&legacy_path, r#"{"name":"sample"}"#).expect("write legacy");
+
+        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(legacy_path));
+    }
+
+    #[test]
+    fn preserves_codex_claude_cursor_legacy_precedence() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("plugins/sample");
+        let codex_path = plugin_root.join(".codex-plugin/plugin.json");
+        let claude_path = plugin_root.join(".claude-plugin/plugin.json");
+        let cursor_path = plugin_root.join(".cursor-plugin/plugin.json");
+        for path in [&codex_path, &claude_path, &cursor_path] {
+            fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            fs::write(path, r#"{"name":"sample"}"#).expect("write manifest");
+        }
+
+        assert_eq!(
+            find_plugin_manifest_path(&plugin_root),
+            Some(codex_path.clone())
+        );
+        fs::remove_file(codex_path).expect("remove Codex manifest");
+        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(claude_path));
     }
 }
