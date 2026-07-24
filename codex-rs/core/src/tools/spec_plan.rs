@@ -713,7 +713,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.environments);
 
-    planned_tools.add(PlanHandler);
+    if turn_context.config.update_plan_enabled {
+        planned_tools.add(PlanHandler);
+    }
 
     if features.enabled(Feature::DeferredExecutor) {
         planned_tools.add(WaitForEnvironmentHandler);

@@ -3147,6 +3147,9 @@
         "experimental_request_user_input": {
           "$ref": "#/definitions/ExperimentalRequestUserInput"
         },
+        "update_plan": {
+          "$ref": "#/definitions/UpdatePlanToolConfig"
+        },
         "web_search": {
           "allOf": [
             {
@@ -4644,6 +4647,16 @@
             }
           ],
           "description": "Text object: word."
+        }
+      },
+      "type": "object"
+    },
+    "UpdatePlanToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "type": "object"

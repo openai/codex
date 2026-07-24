@@ -361,6 +361,7 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: None,
+            update_plan: None,
         })
     );
 }
@@ -380,6 +381,7 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: None,
+            update_plan: None,
         })
     );
 }
@@ -398,6 +400,7 @@ fn tools_experimental_request_user_input_defaults_to_enabled() {
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: true }),
+            update_plan: None,
         })
     );
 }
@@ -417,6 +420,7 @@ enabled = false
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: false }),
+            update_plan: None,
         })
     );
 }
@@ -431,6 +435,7 @@ async fn load_config_resolves_experimental_request_user_input_enabled() -> std::
                 experimental_request_user_input: Some(ExperimentalRequestUserInput {
                     enabled: false,
                 }),
+                update_plan: None,
             }),
             ..ConfigToml::default()
         },
@@ -499,6 +504,27 @@ async fn load_config_resolves_non_prefixed_mcp_tool_servers() -> std::io::Result
             expected_servers.unwrap_or_default()
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_update_plan_enabled() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml = toml::from_str(
+        r#"
+[tools.update_plan]
+enabled = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.update_plan_enabled);
     Ok(())
 }
 
