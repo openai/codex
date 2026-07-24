@@ -28,8 +28,23 @@ const SKILL_MARKER: &str = "EXECUTOR_SKILL_BODY_MARKER";
 const LOCAL_SKILL_MARKER: &str = "LOCAL_SKILL_BODY_MARKER";
 const REFERENCE_MARKER: &str = "EXECUTOR_SKILL_REFERENCE_MARKER";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutorSkillScenario {
+    VisibleWithBudgetWarning,
+    ExplicitOnly,
+}
+
 #[tokio::test]
 async fn selected_executor_root_exposes_plugin_skill_and_forwards_budget_warning() -> Result<()> {
+    exercise_executor_skill(ExecutorSkillScenario::VisibleWithBudgetWarning).await
+}
+
+#[tokio::test]
+async fn explicit_executor_skill_can_read_referenced_file() -> Result<()> {
+    exercise_executor_skill(ExecutorSkillScenario::ExplicitOnly).await
+}
+
+async fn exercise_executor_skill(scenario: ExecutorSkillScenario) -> Result<()> {
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -71,9 +86,10 @@ stream_max_retries = 0
     let plugin_dir = auto_env.selection().cwd.join("plugin")?;
     let manifest_dir = plugin_dir.join(".codex-plugin")?;
     let skill_dir = plugin_dir.join("skills/deploy")?;
+    let agents_dir = skill_dir.join("agents")?;
     let reference_dir = skill_dir.join("references")?;
     let file_system = auto_env.environment().get_filesystem();
-    for directory in [&manifest_dir, &reference_dir] {
+    for directory in [&manifest_dir, &agents_dir, &reference_dir] {
         file_system
             .create_directory(
                 directory,
@@ -84,8 +100,14 @@ stream_max_retries = 0
     }
     let manifest_path = manifest_dir.join("plugin.json")?;
     let skill_path = skill_dir.join("SKILL.md")?;
+    let openai_yaml_path = agents_dir.join("openai.yaml")?;
     let reference_path = reference_dir.join("details.md")?;
-    let reference_contents = format!("{REFERENCE_MARKER}\n{}", "x".repeat(600 * 1024));
+    let reference_size = match scenario {
+        ExecutorSkillScenario::VisibleWithBudgetWarning => 600 * 1024,
+        ExecutorSkillScenario::ExplicitOnly => 40 * 1024,
+    };
+    let allow_implicit_invocation = scenario == ExecutorSkillScenario::VisibleWithBudgetWarning;
+    let reference_contents = format!("{REFERENCE_MARKER}\n{}", "x".repeat(reference_size));
     tokio::try_join!(
         file_system.write_file(
             &manifest_path,
@@ -101,42 +123,52 @@ stream_max_retries = 0
             /*sandbox*/ None,
         ),
         file_system.write_file(
+            &openai_yaml_path,
+            format!(
+                "policy:\n  allow_implicit_invocation: {allow_implicit_invocation}\n"
+            )
+            .into_bytes(),
+            /*sandbox*/ None,
+        ),
+        file_system.write_file(
             &reference_path,
             reference_contents.into_bytes(),
             /*sandbox*/ None,
         ),
     )?;
-    futures::stream::iter(0..200)
-        .map(|index| {
-            let file_system = file_system.clone();
-            let plugin_dir = plugin_dir.clone();
-            async move {
-                let relative = format!("skills/skill-{index:03}");
-                let skill_dir = plugin_dir.join(&relative)?;
-                file_system
-                    .create_directory(
-                        &skill_dir,
-                        CreateDirectoryOptions { recursive: true },
-                        /*sandbox*/ None,
-                    )
-                    .await?;
-                file_system
-                    .write_file(
-                        &skill_dir.join("SKILL.md")?,
-                        format!(
-                            "---\nname: skill-{index:03}\ndescription: {}\n---\n",
-                            "x".repeat(1_025)
+    if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
+        futures::stream::iter(0..200)
+            .map(|index| {
+                let file_system = file_system.clone();
+                let plugin_dir = plugin_dir.clone();
+                async move {
+                    let relative = format!("skills/skill-{index:03}");
+                    let skill_dir = plugin_dir.join(&relative)?;
+                    file_system
+                        .create_directory(
+                            &skill_dir,
+                            CreateDirectoryOptions { recursive: true },
+                            /*sandbox*/ None,
                         )
-                        .into_bytes(),
-                        /*sandbox*/ None,
-                    )
-                    .await?;
-                Ok::<(), anyhow::Error>(())
-            }
-        })
-        .buffer_unordered(16)
-        .try_collect::<Vec<_>>()
-        .await?;
+                        .await?;
+                    file_system
+                        .write_file(
+                            &skill_dir.join("SKILL.md")?,
+                            format!(
+                                "---\nname: skill-{index:03}\ndescription: {}\n---\n",
+                                "x".repeat(1_025)
+                            )
+                            .into_bytes(),
+                            /*sandbox*/ None,
+                        )
+                        .await?;
+                    Ok::<(), anyhow::Error>(())
+                }
+            })
+            .buffer_unordered(16)
+            .try_collect::<Vec<_>>()
+            .await?;
+    }
 
     let authority_id = "demo-plugin@1";
     let locator = |path: &PathUri| {
@@ -231,24 +263,26 @@ stream_max_retries = 0
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let warning = timeout(READ_TIMEOUT, async {
-        loop {
-            let warning: WarningNotification = app_server.read_notification("warning").await?;
-            if warning
+    if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
+        let warning = timeout(READ_TIMEOUT, async {
+            loop {
+                let warning: WarningNotification = app_server.read_notification("warning").await?;
+                if warning
+                    .message
+                    .starts_with("Exceeded skills context budget.")
+                {
+                    return Ok::<WarningNotification, anyhow::Error>(warning);
+                }
+            }
+        })
+        .await??;
+        assert_eq!(warning.thread_id, Some(thread_id));
+        assert!(
+            warning
                 .message
                 .starts_with("Exceeded skills context budget.")
-            {
-                return Ok::<WarningNotification, anyhow::Error>(warning);
-            }
-        }
-    })
-    .await??;
-    assert_eq!(warning.thread_id, Some(thread_id));
-    assert!(
-        warning
-            .message
-            .starts_with("Exceeded skills context budget.")
-    );
+        );
+    }
     timeout(
         READ_TIMEOUT,
         app_server.read_stream_until_notification_message("turn/completed"),
@@ -275,26 +309,54 @@ stream_max_retries = 0
     assert!(skill_fragment.contains(&format!("<name>{SKILL_NAME}</name>")));
     assert!(skill_fragment.contains(SKILL_MARKER));
     assert!(!skill_fragment.contains(LOCAL_SKILL_MARKER));
+    match scenario {
+        ExecutorSkillScenario::VisibleWithBudgetWarning => {
+            assert!(!skill_fragment.contains("<resource_access>"));
+        }
+        ExecutorSkillScenario::ExplicitOnly => {
+            let resource_access = skill_fragment
+                .split_once("<resource_access>")
+                .and_then(|(_, rest)| rest.split_once("</resource_access>"))
+                .map(|(metadata, _)| serde_json::from_str::<serde_json::Value>(metadata))
+                .transpose()?
+                .expect("explicit executor skill should include resource access metadata");
+            assert_eq!(
+                resource_access,
+                json!({
+                    "authority": {"kind": "executor", "id": authority_id},
+                    "package": package,
+                    "main_resource": main_resource,
+                })
+            );
+        }
+    }
     let list_output = serde_json::from_str::<serde_json::Value>(
         &requests[1]
             .function_call_output_text("list")
             .expect("skills.list output"),
     )?;
-    let deploy_skill = list_output["skills"]
-        .as_array()
-        .and_then(|skills| skills.iter().find(|skill| skill["name"] == SKILL_NAME))
-        .expect("skills.list should include the selected executor skill");
-    assert_eq!(
-        deploy_skill,
-        &json!({
-            "authority": {"kind": "executor", "id": authority_id},
-            "package": package,
-            "name": SKILL_NAME,
-            "description": "Deploy through the executor.",
-            "main_resource": main_resource,
-        })
-    );
-    assert!(list_output["next_cursor"].is_string());
+    match scenario {
+        ExecutorSkillScenario::VisibleWithBudgetWarning => {
+            let deploy_skill = list_output["skills"]
+                .as_array()
+                .and_then(|skills| skills.iter().find(|skill| skill["name"] == SKILL_NAME))
+                .expect("skills.list should include the selected executor skill");
+            assert_eq!(
+                deploy_skill,
+                &json!({
+                    "authority": {"kind": "executor", "id": authority_id},
+                    "package": package,
+                    "name": SKILL_NAME,
+                    "description": "Deploy through the executor.",
+                    "main_resource": main_resource,
+                })
+            );
+            assert!(list_output["next_cursor"].is_string());
+        }
+        ExecutorSkillScenario::ExplicitOnly => {
+            assert_eq!(list_output["skills"], json!([]));
+        }
+    }
     assert!(
         requests[2]
             .function_call_output_text("main")
@@ -311,7 +373,14 @@ stream_max_retries = 0
             .as_str()
             .is_some_and(|contents| contents.contains(REFERENCE_MARKER))
     );
-    assert!(reference_output["next_cursor"].is_string());
+    match scenario {
+        ExecutorSkillScenario::VisibleWithBudgetWarning => {
+            assert!(reference_output["next_cursor"].is_string());
+        }
+        ExecutorSkillScenario::ExplicitOnly => {
+            assert!(reference_output["next_cursor"].is_null());
+        }
+    }
 
     Ok(())
 }
