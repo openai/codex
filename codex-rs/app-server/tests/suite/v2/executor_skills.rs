@@ -12,37 +12,25 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::WarningNotification;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
-use core_test_support::skip_if_remote;
+use futures::StreamExt;
+use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const READ_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(20);
 const SKILL_NAME: &str = "demo-plugin:deploy";
 const SKILL_MARKER: &str = "EXECUTOR_SKILL_BODY_MARKER";
 const LOCAL_SKILL_MARKER: &str = "LOCAL_SKILL_BODY_MARKER";
+const REFERENCE_MARKER: &str = "EXECUTOR_SKILL_REFERENCE_MARKER";
 
 #[tokio::test]
 async fn selected_executor_root_exposes_plugin_skill_and_forwards_budget_warning() -> Result<()> {
-    // TODO(anp): Remove after selected capability-root fixtures can be materialized in remote exec.
-    skip_if_remote!(
-        Ok(()),
-        "selected capability root fixture is only materialized on the host"
-    );
-
     let server = responses::start_mock_server().await;
-    let response_mock = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-selected"),
-            responses::ev_assistant_message("msg-selected", "Done"),
-            responses::ev_completed("resp-selected"),
-        ]),
-    )
-    .await;
-
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -74,40 +62,137 @@ stream_max_retries = 0
             "---\nname: {SKILL_NAME}\ndescription: Colliding local skill.\n---\n\n# Local deploy\n\n{LOCAL_SKILL_MARKER}\n"
         ),
     )?;
-    let plugin_dir = TempDir::new()?;
-    let manifest_dir = plugin_dir.path().join(".codex-plugin");
-    let skill_dir = plugin_dir.path().join("skills/deploy");
-    std::fs::create_dir_all(&manifest_dir)?;
-    std::fs::create_dir_all(&skill_dir)?;
-    std::fs::write(
-        manifest_dir.join("plugin.json"),
-        r#"{"name":"demo-plugin"}"#,
-    )?;
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        format!(
-            "---\nname: deploy\ndescription: Deploy through the executor.\n---\n\n# Deploy\n\n{SKILL_MARKER}\n"
-        ),
-    )?;
-    for index in 0..200 {
-        let skill_dir = plugin_dir
-            .path()
-            .join("skills")
-            .join(format!("skill-{index:03}"));
-        std::fs::create_dir_all(&skill_dir)?;
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            format!(
-                "---\nname: skill-{index:03}\ndescription: {}\n---\n",
-                "x".repeat(1_025)
-            ),
-        )?;
-    }
-
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build()
         .await?;
+    let auto_env = app_server.auto_env()?;
+    let environment_id = auto_env.selection().environment_id.clone();
+    let plugin_dir = auto_env.selection().cwd.join("plugin")?;
+    let manifest_dir = plugin_dir.join(".codex-plugin")?;
+    let skill_dir = plugin_dir.join("skills/deploy")?;
+    let reference_dir = skill_dir.join("references")?;
+    let file_system = auto_env.environment().get_filesystem();
+    for directory in [&manifest_dir, &reference_dir] {
+        file_system
+            .create_directory(
+                directory,
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await?;
+    }
+    let manifest_path = manifest_dir.join("plugin.json")?;
+    let skill_path = skill_dir.join("SKILL.md")?;
+    let reference_path = reference_dir.join("details.md")?;
+    let reference_contents = format!("{REFERENCE_MARKER}\n{}", "x".repeat(600 * 1024));
+    tokio::try_join!(
+        file_system.write_file(
+            &manifest_path,
+            br#"{"name":"demo-plugin"}"#.to_vec(),
+            /*sandbox*/ None,
+        ),
+        file_system.write_file(
+            &skill_path,
+            format!(
+                "---\nname: deploy\ndescription: Deploy through the executor.\n---\n\n# Deploy\n\n{SKILL_MARKER}\n\nRead references/details.md.\n"
+            )
+            .into_bytes(),
+            /*sandbox*/ None,
+        ),
+        file_system.write_file(
+            &reference_path,
+            reference_contents.into_bytes(),
+            /*sandbox*/ None,
+        ),
+    )?;
+    futures::stream::iter(0..200)
+        .map(|index| {
+            let file_system = file_system.clone();
+            let plugin_dir = plugin_dir.clone();
+            async move {
+                let relative = format!("skills/skill-{index:03}");
+                let skill_dir = plugin_dir.join(&relative)?;
+                file_system
+                    .create_directory(
+                        &skill_dir,
+                        CreateDirectoryOptions { recursive: true },
+                        /*sandbox*/ None,
+                    )
+                    .await?;
+                file_system
+                    .write_file(
+                        &skill_dir.join("SKILL.md")?,
+                        format!(
+                            "---\nname: skill-{index:03}\ndescription: {}\n---\n",
+                            "x".repeat(1_025)
+                        )
+                        .into_bytes(),
+                        /*sandbox*/ None,
+                    )
+                    .await?;
+                Ok::<(), anyhow::Error>(())
+            }
+        })
+        .buffer_unordered(16)
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    let authority_id = "demo-plugin@1";
+    let locator = |path: &PathUri| {
+        format!(
+            "skill://{authority_id}/{}",
+            path.inferred_native_path_string()
+                .replace('\\', "/")
+                .trim_start_matches('/')
+        )
+    };
+    let package = locator(&skill_dir);
+    let main_resource = locator(&skill_dir.join("SKILL.md")?);
+    let reference_resource = locator(&reference_dir.join("details.md")?);
+    let tool_response = |call_id: &str, tool: &str, arguments: serde_json::Value| {
+        responses::sse(vec![
+            responses::ev_response_created(&format!("resp-{call_id}")),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                "skills",
+                tool,
+                &arguments.to_string(),
+            ),
+            responses::ev_completed(&format!("resp-{call_id}")),
+        ])
+    };
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            tool_response("list", "list", json!({"authority": {"kind": "executor"}})),
+            tool_response(
+                "main",
+                "read",
+                json!({
+                    "authority": {"kind": "executor", "id": authority_id},
+                    "package": package.clone(),
+                    "resource": main_resource.clone(),
+                }),
+            ),
+            tool_response(
+                "reference",
+                "read",
+                json!({
+                    "authority": {"kind": "executor", "id": authority_id},
+                    "package": package.clone(),
+                    "resource": reference_resource.clone(),
+                }),
+            ),
+            responses::sse(vec![
+                responses::ev_response_created("resp-done"),
+                responses::ev_assistant_message("msg-done", "Done"),
+                responses::ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
 
     let request_id = app_server
@@ -116,8 +201,8 @@ stream_max_retries = 0
             selected_capability_roots: Some(vec![SelectedCapabilityRoot {
                 id: "demo-plugin@1".to_string(),
                 location: CapabilityRootLocation::Environment {
-                    environment_id: "local".to_string(),
-                    path: PathUri::from_host_native_path(plugin_dir.path())?,
+                    environment_id,
+                    path: plugin_dir,
                 },
             }]),
             ..Default::default()
@@ -170,7 +255,8 @@ stream_max_retries = 0
     )
     .await??;
 
-    let request = response_mock.single_request();
+    let requests = response_mock.requests();
+    let request = &requests[0];
     assert!(
         request
             .message_input_texts("developer")
@@ -189,6 +275,43 @@ stream_max_retries = 0
     assert!(skill_fragment.contains(&format!("<name>{SKILL_NAME}</name>")));
     assert!(skill_fragment.contains(SKILL_MARKER));
     assert!(!skill_fragment.contains(LOCAL_SKILL_MARKER));
+    let list_output = serde_json::from_str::<serde_json::Value>(
+        &requests[1]
+            .function_call_output_text("list")
+            .expect("skills.list output"),
+    )?;
+    let deploy_skill = list_output["skills"]
+        .as_array()
+        .and_then(|skills| skills.iter().find(|skill| skill["name"] == SKILL_NAME))
+        .expect("skills.list should include the selected executor skill");
+    assert_eq!(
+        deploy_skill,
+        &json!({
+            "authority": {"kind": "executor", "id": authority_id},
+            "package": package,
+            "name": SKILL_NAME,
+            "description": "Deploy through the executor.",
+            "main_resource": main_resource,
+        })
+    );
+    assert!(list_output["next_cursor"].is_string());
+    assert!(
+        requests[2]
+            .function_call_output_text("main")
+            .expect("main skill output")
+            .contains(SKILL_MARKER)
+    );
+    let reference_output = serde_json::from_str::<serde_json::Value>(
+        &requests[3]
+            .function_call_output_text("reference")
+            .expect("referenced skill file output"),
+    )?;
+    assert!(
+        reference_output["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains(REFERENCE_MARKER))
+    );
+    assert!(reference_output["next_cursor"].is_string());
 
     Ok(())
 }

@@ -59,6 +59,19 @@ impl SkillAuthority {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SkillPackageId(pub String);
 
+impl SkillPackageId {
+    pub(crate) fn relative_resource_path<'a>(&self, resource: &'a str) -> Option<&'a str> {
+        let relative = resource
+            .strip_prefix(self.0.trim_end_matches('/'))?
+            .strip_prefix('/')?;
+        (!relative.is_empty()
+            && relative
+                .split('/')
+                .all(|segment| !matches!(segment, "" | "." | "..")))
+        .then_some(relative)
+    }
+}
+
 /// Opaque resource id inside a skill package, optionally bound to the
 /// environment path that owns its contents.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -80,10 +93,12 @@ impl SkillResourceId {
         environment_id: impl Into<String>,
         path: PathUri,
     ) -> Self {
+        let package_root = path.parent().unwrap_or_else(|| path.clone());
         Self {
             id: id.into(),
             environment_path: Some(EnvironmentSkillResource {
                 environment_id: environment_id.into(),
+                package_root,
                 path,
                 contents: None,
             }),
@@ -96,10 +111,12 @@ impl SkillResourceId {
         path: PathUri,
         contents: String,
     ) -> Self {
+        let package_root = path.parent().unwrap_or_else(|| path.clone());
         Self {
             id: id.into(),
             environment_path: Some(EnvironmentSkillResource {
                 environment_id: environment_id.into(),
+                package_root,
                 path,
                 contents: Some(contents.into()),
             }),
@@ -108,6 +125,26 @@ impl SkillResourceId {
 
     pub fn as_str(&self) -> &str {
         &self.id
+    }
+
+    pub(crate) fn bind_environment_package_resource(
+        &self,
+        package: &SkillPackageId,
+        resource: impl Into<String>,
+    ) -> Option<Self> {
+        let resource = resource.into();
+        let relative = package.relative_resource_path(&resource)?;
+        let environment = self.environment_path.as_ref()?;
+        let path = environment.package_root.join(relative).ok()?;
+        path.starts_with(&environment.package_root).then(|| Self {
+            id: resource,
+            environment_path: Some(EnvironmentSkillResource {
+                environment_id: environment.environment_id.clone(),
+                package_root: environment.package_root.clone(),
+                path,
+                contents: None,
+            }),
+        })
     }
 
     pub(crate) fn environment_path(&self) -> Option<(&str, &PathUri)> {
@@ -126,6 +163,7 @@ impl SkillResourceId {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct EnvironmentSkillResource {
     environment_id: String,
+    package_root: PathUri,
     path: PathUri,
     contents: Option<Arc<str>>,
 }
@@ -205,6 +243,10 @@ impl SkillCatalogEntry {
     pub fn hidden_from_prompt(mut self) -> Self {
         self.prompt_visible = false;
         self
+    }
+
+    pub(crate) fn is_model_visible(&self) -> bool {
+        self.enabled && self.prompt_visible
     }
 
     pub(crate) fn rendered_path(&self) -> &str {

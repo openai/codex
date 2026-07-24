@@ -64,8 +64,7 @@ impl ShadowSelectionExperiment {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                entry.enabled
-                    && entry.prompt_visible
+                entry.is_model_visible()
                     // Invocation observation currently exists only for host shell use and
                     // orchestrator reads. Keep the candidate set aligned with that universe.
                     && matches!(

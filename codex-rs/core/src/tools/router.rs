@@ -262,6 +262,7 @@ impl ToolRouter {
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn extension_tool_executors(
     session: &Session,
+    step_store: &codex_extension_api::ExtensionData,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
@@ -269,9 +270,10 @@ pub(crate) fn extension_tool_executors(
         .tool_contributors()
         .iter()
         .flat_map(|contributor| {
-            contributor.tools(
+            contributor.tools_for_step(
                 &session.services.session_extension_data,
                 &session.services.thread_extension_data,
+                step_store,
             )
         })
         .collect()

@@ -265,6 +265,7 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
                     },
                 })
                 .collect(),
+            resolved_executor_roots: Vec::new(),
             host_snapshot: None,
             include_host_skills: false,
             include_bundled_skills: true,
@@ -327,6 +328,7 @@ async fn high_level_discovery_reuses_materialized_skill_contents_for_reads() {
         .list(SkillListQuery {
             turn_id: "turn-1".to_string(),
             executor_roots,
+            resolved_executor_roots: Vec::new(),
             host_snapshot: None,
             include_host_skills: false,
             include_bundled_skills: true,
@@ -343,6 +345,7 @@ async fn high_level_discovery_reuses_materialized_skill_contents_for_reads() {
         authority: entry.authority.clone(),
         package: entry.id.clone(),
         resource: entry.main_prompt.clone(),
+        resolved_executor_roots: Vec::new(),
         host_snapshot: None,
         mcp_resources: None,
     };

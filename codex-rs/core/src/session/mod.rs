@@ -3032,6 +3032,8 @@ impl Session {
                 &ready_selected_capability_roots,
             )
             .await;
+        let extension_data = codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
+        extension_data.insert(selected_capability_roots.clone());
         let mcp = self
             .mcp_runtime_for_step(turn_context.as_ref(), &selected_capability_roots)
             .or_cancel(cancellation_token)
@@ -3041,6 +3043,7 @@ impl Session {
             turn_context.as_ref(),
             &environments,
             mcp.as_ref(),
+            &extension_data,
         )
         .or_cancel(cancellation_token)
         .await?;
