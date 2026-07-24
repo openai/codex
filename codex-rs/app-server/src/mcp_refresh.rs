@@ -2,8 +2,6 @@ use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_protocol::protocol::McpServerRefreshConfig;
-use codex_protocol::protocol::Op;
 use std::io;
 use std::sync::Arc;
 
@@ -20,18 +18,11 @@ pub(crate) async fn reload_mcp_config(
             .get_thread(thread_id)
             .await
             .map_err(|err| io::Error::other(format!("failed to load thread {thread_id}: {err}")))?;
-        let config = build_refresh_config(thread.as_ref(), config_manager).await?;
-        refreshes.push((thread_id, thread, config));
+        let config = load_refresh_config(thread.as_ref(), config_manager).await?;
+        refreshes.push((thread, config));
     }
-    for (thread_id, thread, config) in refreshes {
-        thread
-            .submit(Op::ReloadMcpConfig { config })
-            .await
-            .map_err(|err| {
-                io::Error::other(format!(
-                    "failed to queue MCP config reload for thread {thread_id}: {err}"
-                ))
-            })?;
+    for (thread, config) in refreshes {
+        thread.refresh_mcp_config(config).await;
     }
     Ok(())
 }
@@ -44,22 +35,6 @@ async fn load_refresh_config(
     config_manager
         .load_latest_config_for_thread(thread_config.as_ref())
         .await
-}
-
-async fn build_refresh_config(
-    thread: &CodexThread,
-    config_manager: &ConfigManager,
-) -> io::Result<McpServerRefreshConfig> {
-    let config = load_refresh_config(thread, config_manager).await?;
-    Ok(McpServerRefreshConfig {
-        mcp_servers: serde_json::to_value(config.mcp_servers.get()).map_err(io::Error::other)?,
-        mcp_oauth_credentials_store_mode: serde_json::to_value(
-            config.mcp_oauth_credentials_store_mode,
-        )
-        .map_err(io::Error::other)?,
-        auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())
-            .map_err(io::Error::other)?,
-    })
 }
 
 #[cfg(test)]
@@ -153,12 +128,13 @@ mod tests {
         let thread = good_thread.expect("good test thread should exist");
         let original_model = thread.config().await.model.clone();
 
-        let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
-        let keyring_backend_kind = serde_json::from_value::<AuthKeyringBackendKind>(
-            refresh_config.auth_keyring_backend_kind,
-        )?;
+        let refresh_config = load_refresh_config(thread.as_ref(), &config_manager).await?;
+        thread.refresh_mcp_config(refresh_config).await;
 
-        assert_eq!(keyring_backend_kind, AuthKeyringBackendKind::Secrets);
+        assert_eq!(
+            thread.config().await.auth_keyring_backend_kind(),
+            AuthKeyringBackendKind::Secrets
+        );
         assert_eq!(thread.config().await.model, original_model);
         Ok(())
     }
@@ -194,9 +170,8 @@ enabled = false
 "#,
         )?;
 
-        let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
-        let mut actual =
-            serde_json::from_value::<HashMap<String, McpServerConfig>>(refresh_config.mcp_servers)?;
+        let refresh_config = load_refresh_config(thread.as_ref(), &config_manager).await?;
+        let mut actual = refresh_config.mcp_servers.get().clone();
         actual.remove(codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
         let expected = serde_json::from_value::<HashMap<String, McpServerConfig>>(json!({
             "global": {
@@ -214,7 +189,7 @@ enabled = false
     }
 
     #[tokio::test]
-    async fn strict_refresh_does_not_mutate_thread_config_out_of_band() -> anyhow::Result<()> {
+    async fn strict_refresh_installs_refreshed_thread_mcp_config() -> anyhow::Result<()> {
         let (temp_dir, thread_manager, config_manager, _loader) = refresh_test_state().await?;
         let mut good_thread = None;
         for thread_id in thread_manager.list_thread_ids().await {
@@ -238,9 +213,13 @@ enabled = false
 
         reload_mcp_config(&thread_manager, &config_manager).await?;
 
-        assert_eq!(
-            thread.config().await.mcp_servers.get(),
-            &HashMap::<String, McpServerConfig>::new()
+        assert!(
+            thread
+                .config()
+                .await
+                .mcp_servers
+                .get()
+                .contains_key("refreshed")
         );
         Ok(())
     }

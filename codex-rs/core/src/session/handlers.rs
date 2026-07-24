@@ -785,10 +785,6 @@ pub(super) async fn submission_loop(
                     refresh_mcp_servers(&sess);
                     false
                 }
-                Op::ReloadMcpConfig { config } => {
-                    sess.refresh_mcp_config(config).await;
-                    false
-                }
                 Op::ReloadUserConfig => {
                     reload_user_config(&sess).await;
                     false

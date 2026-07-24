@@ -225,6 +225,10 @@ impl AccountRequestProcessor {
             .await
         {
             Ok(config) => {
+                Self::spawn_effective_plugins_changed_task(
+                    Arc::clone(thread_manager),
+                    config_manager.clone(),
+                );
                 let refresh_thread_manager = Arc::clone(thread_manager);
                 let refresh_config_manager = config_manager.clone();
                 thread_manager
