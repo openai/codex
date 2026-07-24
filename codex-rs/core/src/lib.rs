@@ -116,6 +116,7 @@ pub use thread_manager::ThreadShutdownReport;
 pub use thread_manager::build_models_manager;
 pub use thread_manager::local_agent_graph_store_from_state_db;
 pub use thread_manager::thread_store_from_config;
+pub use tools::handlers::WaitForEnvironmentToolConfig;
 pub use web_search::web_search_action_detail;
 pub use windows_sandbox_read_grants::grant_read_root_non_elevated;
 #[deprecated(note = "use ThreadManager")]
