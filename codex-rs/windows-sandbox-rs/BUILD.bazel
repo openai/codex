@@ -2,6 +2,7 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "windows-sandbox-rs",
+    binary_test_target_compatible_with = ["@platforms//os:windows"],
     build_script_data = [
         "codex-windows-sandbox-setup.manifest",
     ],
