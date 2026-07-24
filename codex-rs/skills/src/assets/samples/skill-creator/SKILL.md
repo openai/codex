@@ -233,6 +233,19 @@ Skill creation involves these steps:
 
 Follow these steps in order, skipping only if there is a clear reason why they are not applicable.
 
+### Skill Location Contract
+
+Choose the skill scope before creating files, and use the supported root for that scope:
+
+- Repository, project, or workspace skills: create the skill under `.agents/skills/<skill-name>/SKILL.md` in the current working directory, a parent directory between the current working directory and the repository root, or the repository root itself. If the user asks for a repo-wide skill and the current directory is inside a Git repository, use `$REPO_ROOT/.agents/skills/<skill-name>/SKILL.md`.
+- User skills: create the skill under `$HOME/.agents/skills/<skill-name>/SKILL.md`.
+- Admin skills: create the skill under `/etc/codex/skills/<skill-name>/SKILL.md` only when the user explicitly requests a machine- or container-wide admin skill and the environment has permission to write there.
+- System skills are bundled with Codex by OpenAI and are not a target for user-authored skills.
+
+Do not create new skills under `<repo>/skills`, `<repo>/.codex/skills`, `skills/`, `$CODEX_HOME/skills`, or `~/.codex/skills` unless the user explicitly asks for a legacy or custom location and understands it may not match the documented authoring paths.
+
+If the user asks for a repo-level, project-level, workspace-level, or checked-in skill, treat that as repository scope and use `.agents/skills`. If the user does not specify a scope, ask where to create the skill; when they have no preference, default to a user skill in `$HOME/.agents/skills`.
+
 ### Skill Naming
 
 - Use lowercase letters, digits, and hyphens only; normalize user-provided titles to hyphen-case (e.g., "Plan Mode" -> `plan-mode`).
@@ -253,7 +266,7 @@ For example, when building an image-editor skill, relevant questions include:
 - "Can you give some examples of how this skill would be used?"
 - "I can imagine users asking for things like 'Remove the red-eye from this image' or 'Rotate this image'. Are there other ways you imagine this skill being used?"
 - "What would a user say that should trigger this skill?"
-- "Where should I create this skill? If you do not have a preference, I will place it in `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset) so Codex can discover it automatically."
+- "Should this be a repository skill in `.agents/skills`, or a user skill in `$HOME/.agents/skills`?"
 
 To avoid overwhelming users, avoid asking too many questions in a single message. Start with the most important questions and follow up as needed for better effectiveness.
 
@@ -289,7 +302,7 @@ At this point, it is time to actually create the skill.
 
 Skip this step only if the skill being developed already exists. In this case, continue to the next step.
 
-Before running `init_skill.py`, ask where the user wants the skill created. If they do not specify a location, default to `$CODEX_HOME/skills`; when `CODEX_HOME` is unset, fall back to `~/.codex/skills` so the skill is auto-discovered.
+Before running `init_skill.py`, resolve the skill root from the Skill Location Contract. For repository skills, use `.agents/skills` in the chosen repository directory. For user skills, use `$HOME/.agents/skills`.
 
 When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
 
@@ -302,9 +315,10 @@ scripts/init_skill.py <skill-name> --path <output-directory> [--resources script
 Examples:
 
 ```bash
-scripts/init_skill.py my-skill --path "${CODEX_HOME:-$HOME/.codex}/skills"
-scripts/init_skill.py my-skill --path "${CODEX_HOME:-$HOME/.codex}/skills" --resources scripts,references
-scripts/init_skill.py my-skill --path ~/work/skills --resources scripts --examples
+scripts/init_skill.py my-repo-skill --path /path/to/repo/.agents/skills
+scripts/init_skill.py my-user-skill --path "$HOME/.agents/skills"
+scripts/init_skill.py my-user-skill --path "$HOME/.agents/skills" --resources scripts,references
+scripts/init_skill.py my-custom-skill --path ~/registered-extra-skill-root --resources scripts --examples
 ```
 
 The script:
