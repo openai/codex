@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::config::Config;
@@ -338,6 +339,11 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         namespace_function_names(&router.model_visible_specs(), "codex_app"),
         vec![visible_tool.to_string()]
     );
+    assert_eq!(
+        router.deferred_tool_namespaces(),
+        BTreeMap::from([("codex_app".to_string(), "Codex app tools.".to_string())])
+    );
+
     Ok(())
 }
 
