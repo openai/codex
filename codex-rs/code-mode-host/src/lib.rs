@@ -14,8 +14,6 @@ use codex_code_mode::InProcessCodeModeSession;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::EncodedFrame;
-use codex_code_mode_protocol::host::FramedReader;
-use codex_code_mode_protocol::host::FramedWriter;
 use codex_code_mode_protocol::host::HandshakeRejectReason;
 use codex_code_mode_protocol::host::HostHello;
 use codex_code_mode_protocol::host::HostRequest;
@@ -34,15 +32,39 @@ use tokio_util::task::TaskTracker;
 
 use self::delegate::RemoteDelegate;
 use self::peer::HostPeer;
+use self::transport::ConnectionReader;
+use self::transport::ConnectionWriter;
+
+pub use self::transport::DEFAULT_LISTEN_URL;
 
 mod delegate;
 mod peer;
+mod transport;
 
 const MAX_IN_FLIGHT_REQUESTS: usize = 256;
 const MAX_ACTIVE_CELLS: usize = 128;
 const MAX_RECENT_REQUEST_IDS: usize = 4096;
 const MAX_RECENT_SESSION_IDS: usize = 4096;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct HostLimits {
+    request_permits: Arc<Semaphore>,
+    active_cell_permits: Arc<Semaphore>,
+}
+
+impl HostLimits {
+    fn new() -> Self {
+        Self {
+            request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
+            active_cell_permits: Arc::new(Semaphore::new(MAX_ACTIVE_CELLS)),
+        }
+    }
+}
+
+/// Runs the code-mode host on its configured stdio or WebSocket transport.
+pub async fn run_main(listen_url: &str) -> Result<()> {
+    transport::run_transport(listen_url).await
+}
 
 /// Runs one code-mode host connection over the process standard streams.
 pub async fn run_stdio() -> Result<()> {
@@ -55,8 +77,19 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let mut reader = FramedReader::new(reader);
-    let mut writer = FramedWriter::new(writer);
+    run_connection(
+        ConnectionReader::from_reader(reader),
+        ConnectionWriter::from_writer(writer),
+        Arc::new(HostLimits::new()),
+    )
+    .await
+}
+
+async fn run_connection(
+    mut reader: ConnectionReader,
+    mut writer: ConnectionWriter,
+    limits: Arc<HostLimits>,
+) -> Result<()> {
     if !negotiate(&mut reader, &mut writer).await? {
         return Ok(());
     }
@@ -68,8 +101,8 @@ where
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
         request_tasks: TaskTracker::new(),
-        request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
-        active_cell_permits: Arc::new(Semaphore::new(MAX_ACTIVE_CELLS)),
+        request_permits: Arc::clone(&limits.request_permits),
+        active_cell_permits: Arc::clone(&limits.active_cell_permits),
         closing: AtomicBool::new(false),
         peer: Arc::clone(&peer),
     });
@@ -82,7 +115,11 @@ where
                     let Some(frame) = frame else {
                         return Ok(());
                     };
-                    if let Err(err) = writer.write_frame(&frame).await {
+                    let result = tokio::select! {
+                        _ = writer_disconnected.cancelled() => return Ok(()),
+                        result = writer.write_frame(frame) => result,
+                    };
+                    if let Err(err) = result {
                         return Err(
                             anyhow::Error::new(err)
                                 .context("failed to write code-mode host message")
@@ -112,7 +149,7 @@ where
         loop {
             let message = tokio::select! {
                 _ = peer.disconnected() => break,
-                message = reader.read::<ClientToHost>() => message
+                message = reader.read() => message
                     .context("failed to read code-mode client message")?,
             };
             let Some(message) = message else {
@@ -158,13 +195,9 @@ where
     Ok(())
 }
 
-async fn negotiate<R, W>(reader: &mut FramedReader<R>, writer: &mut FramedWriter<W>) -> Result<bool>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
+async fn negotiate(reader: &mut ConnectionReader, writer: &mut ConnectionWriter) -> Result<bool> {
     let Some(first_message) = reader
-        .read::<ClientToHost>()
+        .read()
         .await
         .context("failed to read code-mode client hello")?
     else {

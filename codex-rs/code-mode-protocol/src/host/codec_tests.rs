@@ -3,9 +3,42 @@ use serde_json::json;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
+use super::EncodedFrame;
 use super::FramedReader;
 use super::FramedWriter;
 use super::MAX_FRAME_BYTES;
+
+#[test]
+fn complete_frame_round_trips_without_a_byte_stream() {
+    let value = json!({"type": "session/open", "sessionId": "session-1"});
+    let bytes = EncodedFrame::encode(&value)
+        .expect("encode frame")
+        .into_framed_bytes();
+
+    assert_eq!(
+        EncodedFrame::decode_framed::<serde_json::Value>(&bytes).expect("decode frame"),
+        value
+    );
+}
+
+#[test]
+fn complete_frame_rejects_truncated_and_trailing_payloads() {
+    let value = json!({"value": 1});
+    let bytes = EncodedFrame::encode(&value)
+        .expect("encode frame")
+        .into_framed_bytes();
+
+    let truncated = &bytes[..bytes.len() - 1];
+    let truncated_error = EncodedFrame::decode_framed::<serde_json::Value>(truncated)
+        .expect_err("truncated frame should fail");
+    assert_eq!(truncated_error.kind(), std::io::ErrorKind::InvalidData);
+
+    let mut trailing = bytes;
+    trailing.push(0);
+    let trailing_error = EncodedFrame::decode_framed::<serde_json::Value>(&trailing)
+        .expect_err("frame with trailing bytes should fail");
+    assert_eq!(trailing_error.kind(), std::io::ErrorKind::InvalidData);
+}
 
 #[tokio::test]
 async fn frame_wire_format_is_little_endian_length_prefixed_json() {

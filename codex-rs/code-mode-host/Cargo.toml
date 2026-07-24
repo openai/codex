@@ -18,10 +18,15 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+axum = { workspace = true, features = ["http1", "tokio", "ws"] }
+clap = { workspace = true, features = ["derive"] }
 codex-code-mode = { workspace = true }
 codex-code-mode-protocol = { workspace = true }
-tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "sync", "time"] }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 codex-protocol = { workspace = true }
@@ -29,3 +34,4 @@ codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+tokio-tungstenite = { workspace = true }

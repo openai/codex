@@ -2502,15 +2502,21 @@ name = "codex-code-mode-host"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "clap",
  "codex-code-mode",
  "codex-code-mode-protocol",
  "codex-protocol",
  "codex-utils-cargo-bin",
+ "futures",
  "pretty_assertions",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

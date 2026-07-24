@@ -1,3 +1,13 @@
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+use std::sync::atomic::AtomicBool;
+use std::task::Context;
+use std::task::Poll;
+use std::time::Duration;
+
 use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientHello;
@@ -17,8 +27,10 @@ use codex_code_mode_protocol::host::SupportedProtocolVersions;
 use codex_code_mode_protocol::host::WireExecuteRequest;
 use codex_code_mode_protocol::host::WireResult;
 use pretty_assertions::assert_eq;
+use tokio::io::AsyncWrite;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -157,6 +169,85 @@ async fn handshake_and_multiple_session_lifecycles_are_ordered() {
     drop(writer);
     drop(reader);
     host.await.expect("host task").expect("host connection");
+}
+
+#[tokio::test]
+async fn disconnect_cancels_a_backpressured_host_writer() {
+    let (host_reader, client_writer) = tokio::io::duplex(/*max_buf_size*/ 4096);
+    let (blocked_tx, blocked_rx) = oneshot::channel();
+    let host = tokio::spawn(run(
+        host_reader,
+        BlockingWriter {
+            blocked_tx: Some(blocked_tx),
+            handshake_flushed: false,
+        },
+    ));
+    let mut writer = FramedWriter::new(client_writer);
+
+    writer
+        .write(&client_hello([ProtocolVersion::V1], CapabilitySet::empty()))
+        .await
+        .expect("write client hello");
+    writer
+        .write(&ClientToHost::Request {
+            id: request_id(/*value*/ 1),
+            request: HostRequest::OpenSession {
+                session_id: session_id("backpressured-session"),
+            },
+        })
+        .await
+        .expect("write session-open request");
+
+    tokio::time::timeout(Duration::from_secs(1), blocked_rx)
+        .await
+        .expect("host writer should reach backpressure")
+        .expect("host writer should report backpressure");
+
+    writer
+        .write(&client_hello([ProtocolVersion::V1], CapabilitySet::empty()))
+        .await
+        .expect("write invalid second client hello");
+
+    let error = tokio::time::timeout(Duration::from_secs(1), host)
+        .await
+        .expect("disconnect should cancel the backpressured writer")
+        .expect("host task should finish")
+        .expect_err("a second client hello should fail the connection");
+    assert_eq!(
+        error.to_string(),
+        "received a second code-mode client hello"
+    );
+}
+
+struct BlockingWriter {
+    blocked_tx: Option<oneshot::Sender<()>>,
+    handshake_flushed: bool,
+}
+
+impl AsyncWrite for BlockingWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        if self.handshake_flushed {
+            if let Some(blocked_tx) = self.blocked_tx.take() {
+                let _ = blocked_tx.send(());
+            }
+            Poll::Pending
+        } else {
+            Poll::Ready(Ok(bytes.len()))
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.handshake_flushed = true;
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
 }
 
 #[tokio::test]
@@ -478,9 +569,3 @@ async fn cell_forwarding_panic_disconnects_host() {
             .contains("cell forwarding task failed")
     );
 }
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::PoisonError;
-use std::sync::atomic::AtomicBool;
-use std::time::Duration;

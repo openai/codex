@@ -8,7 +8,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
-/// Maximum JSON payload size accepted for one IPC frame.
+/// Maximum JSON payload size accepted for one code-mode host frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 /// A serialized IPC frame that has already passed the payload size limit.
@@ -38,6 +38,55 @@ impl EncodedFrame {
             ));
         }
         Ok(Self { payload })
+    }
+
+    /// Returns the complete length-prefixed representation of this frame.
+    pub fn into_framed_bytes(self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(size_of::<u32>() + self.payload.len());
+        bytes.extend_from_slice(&(self.payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&self.payload);
+        bytes
+    }
+
+    /// Decodes exactly one complete length-prefixed frame.
+    pub fn decode_framed<T>(bytes: &[u8]) -> io::Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let length_bytes: [u8; size_of::<u32>()] = bytes
+            .get(..size_of::<u32>())
+            .and_then(|length_bytes| length_bytes.try_into().ok())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "code-mode IPC frame is missing its length prefix",
+                )
+            })?;
+        let length = u32::from_le_bytes(length_bytes) as usize;
+        if length > MAX_FRAME_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("code-mode IPC frame length {length} exceeds {MAX_FRAME_BYTES} bytes"),
+            ));
+        }
+
+        let payload = &bytes[size_of::<u32>()..];
+        if payload.len() != length {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "code-mode IPC frame declares {length} payload bytes but contains {}",
+                    payload.len()
+                ),
+            ));
+        }
+
+        serde_json::from_slice(payload).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to decode code-mode IPC frame: {err}"),
+            )
+        })
     }
 }
 
