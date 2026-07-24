@@ -36,6 +36,7 @@ use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
+use crate::fragments::ExecutorSkillResourceAccess;
 use crate::fragments::SkillInstructions;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
@@ -464,6 +465,13 @@ where
                             )
                             .0,
                             contents,
+                            executor_resource_access: (!entry.prompt_visible
+                                && entry.authority.kind == SkillSourceKind::Executor)
+                                .then(|| ExecutorSkillResourceAccess {
+                                    authority_id: entry.authority.id.clone(),
+                                    package: entry.id.0.clone(),
+                                    main_resource: entry.main_prompt.as_str().to_string(),
+                                }),
                         };
                         fragments.push(Box::new(fragment));
                         main_prompts_injected = true;

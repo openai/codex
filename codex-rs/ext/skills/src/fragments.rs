@@ -77,6 +77,14 @@ pub(crate) struct SkillInstructions {
     pub(crate) name: String,
     pub(crate) path: String,
     pub(crate) contents: String,
+    pub(crate) executor_resource_access: Option<ExecutorSkillResourceAccess>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ExecutorSkillResourceAccess {
+    pub(crate) authority_id: String,
+    pub(crate) package: String,
+    pub(crate) main_resource: String,
 }
 
 impl ContextualUserFragment for SkillInstructions {
@@ -96,6 +104,21 @@ impl ContextualUserFragment for SkillInstructions {
         let name = &self.name;
         let path = &self.path;
         let contents = &self.contents;
-        format!("\n<name>{name}</name>\n<path>{path}</path>\n{contents}\n")
+        let resource_access = self
+            .executor_resource_access
+            .as_ref()
+            .map(|access| {
+                let metadata = serde_json::json!({
+                    "authority": {
+                        "kind": "executor",
+                        "id": access.authority_id,
+                    },
+                    "package": access.package,
+                    "main_resource": access.main_resource,
+                });
+                format!("\n<resource_access>{metadata}</resource_access>")
+            })
+            .unwrap_or_default();
+        format!("\n<name>{name}</name>\n<path>{path}</path>{resource_access}\n{contents}\n")
     }
 }

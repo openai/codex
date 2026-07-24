@@ -56,7 +56,7 @@ impl ToolExecutor<ToolCall> for ReadTool {
     fn spec(&self) -> ToolSpec {
         skill_function_tool::<ReadArgs, ReadResponse>(
             TOOL_NAME,
-            "Read one page from a skill resource. Pass the exact authority and package from skills.list, plus its main_resource or a referenced resource beneath that package. Pass next_cursor back as cursor to continue.",
+            "Read one page from a skill resource. Pass the exact authority and package from skills.list or an explicitly selected skill's resource_access metadata, plus its main_resource or a referenced resource beneath that package. Pass next_cursor back as cursor to continue.",
         )
     }
 
