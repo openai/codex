@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::ExecServerRuntimePaths;
-use crate::client::http_client::PendingReqwestHttpBodyStream;
-use crate::client::http_client::ReqwestHttpClient;
-use crate::client::http_client::ReqwestHttpRequestRunner;
+use crate::client::http_client::PendingRouteAwareHttpBodyStream;
+use crate::client::http_client::RouteAwareHttpClient;
+use crate::client::http_client::RouteAwareHttpRequestRunner;
 use crate::protocol::CapabilityRootsDiscoverParams;
 use crate::protocol::CapabilityRootsDiscoverResponse;
 use crate::protocol::EnvironmentInfo;
@@ -75,7 +75,7 @@ pub(crate) struct ExecServerHandler {
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
     runtime_paths: ExecServerRuntimePaths,
-    http_client: ReqwestHttpClient,
+    http_client: RouteAwareHttpClient,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -96,7 +96,7 @@ impl ExecServerHandler {
             background_tasks: TaskTracker::new(),
             file_system: FileSystemHandler::new(runtime_paths.clone()),
             runtime_paths,
-            http_client: ReqwestHttpClient::new(http_client_factory),
+            http_client: RouteAwareHttpClient::new(http_client_factory),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }
@@ -405,7 +405,7 @@ impl ExecServerHandler {
 
     async fn start_http_body_stream(
         self: &Arc<Self>,
-        pending_stream: PendingReqwestHttpBodyStream,
+        pending_stream: PendingRouteAwareHttpBodyStream,
     ) {
         let request_id = pending_stream.request_id.clone();
         if self.background_task_shutdown.is_cancelled() {
@@ -419,7 +419,7 @@ impl ExecServerHandler {
         self.background_tasks.spawn(async move {
             tokio::select! {
                 _ = shutdown.cancelled() => {}
-                _ = ReqwestHttpRequestRunner::stream_body(pending_stream, notifications) => {}
+                _ = RouteAwareHttpRequestRunner::stream_body(pending_stream, notifications) => {}
             }
             handler.release_http_body_stream(&finished_request_id).await;
         });

@@ -242,7 +242,6 @@ deny = [
         "codex-api",
         "codex-app-server",
         "codex-core",
-        "codex-exec-server",
         "codex-ollama",
         "codex-otel",
         "codex-protocol",

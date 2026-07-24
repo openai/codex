@@ -20,7 +20,7 @@ use crate::HttpClient;
 use crate::NoiseChannelIdentity;
 use crate::NoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
-use crate::client::http_client::ReqwestHttpClient;
+use crate::client::http_client::RouteAwareHttpClient;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
 use crate::environment_bootstrap::PreparedEnvironmentManager;
@@ -632,7 +632,7 @@ impl Environment {
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             // Test-only construction has no application config from which to resolve proxy policy.
-            http_client: Arc::new(ReqwestHttpClient::new(HttpClientFactory::new(
+            http_client: Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
                 OutboundProxyPolicy::ReqwestDefault,
             ))),
             local_runtime_paths: None,
@@ -713,7 +713,7 @@ impl Environment {
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
             )),
-            http_client: Arc::new(ReqwestHttpClient::new(http_client_factory)),
+            http_client: Arc::new(RouteAwareHttpClient::new(http_client_factory)),
             local_runtime_paths: Some(local_runtime_paths),
         }
     }

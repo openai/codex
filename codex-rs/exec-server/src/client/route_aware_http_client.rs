@@ -1,4 +1,4 @@
-//! `reqwest`-backed `HttpClient` implementation.
+//! Route-aware local HTTP capability implementation.
 //!
 //! This code runs wherever the real network request should originate:
 //! - in a local environment, that means the orchestrator process
@@ -15,12 +15,12 @@ use codex_http_client::RouteAwareRequestError;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
-use reqwest::Method;
-use reqwest::Url;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
+use http::Method;
 use tracing::Instrument;
+use url::Url;
 
 use super::HttpResponseBodyStream;
 use super::response_body_stream::send_body_delta;
@@ -38,25 +38,25 @@ use crate::rpc::invalid_params;
 
 /// HTTP capability implementation backed by the shared route-aware transport.
 #[derive(Clone)]
-pub struct ReqwestHttpClient {
+pub struct RouteAwareHttpClient {
     follow_redirects: RouteAwareClientPool,
     stop_redirects: RouteAwareClientPool,
 }
 
 /// Streaming response state held between the initial HTTP response and
 /// downstream body-delta forwarding.
-pub(crate) struct PendingReqwestHttpBodyStream {
+pub(crate) struct PendingRouteAwareHttpBodyStream {
     pub(crate) request_id: String,
-    pub(crate) response: reqwest::Response,
+    pub(crate) response: codex_http_client::HttpResponse,
 }
 
-/// Validates `http/request` parameters and runs the actual `reqwest` call used
+/// Validates `http/request` parameters and runs the actual HTTP call used
 /// by the exec-server route and the local [`HttpClient`] backend.
-pub(crate) struct ReqwestHttpRequestRunner {
+pub(crate) struct RouteAwareHttpRequestRunner {
     client: RouteAwareClientPool,
 }
 
-impl ReqwestHttpClient {
+impl RouteAwareHttpClient {
     pub fn new(http_client_factory: HttpClientFactory) -> Self {
         Self {
             follow_redirects: RouteAwareClientPool::with_chatgpt_cloudflare_cookies_without_request_logging(
@@ -73,16 +73,19 @@ impl ReqwestHttpClient {
         }
     }
 
-    pub(crate) fn runner(&self, redirect_policy: HttpRedirectPolicy) -> ReqwestHttpRequestRunner {
+    pub(crate) fn runner(
+        &self,
+        redirect_policy: HttpRedirectPolicy,
+    ) -> RouteAwareHttpRequestRunner {
         let client = match redirect_policy {
             HttpRedirectPolicy::Follow => self.follow_redirects.clone(),
             HttpRedirectPolicy::Stop => self.stop_redirects.clone(),
         };
-        ReqwestHttpRequestRunner { client }
+        RouteAwareHttpRequestRunner { client }
     }
 }
 
-impl HttpClient for ReqwestHttpClient {
+impl HttpClient for RouteAwareHttpClient {
     fn http_request(
         &self,
         params: HttpRequestParams,
@@ -128,11 +131,11 @@ impl HttpClient for ReqwestHttpClient {
     }
 }
 
-impl ReqwestHttpRequestRunner {
+impl RouteAwareHttpRequestRunner {
     pub(crate) async fn run(
         &self,
         params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, Option<PendingReqwestHttpBodyStream>), JSONRPCErrorError>
+    ) -> Result<(HttpRequestResponse, Option<PendingRouteAwareHttpBodyStream>), JSONRPCErrorError>
     {
         let method = Method::from_bytes(params.method.as_bytes())
             .map_err(|error| invalid_params(format!("http/request method is invalid: {error}")))?;
@@ -188,7 +191,7 @@ impl ReqwestHttpRequestRunner {
                     headers,
                     body: Vec::new().into(),
                 },
-                Some(PendingReqwestHttpBodyStream {
+                Some(PendingRouteAwareHttpBodyStream {
                     request_id: params.request_id,
                     response,
                 }),
@@ -212,10 +215,10 @@ impl ReqwestHttpRequestRunner {
     }
 
     pub(crate) async fn stream_body(
-        pending_stream: PendingReqwestHttpBodyStream,
+        pending_stream: PendingRouteAwareHttpBodyStream,
         notifications: RpcNotificationSender,
     ) {
-        let PendingReqwestHttpBodyStream {
+        let PendingRouteAwareHttpBodyStream {
             request_id,
             response,
         } = pending_stream;
