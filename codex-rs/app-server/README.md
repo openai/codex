@@ -378,7 +378,7 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-Like `thread/resume`, experimental clients can pass `excludeTurns: true` to `thread/fork` to return only thread metadata in `thread.turns` and page history with `thread/turns/list`. In that mode the server skips replaying restored `thread/tokenUsage/updated`, which keeps the fork path from rebuilding turns just to attribute historical usage.
+Like `thread/resume`, experimental clients can pass `excludeTurns: true` to `thread/fork` to return only thread metadata in `thread.turns` and page history with `thread/turns/list`. In that mode the server skips replaying restored `thread/tokenUsage/updated`, which keeps the fork path from rebuilding turns just to attribute historical usage. Ephemeral forks of paginated threads require `excludeTurns: true`.
 
 ### Example: List threads (with pagination & filters)
 

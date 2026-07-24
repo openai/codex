@@ -4010,17 +4010,17 @@ impl ThreadRequestProcessor {
                 "`deferGoalContinuation` cannot be combined with `ephemeral`",
             ));
         }
+        if paginated_source && ephemeral && include_turns {
+            return Err(invalid_request(
+                "ephemeral paginated thread/fork requires `excludeTurns: true`",
+            ));
+        }
         let source_thread_id = source_thread.thread_id;
         let source_thread_name = source_thread
             .name
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);
         let prepared_fork = if paginated_source {
-            if ephemeral {
-                return Err(invalid_request(
-                    "ephemeral paginated thread/fork is not supported",
-                ));
-            }
             let boundary = match (last_turn_id.as_deref(), before_turn_id.as_deref()) {
                 (Some(turn_id), None) => {
                     codex_thread_store::ForkBoundary::ThroughTurn(turn_id.to_string())
@@ -4301,7 +4301,12 @@ impl ThreadRequestProcessor {
                 &config_snapshot,
                 /*path*/ None,
             );
-            thread.preview = preview_from_rollout_items(&history_items);
+            thread.preview =
+                if paginated_source && last_turn_id.is_none() && before_turn_id.is_none() {
+                    source_thread.preview.clone()
+                } else {
+                    preview_from_rollout_items(&history_items)
+                };
             thread.forked_from_id = Some(source_thread_id.to_string());
             if include_turns {
                 populate_thread_turns_from_history(

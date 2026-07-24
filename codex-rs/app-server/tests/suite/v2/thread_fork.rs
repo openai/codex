@@ -565,6 +565,35 @@ async fn assert_thread_fork_at_named_boundary_keeps_only_terminal_prefix(
                 .collect::<Vec<_>>(),
             turn_ids[..2]
         );
+
+        let completed = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: forked_thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "private child prompt".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            }),
+        )
+        .await??;
+        let ThreadForkResponse {
+            thread: ephemeral_fork,
+            ..
+        } = mcp
+            .request(|request_id| ClientRequest::ThreadFork {
+                request_id,
+                params: ThreadForkParams {
+                    thread_id: forked_thread.id,
+                    before_turn_id: Some(completed.turn.id),
+                    ephemeral: true,
+                    exclude_turns: true,
+                    ..Default::default()
+                },
+            })
+            .await?;
+        assert_eq!(ephemeral_fork.preview, "first");
     }
 
     Ok(())
@@ -1392,6 +1421,22 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
         .build_initialized()
         .await?;
 
+    let ThreadForkResponse {
+        thread: ephemeral_fork,
+        ..
+    } = mcp
+        .request(|request_id| ClientRequest::ThreadFork {
+            request_id,
+            params: ThreadForkParams {
+                thread_id: source_thread_id.clone(),
+                thread_source: thread_source.clone(),
+                ephemeral: true,
+                exclude_turns: true,
+                ..Default::default()
+            },
+        })
+        .await?;
+
     let invalid_fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: source_thread_id.clone(),
@@ -1469,6 +1514,48 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
         })),
     )
     .await?;
+
+    let _: TurnStartResponse = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: ephemeral_fork.id,
+                input: vec![UserInput::Text {
+                    text: "Continue in an ephemeral fork".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let requests = server.received_requests().await.expect("response requests");
+    let input = requests
+        .iter()
+        .rev()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .expect("ephemeral fork model request")
+        .body_json::<Value>()?["input"]
+        .clone();
+    let serialized_input = serde_json::to_string(&input)?;
+    assert!(serialized_input.contains("before-fork model input"));
+    assert!(!serialized_input.contains("after-fork model input"));
+    assert!(input.as_array().is_some_and(|items| {
+        items.iter().any(|item| {
+            item["role"] == expected_marker_role
+                && item["content"].as_array().is_some_and(|content| {
+                    content.iter().any(|fragment| {
+                        fragment["text"]
+                            .as_str()
+                            .is_some_and(|text| text.contains("<turn_aborted>"))
+                    })
+                })
+        })
+    }));
 
     let ThreadTurnsListResponse { data: turns, .. } = mcp
         .request(|request_id| ClientRequest::ThreadTurnsList {
@@ -1767,12 +1854,28 @@ async fn thread_fork_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
 
 #[tokio::test]
 async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()> {
+    assert_thread_fork_ephemeral_remains_pathless_and_omits_listing(ThreadHistoryMode::Legacy).await
+}
+
+#[tokio::test]
+async fn paginated_thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()> {
+    assert_thread_fork_ephemeral_remains_pathless_and_omits_listing(ThreadHistoryMode::Paginated)
+        .await
+}
+
+async fn assert_thread_fork_ephemeral_remains_pathless_and_omits_listing(
+    history_mode: ThreadHistoryMode,
+) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let preview = "Saved user message";
-    let conversation_id = create_fake_rollout(
+    let create_rollout = match history_mode {
+        ThreadHistoryMode::Legacy => create_fake_rollout,
+        ThreadHistoryMode::Paginated => create_fake_paginated_rollout,
+    };
+    let conversation_id = create_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
@@ -1787,10 +1890,30 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         .build_initialized()
         .await?;
 
+    if history_mode == ThreadHistoryMode::Paginated {
+        let fork_id = mcp
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: conversation_id.clone(),
+                ephemeral: true,
+                ..Default::default()
+            })
+            .await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+        )
+        .await??;
+        assert_eq!(
+            error.error.message,
+            "ephemeral paginated thread/fork requires `excludeTurns: true`"
+        );
+    }
+
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
             ephemeral: true,
+            exclude_turns: history_mode == ThreadHistoryMode::Paginated,
             ..Default::default()
         })
         .await?;
@@ -1814,22 +1937,26 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.status, ThreadStatus::Idle);
     assert_eq!(thread.name, None);
-    assert_eq!(thread.turns.len(), 1, "expected copied fork history");
+    if history_mode == ThreadHistoryMode::Paginated {
+        assert!(thread.turns.is_empty());
+    } else {
+        assert_eq!(thread.turns.len(), 1, "expected copied fork history");
 
-    let turn = &thread.turns[0];
-    assert_eq!(turn.status, TurnStatus::Completed);
-    assert_eq!(turn.items.len(), 1, "expected user message item");
-    match &turn.items[0] {
-        ThreadItem::UserMessage { content, .. } => {
-            assert_eq!(
-                content,
-                &vec![UserInput::Text {
-                    text: preview.to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
+        let turn = &thread.turns[0];
+        assert_eq!(turn.status, TurnStatus::Completed);
+        assert_eq!(turn.items.len(), 1, "expected user message item");
+        match &turn.items[0] {
+            ThreadItem::UserMessage { content, .. } => {
+                assert_eq!(
+                    content,
+                    &vec![UserInput::Text {
+                        text: preview.to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+            other => panic!("expected user message item, got {other:?}"),
         }
-        other => panic!("expected user message item, got {other:?}"),
     }
 
     let thread_json = fork_result
@@ -1898,7 +2025,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: fork_thread_id,
+            thread_id: fork_thread_id.clone(),
             client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "continue".to_string(),
@@ -1913,6 +2040,19 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let requests = server.received_requests().await.expect("response requests");
+    let model_input = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .expect("ephemeral fork model request")
+        .body_json::<Value>()?["input"]
+        .to_string();
+    assert!(model_input.contains(preview));
+    assert!(model_input.contains("continue"));
+
+    let ThreadListResponse { data, .. } = list_threads(&mut mcp).await?;
+    assert!(data.iter().all(|thread| thread.id != fork_thread_id));
 
     Ok(())
 }
