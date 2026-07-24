@@ -12,6 +12,7 @@ use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ExtensionWarning;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::ThreadStartInput;
@@ -23,7 +24,6 @@ use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
@@ -540,11 +540,9 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
     assert!(!rendered.contains("description-"));
     assert!(rendered.contains("additional skills omitted from this bounded skills list"));
     let omitted_count = 200 - included_count;
-    let event = event_rx.try_recv()?;
-    assert_eq!("thread", event.id);
-    let EventMsg::Warning(warning) = event.msg else {
-        panic!("expected catalog budget warning");
-    };
+    let warning = event_rx.try_recv()?.into_warning();
+    assert_eq!(warning.thread_id, "thread");
+    assert_eq!(warning.turn_id, None);
     assert_eq!(
         warning.message,
         format!(
@@ -673,9 +671,9 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .contribute_thread_context(&session_store, &thread_store)
         .await;
     assert!(initial_fragments.is_empty());
-    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
-        panic!("expected warning event");
-    };
+    let warning = event_rx.try_recv()?.into_warning();
+    assert_eq!(warning.thread_id, thread_store.level_id());
+    assert_eq!(warning.turn_id, None);
     assert_eq!(
         warning.message,
         "orchestrator skills unavailable: temporary orchestrator failure"
@@ -698,6 +696,13 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
             )
             .await;
         assert!(fragments.is_empty());
+        let warning = event_rx.try_recv()?.into_warning();
+        assert_eq!(warning.thread_id, thread_store.level_id());
+        assert_eq!(warning.turn_id.as_deref(), Some(turn_id));
+        assert_eq!(
+            warning.message,
+            "orchestrator skills unavailable: temporary orchestrator failure"
+        );
     }
     assert_eq!(1, list_calls.load(Ordering::Relaxed));
 
@@ -916,11 +921,9 @@ async fn model_context_window_scales_executor_catalog_but_not_thread_catalog() -
             turn_store: &turn_store,
         })
         .await;
-    let event = event_rx.try_recv()?;
-    assert_eq!("turn-1", event.id);
-    let EventMsg::Warning(warning) = event.msg else {
-        panic!("expected catalog budget warning");
-    };
+    let warning = event_rx.try_recv()?.into_warning();
+    assert_eq!(warning.thread_id, thread_store.level_id());
+    assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
     assert!(
         warning
             .message
@@ -943,6 +946,84 @@ async fn model_context_window_scales_executor_catalog_but_not_thread_catalog() -
             .is_none()
     );
     assert!(event_rx.try_recv().is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn executor_catalog_emits_at_most_four_warnings() -> TestResult {
+    let executor_provider = Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: Vec::new(),
+            warnings: (0..6).map(|index| format!("warning-{index}")).collect(),
+        },
+        read_requests: Arc::new(Mutex::new(Vec::new())),
+        list_calls: None,
+        fail_first_list: false,
+    });
+    let providers = SkillProviders::new().with_executor_provider(executor_provider);
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let mut config = default_config();
+    config.bundled_skills_enabled = false;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "skills".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "env-1".to_string(),
+            path: PathUri::parse("file:///skills").expect("skill root URI"),
+        },
+    }];
+    let turn_store = ExtensionData::new("turn-1");
+
+    registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+    registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: Vec::new(),
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &turn_store,
+        )
+        .await;
+
+    let messages = event_rx
+        .try_iter()
+        .map(|event| event.into_warning().message)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages,
+        vec!["warning-0", "warning-1", "warning-2", "warning-3"]
+    );
 
     Ok(())
 }
@@ -1033,11 +1114,30 @@ struct StaticSkillProvider {
     fail_first_list: bool,
 }
 
-struct ChannelEventSink(std::sync::mpsc::Sender<Event>);
+#[derive(Debug)]
+enum CapturedExtensionEvent {
+    Event(Box<Event>),
+    Warning(ExtensionWarning),
+}
+
+impl CapturedExtensionEvent {
+    fn into_warning(self) -> ExtensionWarning {
+        match self {
+            Self::Warning(warning) => warning,
+            Self::Event(event) => panic!("expected extension warning, got {event:?}"),
+        }
+    }
+}
+
+struct ChannelEventSink(std::sync::mpsc::Sender<CapturedExtensionEvent>);
 
 impl ExtensionEventSink for ChannelEventSink {
     fn emit(&self, event: Event) {
-        let _ = self.0.send(event);
+        let _ = self.0.send(CapturedExtensionEvent::Event(Box::new(event)));
+    }
+
+    fn emit_warning(&self, warning: ExtensionWarning) {
+        let _ = self.0.send(CapturedExtensionEvent::Warning(warning));
     }
 }
 

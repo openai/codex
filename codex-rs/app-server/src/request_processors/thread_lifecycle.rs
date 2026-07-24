@@ -1,4 +1,5 @@
 use super::*;
+use crate::extensions::send_thread_warning;
 use codex_protocol::config_types::MultiAgentMode;
 
 pub(super) const THREAD_UNLOADING_DELAY: Duration = Duration::from_secs(30 * 60);
@@ -487,6 +488,9 @@ pub(super) async fn handle_thread_listener_command(
                     },
                 ))
                 .await;
+        }
+        ThreadListenerCommand::EmitWarning { message } => {
+            send_thread_warning(outgoing, thread_state_manager, conversation_id, message).await;
         }
         ThreadListenerCommand::EmitThreadGoalCleared => {
             outgoing

@@ -61,6 +61,10 @@ pub(crate) enum ThreadListenerCommand {
         turn_id: Option<String>,
         goal: ThreadGoal,
     },
+    // EmitWarning is used to order extension warnings with other thread notifications.
+    EmitWarning {
+        message: String,
+    },
     // EmitThreadGoalCleared is used to order app-server goal clears with running-thread resume responses.
     EmitThreadGoalCleared,
     // EmitThreadGoalSnapshot is used to read and emit the latest goal state in the listener order.

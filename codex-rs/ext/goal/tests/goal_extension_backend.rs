@@ -12,6 +12,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ExtensionWarning;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::ThreadResumeInput;
@@ -1419,6 +1420,10 @@ impl RecordingEventSink {
 impl ExtensionEventSink for RecordingEventSink {
     fn emit(&self, event: Event) {
         self.events().push(event);
+    }
+
+    fn emit_warning(&self, _warning: ExtensionWarning) {
+        panic!("goal extension tests do not emit warnings");
     }
 }
 

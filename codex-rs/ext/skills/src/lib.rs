@@ -10,6 +10,7 @@ mod shadow_selection_experiment;
 mod sources;
 mod state;
 mod tools;
+mod warnings;
 mod world_state;
 
 pub use config::SkillsExtensionConfig;

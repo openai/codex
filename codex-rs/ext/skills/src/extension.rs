@@ -11,6 +11,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ExtensionWarning;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::SkillInvocationContributor;
 use codex_extension_api::SkillInvocationInput;
@@ -27,9 +28,6 @@ use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
 use codex_otel::MetricsClient;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::WarningEvent;
 
 use crate::SkillsExtensionConfig;
 use crate::catalog::SkillCatalog;
@@ -58,6 +56,7 @@ use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 use crate::tools::skill_tools;
+use crate::warnings::bounded_warnings;
 use crate::world_state::executor_skills_world_state_section;
 use crate::world_state::host_skills_world_state_section;
 
@@ -170,8 +169,8 @@ where
                     &thread_state,
                 )
                 .await;
-            for warning in &catalog.warnings {
-                self.emit_warning(thread_store.level_id(), warning.clone());
+            for warning in bounded_warnings(&catalog.warnings) {
+                self.emit_warning(thread_store.level_id(), /*turn_id*/ None, warning);
             }
             let include_usage = thread_store
                 .get::<ModelInfo>()
@@ -183,7 +182,7 @@ where
                 capped_skill_metadata_budget(/*context_window*/ None),
             );
             if let Some(message) = rendered.warning_message {
-                self.emit_warning(thread_store.level_id(), message);
+                self.emit_warning(thread_store.level_id(), /*turn_id*/ None, message);
             }
             rendered
                 .fragment
@@ -247,7 +246,7 @@ where
                     .get_or_init(EmittedCatalogBudgetWarnings::default)
                     .insert(&message)
             {
-                self.emit_warning(input.turn_id, message);
+                self.emit_warning(input.thread_store.level_id(), Some(input.turn_id), message);
             }
             let executor_body = rendered.fragment.map(|fragment| fragment.body());
             let mut sections = vec![executor_skills_world_state_section(
@@ -364,8 +363,8 @@ where
                 .map(|executor_skills| executor_skills.0.clone())
                 .unwrap_or_default();
             catalog.extend(self.list_skills(query, &thread_state).await);
-            for warning in &catalog.warnings {
-                self.emit_warning(&input.turn_id, warning.clone());
+            for warning in bounded_warnings(&catalog.warnings) {
+                self.emit_warning(thread_store.level_id(), Some(&input.turn_id), warning);
             }
 
             let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
@@ -407,7 +406,7 @@ where
                     metadata_budget,
                 );
                 if let Some(message) = rendered.warning_message {
-                    self.emit_warning(&input.turn_id, message);
+                    self.emit_warning(thread_store.level_id(), Some(&input.turn_id), message);
                 }
                 if let Some(fragment) = rendered.fragment {
                     fragments.push(Box::new(fragment));
@@ -435,7 +434,11 @@ where
                                 "Skill `{}` exceeded the main prompt context limit and was truncated.",
                                 entry.name
                             );
-                            self.emit_warning(&input.turn_id, warning.clone());
+                            self.emit_warning(
+                                thread_store.level_id(),
+                                Some(&input.turn_id),
+                                warning.clone(),
+                            );
                             warnings.push(warning);
                         }
                         let fragment = SkillInstructions {
@@ -455,7 +458,11 @@ where
                     }
                     Err(message) => {
                         let warning = format!("Failed to load skill `{}`: {message}", entry.name);
-                        self.emit_warning(&input.turn_id, warning.clone());
+                        self.emit_warning(
+                            thread_store.level_id(),
+                            Some(&input.turn_id),
+                            warning.clone(),
+                        );
                         warnings.push(warning);
                     }
                 }
@@ -542,10 +549,11 @@ impl<C> SkillsExtension<C> {
             .map_err(|err| err.message)
     }
 
-    fn emit_warning(&self, turn_id: &str, message: String) {
-        self.event_sink.emit(Event {
-            id: turn_id.to_string(),
-            msg: EventMsg::Warning(WarningEvent { message }),
+    fn emit_warning(&self, thread_id: &str, turn_id: Option<&str>, message: String) {
+        self.event_sink.emit_warning(ExtensionWarning {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.map(str::to_string),
+            message,
         });
     }
 }

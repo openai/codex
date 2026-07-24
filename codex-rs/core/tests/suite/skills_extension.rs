@@ -4,8 +4,8 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ExtensionWarning;
 use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_skills_extension::SkillProvider;
 use codex_skills_extension::SkillProviderSource;
 use codex_skills_extension::SkillProviders;
@@ -37,11 +37,30 @@ struct StaticSkillProvider {
     catalog: SkillCatalog,
 }
 
-struct ChannelEventSink(std::sync::mpsc::Sender<Event>);
+#[derive(Debug)]
+enum CapturedExtensionEvent {
+    Event(Box<Event>),
+    Warning(ExtensionWarning),
+}
+
+impl CapturedExtensionEvent {
+    fn into_warning(self) -> ExtensionWarning {
+        match self {
+            Self::Warning(warning) => warning,
+            Self::Event(event) => panic!("expected extension warning, got {event:?}"),
+        }
+    }
+}
+
+struct ChannelEventSink(std::sync::mpsc::Sender<CapturedExtensionEvent>);
 
 impl ExtensionEventSink for ChannelEventSink {
     fn emit(&self, event: Event) {
-        let _ = self.0.send(event);
+        let _ = self.0.send(CapturedExtensionEvent::Event(Box::new(event)));
+    }
+
+    fn emit_warning(&self, warning: ExtensionWarning) {
+        let _ = self.0.send(CapturedExtensionEvent::Warning(warning));
     }
 }
 
@@ -153,9 +172,7 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             .iter()
             .filter(|line| line.starts_with("- skill-"))
             .count();
-        let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
-            panic!("expected catalog budget warning");
-        };
+        let warning = event_rx.try_recv()?.into_warning();
         let omitted_count = 400 - included_count;
 
         assert!(catalog_text.contains("additional skills omitted"));
@@ -258,9 +275,7 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
             .all(|length| *length > 0 && *length < 1_024)
     );
     assert!(!catalog_text.contains("additional skills omitted"));
-    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
-        panic!("expected catalog budget warning");
-    };
+    let warning = event_rx.try_recv()?.into_warning();
     assert_eq!(
         warning.message,
         "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
