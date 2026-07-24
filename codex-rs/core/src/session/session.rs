@@ -707,6 +707,7 @@ impl Session {
             session_init.ephemeral = config.ephemeral,
         ));
 
+        let mut mcp_auth_changes = auth_manager.auth_change_receiver();
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1216,9 +1217,34 @@ impl Session {
             }
             turn_environments.start_connection_event_forwarding(tx_event.clone());
 
-            let mcp_auth_changes = sess.services.auth_manager.auth_change_receiver();
+            let startup_auth_changed = mcp_auth_changes.has_changed().unwrap_or(false);
+            if startup_auth_changed {
+                mcp_auth_changes.mark_unchanged();
+            }
+            let latest_auth = sess.services.auth_manager.auth().await;
+            let mcp_projection = if startup_auth_changed
+                || mcp_auth_changes.has_changed().unwrap_or(false)
+            {
+                sess.services
+                    .plugins_manager
+                    .set_auth_mode(latest_auth.as_ref().map(CodexAuth::api_auth_mode));
+                sess.services
+                    .mcp_manager
+                    .runtime_config_for_step(
+                        config.as_ref(),
+                        &sess.services.mcp_thread_init,
+                        &sess.services.thread_extension_data,
+                        &session_configuration.originator,
+                        /*ready_selected_capability_roots*/ &[],
+                        /*executor_capability_discovery*/ None,
+                    )
+                    .await
+            } else {
+                mcp_projection
+            };
             sess.install_initial_mcp_runtime(
                 &session_configuration,
+                latest_auth,
                 mcp_projection,
                 &resolved_environments,
                 mcp_runtime_cwd,

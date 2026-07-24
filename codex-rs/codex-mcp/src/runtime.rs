@@ -76,6 +76,8 @@ pub struct McpRuntime {
 struct PublishedMcpRuntime {
     connections: Arc<McpConnectionSet>,
     config: Option<Arc<McpConfig>>,
+    auth: Option<CodexAuth>,
+    auth_token: Option<String>,
     plugins_available: bool,
     ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
 }
@@ -125,6 +127,8 @@ impl McpRuntime {
             current: ArcSwap::from_pointee(PublishedMcpRuntime {
                 connections: Arc::new(McpConnectionSet::empty(prefix_mcp_tool_names)),
                 config: None,
+                auth: None,
+                auth_token: None,
                 plugins_available: false,
                 ready_selected_capability_roots: Vec::new(),
             }),
@@ -154,6 +158,8 @@ impl McpRuntime {
     async fn publish(&self, input: McpRuntimeInput, previous: Option<&McpConnectionSet>) {
         let (publish, publication_gate) = McpPublicationGate::pending();
         let config = Arc::clone(&input.config);
+        let auth = input.auth.clone();
+        let auth_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
         let plugins_available = input.plugins_available;
         let ready_selected_capability_roots = input.ready_selected_capability_roots.clone();
         let connections = Arc::new(
@@ -168,6 +174,8 @@ impl McpRuntime {
         self.current.store(Arc::new(PublishedMcpRuntime {
             connections,
             config: Some(config),
+            auth,
+            auth_token,
             plugins_available,
             ready_selected_capability_roots,
         }));
@@ -184,6 +192,22 @@ impl McpRuntime {
                 .capture_binding_with_metadata(config, current.plugins_available)
                 .await,
         ))
+    }
+
+    /// Returns whether the published snapshot still belongs to the current credentials.
+    pub fn current_auth_matches(&self, auth: Option<&CodexAuth>) -> bool {
+        let current = self.current.load();
+        match (current.auth.as_ref(), auth) {
+            (Some(previous), Some(latest)) => {
+                previous == latest
+                    && previous.get_account_id() == latest.get_account_id()
+                    && previous.get_chatgpt_user_id() == latest.get_chatgpt_user_id()
+                    && previous.is_fedramp_account() == latest.is_fedramp_account()
+                    && current.auth_token == latest.get_token().ok()
+            }
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        }
     }
 
     pub fn current_ready_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {

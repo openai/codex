@@ -7936,6 +7936,65 @@ async fn mcp_policy_changes_schedule_runtime_refresh() {
     );
 }
 
+#[tokio::test]
+async fn mcp_refresh_updates_plugin_auth_mode_before_checking_pending_state() {
+    let codex_home = tempfile::tempdir().expect("create auth test directory");
+    let (mut session, _turn_context) = make_session_and_context().await;
+    session.services.auth_manager = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("old-api-key"),
+        codex_home.path().to_path_buf(),
+    );
+    let session = Arc::new(session);
+    let auth_mode = session.services.auth_manager.get_api_auth_mode();
+
+    assert_ne!(session.services.plugins_manager.auth_mode(), auth_mode);
+    session
+        .mcp_refresh_pending
+        .store(false, std::sync::atomic::Ordering::Release);
+
+    session.refresh_mcp_if_dirty().await;
+
+    assert_eq!(session.services.plugins_manager.auth_mode(), auth_mode);
+    assert!(
+        session
+            .services
+            .mcp_runtime
+            .current_binding()
+            .await
+            .is_some()
+    );
+
+    codex_login::login_with_api_key(
+        codex_home.path(),
+        "new-api-key",
+        codex_login::AuthCredentialsStoreMode::File,
+        codex_login::AuthKeyringBackendKind::default(),
+    )
+    .expect("store replacement API key");
+    session.services.auth_manager.reload().await;
+    assert_eq!(
+        session
+            .services
+            .auth_manager
+            .auth_cached()
+            .and_then(|auth| auth.get_token().ok()),
+        Some("new-api-key".to_string())
+    );
+    assert_eq!(session.services.plugins_manager.auth_mode(), auth_mode);
+    session
+        .mcp_refresh_pending
+        .store(false, std::sync::atomic::Ordering::Release);
+
+    session.refresh_mcp_if_dirty().await;
+
+    assert!(
+        session
+            .services
+            .mcp_runtime
+            .current_auth_matches(session.services.auth_manager.auth_cached().as_ref())
+    );
+}
+
 struct PendingNoiseConnectProvider;
 
 impl codex_exec_server::NoiseRendezvousConnectProvider for PendingNoiseConnectProvider {
