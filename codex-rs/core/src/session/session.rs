@@ -1,4 +1,5 @@
 use super::input_queue::InputQueue;
+use super::mcp_refresh::McpRefresh;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
@@ -40,9 +41,8 @@ pub(crate) struct Session {
     pub(crate) windows_sandbox_proxy_settings_mode:
         codex_sandboxing::WindowsSandboxProxySettingsMode,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
-    pub(super) mcp_refresh_pending: std::sync::atomic::AtomicBool,
-    /// Serializes runtime refreshes without blocking calls that own a snapshot.
-    pub(super) mcp_refresh_lock: Semaphore,
+    /// Owns invalidation and serializes refreshes without blocking captured calls.
+    pub(super) mcp_refresh: McpRefresh,
     pub(super) mcp_elicitation_reviewer_handle: OnceLock<codex_mcp::ElicitationReviewerHandle>,
     pub(super) mcp_elicitation_lifecycle_handle: OnceLock<codex_mcp::ElicitationLifecycle>,
     pub(super) mcp_prewarm_tx: async_channel::Sender<()>,
@@ -1160,8 +1160,7 @@ impl Session {
                 features: config.features.clone(),
                 windows_sandbox_proxy_settings_mode,
                 multi_agent_version,
-                mcp_refresh_pending: std::sync::atomic::AtomicBool::new(false),
-                mcp_refresh_lock: Semaphore::new(/*permits*/ 1),
+                mcp_refresh: McpRefresh::new(),
                 mcp_elicitation_reviewer_handle: OnceLock::new(),
                 mcp_elicitation_lifecycle_handle: OnceLock::new(),
                 mcp_prewarm_tx,
