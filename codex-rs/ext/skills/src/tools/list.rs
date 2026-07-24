@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::catalog::SkillCatalogEntry;
 use crate::render::truncate_catalog_skill_description;
-use crate::render::truncate_utf8_to_bytes;
+use crate::warnings::bounded_warnings;
 
 use super::MAX_HANDLE_BYTES;
 use super::SkillToolAuthority;
@@ -21,8 +21,6 @@ use super::skill_function_tool;
 use super::skill_tool_name;
 
 const TOOL_NAME: &str = "list";
-const MAX_WARNINGS: usize = 4;
-const MAX_WARNING_BYTES: usize = 256;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -76,7 +74,7 @@ impl ToolExecutor<ToolCall> for ListTool {
                     .filter(|entry| entry.enabled && entry.authority == authority)
                     .filter_map(listed_skill)
                     .collect(),
-                warnings: bounded_warnings(catalog.warnings),
+                warnings: bounded_warnings(&catalog.warnings),
             };
 
             external_json_output(&response)
@@ -99,15 +97,4 @@ fn listed_skill(entry: SkillCatalogEntry) -> Option<ListedSkill> {
         description: truncate_catalog_skill_description(&entry.description).into_owned(),
         main_resource: entry.main_prompt.as_str().to_string(),
     })
-}
-
-fn bounded_warnings(warnings: Vec<String>) -> Vec<String> {
-    warnings
-        .into_iter()
-        .take(MAX_WARNINGS)
-        .map(|warning| {
-            let (warning, _) = truncate_utf8_to_bytes(&warning, MAX_WARNING_BYTES);
-            warning
-        })
-        .collect()
 }

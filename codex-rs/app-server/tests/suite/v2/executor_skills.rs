@@ -11,9 +11,11 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_app_server_protocol::WarningNotification;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
 use core_test_support::skip_if_remote;
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -23,7 +25,7 @@ const SKILL_MARKER: &str = "EXECUTOR_SKILL_BODY_MARKER";
 const LOCAL_SKILL_MARKER: &str = "LOCAL_SKILL_BODY_MARKER";
 
 #[tokio::test]
-async fn selected_executor_root_exposes_plugin_skill() -> Result<()> {
+async fn selected_executor_root_exposes_plugin_skill_and_forwards_budget_warning() -> Result<()> {
     // TODO(anp): Remove after selected capability-root fixtures can be materialized in remote exec.
     skip_if_remote!(
         Ok(()),
@@ -87,6 +89,20 @@ stream_max_retries = 0
             "---\nname: deploy\ndescription: Deploy through the executor.\n---\n\n# Deploy\n\n{SKILL_MARKER}\n"
         ),
     )?;
+    for index in 0..200 {
+        let skill_dir = plugin_dir
+            .path()
+            .join("skills")
+            .join(format!("skill-{index:03}"));
+        std::fs::create_dir_all(&skill_dir)?;
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: skill-{index:03}\ndescription: {}\n---\n",
+                "x".repeat(1_025)
+            ),
+        )?;
+    }
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -113,10 +129,11 @@ stream_max_retries = 0
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response(response)?;
+    let thread_id = thread.id;
 
     let request_id = app_server
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: format!("Use ${SKILL_NAME}"),
                 text_elements: Vec::new(),
@@ -129,6 +146,24 @@ stream_max_retries = 0
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    let warning = timeout(READ_TIMEOUT, async {
+        loop {
+            let warning: WarningNotification = app_server.read_notification("warning").await?;
+            if warning
+                .message
+                .starts_with("Exceeded skills context budget.")
+            {
+                return Ok::<WarningNotification, anyhow::Error>(warning);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(warning.thread_id, Some(thread_id));
+    assert!(
+        warning
+            .message
+            .starts_with("Exceeded skills context budget.")
+    );
     timeout(
         READ_TIMEOUT,
         app_server.read_stream_until_notification_message("turn/completed"),
