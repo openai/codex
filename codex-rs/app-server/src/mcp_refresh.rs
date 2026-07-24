@@ -4,6 +4,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use std::io;
 use std::sync::Arc;
+use tracing::warn;
 
 pub(crate) async fn reload_mcp_config(
     thread_manager: &Arc<ThreadManager>,
@@ -25,6 +26,29 @@ pub(crate) async fn reload_mcp_config(
         thread.refresh_mcp_config(config).await;
     }
     Ok(())
+}
+
+pub(crate) async fn reload_mcp_config_best_effort(
+    thread_manager: &Arc<ThreadManager>,
+    config_manager: &ConfigManager,
+) {
+    for thread_id in thread_manager.list_thread_ids().await {
+        let thread = match thread_manager.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                warn!(%thread_id, %err, "failed to load thread for MCP configuration refresh");
+                continue;
+            }
+        };
+        let config = match load_refresh_config(thread.as_ref(), config_manager).await {
+            Ok(config) => config,
+            Err(err) => {
+                warn!(%thread_id, %err, "failed to load thread MCP configuration");
+                continue;
+            }
+        };
+        thread.refresh_mcp_config(config).await;
+    }
 }
 
 async fn load_refresh_config(
@@ -93,6 +117,31 @@ mod tests {
                     .auth_keyring_backend_kind(),
                 AuthKeyringBackendKind::Direct
             );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn best_effort_refresh_updates_healthy_threads() -> anyhow::Result<()> {
+        let (temp_dir, thread_manager, config_manager, loader) = refresh_test_state().await?;
+        std::fs::write(
+            temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
+            "[features]\nsecret_auth_storage = true\n",
+        )?;
+
+        reload_mcp_config_best_effort(&thread_manager, &config_manager).await;
+
+        assert_eq!(loader.good_loads.load(Ordering::Relaxed), 1);
+        assert_eq!(loader.bad_loads.load(Ordering::Relaxed), 1);
+        for thread_id in thread_manager.list_thread_ids().await {
+            let thread = thread_manager.get_thread(thread_id).await?;
+            let config = thread.config().await;
+            let expected = if config.cwd.ends_with("good") {
+                AuthKeyringBackendKind::Secrets
+            } else {
+                AuthKeyringBackendKind::Direct
+            };
+            assert_eq!(config.auth_keyring_backend_kind(), expected);
         }
         Ok(())
     }
