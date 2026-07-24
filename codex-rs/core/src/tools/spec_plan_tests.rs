@@ -1119,6 +1119,7 @@ async fn tool_search_cache_rebuilds_when_deferred_world_state_changes() {
                 )],
                 tool_suggest_candidates: None,
                 extension_tool_executors: Vec::new(),
+                wait_for_environment_tool_config: None,
                 dynamic_tools: &[],
             },
             &cache,

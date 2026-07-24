@@ -422,7 +422,7 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
 }
 
 pub fn refresh_mcp_servers(sess: &Session) {
-    sess.mark_mcp_runtime_dirty();
+    sess.request_mcp_runtime_refresh();
 }
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
@@ -585,9 +585,12 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    let _refresh = sess.mcp_refresh_lock.acquire().await;
-    sess.mcp_refresh_lock.close();
-    sess.services.mcp_runtime.shutdown().await;
+    sess.stop_mcp_prewarm_worker().await;
+    {
+        let _refresh = sess.mcp_refresh_lock.acquire().await;
+        sess.mcp_refresh_lock.close();
+        sess.services.mcp_runtime.shutdown().await;
+    }
     sess.guardian_review_session.shutdown().await;
 
     crate::hook_runtime::run_session_end_hooks(sess).await;
