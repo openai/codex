@@ -12,6 +12,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 pub(super) struct McpDesiredState {
     pub(super) config: Arc<Config>,
+    pub(super) auth: Option<CodexAuth>,
     pub(super) submit_id: String,
     pub(super) originator: String,
     pub(super) environments: TurnEnvironmentSnapshot,
@@ -28,7 +29,10 @@ impl McpDesiredState {
 }
 
 impl Session {
-    pub(super) async fn latest_mcp_desired_state(&self) -> McpDesiredState {
+    pub(super) async fn latest_mcp_desired_state(
+        &self,
+        auth: Option<CodexAuth>,
+    ) -> McpDesiredState {
         let session_configuration = {
             let state = self.state.lock().await;
             state.session_configuration.clone()
@@ -43,6 +47,7 @@ impl Session {
 
         McpDesiredState {
             config: Arc::new(config),
+            auth,
             submit_id: self.next_internal_sub_id(),
             originator: session_configuration.originator.clone(),
             environments,
@@ -52,6 +57,7 @@ impl Session {
     pub(super) async fn install_initial_mcp_runtime(
         self: &Arc<Self>,
         session_configuration: &SessionConfiguration,
+        auth: Option<CodexAuth>,
         mcp_projection: McpRuntimeProjection,
         resolved_environments: &TurnEnvironmentSnapshot,
         local_stdio_fallback_cwd: PathBuf,
@@ -62,6 +68,7 @@ impl Session {
         config.permissions.approval_policy = session_configuration.approval_policy.clone();
         let desired = McpDesiredState {
             config: Arc::new(config),
+            auth,
             submit_id: INITIAL_SUBMIT_ID.to_owned(),
             originator: session_configuration.originator.clone(),
             environments: resolved_environments.clone(),
@@ -89,25 +96,23 @@ impl Session {
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let input = self
-            .build_mcp_runtime_input(
-                desired,
-                mcp_projection,
-                ready_selected_capability_roots,
-                elicitation_reviewer,
-            )
-            .await;
+        let input = self.build_mcp_runtime_input(
+            desired,
+            mcp_projection,
+            ready_selected_capability_roots,
+            elicitation_reviewer,
+        );
         self.services.mcp_runtime.replace(input).await;
     }
 
-    pub(super) async fn build_mcp_runtime_input(
+    pub(super) fn build_mcp_runtime_input(
         &self,
         desired: &McpDesiredState,
         mcp_projection: McpRuntimeProjection,
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> McpRuntimeInput {
-        let auth = self.services.auth_manager.auth().await;
+        let auth = desired.auth.clone();
         let supports_openai_form_elicitation = self
             .services
             .supports_openai_form_elicitation

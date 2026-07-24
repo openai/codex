@@ -152,6 +152,19 @@ impl Session {
             return;
         };
         loop {
+            let auth = self.services.auth_manager.auth_cached();
+            if self
+                .services
+                .plugins_manager
+                .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode))
+                || !self
+                    .services
+                    .mcp_runtime
+                    .current_auth_matches(auth.as_ref())
+            {
+                self.mark_mcp_runtime_dirty();
+            }
+
             if !self
                 .mcp_refresh_pending
                 .swap(false, std::sync::atomic::Ordering::AcqRel)
@@ -162,7 +175,11 @@ impl Session {
                 pending: &self.mcp_refresh_pending,
                 published: false,
             };
-            let desired = self.latest_mcp_desired_state().await;
+            let auth = self.services.auth_manager.auth().await;
+            self.services
+                .plugins_manager
+                .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+            let desired = self.latest_mcp_desired_state(auth).await;
             let selected_capability_roots = self
                 .resolve_selected_capability_roots_for_step(&desired.environments)
                 .await;
@@ -213,7 +230,11 @@ impl Session {
             .acquire()
             .await
             .map_err(|_| anyhow::anyhow!("MCP runtime refresh semaphore closed"))?;
-        let desired = self.latest_mcp_desired_state().await;
+        let auth = self.services.auth_manager.auth().await;
+        self.services
+            .plugins_manager
+            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+        let desired = self.latest_mcp_desired_state(auth).await;
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&desired.environments)
             .await;
@@ -237,14 +258,12 @@ impl Session {
                 executor_capability_discovery.as_deref(),
             )
             .await;
-        let input = self
-            .build_mcp_runtime_input(
-                &desired,
-                mcp_projection,
-                &ready_selected_capability_roots,
-                Some(self.mcp_elicitation_reviewer()),
-            )
-            .await;
+        let input = self.build_mcp_runtime_input(
+            &desired,
+            mcp_projection,
+            &ready_selected_capability_roots,
+            Some(self.mcp_elicitation_reviewer()),
+        );
         anyhow::ensure!(
             input.mcp_servers.contains_key(CODEX_APPS_MCP_SERVER_NAME),
             "unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"
@@ -516,6 +535,10 @@ impl Session {
             error!("MCP runtime refresh semaphore closed");
             return;
         };
+        let auth = self.services.auth_manager.auth().await;
+        self.services
+            .plugins_manager
+            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
         {
             let mut state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
@@ -544,7 +567,7 @@ impl Session {
                 executor_capability_discovery.as_deref(),
             )
             .await;
-        let mut desired = self.latest_mcp_desired_state().await;
+        let mut desired = self.latest_mcp_desired_state(auth).await;
         desired.config = Arc::new(refresh_config.clone());
         self.publish_mcp_runtime(
             &desired,
