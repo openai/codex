@@ -37,6 +37,7 @@ codex-analytics = { workspace = true }
 codex-agent-extension = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-config = { workspace = true }
+codex-code-mode = { workspace = true }
 codex-config = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core = { workspace = true }
@@ -105,6 +106,7 @@ tokio = { workspace = true, features = [
 tokio-util = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -138,5 +140,4 @@ shlex = { workspace = true }
 tar = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
-url = { workspace = true }
 wiremock = { workspace = true }

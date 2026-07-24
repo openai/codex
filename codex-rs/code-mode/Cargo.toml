@@ -17,11 +17,14 @@ workspace = true
 
 [dependencies]
 codex-code-mode-protocol = { workspace = true }
+codex-http-client = { workspace = true }
 codex-protocol = { workspace = true }
+codex-websocket-client = { workspace = true }
 deno_core_icudata = { workspace = true }
 futures = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 v8 = { workspace = true }

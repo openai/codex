@@ -1966,6 +1966,7 @@ dependencies = [
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-config",
+ "codex-code-mode",
  "codex-config",
  "codex-connectors",
  "codex-core",
@@ -2486,12 +2487,15 @@ name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
  "codex-code-mode-protocol",
+ "codex-http-client",
  "codex-protocol",
+ "codex-websocket-client",
  "deno_core_icudata",
  "futures",
  "pretty_assertions",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "v8",

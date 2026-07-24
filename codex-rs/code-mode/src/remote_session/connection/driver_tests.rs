@@ -12,10 +12,13 @@ use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_code_mode_protocol::WaitRequest;
+use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::DelegateRequest;
 use codex_code_mode_protocol::host::DelegateRequestId;
+use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::HostResponse;
 use codex_code_mode_protocol::host::HostToClient;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::WireNestedToolCall;
@@ -460,6 +463,73 @@ async fn delegate_cancel_is_best_effort_and_sends_no_late_response() {
     assert!(!harness.alive.load(Ordering::Acquire));
     assert_eq!(delegate.invocations.load(Ordering::Relaxed), 1);
     assert_eq!(delegate.notifications.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn delegate_limit_returns_an_error_without_disconnecting() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    let delegate = Arc::new(RecordingDelegate::default());
+    harness.open(session.clone(), delegate.clone()).await;
+    let _started = harness
+        .start_cell(session.clone(), /*request_id*/ 2, "1")
+        .await;
+
+    for value in 1..=MAX_PENDING_DELEGATE_CALLS {
+        harness
+            .start_tool_delegate(&session, DelegateRequestId::new(value as i64))
+            .await;
+    }
+
+    let overflow_id = DelegateRequestId::new(MAX_PENDING_DELEGATE_CALLS as i64 + 1);
+    harness.start_tool_delegate(&session, overflow_id).await;
+    let response = tokio::time::timeout(Duration::from_secs(5), harness.outgoing_rx.recv())
+        .await
+        .expect("delegate overflow response timeout")
+        .expect("delegate overflow response frame");
+
+    assert_eq!(
+        EncodedFrame::decode_framed::<ClientToHost>(&response.into_framed_bytes())
+            .expect("decode delegate overflow response"),
+        ClientToHost::DelegateResponse {
+            id: overflow_id,
+            result: WireResult::Err {
+                message: format!(
+                    "code-mode host exceeded the limit of {MAX_PENDING_DELEGATE_CALLS} pending delegate calls"
+                ),
+            },
+        }
+    );
+    assert!(harness.alive.load(Ordering::Acquire));
+
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(
+            HostToClient::CancelDelegateRequest {
+                id: DelegateRequestId::new(/*value*/ 1),
+            },
+        ))
+        .await
+        .expect("cancel pending delegate");
+    harness
+        .start_tool_delegate(
+            &session,
+            DelegateRequestId::new(MAX_PENDING_DELEGATE_CALLS as i64 + 2),
+        )
+        .await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while delegate.invocations.load(Ordering::Relaxed) <= MAX_PENDING_DELEGATE_CALLS {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("delegate capacity should be available after cancellation");
+    assert_eq!(
+        delegate.invocations.load(Ordering::Relaxed),
+        MAX_PENDING_DELEGATE_CALLS + 1
+    );
+    assert!(harness.alive.load(Ordering::Acquire));
 }
 
 #[tokio::test]

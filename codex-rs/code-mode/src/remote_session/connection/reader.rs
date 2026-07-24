@@ -1,20 +1,18 @@
-use codex_code_mode_protocol::host::FramedReader;
-use codex_code_mode_protocol::host::HostToClient;
-use tokio::process::ChildStdout;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::driver::DriverEvent;
+use super::transport::ConnectionReader;
 
 pub(super) async fn drive_reader(
-    mut reader: FramedReader<ChildStdout>,
+    mut reader: ConnectionReader,
     events: mpsc::Sender<DriverEvent>,
     cancellation: CancellationToken,
 ) -> Result<(), String> {
     loop {
         let message = tokio::select! {
             _ = cancellation.cancelled() => return Ok(()),
-            result = reader.read::<HostToClient>() => result,
+            result = reader.read() => result,
         };
         let message = match message {
             Ok(Some(message)) => message,
