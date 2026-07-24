@@ -638,6 +638,7 @@ impl Session {
                     state.session_configuration = next.clone();
                     Ok((
                         next,
+                        mcp_inputs_changed,
                         permission_profile_changed,
                         previous_config,
                         new_config,
@@ -647,23 +648,31 @@ impl Session {
             }
         };
 
-        let (session_configuration, permission_profile_changed, previous_config, new_config) =
-            match update_result {
-                Ok(update) => update,
-                Err(err) => {
-                    let message = err.to_string();
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: message.clone(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(CodexErr::InvalidRequest(message));
-                }
-            };
+        let (
+            session_configuration,
+            mcp_inputs_changed,
+            permission_profile_changed,
+            previous_config,
+            new_config,
+        ) = match update_result {
+            Ok(update) => update,
+            Err(err) => {
+                let message = err.to_string();
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: message.clone(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(CodexErr::InvalidRequest(message));
+            }
+        };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
+        if mcp_inputs_changed {
+            self.schedule_mcp_prewarm();
+        }
 
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
@@ -727,7 +736,6 @@ impl Session {
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
-
         let model_info = self
             .services
             .models_manager

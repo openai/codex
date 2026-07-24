@@ -502,7 +502,7 @@ impl Session {
         self.services
             .supports_openai_form_elicitation
             .store(supported, std::sync::atomic::Ordering::Relaxed);
-        self.mark_mcp_runtime_dirty();
+        self.request_mcp_runtime_refresh();
         Ok(())
     }
 
