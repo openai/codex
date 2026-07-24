@@ -23,6 +23,20 @@ use codex_config::types::OAuthCredentialsStoreMode;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Timeout policy for OAuth metadata discovery through a supplied HTTP client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthDiscoveryTimeout {
+    /// Preserve the timeout requested by the OAuth implementation.
+    Requested,
+    /// Cap OAuth discovery requests at the supplied duration.
+    Capped(Duration),
+}
+
+impl OAuthDiscoveryTimeout {
+    /// Preserves the existing timeout for local OAuth discovery.
+    pub const LOCAL: Self = Self::Capped(DISCOVERY_TIMEOUT);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamableHttpOAuthDiscovery {
     pub scopes_supported: Option<Vec<String>>,
@@ -100,6 +114,7 @@ pub async fn determine_streamable_http_auth_status_with_http_client(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
     http_client: Arc<dyn HttpClient>,
+    discovery_timeout: OAuthDiscoveryTimeout,
 ) -> Result<McpAuthState> {
     let default_headers = match auth_status_before_discovery(
         server_name,
@@ -120,6 +135,7 @@ pub async fn determine_streamable_http_auth_status_with_http_client(
             url,
             default_headers,
             http_client,
+            discovery_timeout,
         )
         .await,
     )
@@ -224,10 +240,16 @@ pub async fn discover_streamable_http_oauth_with_http_client(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     http_client: Arc<dyn HttpClient>,
+    discovery_timeout: OAuthDiscoveryTimeout,
 ) -> Result<Option<StreamableHttpOAuthDiscovery>> {
     let default_headers = build_default_headers(http_headers, env_http_headers)?;
-    discover_streamable_http_oauth_with_headers_and_http_client(url, default_headers, http_client)
-        .await
+    discover_streamable_http_oauth_with_headers_and_http_client(
+        url,
+        default_headers,
+        http_client,
+        discovery_timeout,
+    )
+    .await
 }
 
 async fn discover_streamable_http_oauth_with_headers(
@@ -247,12 +269,18 @@ async fn discover_streamable_http_oauth_with_headers_and_http_client(
     url: &str,
     default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
+    discovery_timeout: OAuthDiscoveryTimeout,
 ) -> Result<Option<StreamableHttpOAuthDiscovery>> {
-    let authorization_manager = AuthorizationManager::new_with_oauth_http_client(
-        url,
-        Arc::new(OAuthHttpClientAdapter::new(http_client, default_headers)),
-    )
-    .await?;
+    let oauth_http_client = match discovery_timeout {
+        OAuthDiscoveryTimeout::Requested => {
+            OAuthHttpClientAdapter::new(http_client, default_headers)
+        }
+        OAuthDiscoveryTimeout::Capped(max_timeout) => {
+            OAuthHttpClientAdapter::new_with_max_timeout(http_client, default_headers, max_timeout)
+        }
+    };
+    let authorization_manager =
+        AuthorizationManager::new_with_oauth_http_client(url, Arc::new(oauth_http_client)).await?;
     discover_streamable_http_oauth_with_manager(&authorization_manager).await
 }
 
@@ -298,10 +326,16 @@ mod tests {
     use axum::http::StatusCode;
     use axum::http::header::WWW_AUTHENTICATE;
     use axum::routing::get;
+    use codex_exec_server::ExecServerError;
+    use codex_exec_server::HttpRequestParams;
+    use codex_exec_server::HttpRequestResponse;
+    use codex_exec_server::HttpResponseBodyStream;
+    use futures::future::BoxFuture;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use std::collections::HashMap;
     use std::ffi::OsString;
+    use std::sync::Mutex;
     use tokio::task::JoinHandle;
 
     struct TestServer {
@@ -312,6 +346,40 @@ mod tests {
     impl Drop for TestServer {
         fn drop(&mut self) {
             self.handle.abort();
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingHttpClient {
+        timeout_ms: Mutex<Option<Option<u64>>>,
+    }
+
+    impl HttpClient for RecordingHttpClient {
+        fn http_request(
+            &self,
+            _params: HttpRequestParams,
+        ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
+            Box::pin(async {
+                Err(ExecServerError::HttpRequest(
+                    "unexpected buffered request".to_string(),
+                ))
+            })
+        }
+
+        fn http_request_stream(
+            &self,
+            params: HttpRequestParams,
+        ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>>
+        {
+            *self
+                .timeout_ms
+                .lock()
+                .expect("timeout recorder lock should not be poisoned") = Some(params.timeout_ms);
+            Box::pin(async {
+                Err(ExecServerError::HttpRequest(
+                    "expected discovery request failure".to_string(),
+                ))
+            })
         }
     }
 
@@ -435,6 +503,55 @@ mod tests {
         assert_eq!(
             discovery.scopes_supported,
             Some(vec!["profile".to_string(), "email".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn routed_oauth_discovery_caps_local_discovery_timeout() {
+        let http_client = Arc::new(RecordingHttpClient::default());
+
+        let discovery = discover_streamable_http_oauth_with_http_client(
+            "http://example.com/mcp",
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            http_client.clone(),
+            OAuthDiscoveryTimeout::LOCAL,
+        )
+        .await;
+
+        assert!(matches!(discovery, Ok(None)));
+        assert_eq!(
+            *http_client
+                .timeout_ms
+                .lock()
+                .expect("timeout recorder lock should not be poisoned"),
+            Some(Some(
+                u64::try_from(DISCOVERY_TIMEOUT.as_millis())
+                    .expect("discovery timeout should fit in u64")
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn routed_oauth_discovery_preserves_requested_timeout() {
+        let http_client = Arc::new(RecordingHttpClient::default());
+
+        let discovery = discover_streamable_http_oauth_with_http_client(
+            "http://example.com/mcp",
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            http_client.clone(),
+            OAuthDiscoveryTimeout::Requested,
+        )
+        .await;
+
+        assert!(matches!(discovery, Ok(None)));
+        assert_eq!(
+            *http_client
+                .timeout_ms
+                .lock()
+                .expect("timeout recorder lock should not be poisoned"),
+            Some(Some(30_000))
         );
     }
 
