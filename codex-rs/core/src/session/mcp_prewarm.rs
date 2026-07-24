@@ -6,7 +6,7 @@
 use super::*;
 
 impl Session {
-    pub(super) fn request_mcp_runtime_refresh(&self) {
+    pub(crate) fn request_mcp_runtime_refresh(&self) {
         self.mark_mcp_runtime_dirty();
         self.schedule_mcp_prewarm();
     }
