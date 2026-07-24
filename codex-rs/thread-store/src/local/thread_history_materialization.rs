@@ -26,17 +26,22 @@ pub(super) async fn materialize_to_sqlite(
     thread_id: ThreadId,
     rollout_path: &Path,
 ) -> ThreadStoreResult<()> {
-    let start_offset = super::thread_history::next_rollout_byte_offset(store, thread_id).await?;
+    let start_offset = super::thread_history::projection_state(store, thread_id)
+        .await?
+        .map_or(0, |state| state.next_byte_offset);
     let (lines, next_offset) = read_complete_rollout_lines(rollout_path, start_offset).await?;
     // Empty valid records can still consume bytes through blank or rejected complete lines.
     if lines.is_empty() && start_offset == next_offset {
         return Ok(());
     }
-    let subagent_history_start_ordinal = codex_rollout::read_session_meta_line(rollout_path)
+    let session_meta = codex_rollout::read_session_meta_line(rollout_path)
         .await
         .map_err(thread_store_io_error)?
-        .meta
-        .subagent_history_start_ordinal;
+        .meta;
+    let initial_ordinal = session_meta
+        .history_base
+        .map_or(0, |base| base.end_ordinal_exclusive);
+    let subagent_history_start_ordinal = session_meta.subagent_history_start_ordinal;
 
     let projections = lines
         .iter()
@@ -67,6 +72,7 @@ pub(super) async fn materialize_to_sqlite(
         thread_id,
         start_offset,
         next_offset,
+        initial_ordinal,
         projections,
     )
     .await

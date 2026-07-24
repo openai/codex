@@ -5,9 +5,12 @@ use serde::Serialize;
 use sqlx::Row;
 
 use super::super::LocalThreadStore;
+use super::super::rollout_lineage::RolloutLineage;
 use super::segment_paging::page_item_rows;
 use super::segment_paging::page_turn_rows;
 use super::segment_paging::validate_page_size;
+use super::sqlite_integer;
+use super::turn_lookup::find_source_turn;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListTurnsParams;
@@ -36,7 +39,6 @@ pub(super) enum CursorScope {
 #[serde(rename_all = "camelCase")]
 pub(super) struct HistoryCursor {
     pub requested_thread_id: ThreadId,
-    pub physical_thread_id: ThreadId,
     pub rollout_ordinal: u64,
     pub include_anchor: bool,
     pub scope: CursorScope,
@@ -92,7 +94,7 @@ pub(in crate::local) async fn list_turns(
     for turn in page.rows {
         let items = match params.items_view {
             StoredTurnItemsView::NotLoaded => Vec::new(),
-            StoredTurnItemsView::Summary => load_summary_items(pool, &turn).await?,
+            StoredTurnItemsView::Summary => load_summary_items(pool, &lineage, &turn).await?,
         };
         turns.push(StoredTurn {
             turn_id: turn.turn_id,
@@ -168,22 +170,58 @@ pub(super) async fn validate_thread_for_paginated_reads(
 
 async fn load_summary_items(
     pool: &sqlx::SqlitePool,
+    lineage: &RolloutLineage,
     turn: &StoredTurnRow,
 ) -> ThreadStoreResult<Vec<StoredThreadItem>> {
+    let (item_owner, first_user_item_id, final_agent_item_id) =
+        if matches!(turn.status, StoredTurnStatus::Interrupted)
+            && turn.first_user_item_id.is_none()
+            && turn.final_agent_item_id.is_none()
+        {
+            let source = find_source_turn(pool, lineage, turn.turn_id.as_str()).await?;
+            (
+                source.physical_thread_id,
+                source.first_user_item_id,
+                source.final_agent_item_id,
+            )
+        } else {
+            (
+                turn.position.physical_thread_id,
+                turn.first_user_item_id.clone(),
+                turn.final_agent_item_id.clone(),
+            )
+        };
+    let Some(segment) = lineage
+        .segments()
+        .iter()
+        .find(|segment| segment.thread_id() == item_owner)
+    else {
+        return Ok(Vec::new());
+    };
+    let start_ordinal = sqlite_integer(segment.start_ordinal(), "rollout ordinal")?;
+    let end_ordinal = segment
+        .end_ordinal()
+        .map(|ordinal| sqlite_integer(ordinal, "rollout ordinal"))
+        .transpose()?;
     let rows = sqlx::query(
         r#"
 SELECT turn_id, item_id, updated_at_ordinal, created_at_ms, item_json
 FROM thread_items
 WHERE thread_id = ?
   AND turn_id = ?
+  AND rollout_ordinal >= ?
+  AND (? IS NULL OR rollout_ordinal < ?)
   AND (item_id = ? OR item_id = ?)
 ORDER BY rollout_ordinal ASC
         "#,
     )
-    .bind(turn.position.physical_thread_id.to_string())
+    .bind(item_owner.to_string())
     .bind(turn.turn_id.as_str())
-    .bind(turn.first_user_item_id.as_deref())
-    .bind(turn.final_agent_item_id.as_deref())
+    .bind(start_ordinal)
+    .bind(end_ordinal)
+    .bind(end_ordinal)
+    .bind(first_user_item_id.as_deref())
+    .bind(final_agent_item_id.as_deref())
     .fetch_all(pool)
     .await
     .map_err(super::thread_history_error)?;
@@ -209,14 +247,13 @@ pub(super) fn parse_cursor(
 pub(super) fn serialize_cursor(
     requested_thread_id: ThreadId,
     scope: CursorScope,
-    position: PhysicalHistoryPosition,
+    rollout_ordinal: i64,
     include_anchor: bool,
 ) -> ThreadStoreResult<String> {
-    let rollout_ordinal = u64::try_from(position.rollout_ordinal)
-        .map_err(|_| invalid_cursor("negative rollout ordinal"))?;
+    let rollout_ordinal =
+        u64::try_from(rollout_ordinal).map_err(|_| invalid_cursor("negative rollout ordinal"))?;
     serde_json::to_string(&HistoryCursor {
         requested_thread_id,
-        physical_thread_id: position.physical_thread_id,
         rollout_ordinal,
         include_anchor,
         scope,

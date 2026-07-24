@@ -404,6 +404,8 @@ async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
     write_rollout(&rollout_path, thread_id, "hello before resume")?;
     compress_now(&rollout_path)?;
     let compressed_path = compressed_rollout_path(&rollout_path);
+    set_old_mtime(compressed_path.as_path())?;
+    let compressed_modified = fs::metadata(compressed_path.as_path())?.modified()?;
 
     let InitialHistory::Resumed(history) =
         RolloutRecorder::get_rollout_history(compressed_path.as_path()).await?
@@ -421,6 +423,7 @@ async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
     assert_eq!(recorder.rollout_path(), rollout_path.as_path());
     assert!(rollout_path.exists());
     assert!(!compressed_path.exists());
+    assert!(fs::metadata(rollout_path.as_path())?.modified()? > compressed_modified);
     recorder
         .record_canonical_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
             UserMessageEvent {

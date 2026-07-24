@@ -10,6 +10,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
+use crate::session::ForkPersistence;
 use crate::session::GitEnrichmentPolicy;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::SessionIo;
@@ -69,6 +70,7 @@ use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::PreparedFork;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::StoredModelContext;
@@ -158,6 +160,12 @@ pub enum ForkSnapshot {
     /// already at a turn boundary, this returns the current persisted history
     /// unchanged.
     Interrupted,
+}
+
+struct ForkHistory {
+    snapshot: ForkSnapshot,
+    initial_history: InitialHistory,
+    persistence: ForkPersistence,
 }
 
 /// Preserve legacy `fork_thread(usize, ...)` callsites by mapping them to the
@@ -760,6 +768,7 @@ impl ThreadManager {
             session_source,
             /*parent_thread_id*/ None,
             forked_from_thread_id,
+            ForkPersistence::Copied,
             thread_source,
             options.dynamic_tools,
             options.metrics_service_name,
@@ -866,6 +875,7 @@ impl ThreadManager {
             session_source,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
+            ForkPersistence::Copied,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -899,6 +909,7 @@ impl ThreadManager {
             agent_control,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
+            ForkPersistence::Copied,
             /*thread_source*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -939,6 +950,7 @@ impl ThreadManager {
             session_source,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
+            ForkPersistence::Copied,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -1071,9 +1083,12 @@ impl ThreadManager {
         S: Into<ForkSnapshot>,
     {
         self.fork_thread_with_initial_history(
-            snapshot.into(),
             config,
-            history,
+            ForkHistory {
+                snapshot: snapshot.into(),
+                initial_history: history,
+                persistence: ForkPersistence::Copied,
+            },
             thread_source,
             parent_trace,
             supports_openai_form_elicitation,
@@ -1081,15 +1096,54 @@ impl ThreadManager {
         .await
     }
 
-    async fn fork_thread_with_initial_history(
+    /// Fork prepared reference-backed history using the same snapshot semantics as copied forks.
+    pub async fn fork_prepared_thread(
         &self,
-        snapshot: ForkSnapshot,
         config: Config,
-        history: InitialHistory,
+        prepared: PreparedFork,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
+        let history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: prepared.source_thread_id,
+            history: Arc::clone(&prepared.model_context),
+            rollout_path: None,
+        });
+        let fork_persistence = ForkPersistence::Referenced {
+            history_base: prepared.history_base,
+            inherited_item_count: prepared.model_context.len(),
+        };
+        let result = self
+            .fork_thread_with_initial_history(
+                config,
+                ForkHistory {
+                    snapshot: ForkSnapshot::Interrupted,
+                    initial_history: history,
+                    persistence: fork_persistence,
+                },
+                thread_source,
+                parent_trace,
+                supports_openai_form_elicitation,
+            )
+            .await;
+        drop(prepared);
+        result
+    }
+
+    async fn fork_thread_with_initial_history(
+        &self,
+        config: Config,
+        fork_history: ForkHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        supports_openai_form_elicitation: bool,
+    ) -> CodexResult<NewThread> {
+        let ForkHistory {
+            snapshot,
+            initial_history: history,
+            persistence: fork_persistence,
+        } = fork_history;
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
         let source_thread_id = match &history {
@@ -1123,6 +1177,7 @@ impl ThreadManager {
             agent_control,
             /*parent_thread_id*/ None,
             source_thread_id,
+            fork_persistence,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -1469,6 +1524,7 @@ impl ThreadManagerState {
             session_source,
             parent_thread_id,
             forked_from_thread_id,
+            ForkPersistence::Copied,
             thread_source,
             Vec::new(),
             metrics_service_name,
@@ -1512,6 +1568,7 @@ impl ThreadManagerState {
             session_source,
             parent_thread_id,
             /*forked_from_thread_id*/ None,
+            ForkPersistence::Copied,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -1559,6 +1616,7 @@ impl ThreadManagerState {
             session_source,
             parent_thread_id,
             forked_from_thread_id,
+            ForkPersistence::Copied,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -1583,6 +1641,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
+        fork_persistence: ForkPersistence,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
@@ -1602,6 +1661,7 @@ impl ThreadManagerState {
             self.session_source.clone(),
             parent_thread_id,
             forked_from_thread_id,
+            fork_persistence,
             thread_source,
             dynamic_tools,
             metrics_service_name,
@@ -1628,6 +1688,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
+        fork_persistence: ForkPersistence,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
@@ -1718,6 +1779,7 @@ impl ThreadManagerState {
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
             requested_history_mode: history_mode,
+            fork_persistence,
             session_source,
             forked_from_thread_id,
             parent_thread_id,

@@ -11,10 +11,13 @@ use crate::ThreadStoreResult;
 mod read;
 mod search;
 mod segment_paging;
+mod turn_lookup;
 
 pub(super) use read::list_items;
 pub(super) use read::list_turns;
 pub(super) use search::search_thread_occurrences;
+pub(super) use turn_lookup::find_source_turn;
+pub(super) use turn_lookup::find_visible_turn;
 
 /// A valid complete rollout line with its absolute byte span in durable JSONL.
 ///
@@ -28,30 +31,55 @@ pub(super) struct ProjectedRolloutLine {
     pub changes: ThreadHistoryChangeSet,
 }
 
-pub(super) async fn next_rollout_byte_offset(
+pub(super) struct RolloutProjectionState {
+    pub next_byte_offset: u64,
+    pub next_ordinal: u64,
+}
+
+pub(super) async fn projection_state(
     store: &LocalThreadStore,
     thread_id: ThreadId,
-) -> ThreadStoreResult<u64> {
+) -> ThreadStoreResult<Option<RolloutProjectionState>> {
     let db_path = store.config.sqlite.thread_history_db_path();
     if !tokio::fs::try_exists(db_path.as_path())
         .await
         .map_err(thread_history_error)?
     {
-        return Ok(0);
+        return Ok(None);
     }
 
     let pool = store.thread_history_db().await?;
-    let offset = sqlx::query_scalar::<_, i64>(
-        "SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id = ?",
+    let state = sqlx::query_as::<_, (i64, i64)>(
+        r#"
+SELECT next_rollout_byte_offset, next_rollout_ordinal
+FROM thread_history_projection_state
+WHERE thread_id = ?
+        "#,
     )
     .bind(thread_id.to_string())
     .fetch_optional(pool)
     .await
-    .map_err(thread_history_error)?
-    .unwrap_or(0);
-    u64::try_from(offset).map_err(|_| ThreadStoreError::Internal {
-        message: format!("thread history projection for {thread_id} has a negative byte offset"),
-    })
+    .map_err(thread_history_error)?;
+    state
+        .map(|(next_byte_offset, next_ordinal)| {
+            Ok(RolloutProjectionState {
+                next_byte_offset: u64::try_from(next_byte_offset).map_err(|_| {
+                    ThreadStoreError::Internal {
+                        message: format!(
+                            "thread history projection for {thread_id} has a negative byte offset"
+                        ),
+                    }
+                })?,
+                next_ordinal: u64::try_from(next_ordinal).map_err(|_| {
+                    ThreadStoreError::Internal {
+                        message: format!(
+                            "thread history projection for {thread_id} has a negative ordinal"
+                        ),
+                    }
+                })?,
+            })
+        })
+        .transpose()
 }
 
 pub(super) async fn apply_projection(
@@ -59,6 +87,7 @@ pub(super) async fn apply_projection(
     thread_id: ThreadId,
     start_offset: u64,
     next_offset: u64,
+    initial_ordinal: u64,
     projections: Vec<ProjectedRolloutLine>,
 ) -> ThreadStoreResult<()> {
     let pool = store.thread_history_db().await?;
@@ -81,7 +110,8 @@ WHERE thread_id = ?
     .fetch_optional(&mut *transaction)
     .await
     .map_err(thread_history_error)?;
-    let (expected_offset, mut next_ordinal) = projection_state.unwrap_or((0, 0));
+    let (expected_offset, mut next_ordinal) =
+        projection_state.unwrap_or((0, sqlite_integer(initial_ordinal, "rollout ordinal")?));
     let start_offset = sqlite_integer(start_offset, "rollout byte offset")?;
     if expected_offset != start_offset {
         return Err(ThreadStoreError::Internal {
@@ -311,9 +341,9 @@ WHERE thread_id = ?
     for item in changes.changed_items {
         let item_id = item.item.id().to_string();
         let item_json = serde_json::to_string(&item.item).map_err(thread_history_error)?;
-        // The same item can appear again with a newer snapshot. Replace its JSON, but keep the
-        // creation ordinal and timestamp from the first record so item identity and age stay
-        // stable. Track the latest snapshot separately for incremental replay.
+        // Completed items are immutable: local producers emit ItemCompleted exactly once per
+        // item. Tolerate an unexpected duplicate defensively so it cannot poison materialization,
+        // preserving the original creation ordinal and timestamp while updating its snapshot.
         sqlx::query(
             r#"
 INSERT INTO thread_items (

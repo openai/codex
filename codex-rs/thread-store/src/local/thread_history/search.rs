@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::UserInput;
@@ -14,10 +15,11 @@ use sqlx::Row;
 
 use super::super::LocalThreadStore;
 use super::read::CursorScope;
-use super::read::PhysicalHistoryPosition;
 use super::read::serialize_cursor;
 use super::read::validate_thread_for_paginated_reads;
+use super::sqlite_integer;
 use super::thread_history_error;
+use super::turn_lookup::find_visible_turn;
 use crate::SearchTextRange;
 use crate::SearchThreadOccurrencesParams;
 use crate::StoredThreadOccurrence;
@@ -71,13 +73,43 @@ pub(in crate::local) async fn search_thread_occurrences(
         params.thread_id,
         &params.search_term,
     )?;
-    let next_rollout_ordinal = cursor
-        .as_ref()
-        .map_or(0, |cursor| cursor.next_rollout_ordinal);
     let matcher = LiteralMatcher::new(params.search_term.as_str());
+    let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+    let cursor_segment = cursor
+        .as_ref()
+        .map(|cursor| {
+            lineage
+                .segment_index_for_ordinal(
+                    u64::try_from(cursor.next_rollout_ordinal)
+                        .map_err(|_| invalid_cursor("negative rollout ordinal"))?,
+                )
+                .ok_or_else(|| invalid_cursor("position outside thread lineage"))
+        })
+        .transpose()?;
     let pool = store.thread_history_db().await?;
-    let mut rows = sqlx::query(
-        r#"
+    let mut items = Vec::with_capacity(params.page_size);
+    let mut effective_turn_ordinals = HashMap::new();
+    for (segment_index, segment) in lineage
+        .segments()
+        .iter()
+        .enumerate()
+        .skip(cursor_segment.unwrap_or(0))
+    {
+        let segment_start_ordinal = sqlite_integer(segment.start_ordinal(), "rollout ordinal")?;
+        let next_rollout_ordinal = if Some(segment_index) == cursor_segment {
+            cursor
+                .as_ref()
+                .map_or(0, |cursor| cursor.next_rollout_ordinal)
+        } else {
+            segment_start_ordinal
+        };
+        let end_rollout_ordinal = segment
+            .end_ordinal()
+            .map(|ordinal| sqlite_integer(ordinal, "rollout ordinal"))
+            .transpose()?
+            .unwrap_or(i64::MAX);
+        let mut rows = sqlx::query(
+            r#"
 SELECT turn_id, item_id, rollout_ordinal, item_json, turn_rollout_ordinal
 FROM (
     SELECT
@@ -93,6 +125,9 @@ FROM (
     WHERE items.thread_id = ?
       AND items.item_type = 'userMessage'
       AND items.rollout_ordinal >= ?
+      AND items.rollout_ordinal < ?
+      AND turns.rollout_ordinal >= ?
+      AND turns.rollout_ordinal < ?
 
     UNION ALL
 
@@ -110,71 +145,107 @@ FROM (
     WHERE turns.thread_id = ?
       AND turns.final_agent_item_id IS NOT NULL
       AND items.rollout_ordinal >= ?
+      AND items.rollout_ordinal < ?
+      AND turns.rollout_ordinal >= ?
+      AND turns.rollout_ordinal < ?
 )
 ORDER BY rollout_ordinal ASC
         "#,
-    )
-    .bind(params.thread_id.to_string())
-    .bind(next_rollout_ordinal)
-    .bind(params.thread_id.to_string())
-    .bind(next_rollout_ordinal)
-    .fetch(pool);
+        )
+        .bind(segment.thread_id().to_string())
+        .bind(next_rollout_ordinal)
+        .bind(end_rollout_ordinal)
+        .bind(segment_start_ordinal)
+        .bind(end_rollout_ordinal)
+        .bind(segment.thread_id().to_string())
+        .bind(next_rollout_ordinal)
+        .bind(end_rollout_ordinal)
+        .bind(segment_start_ordinal)
+        .bind(end_rollout_ordinal)
+        .fetch(pool);
 
-    let mut items = Vec::with_capacity(params.page_size);
-    while let Some(row) = rows.try_next().await.map_err(thread_history_error)? {
-        let row = candidate_row(row)?;
-        let item = serde_json::from_str::<ThreadItem>(row.item_json.as_str()).map_err(|err| {
-            ThreadStoreError::Internal {
-                message: format!("failed to deserialize stored thread item: {err}"),
-            }
-        })?;
-        let Some(text) = searchable_text(&item) else {
-            continue;
-        };
-        let first_occurrence_index = cursor
-            .as_ref()
-            .filter(|cursor| cursor.next_rollout_ordinal == row.rollout_ordinal)
-            .map_or(0, |cursor| cursor.next_occurrence_index);
-        let remaining = params
-            .page_size
-            .saturating_add(1)
-            .saturating_sub(items.len());
-        let turn_cursor = serialize_cursor(
-            params.thread_id,
-            CursorScope::Turns,
-            PhysicalHistoryPosition {
-                physical_thread_id: params.thread_id,
-                rollout_ordinal: row.turn_rollout_ordinal,
-            },
-            /*include_anchor*/ true,
-        )?;
-        for (occurrence_index, matched) in matcher
-            .find_ranges(
+        let mut matching_rows = Vec::new();
+        let mut matching_occurrences = 0_usize;
+        while let Some(row) = rows.try_next().await.map_err(thread_history_error)? {
+            let row = candidate_row(row)?;
+            let item =
+                serde_json::from_str::<ThreadItem>(row.item_json.as_str()).map_err(|err| {
+                    ThreadStoreError::Internal {
+                        message: format!("failed to deserialize stored thread item: {err}"),
+                    }
+                })?;
+            let Some(text) = searchable_text(&item) else {
+                continue;
+            };
+            let first_occurrence_index = cursor
+                .as_ref()
+                .filter(|cursor| cursor.next_rollout_ordinal == row.rollout_ordinal)
+                .map_or(0, |cursor| cursor.next_occurrence_index);
+            let remaining = params
+                .page_size
+                .saturating_add(1)
+                .saturating_sub(items.len())
+                .saturating_sub(matching_occurrences);
+            let matches = matcher.find_ranges(
                 text.as_ref(),
                 first_occurrence_index.saturating_add(remaining),
-            )
-            .into_iter()
-            .enumerate()
-            .skip(first_occurrence_index)
-        {
-            if items.len() == params.page_size {
-                return Ok(ThreadOccurrenceSearchPage {
-                    items,
-                    next_cursor: Some(serialize_cursor_for_search(SearchCursor {
-                        thread_id: params.thread_id,
-                        search_term: params.search_term,
-                        next_rollout_ordinal: row.rollout_ordinal,
-                        next_occurrence_index: occurrence_index,
-                    })?),
-                });
+            );
+            if matches.len() <= first_occurrence_index {
+                continue;
             }
-            items.push(occurrence_in_item(
-                row.turn_id.as_str(),
-                row.item_id.as_str(),
-                text.as_ref(),
-                matched,
-                turn_cursor.as_str(),
-            ));
+            matching_occurrences += matches.len() - first_occurrence_index;
+            matching_rows.push((row, text.into_owned(), matches, first_occurrence_index));
+            if matching_occurrences
+                == params
+                    .page_size
+                    .saturating_add(1)
+                    .saturating_sub(items.len())
+            {
+                break;
+            }
+        }
+        drop(rows);
+
+        for (row, text, matches, first_occurrence_index) in matching_rows {
+            let turn_rollout_ordinal = if segment_index + 1 == lineage.segments().len() {
+                row.turn_rollout_ordinal
+            } else if let Some(ordinal) = effective_turn_ordinals.get(&row.turn_id) {
+                *ordinal
+            } else {
+                let ordinal = find_visible_turn(pool, &lineage, row.turn_id.as_str())
+                    .await?
+                    .rollout_ordinal;
+                effective_turn_ordinals.insert(row.turn_id.clone(), ordinal);
+                ordinal
+            };
+            let turn_cursor = serialize_cursor(
+                params.thread_id,
+                CursorScope::Turns,
+                turn_rollout_ordinal,
+                /*include_anchor*/ true,
+            )?;
+            for (occurrence_index, matched) in
+                matches.into_iter().enumerate().skip(first_occurrence_index)
+            {
+                if items.len() == params.page_size {
+                    return Ok(ThreadOccurrenceSearchPage {
+                        items,
+                        next_cursor: Some(serialize_cursor_for_search(SearchCursor {
+                            thread_id: params.thread_id,
+                            search_term: params.search_term,
+                            next_rollout_ordinal: row.rollout_ordinal,
+                            next_occurrence_index: occurrence_index,
+                        })?),
+                    });
+                }
+                items.push(occurrence_in_item(
+                    row.turn_id.as_str(),
+                    row.item_id.as_str(),
+                    text.as_str(),
+                    matched,
+                    turn_cursor.as_str(),
+                ));
+            }
         }
     }
 

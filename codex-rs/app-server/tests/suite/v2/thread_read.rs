@@ -495,6 +495,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: codex_protocol::protocol::ThreadHistoryMode::Paginated,
+            history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
@@ -640,6 +641,75 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
     assert_eq!(data[2].snippet, "😀 Final needle");
     assert_eq!(data[2].snippet_match_range.start, 9);
     assert_eq!(data[2].snippet_match_range.end, 15);
+    assert_eq!(next_cursor, None);
+
+    let fork_request_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: thread_id.to_string(),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadForkResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_request_id)).await??;
+    let forked_thread_id = thread.id;
+    let source_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(source_resume_id)).await??;
+    for (target_thread_id, text) in [
+        (thread_id.to_string(), "excluded parent needle"),
+        (forked_thread_id.clone(), "child needle"),
+    ] {
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: target_thread_id,
+                input: vec![UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let _: TurnStartResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+    }
+    let request_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: forked_thread_id.clone(),
+            search_term: "needle".to_string(),
+            cursor: None,
+            limit: Some(6),
+        })
+        .await?;
+    let ThreadSearchOccurrencesResponse { data, next_cursor } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(data.len(), 6);
+    assert!(
+        data.iter()
+            .all(|occurrence| !occurrence.snippet.contains("excluded parent needle"))
+    );
+    let next_cursor = next_cursor.expect("search should continue into child history");
+    let request_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: forked_thread_id,
+            search_term: "needle".to_string(),
+            cursor: Some(next_cursor),
+            limit: Some(6),
+        })
+        .await?;
+    let ThreadSearchOccurrencesResponse { data, next_cursor } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(data.len(), 1);
+    assert!(data[0].snippet.contains("child needle"));
     assert_eq!(next_cursor, None);
 
     Ok(())
@@ -1473,6 +1543,7 @@ async fn paginated_history_lists_use_projected_turns_and_items() -> Result<()> {
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: codex_protocol::protocol::ThreadHistoryMode::Paginated,
+            history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
@@ -2161,6 +2232,7 @@ async fn seed_pathless_store_thread(
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: Default::default(),
+            history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {

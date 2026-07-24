@@ -13,6 +13,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -95,6 +96,8 @@ pub struct CreateThreadParams {
     pub multi_agent_version: Option<MultiAgentVersion>,
     /// Persisted thread history contract selected when the thread was created.
     pub history_mode: ThreadHistoryMode,
+    /// Exclusive prefix of another paginated rollout inherited by this thread.
+    pub history_base: Option<HistoryPosition>,
     /// First rollout ordinal that belongs to this subagent's projected history.
     pub subagent_history_start_ordinal: Option<u64>,
     /// Initial context-window identity captured when the thread was created.
@@ -173,6 +176,56 @@ pub struct StoredModelContext {
     pub thread_id: ThreadId,
     /// Persisted rollout items in replay order.
     pub items: Vec<RolloutItem>,
+}
+
+/// Requested boundary for inheriting a paginated thread's history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ForkBoundary {
+    /// Inherit the source thread's latest durable state.
+    Latest,
+    /// Inherit history through the newest visible occurrence of this turn.
+    ThroughTurn(String),
+    /// Inherit history preceding the original visible occurrence of this turn.
+    BeforeTurn(String),
+}
+
+/// Parameters for freezing the source history used to initialize a fork.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrepareForkParams {
+    /// Immediate source thread whose metadata and approval settings are inherited.
+    pub thread_id: ThreadId,
+    /// Requested inclusive or exclusive fork boundary.
+    pub boundary: ForkBoundary,
+}
+
+/// Frozen source history and model context for a reference-backed fork.
+#[derive(Debug)]
+pub struct PreparedFork {
+    /// Immediate source thread, even when the normalized history base names an ancestor.
+    pub source_thread_id: ThreadId,
+    /// Frozen physical rollout prefix inherited by the child.
+    pub history_base: Option<HistoryPosition>,
+    /// Bounded model context selected by the requested fork boundary.
+    pub model_context: Arc<Vec<RolloutItem>>,
+    /// Blocks source deletion until the child's history reference is durable.
+    _source_reservation: Box<dyn std::fmt::Debug + Send>,
+}
+
+impl PreparedFork {
+    /// Creates a frozen fork snapshot while retaining a backend-owned source reservation.
+    pub fn new(
+        source_thread_id: ThreadId,
+        history_base: Option<HistoryPosition>,
+        model_context: Arc<Vec<RolloutItem>>,
+        source_reservation: impl std::fmt::Debug + Send + 'static,
+    ) -> Self {
+        Self {
+            source_thread_id,
+            history_base,
+            model_context,
+            _source_reservation: Box::new(source_reservation),
+        }
+    }
 }
 
 /// Parameters for reading a thread summary and optionally its replay history.

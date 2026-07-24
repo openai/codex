@@ -4309,6 +4309,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             multi_agent_version: None,
             history_mode: Default::default(),
             subagent_history_start_ordinal: None,
+            history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
@@ -5352,6 +5353,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         tx_event,
         agent_status_tx,
         InitialHistory::New,
+        ForkPersistence::Copied,
         SessionSource::Exec,
         skills_service,
         plugins_manager,
@@ -5640,6 +5642,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
+        fork_persistence: ForkPersistence::Copied,
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -5743,6 +5746,7 @@ async fn make_session_with_config_and_rx(
         tx_event,
         agent_status_tx,
         InitialHistory::New,
+        ForkPersistence::Copied,
         SessionSource::Exec,
         skills_service,
         plugins_manager,
@@ -5852,6 +5856,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         tx_event,
         agent_status_tx,
         initial_history,
+        ForkPersistence::Copied,
         session_source,
         skills_service,
         plugins_manager,
@@ -7120,6 +7125,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             multi_agent_version: None,
             history_mode: Default::default(),
             subagent_history_start_ordinal: None,
+            history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
@@ -7198,6 +7204,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() {
             multi_agent_version: None,
             history_mode: Default::default(),
             subagent_history_start_ordinal: None,
+            history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
@@ -7808,6 +7815,7 @@ where
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
+        fork_persistence: ForkPersistence::Copied,
         next_internal_sub_id: AtomicU64::new(0),
     });
 
@@ -9593,6 +9601,7 @@ async fn attach_in_memory_thread_store(
             multi_agent_version: None,
             history_mode: Default::default(),
             subagent_history_start_ordinal: None,
+            history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),

@@ -9,6 +9,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
@@ -142,6 +143,25 @@ fn append_repair_terminates_nonempty_rollout_tail() -> std::io::Result<()> {
     drop(open_log_file(&rollout_path)?);
 
     assert_eq!(fs::read(&rollout_path)?, b"{\"type\":\"event_msg\"}\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn opening_existing_rollout_preserves_modified_time() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    write_paginated_rollout(&rollout_path, ThreadId::default(), &[])?;
+    let modified = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    File::options()
+        .write(true)
+        .open(&rollout_path)?
+        .set_times(std::fs::FileTimes::new().set_modified(modified))?;
+
+    drop(open_log_file(&rollout_path)?);
+    assert_eq!(fs::metadata(&rollout_path)?.modified()?, modified);
+
+    drop(open_rollout_for_append(&rollout_path).await?);
+    assert_eq!(fs::metadata(&rollout_path)?.modified()?, modified);
     Ok(())
 }
 
@@ -588,6 +608,60 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
 
     recorder.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn referenced_paginated_rollout_starts_at_history_cutoff_and_resumes() -> std::io::Result<()>
+{
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let history_base = HistoryPosition {
+        thread_id: ThreadId::new(),
+        end_ordinal_exclusive: 41,
+        end_byte_offset: 1,
+    };
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            ThreadId::new(),
+            /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
+            SessionSource::Exec,
+            /*thread_source*/ None,
+            "test_originator".to_string(),
+            BaseInstructions::default(),
+            Vec::new(),
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_history_base(Some(history_base)),
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    recorder.persist().await?;
+    recorder.shutdown().await?;
+
+    let resumed =
+        RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path.clone())).await?;
+    resumed
+        .record_canonical_items(&[agent_message_item("first child record")])
+        .await?;
+    resumed.flush().await?;
+    resumed.shutdown().await?;
+
+    let resumed =
+        RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path.clone())).await?;
+    resumed
+        .record_canonical_items(&[agent_message_item("second child record")])
+        .await?;
+    resumed.flush().await?;
+    assert_eq!(
+        read_rollout_lines(&rollout_path)?
+            .into_iter()
+            .map(|line| line.ordinal)
+            .collect::<Vec<_>>(),
+        vec![Some(41), Some(42), Some(43)]
+    );
+    resumed.shutdown().await
 }
 
 #[tokio::test]
