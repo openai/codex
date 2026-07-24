@@ -588,8 +588,8 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     }
     sess.stop_mcp_prewarm_worker().await;
     {
-        let _refresh = sess.mcp_refresh_lock.acquire().await;
-        sess.mcp_refresh_lock.close();
+        let _refresh = sess.mcp_refresh.acquire().await;
+        sess.mcp_refresh.close();
         sess.services.mcp_runtime.shutdown().await;
     }
     sess.guardian_review_session.shutdown().await;

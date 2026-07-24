@@ -1,3 +1,4 @@
+use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
@@ -42,21 +43,6 @@ enum GuardianElicitationReview {
 
 struct GuardianMcpElicitationReviewer {
     session: std::sync::Weak<Session>,
-}
-
-/// Restores a claimed refresh when its task is cancelled before publication.
-struct McpRefreshInvalidationGuard<'a> {
-    pending: &'a std::sync::atomic::AtomicBool,
-    published: bool,
-}
-
-impl Drop for McpRefreshInvalidationGuard<'_> {
-    fn drop(&mut self) {
-        if !self.published {
-            self.pending
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
-    }
 }
 
 pub(crate) struct McpServerElicitationOutcome {
@@ -147,7 +133,7 @@ impl Session {
 
     /// Publishes changed MCP state, waiting for any refresh already in progress.
     pub(crate) async fn refresh_mcp_if_dirty(self: &Arc<Self>) {
-        let Ok(_refresh) = self.mcp_refresh_lock.acquire().await else {
+        let Ok(_refresh) = self.mcp_refresh.acquire().await else {
             error!("MCP runtime refresh semaphore closed");
             return;
         };
@@ -165,14 +151,11 @@ impl Session {
                 self.mark_mcp_runtime_dirty();
             }
 
-            if !self
-                .mcp_refresh_pending
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-            {
+            if !self.mcp_refresh.claim() {
                 return;
             }
             let mut refresh_invalidation = McpRefreshInvalidationGuard {
-                pending: &self.mcp_refresh_pending,
+                refresh: &self.mcp_refresh,
                 published: false,
             };
             let auth = self.services.auth_manager.auth().await;
@@ -211,10 +194,7 @@ impl Session {
             )
             .await;
             refresh_invalidation.published = true;
-            if !self
-                .mcp_refresh_pending
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
+            if !self.mcp_refresh.is_pending() {
                 return;
             }
         }
@@ -226,7 +206,7 @@ impl Session {
     ) -> anyhow::Result<Vec<codex_mcp::ToolInfo>> {
         self.refresh_mcp_if_dirty().await;
         let _refresh = self
-            .mcp_refresh_lock
+            .mcp_refresh
             .acquire()
             .await
             .map_err(|_| anyhow::anyhow!("MCP runtime refresh semaphore closed"))?;
@@ -272,8 +252,7 @@ impl Session {
     }
 
     pub(super) fn mark_mcp_runtime_dirty(&self) {
-        self.mcp_refresh_pending
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.mcp_refresh.invalidate();
     }
 
     #[tracing::instrument(name = "mcp.runtime.resolve_for_step", skip_all)]
@@ -531,7 +510,7 @@ impl Session {
         refresh_config: &Config,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let Ok(_refresh) = self.mcp_refresh_lock.acquire().await else {
+        let Ok(_refresh) = self.mcp_refresh.acquire().await else {
             error!("MCP runtime refresh semaphore closed");
             return;
         };
