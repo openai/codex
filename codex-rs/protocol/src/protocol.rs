@@ -194,14 +194,6 @@ pub struct W3cTraceContext {
     pub tracestate: Option<String>,
 }
 
-/// Resolved MCP inputs to apply through a thread's submission queue.
-#[derive(Debug, Clone, PartialEq)]
-pub struct McpServerRefreshConfig {
-    pub mcp_servers: Value,
-    pub mcp_oauth_credentials_store_mode: Value,
-    pub auth_keyring_backend_kind: Value,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationStartParams {
     /// Whether Codex response handoffs are managed through explicit client append calls.
@@ -643,9 +635,6 @@ pub enum Op {
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers,
 
-    /// Replace the thread's resolved MCP configuration before its next turn.
-    ReloadMcpConfig { config: McpServerRefreshConfig },
-
     /// Reload user config layer overrides for the active session.
     ///
     /// This updates runtime config-derived behavior (for example app
@@ -886,7 +875,6 @@ impl Op {
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
             Self::RefreshMcpServers => "refresh_mcp_servers",
-            Self::ReloadMcpConfig { .. } => "reload_mcp_config",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
