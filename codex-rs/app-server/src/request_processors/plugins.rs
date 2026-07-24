@@ -1879,6 +1879,7 @@ impl PluginRequestProcessor {
                     &resolved_scopes.scopes,
                     oauth_client_id,
                     server.oauth_resource.as_deref(),
+                    /*client_metadata_url_base*/ None,
                     callback_port,
                     callback_url.as_deref(),
                 )
@@ -1896,6 +1897,7 @@ impl PluginRequestProcessor {
                             &[],
                             oauth_client_id,
                             server.oauth_resource.as_deref(),
+                            /*client_metadata_url_base*/ None,
                             callback_port,
                             callback_url.as_deref(),
                         )
