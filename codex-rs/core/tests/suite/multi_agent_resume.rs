@@ -279,15 +279,28 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
 
     resumed.submit_turn(FOLLOWUP_PROMPT).await?;
 
-    assert!(followup_child_request.requests().iter().any(|request| {
-        request.body_contains_text(FOLLOWUP_TASK)
-            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
-    }));
     let reloaded_worker = resumed
         .thread_manager
         .get_thread(worker_thread_id)
         .await
         .expect("follow-up should lazily reload the original worker");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if matches!(
+            reloaded_worker.agent_status().await,
+            AgentStatus::Completed(_)
+        ) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for reloaded worker completion");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert!(followup_child_request.requests().iter().any(|request| {
+        request.body_contains_text(FOLLOWUP_TASK)
+            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+    }));
     let reloaded_worker_config = reloaded_worker.config_snapshot().await;
     let reloaded_worker_role_config = (
         reloaded_worker_config.model,
