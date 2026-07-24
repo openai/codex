@@ -689,6 +689,7 @@ impl Client {
                 AccountPlanType::SelfServeBusinessUsageBased
             }
             crate::types::PlanType::Business => AccountPlanType::Business,
+            crate::types::PlanType::Ent26 => AccountPlanType::Ent26,
             crate::types::PlanType::EnterpriseCbpUsageBased => {
                 AccountPlanType::EnterpriseCbpUsageBased
             }
@@ -740,6 +741,9 @@ mod tests {
             Client::map_plan_type(crate::types::PlanType::EnterpriseCbpUsageBased),
             AccountPlanType::EnterpriseCbpUsageBased
         );
+        let ent26 = serde_json::from_str::<crate::types::PlanType>("\"ent26\"")
+            .expect("ent26 backend plan should deserialize");
+        assert_eq!(Client::map_plan_type(ent26), AccountPlanType::Ent26);
     }
 
     #[test]

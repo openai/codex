@@ -336,17 +336,19 @@ fn usage_limit_reached_error_formats_team_plan() {
 
 #[test]
 fn usage_limit_reached_error_formats_business_plan_without_reset() {
-    let err = UsageLimitReachedError {
-        plan_type: Some(PlanType::Known(KnownPlan::Business)),
-        resets_at: None,
-        rate_limits: Some(Box::new(rate_limit_snapshot())),
-        promo_message: None,
-        rate_limit_reached_type: None,
-    };
-    assert_eq!(
-        err.to_string(),
-        "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
-    );
+    for plan in [KnownPlan::Business, KnownPlan::Ent26] {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(plan)),
+            resets_at: None,
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
+            promo_message: None,
+            rate_limit_reached_type: None,
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
+        );
+    }
 }
 
 #[test]

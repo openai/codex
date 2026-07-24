@@ -75,6 +75,7 @@ impl PlanType {
                 Self::Known(KnownPlan::SelfServeBusinessUsageBased)
             }
             "business" => Self::Known(KnownPlan::Business),
+            "ent26" => Self::Known(KnownPlan::Ent26),
             "enterprise_cbp_usage_based" => Self::Known(KnownPlan::EnterpriseCbpUsageBased),
             "enterprise" | "hc" => Self::Known(KnownPlan::Enterprise),
             "education" | "edu" => Self::Known(KnownPlan::Edu),
@@ -95,6 +96,7 @@ pub enum KnownPlan {
     #[serde(rename = "self_serve_business_usage_based")]
     SelfServeBusinessUsageBased,
     Business,
+    Ent26,
     #[serde(rename = "enterprise_cbp_usage_based")]
     EnterpriseCbpUsageBased,
     #[serde(alias = "hc")]
@@ -114,6 +116,7 @@ impl KnownPlan {
             Self::Team => "Team",
             Self::SelfServeBusinessUsageBased => "Self Serve Business Usage Based",
             Self::Business => "Business",
+            Self::Ent26 => "Enterprise",
             Self::EnterpriseCbpUsageBased => "Enterprise CBP Usage Based",
             Self::Enterprise => "Enterprise",
             Self::Edu => "Edu",
@@ -130,6 +133,7 @@ impl KnownPlan {
             Self::Team => "team",
             Self::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
             Self::Business => "business",
+            Self::Ent26 => "ent26",
             Self::EnterpriseCbpUsageBased => "enterprise_cbp_usage_based",
             Self::Enterprise => "enterprise",
             Self::Edu => "edu",
@@ -142,6 +146,7 @@ impl KnownPlan {
             Self::Team
                 | Self::SelfServeBusinessUsageBased
                 | Self::Business
+                | Self::Ent26
                 | Self::EnterpriseCbpUsageBased
                 | Self::Enterprise
                 | Self::Edu

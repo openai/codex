@@ -416,6 +416,7 @@ async fn get_bundle_skips_individual_plan() {
 async fn get_bundle_allows_eligible_workspace_plans_and_writes_cache() {
     for plan_type in [
         "business",
+        "ent26",
         "enterprise_cbp_usage_based",
         "enterprise",
         "hc",

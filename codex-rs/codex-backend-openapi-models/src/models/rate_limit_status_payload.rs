@@ -116,6 +116,8 @@ pub enum PlanType {
     SelfServeBusinessUsageBased,
     #[serde(rename = "business")]
     Business,
+    #[serde(rename = "ent26")]
+    Ent26,
     #[serde(rename = "enterprise_cbp_usage_based")]
     EnterpriseCbpUsageBased,
     #[serde(rename = "education")]
