@@ -255,6 +255,7 @@ mod tests {
                 text: format!("{USER_MESSAGE_BEGIN} actual user request"),
                 text_elements: Vec::new(),
             }])),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
         }));
 

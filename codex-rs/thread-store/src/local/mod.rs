@@ -1580,6 +1580,7 @@ mod tests {
                 client_id: None,
                 content: Vec::new(),
             }),
+            started_at_ms: Some(0),
             completed_at_ms: 1,
         }));
         store

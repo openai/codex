@@ -2092,13 +2092,17 @@ impl Session {
     }
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+        let started_at_ms = turn_context
+            .turn_timing_state
+            .record_item_started(item.id(), now_unix_timestamp_ms())
+            .await;
         self.send_event(
             turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
                 thread_id: self.thread_id,
                 turn_id: turn_context.sub_id.clone(),
                 item: item.clone(),
-                started_at_ms: now_unix_timestamp_ms(),
+                started_at_ms,
             }),
         )
         .await;
@@ -2110,13 +2114,29 @@ impl Session {
         item: TurnItem,
     ) {
         record_turn_ttfm_metric(turn_context, &item).await;
+        let completed_at_ms = now_unix_timestamp_ms();
+        let item_id = item.id();
+        let started_at_ms = turn_context
+            .turn_timing_state
+            .take_item_started(&item_id)
+            .await
+            .unwrap_or_else(|| {
+                warn!(
+                    thread_id = %self.thread_id,
+                    turn_id = %turn_context.sub_id,
+                    item_id = %item_id,
+                    "item completed without a recorded start timestamp"
+                );
+                completed_at_ms
+            });
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: self.thread_id,
                 turn_id: turn_context.sub_id.clone(),
                 item,
-                completed_at_ms: now_unix_timestamp_ms(),
+                started_at_ms: Some(started_at_ms),
+                completed_at_ms,
             }),
         )
         .await;

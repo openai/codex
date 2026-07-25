@@ -2002,6 +2002,47 @@ async fn record_response_item_and_emit_turn_item_emits_hook_prompt_lifecycle() {
 }
 
 #[tokio::test]
+async fn item_completion_without_a_start_uses_completion_timestamp() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let item = TurnItem::UserMessage(UserMessageItem {
+        id: "missing-start".to_string(),
+        client_id: None,
+        content: Vec::new(),
+    });
+
+    session.emit_turn_item_completed(&turn_context, item).await;
+
+    let completed = rx.recv().await.expect("completed item event");
+    let EventMsg::ItemCompleted(event) = completed.msg else {
+        panic!("expected completed item event");
+    };
+    assert_eq!(event.started_at_ms, Some(event.completed_at_ms));
+}
+
+#[tokio::test]
+async fn subagent_activity_emits_matching_start_and_completion() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let item = codex_protocol::items::SubAgentActivityItem {
+        id: "activity-1".to_string(),
+        kind: codex_protocol::protocol::SubAgentActivityKind::Started,
+        agent_thread_id: ThreadId::new(),
+        agent_path: AgentPath::root(),
+    };
+
+    crate::tools::handlers::multi_agents_v2::emit_sub_agent_activity(&session, &turn_context, item)
+        .await;
+
+    let EventMsg::ItemStarted(started) = rx.recv().await.expect("started item event").msg else {
+        panic!("expected started item event");
+    };
+    let EventMsg::ItemCompleted(completed) = rx.recv().await.expect("completed item event").msg
+    else {
+        panic!("expected completed item event");
+    };
+    assert_eq!(completed.started_at_ms, Some(started.started_at_ms));
+}
+
+#[tokio::test]
 async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
     let (mut session, turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;

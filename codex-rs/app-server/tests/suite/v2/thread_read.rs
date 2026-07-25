@@ -2170,6 +2170,7 @@ fn paginated_completed_item(
         thread_id,
         turn_id: turn_id.to_string(),
         item,
+        started_at_ms: Some(0),
         completed_at_ms: 1,
     }))
 }

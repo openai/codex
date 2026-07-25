@@ -569,6 +569,7 @@ fn completed_user_message(turn_id: &str, message: &str) -> RolloutItem {
                 text_elements: Vec::new(),
             }],
         }),
+        started_at_ms: Some(0),
         completed_at_ms: 0,
     }))
 }

@@ -14,6 +14,9 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -319,7 +322,10 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let TestCodex { codex, .. } = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build(&server)
+        .await?;
 
     let web_search_added = ev_web_search_call_added_partial("web-search-1", "in_progress");
     let web_search_done = ev_web_search_call_done("web-search-1", "completed", "weather seattle");
@@ -362,9 +368,10 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     let completed = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::WebSearch(item),
+            started_at_ms,
             completed_at_ms,
             ..
-        }) => Some((item.clone(), *completed_at_ms)),
+        }) => Some((item.clone(), *started_at_ms, *completed_at_ms)),
         _ => None,
     })
     .await;
@@ -373,7 +380,8 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     assert_eq!(started.0.id, begin.call_id);
     assert!(started.1 > 0);
     assert_eq!(completed.0.id, begin.call_id);
-    assert!(completed.1 > 0);
+    assert_eq!(completed.1, Some(started.1));
+    assert!(completed.2 > 0);
     assert_eq!(
         completed.0.action,
         WebSearchAction::Search {
@@ -381,6 +389,25 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
             queries: None,
         }
     );
+
+    codex.flush_rollout().await?;
+    let rollout_path = codex.rollout_path().expect("paginated rollout path");
+    let rollout = std::fs::read_to_string(rollout_path)?;
+    let persisted_completion = rollout
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
+                if matches!(&event.item, TurnItem::WebSearch(item) if item.id == begin.call_id) =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .expect("persisted web search completion");
+    assert_eq!(persisted_completion.started_at_ms, Some(started.1));
 
     Ok(())
 }

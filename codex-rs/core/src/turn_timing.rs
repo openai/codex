@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -49,6 +50,7 @@ pub(crate) struct TurnTimingState {
 struct TurnTimingStateInner {
     started_at: Option<Instant>,
     started_at_unix_secs: Option<i64>,
+    item_started_at_ms: HashMap<String, i64>,
     first_token_at: Option<Instant>,
     first_message_at: Option<Instant>,
 }
@@ -90,6 +92,7 @@ impl TurnTimingState {
         let mut state = self.state.lock().await;
         state.started_at = Some(started_at);
         state.started_at_unix_secs = Some(started_at_unix_ms / 1000);
+        state.item_started_at_ms.clear();
         state.first_token_at = None;
         state.first_message_at = None;
         self.profile_state().start(started_at);
@@ -98,6 +101,20 @@ impl TurnTimingState {
 
     pub(crate) async fn started_at_unix_secs(&self) -> Option<i64> {
         self.state.lock().await.started_at_unix_secs
+    }
+
+    pub(crate) async fn record_item_started(&self, item_id: String, started_at_ms: i64) -> i64 {
+        *self
+            .state
+            .lock()
+            .await
+            .item_started_at_ms
+            .entry(item_id)
+            .or_insert(started_at_ms)
+    }
+
+    pub(crate) async fn take_item_started(&self, item_id: &str) -> Option<i64> {
+        self.state.lock().await.item_started_at_ms.remove(item_id)
     }
 
     pub(crate) async fn complete_profile_and_duration_ms(

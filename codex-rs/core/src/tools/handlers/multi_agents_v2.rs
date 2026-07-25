@@ -46,9 +46,9 @@ pub(crate) async fn emit_sub_agent_activity(
     turn: &crate::session::turn_context::TurnContext,
     item: SubAgentActivityItem,
 ) {
-    session
-        .emit_turn_item_completed(turn, TurnItem::SubAgentActivity(item))
-        .await;
+    let item = TurnItem::SubAgentActivity(item);
+    session.emit_turn_item_started(turn, &item).await;
+    session.emit_turn_item_completed(turn, item).await;
 }
 
 pub(super) fn communication_from_tool_message(

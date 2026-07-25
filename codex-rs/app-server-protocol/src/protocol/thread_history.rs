@@ -1830,12 +1830,14 @@ mod tests {
                 thread_id,
                 turn_id: "turn-1".into(),
                 item: entered,
+                started_at_ms: Some(0),
                 completed_at_ms: 0,
             }),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id,
                 turn_id: "turn-1".into(),
                 item: exited,
+                started_at_ms: Some(0),
                 completed_at_ms: 0,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
@@ -2002,6 +2004,7 @@ mod tests {
                 thread_id,
                 turn_id: turn_id.to_string(),
                 item: sleep_item,
+                started_at_ms: Some(0),
                 completed_at_ms: 1_000,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
@@ -2056,6 +2059,7 @@ mod tests {
                         saved_path: Some(saved_path.clone()),
                     },
                 )),
+                started_at_ms: Some(0),
                 completed_at_ms: 1_000,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
@@ -2123,6 +2127,7 @@ mod tests {
                 thread_id,
                 turn_id: turn_id.to_string(),
                 item: command_item,
+                started_at_ms: Some(0),
                 completed_at_ms: 1_000,
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -4195,6 +4200,7 @@ mod tests {
             thread_id: ThreadId::new(),
             turn_id: "turn-a".into(),
             item: hook_prompt,
+            started_at_ms: Some(0),
             completed_at_ms: 0,
         }));
 

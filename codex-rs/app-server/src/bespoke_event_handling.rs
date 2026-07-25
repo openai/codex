@@ -3432,6 +3432,7 @@ mod tests {
                         agent_path: AgentPath::try_from("/root/worker")
                             .expect("agent path should parse"),
                     }),
+                    started_at_ms: Some(42),
                     completed_at_ms: 42,
                 }),
             },
@@ -3606,6 +3607,7 @@ mod tests {
                         phase: None,
                         memory_citation: None,
                     }),
+                    started_at_ms: Some(0),
                     completed_at_ms: 0,
                 }),
             );
@@ -3622,6 +3624,7 @@ mod tests {
                         phase: None,
                         memory_citation: None,
                     }),
+                    started_at_ms: Some(0),
                     completed_at_ms: 0,
                 }),
             );

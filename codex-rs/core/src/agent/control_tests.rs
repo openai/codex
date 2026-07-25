@@ -944,6 +944,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
                     client_id: None,
                     content: Vec::new(),
                 }),
+                started_at_ms: Some(0),
                 completed_at_ms: 1,
             })),
             RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(

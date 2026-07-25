@@ -258,6 +258,7 @@ fn item_completion_persistence_depends_on_history_mode() {
             client_id: None,
             content: Vec::new(),
         }),
+        started_at_ms: Some(0),
         completed_at_ms: 0,
     }));
 
@@ -299,6 +300,7 @@ fn review_mode_persistence_depends_on_history_mode() {
                 },
                 user_facing_hint: "Review requested.".to_string(),
             }),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
         })),
         RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
@@ -308,6 +310,7 @@ fn review_mode_persistence_depends_on_history_mode() {
                 id: "exited-review".to_string(),
                 review_output: None,
             }),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
         })),
     ];
