@@ -2184,6 +2184,7 @@ impl Session {
         &self,
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
+        on_policy_applied: impl FnOnce() + Send,
     ) -> anyhow::Result<()> {
         let _refresh_guard = self
             .managed_network_proxy_refresh_lock
@@ -2201,6 +2202,7 @@ impl Session {
             .clone();
         let execpolicy_amendment =
             execpolicy_network_rule_amendment(amendment, network_approval_context, &host);
+        let mut on_policy_applied = Some(on_policy_applied);
 
         if let Some(started_network_proxy) = self.services.network_proxy.load_full() {
             let proxy = started_network_proxy.proxy();
@@ -2213,6 +2215,11 @@ impl Session {
                     .add_denied_domain(&host)
                     .await
                     .map_err(|err| anyhow::anyhow!("failed to update runtime denylist: {err}"))?,
+            }
+            // Active enforcement changed successfully. Notify the owner before
+            // the next fallible await so cancellation cannot contradict it.
+            if let Some(on_policy_applied) = on_policy_applied.take() {
+                on_policy_applied();
             }
         }
 
@@ -2229,6 +2236,11 @@ impl Session {
             .map_err(|err| {
                 anyhow::anyhow!("failed to persist network policy amendment to execpolicy: {err}")
             })?;
+
+        // Without a running proxy, persistence is the first effective policy change.
+        if let Some(on_policy_applied) = on_policy_applied {
+            on_policy_applied();
+        }
 
         Ok(())
     }

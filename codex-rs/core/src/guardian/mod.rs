@@ -35,7 +35,6 @@ pub(crate) use review::new_guardian_review_id;
 #[cfg(test)]
 pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::review_approval_request;
-#[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub(crate) use review::routes_approval_to_guardian;

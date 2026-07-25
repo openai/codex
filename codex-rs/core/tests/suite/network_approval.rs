@@ -16,6 +16,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -255,10 +256,20 @@ async fn cancelled_guardian_network_review_fails_closed_without_rewriting_turn_s
     .await?;
     wait_for_response_request(&pending_guardian).await;
     test.codex.submit(Op::Interrupt).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnAborted(_))
-    })
-    .await;
+    let mut saw_turn_aborted = false;
+    let mut saw_guardian_aborted = false;
+    while !saw_turn_aborted || !saw_guardian_aborted {
+        let event = tokio::time::timeout(Duration::from_secs(5), test.codex.next_event())
+            .await
+            .context("timed out waiting for parent and Guardian cancellation")?
+            .context("event stream ended while waiting for cancellation")?;
+        saw_turn_aborted |= matches!(&event.msg, EventMsg::TurnAborted(_));
+        saw_guardian_aborted |= matches!(
+            &event.msg,
+            EventMsg::GuardianAssessment(assessment)
+                if assessment.status == GuardianAssessmentStatus::Aborted
+        );
+    }
 
     let state_check = mount_sse_once_match(
         &server,
@@ -427,11 +438,13 @@ async fn user_network_approval_once_session_and_denial_semantics() -> Result<()>
     )
     .await?;
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
-    assert_eq!(
-        approval.call_id,
-        "network#local#http#codex-network-test.invalid#80"
+    assert!(
+        approval
+            .call_id
+            .starts_with("network#local#http#codex-network-test.invalid#80#")
     );
-    assert_eq!(approval.approval_id, None);
+    assert_eq!(approval.approval_id.as_deref(), None);
+    let first_approval_call_id = approval.call_id.clone();
     assert!(!approval.turn_id.is_empty());
     assert_eq!(approval.cwd, test.config.cwd);
     assert_eq!(
@@ -463,6 +476,8 @@ async fn user_network_approval_once_session_and_denial_semantics() -> Result<()>
     )
     .await?;
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
+    assert_eq!(approval.approval_id.as_deref(), None);
+    assert_ne!(approval.call_id, first_approval_call_id);
     test.codex
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
@@ -855,6 +870,10 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
     };
     let first_command = network_command(&first_marker, &second_marker, "1.1.1.1");
     let second_command = network_command(&second_marker, &first_marker, "8.8.8.8");
+    let mut first_args = network_exec_args(&first_command);
+    first_args["yield_time_ms"] = json!(10_000);
+    let mut second_args = network_exec_args(&second_command);
+    second_args["yield_time_ms"] = json!(10_000);
     let first_denial = "first concurrent network request denied";
     let second_denial = "second concurrent network request denied";
     mount_sse_once_match(
@@ -869,12 +888,12 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
             ev_function_call(
                 "exec-network-first",
                 "exec_command",
-                &serde_json::to_string(&network_exec_args(&first_command))?,
+                &serde_json::to_string(&first_args)?,
             ),
             ev_function_call(
                 "exec-network-second",
                 "exec_command",
-                &serde_json::to_string(&network_exec_args(&second_command))?,
+                &serde_json::to_string(&second_args)?,
             ),
             ev_completed("resp-network-concurrent"),
         ]),
