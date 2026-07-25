@@ -738,12 +738,25 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+        self.refresh_mentions_v2_popup_candidates();
         self.sync_popups();
     }
 
     pub fn set_plugin_mentions(&mut self, plugins: Option<Vec<PluginCapabilitySummary>>) {
         self.plugins = plugins;
+        self.refresh_mentions_v2_popup_candidates();
         self.sync_popups();
+    }
+
+    /// Refreshes an open mention catalog when skill or plugin metadata changes.
+    fn refresh_mentions_v2_popup_candidates(&mut self) {
+        let ActivePopup::MentionV2(popup) = &mut self.popups.active else {
+            return;
+        };
+        popup.set_candidates(super::mentions_v2::build_search_catalog(
+            self.skills.as_deref(),
+            self.plugins.as_deref(),
+        ));
     }
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
@@ -3985,25 +3998,31 @@ impl ChatComposer {
                 .send(AppEvent::StartFileSearch(String::new()));
             self.popups.current_file_query = None;
         } else {
-            self.app_event_tx
-                .send(AppEvent::StartFileSearch(query.clone()));
-            self.popups.current_file_query = Some(query.clone());
+            let new_popup = !matches!(self.popups.active, ActivePopup::MentionV2(_));
+            if new_popup {
+                // A fresh popup has no cached matches, and the app-owned file-search manager can
+                // retain an identical query. Reset it before issuing the query so results arrive.
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+            }
+            if new_popup || self.popups.current_file_query.as_deref() != Some(query.as_str()) {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(query.clone()));
+                self.popups.current_file_query = Some(query.clone());
+            }
         }
-
-        let candidates = super::mentions_v2::build_search_catalog(
-            self.skills.as_deref(),
-            self.plugins.as_deref(),
-        );
 
         match &mut self.popups.active {
             ActivePopup::MentionV2(popup) => {
                 popup.set_query(&query);
-                popup.set_candidates(candidates);
             }
             _ => {
-                let mut popup = MentionV2Popup::new(candidates);
-                popup.set_query(&query);
-                self.popups.active = ActivePopup::MentionV2(popup);
+                let candidates = super::mentions_v2::build_search_catalog(
+                    self.skills.as_deref(),
+                    self.plugins.as_deref(),
+                );
+                self.popups.active =
+                    ActivePopup::MentionV2(MentionV2Popup::new(candidates, &query));
             }
         }
 
@@ -7426,6 +7445,73 @@ mod tests {
                 }]));
             },
         );
+    }
+
+    #[test]
+    fn bare_unified_mention_resets_an_inherited_file_search() {
+        let (mut composer, mut rx) = new_test_composer();
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+
+        composer.insert_str("@");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::StartFileSearch(query)) if query.is_empty()
+        ));
+
+        composer.insert_str("s");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::StartFileSearch(query)) if query == "s"
+        ));
+    }
+
+    #[test]
+    fn reopening_identical_unified_mention_restarts_file_search() {
+        let (mut composer, mut rx) = new_test_composer();
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+        composer.set_text_content("@foo @foo".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@f".len());
+        composer.sync_popups();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::StartFileSearch(query)) if query.is_empty()
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::StartFileSearch(query)) if query == "foo"
+        ));
+
+        composer.on_file_search_result("foo".to_string(), Vec::new());
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        composer.draft.textarea.set_cursor("@foo @foo".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::MentionV2(_)));
+        let queries = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::StartFileSearch(query) => Some(query),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(queries, vec![String::new(), "foo".to_string()]);
+    }
+
+    #[test]
+    fn restored_unified_mention_restarts_file_search() {
+        let (mut composer, mut rx) = new_test_composer();
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+
+        composer.set_text_content("@foo".to_string(), Vec::new(), Vec::new());
+
+        assert!(matches!(composer.popups.active, ActivePopup::MentionV2(_)));
+        let queries = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::StartFileSearch(query) => Some(query),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(queries, vec![String::new(), "foo".to_string()]);
     }
 
     #[test]
