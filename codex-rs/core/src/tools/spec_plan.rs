@@ -493,6 +493,22 @@ fn build_code_mode_executors(
         code_mode_nested_tool_specs.push(spec);
     }
 
+    if turn_context.model_info.use_responses_lite {
+        let code_mode_tool_names =
+            collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter())
+                .into_iter()
+                .map(|tool| {
+                    (
+                        codex_code_mode::normalize_code_mode_identifier(&tool.name),
+                        tool.tool_name,
+                    )
+                })
+                .collect();
+        turn_context
+            .turn_metadata_state
+            .set_code_mode_tool_names(code_mode_tool_names);
+    }
+
     let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
     let mut enabled_tools =
         collect_code_mode_exec_prompt_tool_definitions(exec_prompt_tool_specs.iter());

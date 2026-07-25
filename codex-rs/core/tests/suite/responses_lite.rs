@@ -13,6 +13,7 @@ use codex_login::auth::BedrockApiKeyAuth;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -97,6 +98,7 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
     let mut builder = test_codex()
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
+            model_info.tool_mode = Some(ToolMode::CodeMode);
         })
         .with_config(|config| {
             config.base_instructions = Some("test instructions".to_string());
@@ -128,6 +130,23 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
 
     let tools = additional_tools(&body)?;
     assert!(!tools.is_empty());
+    let client_metadata = body["client_metadata"]
+        .as_object()
+        .context("Responses request should include client metadata")?;
+    let turn_metadata: Value = serde_json::from_str(
+        client_metadata["x-codex-turn-metadata"]
+            .as_str()
+            .context("Responses request should include turn metadata")?,
+    )?;
+
+    assert_eq!(
+        turn_metadata["code_mode_tool_names"]["view_image"],
+        serde_json::json!({
+            "name": "view_image",
+            "namespace": null,
+        })
+    );
+    assert!(!client_metadata.contains_key("x-codex-code-mode-tool-names"));
 
     Ok(())
 }
