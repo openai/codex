@@ -24,6 +24,9 @@ pub struct RemoteNetworkProxyLaunchConfig {
     pub environment_id: Option<String>,
     #[serde(default)]
     pub execution_id: Option<String>,
+    /// Controller-side policy decision budget. The executor adds transport overhead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_decision_timeout_ms: Option<u64>,
 }
 
 impl RemoteNetworkProxyLaunchConfig {
@@ -33,6 +36,7 @@ impl RemoteNetworkProxyLaunchConfig {
             audit_metadata: NetworkProxyAuditMetadata::default(),
             environment_id: None,
             execution_id: None,
+            policy_decision_timeout_ms: None,
         }
     }
 
@@ -66,9 +70,6 @@ pub struct RemoteNetworkProxyConfig {
     pub domains: Option<NetworkDomainPermissions>,
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: bool,
-    /// Whether the executor sends domain policy decisions back to the client.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub request_policy_decisions: bool,
 }
 
 impl RemoteNetworkProxyConfig {
@@ -91,7 +92,6 @@ impl RemoteNetworkProxyConfig {
             domains: config.domains.clone(),
             unix_sockets: config.unix_sockets.clone(),
             allow_local_binding: config.allow_local_binding,
-            request_policy_decisions: false,
         })
     }
 

@@ -111,6 +111,7 @@ fn launch_config_materializes_audit_and_execution_attribution() {
         audit_metadata: audit_metadata.clone(),
         environment_id: Some("remote".to_string()),
         execution_id: Some("execution-1".to_string()),
+        policy_decision_timeout_ms: None,
     })
     .expect("remote launch state");
 
@@ -120,24 +121,18 @@ fn launch_config_materializes_audit_and_execution_attribution() {
 }
 
 #[test]
-fn policy_decision_callback_opt_in_is_backward_compatible() {
-    let mut config =
-        RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
-            .expect("supported remote config");
-    let legacy = serde_json::to_value(&config).expect("serialize legacy config");
-    assert_eq!(legacy.get("requestPolicyDecisions"), None);
-    assert!(
-        !serde_json::from_value::<RemoteNetworkProxyConfig>(legacy)
-            .expect("deserialize legacy remote config")
-            .request_policy_decisions
-    );
-
-    config.request_policy_decisions = true;
-    let enabled = serde_json::to_value(&config).expect("serialize callback-enabled config");
-    assert_eq!(enabled["requestPolicyDecisions"], true);
+fn policy_decision_callback_timeout_round_trips() {
+    let config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
+        .expect("supported remote config");
+    let mut launch = RemoteNetworkProxyLaunchConfig::new(config);
+    let without_timeout = serde_json::to_value(&launch).expect("serialize launch config");
+    assert_eq!(without_timeout.get("policyDecisionTimeoutMs"), None);
+    launch.policy_decision_timeout_ms = Some(900_000);
+    let with_timeout = serde_json::to_value(&launch).expect("serialize launch timeout");
+    assert_eq!(with_timeout["policyDecisionTimeoutMs"], 900_000);
     assert_eq!(
-        serde_json::from_value::<RemoteNetworkProxyConfig>(enabled)
-            .expect("deserialize callback-enabled config"),
-        config
+        serde_json::from_value::<RemoteNetworkProxyLaunchConfig>(with_timeout)
+            .expect("deserialize launch timeout"),
+        launch
     );
 }

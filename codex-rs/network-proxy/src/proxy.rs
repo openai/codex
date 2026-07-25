@@ -831,6 +831,7 @@ impl NetworkProxy {
             audit_metadata: self.state.audit_metadata().clone(),
             environment_id,
             execution_id,
+            policy_decision_timeout_ms: None,
         })
     }
 

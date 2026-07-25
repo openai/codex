@@ -263,25 +263,35 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let request_policy_decisions = params
+        let policy_decision_timeout_ms = params
             .network_proxy
             .as_ref()
-            .is_some_and(|launch| launch.proxy.request_policy_decisions);
-        if request_policy_decisions
+            .and_then(|launch| launch.policy_decision_timeout_ms);
+        if policy_decision_timeout_ms == Some(0) {
+            return Err(invalid_params(
+                "network policy decision callback timeout must be nonzero".to_string(),
+            ));
+        }
+        if policy_decision_timeout_ms.is_some()
             && (process_id.is_empty() || process_id.len() > MAX_NETWORK_POLICY_PROCESS_ID_BYTES)
         {
             return Err(invalid_params(format!(
                 "callback-enabled process ID must be non-empty and at most {MAX_NETWORK_POLICY_PROCESS_ID_BYTES} bytes"
             )));
         }
-        let network_policy_shutdown = request_policy_decisions.then(CancellationToken::new);
-        let network_policy_decider = network_policy_shutdown.as_ref().map(|process_shutdown| {
-            network_policy_decider(
-                process_id.clone(),
-                Arc::clone(&self.inner.requests),
-                process_shutdown.clone(),
-            )
-        });
+        let policy_decision_timeout = policy_decision_timeout_ms.map(Duration::from_millis);
+        let network_policy_shutdown = policy_decision_timeout.map(|_| CancellationToken::new());
+        let network_policy_decider = network_policy_shutdown
+            .as_ref()
+            .zip(policy_decision_timeout)
+            .map(|(process_shutdown, controller_timeout)| {
+                network_policy_decider(
+                    process_id.clone(),
+                    Arc::clone(&self.inner.requests),
+                    controller_timeout,
+                    process_shutdown.clone(),
+                )
+            });
         let prepared = prepare_exec_request(
             &params,
             child_env(&params),
@@ -1161,11 +1171,11 @@ mod tests {
 
     #[tokio::test]
     async fn callback_enabled_start_bounds_process_id_before_proxy_launch() {
-        let mut proxy_config =
+        let proxy_config =
             RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
                 .expect("remote proxy config");
-        proxy_config.request_policy_decisions = true;
-        let proxy = RemoteNetworkProxyLaunchConfig::new(proxy_config);
+        let mut proxy = RemoteNetworkProxyLaunchConfig::new(proxy_config);
+        proxy.policy_decision_timeout_ms = Some(1_000);
         let expected = invalid_params(format!(
             "callback-enabled process ID must be non-empty and at most {MAX_NETWORK_POLICY_PROCESS_ID_BYTES} bytes"
         ));
@@ -1511,6 +1521,7 @@ mod tests {
         let decider = network_policy_decider(
             process.process_id.clone(),
             Arc::clone(&backend.inner.requests),
+            Duration::from_secs(30),
             network_policy_shutdown.clone(),
         );
         let config = NetworkProxyConfig {

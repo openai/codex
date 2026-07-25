@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcServerOutboundMessage;
 
-const MAX_IN_FLIGHT_SERVER_CALLS: usize = 256;
+pub(crate) const MAX_IN_FLIGHT_SERVER_CALLS: usize = 256;
 
 type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
 

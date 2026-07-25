@@ -284,6 +284,7 @@ impl NetworkProxyState {
             audit_metadata,
             environment_id,
             execution_id,
+            policy_decision_timeout_ms: _,
         } = launch;
         anyhow::ensure!(
             proxy.enabled,

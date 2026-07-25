@@ -9,7 +9,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use codex_exec_server_protocol::JSONRPCNotification;
+use codex_network_proxy::NetworkPolicyDecider;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -18,6 +20,7 @@ use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use tokio::time::timeout;
@@ -112,6 +115,7 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
+use crate::rpc_server_requests::MAX_IN_FLIGHT_SERVER_CALLS;
 use codex_http_client::HttpClientFactory;
 
 pub(crate) mod http_client;
@@ -180,6 +184,14 @@ pub(crate) struct SessionState {
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
     next_write_id: AtomicU64,
+    network_policy_controller: ArcSwapOption<NetworkPolicyDecisionController>,
+    network_policy_cancelled: CancellationToken,
+}
+
+#[derive(Clone)]
+struct NetworkPolicyDecisionController {
+    decider: Arc<dyn NetworkPolicyDecider>,
+    timeout: Duration,
 }
 
 #[derive(Default)]
@@ -223,6 +235,8 @@ struct Inner {
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_byte_budget: Arc<Semaphore>,
     http_body_stream_next_id: AtomicU64,
+    // Keep admission shared while recovered transports finish older requests.
+    rpc_inbound_request_slots: Arc<Semaphore>,
     session_id: OnceLock<String>,
     reconnect_strategy: Option<ExecServerReconnectStrategy>,
 }
@@ -286,6 +300,21 @@ struct ActiveProcessStart {
 impl Drop for ActiveProcessStart {
     fn drop(&mut self) {
         self.inner.finish_process_start();
+    }
+}
+
+struct PendingProcessStartSession {
+    inner: Arc<Inner>,
+    process_id: ProcessId,
+    state: Arc<SessionState>,
+    armed: bool,
+}
+
+impl Drop for PendingProcessStartSession {
+    fn drop(&mut self) {
+        if self.armed {
+            self.inner.remove_session_if(&self.process_id, &self.state);
+        }
     }
 }
 
@@ -863,8 +892,15 @@ impl ExecServerClient {
             let active_start = ActiveProcessStart {
                 inner: Arc::clone(&self.inner),
             };
+            let mut pending_start = PendingProcessStartSession {
+                inner: Arc::clone(&self.inner),
+                process_id: process_id.clone(),
+                state: Arc::clone(&state),
+                armed: true,
+            };
             let client = self.clone();
             let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+            let (result_received_tx, result_received_rx) = tokio::sync::oneshot::channel();
             let process_start_task = async move {
                 let _active_start = active_start;
                 match client
@@ -878,7 +914,9 @@ impl ExecServerClient {
                             process_id: process_id.clone(),
                             state: Arc::clone(&state),
                         };
-                        if result_tx.send(Ok(session)).is_err() {
+                        // Wait for caller receipt so cancellation after send still triggers cleanup.
+                        if result_tx.send(Ok(session)).is_err() || result_received_rx.await.is_err()
+                        {
                             state.recoverable.store(false, Ordering::Release);
                             tokio::spawn(async move {
                                 cleanup_process_start(&client, &process_id, &state).await;
@@ -902,7 +940,12 @@ impl ExecServerClient {
                     .in_current_span()
                     .with_current_subscriber(),
             );
-            return result_rx.await.map_err(|_| {
+            let result = result_rx.await;
+            if matches!(&result, Ok(Ok(_))) {
+                pending_start.armed = false;
+                let _ = result_received_tx.send(());
+            }
+            return result.map_err(|_| {
                 ExecServerError::Protocol("process start task stopped unexpectedly".to_string())
             })?;
         }
@@ -980,6 +1023,7 @@ impl ExecServerClient {
             http_body_streams_write_lock: Mutex::new(()),
             http_body_stream_byte_budget: Arc::new(Semaphore::new(MAX_QUEUED_HTTP_BODY_BYTES)),
             http_body_stream_next_id: AtomicU64::new(1),
+            rpc_inbound_request_slots: Arc::new(Semaphore::new(MAX_IN_FLIGHT_SERVER_CALLS)),
             session_id,
             reconnect_strategy,
         });
@@ -1086,6 +1130,8 @@ impl SessionState {
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
             next_write_id: AtomicU64::new(1),
+            network_policy_controller: ArcSwapOption::empty(),
+            network_policy_cancelled: CancellationToken::new(),
         }
     }
 
@@ -1395,6 +1441,8 @@ impl Inner {
         let mut next_sessions = sessions.as_ref().clone();
         next_sessions.remove(process_id);
         self.sessions.store(Arc::new(next_sessions));
+        expected.network_policy_cancelled.cancel();
+        expected.network_policy_controller.store(None);
     }
 
     fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
@@ -1433,6 +1481,8 @@ fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     let sessions = inner.take_all_sessions();
 
     for (_, session) in sessions {
+        session.network_policy_cancelled.cancel();
+        session.network_policy_controller.store(None);
         // Sessions synthesize a closed read response and emit a pushed Failed
         // event. That covers both polling consumers and streaming consumers
         // such as environment-backed MCP stdio.
@@ -2764,4 +2814,6 @@ mod tests {
         drop(client);
         server.await.expect("server task should finish");
     }
+
+    mod network_policy_tests;
 }

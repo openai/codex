@@ -19,14 +19,16 @@ use crate::protocol::NetworkPolicyRequestParams;
 use crate::protocol::NetworkPolicyRequestResponse;
 use crate::rpc_server_requests::RpcServerRequestSender;
 
-// Leave transport overhead outside the client-side 95-second decision window.
-const NETWORK_POLICY_REQUEST_TIMEOUT: Duration = Duration::from_secs(100);
+const NETWORK_POLICY_TRANSPORT_TIMEOUT_MARGIN: Duration = Duration::from_secs(5);
 
 pub(crate) fn network_policy_decider(
     process_id: ProcessId,
     requests: Arc<RwLock<Option<RpcServerRequestSender>>>,
+    controller_timeout: Duration,
     process_shutdown: CancellationToken,
 ) -> Arc<dyn NetworkPolicyDecider> {
+    let request_timeout =
+        controller_timeout.saturating_add(NETWORK_POLICY_TRANSPORT_TIMEOUT_MARGIN);
     Arc::new(move |request: NetworkPolicyRequest| {
         let process_id = process_id.clone();
         let requests = Arc::clone(&requests);
@@ -66,7 +68,7 @@ pub(crate) fn network_policy_decider(
                 response = requests.call_with_timeout::<_, NetworkPolicyRequestResponse>(
                     NETWORK_POLICY_REQUEST_METHOD,
                     &params,
-                    NETWORK_POLICY_REQUEST_TIMEOUT,
+                    request_timeout,
                 ) => response
                     .map(|response| match response.decision {
                         ExecServerNetworkPolicyDecision::Allow => NetworkDecision::Allow,

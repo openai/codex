@@ -20,6 +20,7 @@ use crate::rpc::RpcServerOutboundMessage;
 struct DeciderHarness {
     requests: RpcServerRequestSender,
     outgoing: mpsc::Receiver<RpcServerOutboundMessage>,
+    controller_timeout: Duration,
     process_shutdown: CancellationToken,
 }
 
@@ -29,6 +30,7 @@ impl DeciderHarness {
         Self {
             requests: RpcServerRequestSender::new(outgoing_tx),
             outgoing,
+            controller_timeout: Duration::from_secs(60),
             process_shutdown: CancellationToken::new(),
         }
     }
@@ -37,6 +39,7 @@ impl DeciderHarness {
         let decider = network_policy_decider(
             ProcessId::from("process"),
             Arc::new(RwLock::new(Some(self.requests.clone()))),
+            self.controller_timeout,
             self.process_shutdown.clone(),
         );
         let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
@@ -204,12 +207,13 @@ async fn process_exit_and_disconnect_fail_closed() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn decision_timeout_fails_closed() {
+async fn configured_decision_timeout_fails_closed() {
     let mut harness = DeciderHarness::new();
+    harness.controller_timeout = Duration::from_secs(17);
     let decision = harness.request("timeout.example.com");
     harness.next_request().await;
 
-    tokio::time::advance(Duration::from_secs(99)).await;
+    tokio::time::advance(Duration::from_secs(21)).await;
     assert!(!decision.is_finished());
 
     tokio::time::advance(Duration::from_secs(1)).await;
