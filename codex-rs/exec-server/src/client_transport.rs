@@ -170,6 +170,7 @@ impl ExecServerClient {
         .await
     }
 
+    #[tracing::instrument(name = "codex.exec_server.remote.noise.connect", skip_all)]
     async fn open_initial_noise_rendezvous_connection(
         provider: &Arc<dyn NoiseRendezvousConnectProvider>,
         identity: &NoiseChannelIdentity,
@@ -285,6 +286,16 @@ impl ExecServerClient {
         Self::connect(connection, options).await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.noise.websocket_connect",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.noise.websocket_connect",
+            environment_id = %args.bundle.environment_id,
+            executor_registration_id = %args.bundle.executor_registration_id,
+        )
+    )]
     pub(crate) async fn open_noise_rendezvous_connection(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {

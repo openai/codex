@@ -170,6 +170,15 @@ impl EnvironmentRegistryClient {
     }
 
     /// Authorize one Noise harness key and obtain the full rendezvous bundle.
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.environment_registry.connect",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.environment_registry.connect",
+            environment_id = %environment_id,
+        )
+    )]
     async fn connect_environment(
         &self,
         environment_id: &str,
@@ -182,6 +191,7 @@ impl EnvironmentRegistryClient {
                 &format!("/cloud/environment/{environment_id}/connect"),
             ))
             .headers(self.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryConnectRequest { harness_public_key })
             .timeout(self.connect_timeout)
             .send()
@@ -248,6 +258,16 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
     /// Authorize the harness key recovered from the first IK message.
     /// Noise proves key possession; the registry decides whether that key may use
     /// this executor. The authorization token and public key are checked together.
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.environment_registry.validate_harness_key",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.environment_registry.validate_harness_key",
+            environment_id = %self.environment_id,
+            executor_registration_id = %self.executor_registration_id,
+        )
+    )]
     async fn validate_harness_key(
         &self,
         harness_public_key: &NoiseChannelPublicKey,
@@ -262,6 +282,7 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
                 &format!("/cloud/environment/{environment_id}/validate"),
             ))
             .headers(self.client.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
                 executor_registration_id: self.executor_registration_id.clone(),
                 harness_public_key: harness_public_key.clone(),

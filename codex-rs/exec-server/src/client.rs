@@ -337,11 +337,15 @@ impl LazyRemoteExecServerClient {
             return None;
         }
         let client = self.clone();
-        Some(AbortOnDropHandle::new(tokio::spawn(async move {
-            if let Err(error) = client.wait_until_ready().await {
-                debug!(%error, "exec-server environment startup failed");
+        Some(AbortOnDropHandle::new(tokio::spawn(
+            async move {
+                if let Err(error) = client.wait_until_ready().await {
+                    debug!(%error, "exec-server environment startup failed");
+                }
             }
-        })))
+            .in_current_span()
+            .with_current_subscriber(),
+        )))
     }
 
     pub(crate) fn startup_finished(&self) -> bool {
@@ -509,6 +513,7 @@ impl LazyRemoteExecServerClient {
         )
     }
 
+    #[tracing::instrument(name = "codex.exec_server.remote.connect", skip_all)]
     async fn connect_once(&self) -> ConnectionResult {
         let result = ExecServerClient::connect_for_transport(
             self.transport_params.clone(),
