@@ -1,0 +1,61 @@
+---
+source: tui/src/keymap_setup.rs
+expression: snapshot
+---
+48 columns:
+
+  Edit Shortcut
+  Open Transcript · Global
+  Current ctrl-t · Default keymap
+  Config `tui.keymap.global.open_transcript`
+  Open the transcript overlay.
+
+› 1. Replace binding
+     Capture one key and replace `ctrl-t`.
+  2. Add alternate binding
+     Keep the current binding and add another
+     key.
+  –  Remove custom binding (disabled)
+     No custom root override to remove.
+  3. Back to shortcuts
+     Return to the shortcut list.
+
+  Changes write the root `tui.keymap.*`
+  override.
+  enter select · esc back
+
+64 columns:
+
+  Edit Shortcut
+  Open Transcript · Global
+  Current ctrl-t · Default keymap
+  Config `tui.keymap.global.open_transcript`
+  Open the transcript overlay.
+
+› 1. Replace binding
+     Capture one key and replace `ctrl-t`.
+  2. Add alternate binding
+     Keep the current binding and add another key.
+  –  Remove custom binding (disabled)
+     No custom root override to remove.
+  3. Back to shortcuts
+     Return to the shortcut list.
+
+  Changes write the root `tui.keymap.*` override.
+  enter select · esc back
+
+96 columns:
+
+  Edit Shortcut
+  Open Transcript · Global
+  Current ctrl-t · Default keymap
+  Config `tui.keymap.global.open_transcript`
+  Open the transcript overlay.
+
+› 1. Replace binding                   Capture one key and replace `ctrl-t`.
+  2. Add alternate binding             Keep the current binding and add another key.
+  –  Remove custom binding (disabled)  No custom root override to remove.
+  3. Back to shortcuts                 Return to the shortcut list.
+
+  Changes write the root `tui.keymap.*` override.
+  enter select · esc back

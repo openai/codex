@@ -52,6 +52,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ColumnWidthMode;
+use crate::bottom_pane::SelectionDescriptionLayout;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -69,6 +70,7 @@ use debug::KeymapDebugView;
 
 pub(crate) const KEYMAP_ACTION_MENU_VIEW_ID: &str = "keymap-action-menu";
 pub(crate) const KEYMAP_REPLACE_BINDING_MENU_VIEW_ID: &str = "keymap-replace-binding-menu";
+const KEYMAP_ACTION_MENU_MIN_DESCRIPTION_WIDTH: u16 = 24;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum KeymapEditOutcome {
@@ -166,8 +168,8 @@ pub(crate) fn build_keymap_action_menu_params(
     let description = descriptor
         .map(|descriptor| descriptor.description)
         .unwrap_or("Configure this shortcut.");
-    let remove_disabled_reason = (!custom_binding)
-        .then(|| "There is no custom root binding for this action to remove.".to_string());
+    let remove_disabled_reason =
+        (!custom_binding).then(|| "No custom root override to remove.".to_string());
     let label = action_label(&action);
     let remove_context = context.clone();
     let remove_action = action.clone();
@@ -263,15 +265,11 @@ pub(crate) fn build_keymap_action_menu_params(
     }
     items.push(SelectionItem {
         name: "Remove custom binding".to_string(),
-        description: Some(if custom_binding {
-            "Restore the default keymap binding.".to_string()
-        } else {
-            "No root override to remove.".to_string()
-        }),
-        selected_description: Some(
-            "Delete the root override and use the default keymap again.".to_string(),
-        ),
+        description: custom_binding.then(|| "Restore the default keymap binding.".to_string()),
+        selected_description: custom_binding
+            .then(|| "Delete the root override and use the default keymap again.".to_string()),
         disabled_reason: remove_disabled_reason,
+        disabled_gutter_marker: Some("–"),
         actions: vec![Box::new(move |tx| {
             tx.send(AppEvent::KeymapCleared {
                 context: remove_context.clone(),
@@ -297,7 +295,10 @@ pub(crate) fn build_keymap_action_menu_params(
         ])),
         footer_hint: Some(keymap_action_menu_hint_line()),
         items,
-        col_width_mode: ColumnWidthMode::Fixed,
+        col_width_mode: ColumnWidthMode::AutoAllRows,
+        description_layout: SelectionDescriptionLayout::StackBelowWhenNarrow {
+            min_description_width: KEYMAP_ACTION_MENU_MIN_DESCRIPTION_WIDTH,
+        },
         ..Default::default()
     }
 }
@@ -1298,6 +1299,33 @@ mod tests {
     }
 
     #[test]
+    fn action_menu_responsive_render_snapshot() {
+        let runtime = RuntimeKeymap::defaults();
+        let render_at = |width| {
+            let params = build_keymap_action_menu_params(
+                "global".to_string(),
+                "open_transcript".to_string(),
+                &runtime,
+                &TuiKeymap::default(),
+            );
+            render_picker(params, width)
+        };
+        let snapshot = [
+            "48 columns:",
+            &render_at(/*width*/ 48),
+            "",
+            "64 columns:",
+            &render_at(/*width*/ 64),
+            "",
+            "96 columns:",
+            &render_at(/*width*/ 96),
+        ]
+        .join("\n");
+
+        assert_snapshot!("keymap_action_menu_responsive", snapshot);
+    }
+
+    #[test]
     fn action_menu_disables_clear_when_action_has_no_custom_binding() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_action_menu_params(
@@ -1314,7 +1342,7 @@ mod tests {
         let back = selection_item(&params, "Back to shortcuts");
         assert_eq!(
             remove.disabled_reason.as_deref(),
-            Some("There is no custom root binding for this action to remove.")
+            Some("No custom root override to remove.")
         );
         assert!(
             !replace.dismiss_on_select,

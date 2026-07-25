@@ -34,6 +34,7 @@ use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height_with_col_width_mode;
 use super::selection_popup_common::render_rows_single_line_with_col_width_mode;
 use super::selection_popup_common::render_rows_with_col_width_mode;
+pub(crate) use super::selection_row_layout::SelectionDescriptionLayout;
 use super::selection_tabs::SelectionTab;
 use super::selection_tabs::render_tab_bar;
 use super::selection_tabs::tab_bar_height;
@@ -145,6 +146,8 @@ pub(crate) struct SelectionItem {
     pub dismiss_parent_on_child_accept: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
+    /// Optional marker rendered in place of the number for a disabled row.
+    pub disabled_gutter_marker: Option<&'static str>,
 }
 
 /// Construction-time configuration for [`ListSelectionView`].
@@ -158,6 +161,8 @@ pub(crate) struct SelectionItem {
 /// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls
 /// `Fixed` used a fixed 30/70  split between columns
 /// `row_display` controls whether rows can wrap or stay single-line with ellipsis truncation
+/// `description_layout` optionally moves descriptions below labels when their
+/// column would become too narrow.
 pub(crate) struct SelectionViewParams {
     pub view_id: Option<&'static str>,
     pub title: Option<String>,
@@ -172,6 +177,7 @@ pub(crate) struct SelectionViewParams {
     pub search_placeholder: Option<String>,
     pub col_width_mode: ColumnWidthMode,
     pub row_display: SelectionRowDisplay,
+    pub description_layout: SelectionDescriptionLayout,
     /// Rendered left-column width to use for auto-sized rows.
     pub name_column_width: Option<usize>,
     pub header: Box<dyn Renderable>,
@@ -223,6 +229,7 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             col_width_mode: ColumnWidthMode::AutoVisible,
             row_display: SelectionRowDisplay::Wrapped,
+            description_layout: SelectionDescriptionLayout::Columns,
             name_column_width: None,
             header: Box::new(()),
             initial_selected_idx: None,
@@ -260,6 +267,7 @@ pub(crate) struct ListSelectionView {
     search_placeholder: Option<String>,
     col_width_mode: ColumnWidthMode,
     row_display: SelectionRowDisplay,
+    description_layout: SelectionDescriptionLayout,
     name_column_width: Option<usize>,
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
@@ -394,6 +402,7 @@ impl ListSelectionView {
             },
             col_width_mode: params.col_width_mode,
             row_display: params.row_display,
+            description_layout: params.description_layout,
             name_column_width: params.name_column_width,
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
@@ -581,7 +590,14 @@ impl ListSelectionView {
                         // numbers be used for the search query).
                         format!("{prefix} ")
                     } else if is_disabled {
-                        format!("{prefix} {}", " ".repeat(enabled_row_number_width + 2))
+                        if let Some(disabled_gutter_marker) = item.disabled_gutter_marker {
+                            let marker_width = UnicodeWidthStr::width(disabled_gutter_marker);
+                            let marker_padding =
+                                " ".repeat(enabled_row_number_width.saturating_sub(marker_width));
+                            format!("{prefix} {marker_padding}{disabled_gutter_marker}  ")
+                        } else {
+                            format!("{prefix} {}", " ".repeat(enabled_row_number_width + 2))
+                        }
                     } else {
                         enabled_row_number += 1;
                         let n = enabled_row_number;
@@ -1115,7 +1131,8 @@ impl Renderable for ListSelectionView {
 
         // Measure wrapped height for up to MAX_POPUP_ROWS items.
         let rows = self.build_rows();
-        let column_width = ColumnWidthConfig::new(self.col_width_mode, self.name_column_width);
+        let column_width = ColumnWidthConfig::new(self.col_width_mode, self.name_column_width)
+            .with_description_layout(self.description_layout);
         let rows_height = match self.row_display {
             SelectionRowDisplay::Wrapped => measure_rows_height_with_col_width_mode(
                 &rows,
@@ -1193,7 +1210,8 @@ impl Renderable for ListSelectionView {
         let header_height = header.desired_height(inner_width);
         let tab_height = tab_bar_height(&self.tabs, self.active_tab_idx.unwrap_or(0), inner_width);
         let rows = self.build_rows();
-        let column_width = ColumnWidthConfig::new(self.col_width_mode, self.name_column_width);
+        let column_width = ColumnWidthConfig::new(self.col_width_mode, self.name_column_width)
+            .with_description_layout(self.description_layout);
         let rows_height = match self.row_display {
             SelectionRowDisplay::Wrapped => measure_rows_height_with_col_width_mode(
                 &rows,

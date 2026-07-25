@@ -7,8 +7,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
-use std::borrow::Cow;
-use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
@@ -19,6 +17,10 @@ use crate::style::accent_style;
 use crate::style::user_message_style;
 
 use super::scroll_state::ScrollState;
+use super::selection_row_layout::SelectionDescriptionLayout;
+use super::selection_row_layout::build_full_line;
+use super::selection_row_layout::line_to_owned;
+use super::selection_row_layout::wrap_stacked_row;
 
 /// Render-ready representation of one row in a selection popup.
 ///
@@ -59,6 +61,7 @@ pub(crate) enum ColumnWidthMode {
 pub(crate) struct ColumnWidthConfig {
     pub mode: ColumnWidthMode,
     pub name_column_width: Option<usize>,
+    pub description_layout: SelectionDescriptionLayout,
 }
 
 impl ColumnWidthConfig {
@@ -66,7 +69,16 @@ impl ColumnWidthConfig {
         Self {
             mode,
             name_column_width,
+            description_layout: SelectionDescriptionLayout::Columns,
         }
+    }
+
+    pub(crate) const fn with_description_layout(
+        mut self,
+        description_layout: SelectionDescriptionLayout,
+    ) -> Self {
+        self.description_layout = description_layout;
+        self
     }
 }
 
@@ -119,21 +131,6 @@ pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'
         .initial_indent(Line::from(""))
         .subsequent_indent(Line::from(""));
     word_wrap_line(line, opts)
-}
-
-fn line_to_owned(line: Line<'_>) -> Line<'static> {
-    Line {
-        style: line.style,
-        alignment: line.alignment,
-        spans: line
-            .spans
-            .into_iter()
-            .map(|span| Span {
-                style: span.style,
-                content: Cow::Owned(span.content.into_owned()),
-            })
-            .collect(),
-    }
 }
 
 fn compute_desc_col(
@@ -287,11 +284,16 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
     out
 }
 
-fn wrap_standard_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
+fn wrap_standard_row(
+    row: &GenericDisplayRow,
+    desc_col: usize,
+    width: u16,
+    description_layout: SelectionDescriptionLayout,
+) -> Vec<Line<'static>> {
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;
 
-    let full_line = build_full_line(row, desc_col);
+    let full_line = build_full_line(row, desc_col, description_layout);
     let continuation_indent = wrap_indent(row, desc_col, width);
     let options = RtOptions::new(width.max(1) as usize)
         .initial_indent(Line::from(""))
@@ -302,7 +304,15 @@ fn wrap_standard_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Ve
         .collect()
 }
 
-fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
+fn wrap_row_lines(
+    row: &GenericDisplayRow,
+    desc_col: usize,
+    width: u16,
+    description_layout: SelectionDescriptionLayout,
+) -> Vec<Line<'static>> {
+    if description_layout.should_stack(width, desc_col) {
+        return wrap_stacked_row(row, width);
+    }
     if should_wrap_name_in_column(row) {
         let wrapped = wrap_two_column_row(row, desc_col, width);
         if !wrapped.is_empty() {
@@ -310,7 +320,7 @@ fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<L
         }
     }
 
-    wrap_standard_row(row, desc_col, width)
+    wrap_standard_row(row, desc_col, width, description_layout)
 }
 
 fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
@@ -353,23 +363,31 @@ fn compute_item_window_start(
     start_idx
 }
 
+#[derive(Clone, Copy)]
+struct WrappedViewport {
+    width: u16,
+    height: u16,
+    description_layout: SelectionDescriptionLayout,
+}
+
 fn is_selected_visible_in_wrapped_viewport(
     rows_all: &[GenericDisplayRow],
     start_idx: usize,
     max_items: usize,
     selected_idx: usize,
     desc_col: usize,
-    width: u16,
-    viewport_height: u16,
+    viewport: WrappedViewport,
 ) -> bool {
-    if viewport_height == 0 {
+    if viewport.height == 0 {
         return false;
     }
 
     let mut used_lines = 0usize;
-    let viewport_height = viewport_height as usize;
+    let viewport_height = viewport.height as usize;
     for (idx, row) in rows_all.iter().enumerate().skip(start_idx).take(max_items) {
-        let row_lines = wrap_row_lines(row, desc_col, width).len().max(1);
+        let row_lines = wrap_row_lines(row, desc_col, viewport.width, viewport.description_layout)
+            .len()
+            .max(1);
         // Keep rendering semantics in sync: always show the first row, even if
         // it overflows the viewport.
         if used_lines > 0 && used_lines.saturating_add(row_lines) > viewport_height {
@@ -414,100 +432,17 @@ fn adjust_start_for_wrapped_selection_visibility(
             max_items,
             sel,
             desc_col,
-            width,
-            viewport_height,
+            WrappedViewport {
+                width,
+                height: viewport_height,
+                description_layout: column_width.description_layout,
+            },
         ) {
             break;
         }
         start_idx = start_idx.saturating_add(1);
     }
     start_idx
-}
-
-/// Build the full display line for a row with the description padded to start
-/// at `desc_col`. Applies fuzzy-match bolding when indices are present and
-/// dims the description.
-fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
-    let combined_description = match (&row.description, &row.disabled_reason) {
-        (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
-        (Some(desc), None) => Some(desc.clone()),
-        (None, Some(reason)) => Some(format!("disabled: {reason}")),
-        (None, None) => None,
-    };
-
-    // Enforce single-line name: allow at most desc_col - 2 cells for name,
-    // reserving two spaces before the description column.
-    let name_prefix_width = Line::from(row.name_prefix_spans.clone()).width();
-    let name_limit = combined_description
-        .as_ref()
-        .map(|_| desc_col.saturating_sub(2).saturating_sub(name_prefix_width))
-        .unwrap_or(usize::MAX);
-
-    let mut name_spans: Vec<Span> = Vec::with_capacity(row.name.len());
-    let mut used_width = 0usize;
-    let mut truncated = false;
-
-    if let Some(idxs) = row.match_indices.as_ref() {
-        let mut idx_iter = idxs.iter().peekable();
-        for (char_idx, ch) in row.name.chars().enumerate() {
-            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-            let next_width = used_width.saturating_add(ch_w);
-            if next_width > name_limit {
-                truncated = true;
-                break;
-            }
-            used_width = next_width;
-
-            if idx_iter.peek().is_some_and(|next| **next == char_idx) {
-                idx_iter.next();
-                name_spans.push(ch.to_string().bold());
-            } else {
-                name_spans.push(ch.to_string().into());
-            }
-        }
-    } else {
-        for ch in row.name.chars() {
-            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-            let next_width = used_width.saturating_add(ch_w);
-            if next_width > name_limit {
-                truncated = true;
-                break;
-            }
-            used_width = next_width;
-            name_spans.push(ch.to_string().into());
-        }
-    }
-
-    if truncated {
-        // If there is at least one cell available, add an ellipsis.
-        // When name_limit is 0, we still show an ellipsis to indicate truncation.
-        name_spans.push("…".into());
-    }
-
-    if row.disabled_reason.is_some() {
-        name_spans.push(" (disabled)".dim());
-    }
-
-    let this_name_width = name_prefix_width + Line::from(name_spans.clone()).width();
-    let mut full_spans: Vec<Span> = row.name_prefix_spans.clone();
-    full_spans.extend(name_spans);
-    if let Some(display_shortcut) = row.display_shortcut {
-        full_spans.push(" (".into());
-        full_spans.push(display_shortcut.into());
-        full_spans.push(")".into());
-    }
-    if let Some(desc) = combined_description.as_ref() {
-        let gap = desc_col.saturating_sub(this_name_width);
-        if gap > 0 {
-            full_spans.push(" ".repeat(gap).into());
-        }
-        full_spans.push(desc.clone().dim());
-    }
-    if let Some(tag) = row.category_tag.as_deref().filter(|tag| !tag.is_empty()) {
-        full_spans.push("  ".into());
-        full_spans.push(tag.to_string().dim());
-    }
-    Line::from(full_spans)
 }
 
 /// Render a list of rows using the provided ScrollState, with shared styling
@@ -566,7 +501,8 @@ fn render_rows_inner(
             break;
         }
 
-        let mut wrapped = wrap_row_lines(row, desc_col, area.width);
+        let mut wrapped =
+            wrap_row_lines(row, desc_col, area.width, column_width.description_layout);
         apply_row_state_style(
             &mut wrapped,
             Some(i) == state.selected_idx && !row.is_disabled,
@@ -721,7 +657,7 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
             break;
         }
 
-        let mut full_line = build_full_line(row, desc_col);
+        let mut full_line = build_full_line(row, desc_col, column_width.description_layout);
         if Some(i) == state.selected_idx && !row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
                 span.style = accent_style();
@@ -828,7 +764,13 @@ fn measure_rows_height_inner(
         .take(visible_items)
         .map(|(_, r)| r)
     {
-        let wrapped_lines = wrap_row_lines(row, desc_col, content_width).len();
+        let wrapped_lines = wrap_row_lines(
+            row,
+            desc_col,
+            content_width,
+            column_width.description_layout,
+        )
+        .len();
         total = total.saturating_add(wrapped_lines as u16);
     }
     total.max(1)
