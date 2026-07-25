@@ -248,10 +248,13 @@ impl CodexResponsesMetadata {
     pub(crate) fn compatibility_headers(&self) -> ApiHeaderMap {
         let mut headers = ApiHeaderMap::new();
         insert_header(&mut headers, X_CODEX_WINDOW_ID_HEADER, &self.window_id);
-        // Direct x-codex-turn-metadata is compatibility output. New per-request consumers should
-        // prefer client_metadata["x-codex-turn-metadata"], which is rendered from this same object.
+        // Direct x-codex-turn-metadata is compatibility output. Keep the unbounded Code Mode
+        // mapping in client_metadata only so HTTP and WebSocket headers remain bounded.
         if self.has_turn_metadata()
-            && let Some(turn_metadata_json) = self.turn_metadata_json()
+            && let Ok(turn_metadata_json) = to_ascii_json_string(&CodexTurnMetadataPayload {
+                code_mode_tool_names: None,
+                ..self.turn_metadata_payload()
+            })
         {
             insert_header(
                 &mut headers,
