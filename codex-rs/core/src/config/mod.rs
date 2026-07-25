@@ -1995,6 +1995,13 @@ fn filter_plugin_mcp_servers_by_requirements(
     let Some(requirements) = plugin_requirements else {
         return;
     };
+    if !requirements
+        .value
+        .values()
+        .any(|plugin| plugin.mcp_servers.is_some())
+    {
+        return;
+    }
     let source = requirements.source.clone();
     let plugin_mcp_requirements = requirements
         .value
