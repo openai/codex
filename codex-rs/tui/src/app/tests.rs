@@ -2961,6 +2961,8 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
         ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("valid thread");
     let agent_thread_id =
         ThreadId::from_string("00000000-0000-0000-0000-000000000033").expect("valid thread");
+    let quiet_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000044").expect("valid thread");
 
     app.primary_thread_id = Some(main_thread_id);
     app.active_thread_id = Some(side_thread_id);
@@ -2986,14 +2988,27 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
         /*is_closed*/ false,
     );
 
-    app.enqueue_thread_request(
+    let pending_approval = exec_approval_request(
         agent_thread_id,
-        exec_approval_request(
-            agent_thread_id,
-            "turn-approval",
-            "call-approval",
-            /*approval_id*/ None,
-        ),
+        "turn-approval",
+        "call-approval",
+        /*approval_id*/ None,
+    );
+    app.enqueue_thread_request(agent_thread_id, pending_approval.clone())
+        .await?;
+    app.enqueue_thread_request(
+        quiet_thread_id,
+        ServerRequest::DynamicToolCall {
+            request_id: AppServerRequestId::Integer(99),
+            params: codex_app_server_protocol::DynamicToolCallParams {
+                thread_id: quiet_thread_id.to_string(),
+                turn_id: "turn-quiet".to_string(),
+                call_id: "call-quiet".to_string(),
+                namespace: None,
+                tool: "ignored-tool".to_string(),
+                arguments: serde_json::json!({}),
+            },
+        },
     )
     .await?;
 
@@ -3005,6 +3020,10 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
 
     app.side_threads.remove(&side_thread_id);
     app.active_thread_id = Some(main_thread_id);
+    assert_eq!(
+        app.pending_inactive_thread_requests().await,
+        vec![(agent_thread_id, pending_approval)]
+    );
     app.surface_pending_inactive_thread_interactive_requests()
         .await?;
 

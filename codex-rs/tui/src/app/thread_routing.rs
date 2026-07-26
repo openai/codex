@@ -389,6 +389,9 @@ impl App {
             }
 
             let store = store.lock().await;
+            if store.side_parent_pending_status().is_none() {
+                continue;
+            }
             requests.extend(
                 store
                     .pending_replay_requests()
