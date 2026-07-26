@@ -46,6 +46,11 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
 pub trait ContextualUserFragment {
     fn role(&self) -> &'static str;
 
+    /// Whether this fragment must be recorded as its own response item.
+    fn requires_separate_message(&self) -> bool {
+        false
+    }
+
     fn markers(&self) -> (&'static str, &'static str);
 
     fn body(&self) -> String;

@@ -20,6 +20,8 @@ use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_image_generation_call;
@@ -177,6 +179,31 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     assert!(
         model_switch_text.contains("The user was previously using a different model."),
         "expected model switch preamble, got: {model_switch_text:?}"
+    );
+
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let model_states = std::fs::read_to_string(rollout_path)?
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<serde_json::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::WorldState(item) => item
+                .state
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        model_states,
+        vec![
+            test.session_configured.model.clone(),
+            next_model.to_string()
+        ]
     );
 
     Ok(())

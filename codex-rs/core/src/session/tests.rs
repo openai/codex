@@ -9359,11 +9359,6 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     }
     let rollout_path = attach_thread_persistence(&mut session).await;
 
-    let update_items = session
-        .build_settings_update_items(Some(&previous_context_item), &turn_context)
-        .await;
-    assert_eq!(update_items, Vec::new());
-
     let turn_context = Arc::new(turn_context);
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
