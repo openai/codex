@@ -1395,6 +1395,7 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
                     text_elements: Vec::new(),
                 }],
             }),
+            started_at_ms: Some(0),
             completed_at_ms,
         }))
     };

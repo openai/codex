@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_mcp_server::run_main;
