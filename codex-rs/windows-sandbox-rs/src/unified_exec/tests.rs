@@ -12,6 +12,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
+use codex_utils_pty::ProcessSignal;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -345,7 +346,7 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
 }
 
 #[test]
-fn legacy_non_tty_powershell_emits_output() {
+fn legacy_non_tty_powershell_interrupt_terminates_process() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
@@ -364,11 +365,11 @@ fn legacy_non_tty_powershell_emits_output() {
                 pwsh.display().to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
-                "Write-Output LEGACY-NONTTY-DIRECT".to_string(),
+                "Write-Output LEGACY-NONTTY-DIRECT; [System.Threading.ManualResetEvent]::new($false).WaitOne()".to_string(),
             ],
             cwd.as_path(),
             HashMap::new(),
-            Some(5_000),
+            /*timeout_ms*/ None,
             &[],
             &[],
             /*tty*/ false,
@@ -378,12 +379,41 @@ fn legacy_non_tty_powershell_emits_output() {
         .await
         .expect("spawn legacy non-tty powershell session");
         println!("pwsh spawn returned");
-        let (stdout, exit_code) =
-            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(10)).await;
-        println!("pwsh collect returned exit_code={exit_code}");
-        let stdout = String::from_utf8_lossy(&stdout);
-        assert_eq!(exit_code, 0, "stdout={stdout:?}");
-        assert!(stdout.contains("LEGACY-NONTTY-DIRECT"), "stdout={stdout:?}");
+        let codex_utils_pty::SpawnedProcess {
+            session,
+            mut stdout_rx,
+            stderr_rx: _stderr_rx,
+            exit_rx,
+        } = spawned;
+        timeout(Duration::from_secs(5), async {
+            let mut stdout = Vec::new();
+            while let Some(chunk) = stdout_rx.recv().await {
+                stdout.extend(chunk);
+                if String::from_utf8_lossy(&stdout).contains("LEGACY-NONTTY-DIRECT") {
+                    return;
+                }
+            }
+            panic!(
+                "PowerShell exited before emitting its readiness marker\n{}",
+                sandbox_log(codex_home.path())
+            );
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for PowerShell readiness marker\n{}",
+                sandbox_log(codex_home.path())
+            )
+        });
+
+        session
+            .signal(ProcessSignal::Interrupt)
+            .expect("interrupt should terminate the restricted-token process job");
+        let exit_code = timeout(Duration::from_secs(5), exit_rx)
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for exit\n{}", sandbox_log(codex_home.path())))
+            .expect("interrupted process should report an exit code");
+        assert_eq!(exit_code, 1);
     });
 }
 
@@ -405,6 +435,7 @@ fn finish_driver_spawn_keeps_stdin_open_when_requested() {
                 terminator: None,
                 writer_handle: None,
                 resizer: None,
+                tty: false,
             },
             /*stdin_open*/ true,
         );
@@ -437,6 +468,7 @@ fn finish_driver_spawn_closes_stdin_when_not_requested() {
                 terminator: None,
                 writer_handle: None,
                 resizer: None,
+                tty: false,
             },
             /*stdin_open*/ false,
         );

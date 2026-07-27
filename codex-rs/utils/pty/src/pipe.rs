@@ -48,7 +48,12 @@ impl ChildTerminator for PipeChildTerminator {
                     crate::process_group::interrupt_process_group(self.process_group_id)
                 }
 
-                #[cfg(not(unix))]
+                #[cfg(windows)]
+                {
+                    self.kill()
+                }
+
+                #[cfg(not(any(unix, windows)))]
                 {
                     Err(crate::process::unsupported_signal(signal))
                 }

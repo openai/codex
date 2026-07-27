@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn process_fallback_terminates_root() -> anyhow::Result<()> {
+fn process_fallback_interrupt_terminates_root() -> anyhow::Result<()> {
     let mut child = std::process::Command::new("ping.exe")
         .args(["-n", "60", "127.0.0.1"])
         .stdin(Stdio::null())
@@ -12,7 +12,7 @@ fn process_fallback_terminates_root() -> anyhow::Result<()> {
         windows: WindowsChildTerminator::Process(child.id()),
     };
 
-    terminator.kill()?;
+    terminator.signal(ProcessSignal::Interrupt)?;
 
     assert!(!child.wait()?.success());
     Ok(())

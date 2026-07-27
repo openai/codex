@@ -4,6 +4,7 @@ use std::path::Path;
 use pretty_assertions::assert_eq;
 
 use crate::ProcessDriver;
+use crate::ProcessSignal;
 use crate::SpawnedProcess;
 use crate::TerminalSize;
 use crate::combine_output_receivers;
@@ -614,7 +615,14 @@ async fn driver_backed_process_can_expose_split_stdout_and_stderr() -> anyhow::R
         terminator: None,
         writer_handle: None,
         resizer: None,
+        #[cfg(windows)]
+        tty: false,
     });
+    let error = spawned
+        .session
+        .signal(ProcessSignal::Interrupt)
+        .expect_err("interrupting a driver without a terminator should remain unsupported");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
 
     let SpawnedProcess {
         session: _session,
@@ -650,6 +658,37 @@ async fn driver_backed_process_can_expose_split_stdout_and_stderr() -> anyhow::R
     Ok(())
 }
 
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver_backed_interrupt_terminates_once() {
+    let terminations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let callback_terminations = std::sync::Arc::clone(&terminations);
+    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+    let (_stdout_tx, stdout_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(1);
+    let (_exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
+    let spawned = spawn_from_driver(ProcessDriver {
+        writer_tx,
+        stdout_rx,
+        stderr_rx: None,
+        exit_rx,
+        terminator: Some(Box::new(move || {
+            callback_terminations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })),
+        writer_handle: None,
+        resizer: None,
+        #[cfg(windows)]
+        tty: false,
+    });
+
+    spawned
+        .session
+        .signal(ProcessSignal::Interrupt)
+        .expect("interrupt should terminate the driver-backed process");
+    drop(spawned.session);
+
+    assert_eq!(terminations.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<()> {
     let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
@@ -663,7 +702,7 @@ async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<(
         stdout_rx: stdout_driver_rx,
         stderr_rx: None,
         exit_rx,
-        terminator: None,
+        terminator: Some(Box::new(|| {})),
         writer_handle: None,
         resizer: Some(Box::new(move |size| {
             if let Ok(mut guard) = size_tx.lock()
@@ -673,7 +712,15 @@ async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<(
             }
             Ok(())
         })),
+        #[cfg(windows)]
+        tty: true,
     });
+
+    let error = spawned
+        .session
+        .signal(ProcessSignal::Interrupt)
+        .expect_err("interrupting a PTY-backed driver should remain unsupported");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
 
     spawned.session.resize(TerminalSize {
         rows: 40,
@@ -711,6 +758,8 @@ async fn driver_backed_process_drains_output_that_arrives_after_exit_signal() ->
         terminator: None,
         writer_handle: None,
         resizer: None,
+        #[cfg(windows)]
+        tty: false,
     });
 
     let SpawnedProcess {

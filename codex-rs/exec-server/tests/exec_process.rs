@@ -932,7 +932,7 @@ async fn assert_exec_process_signal_interrupts_process(use_remote: bool) -> Resu
     Ok(())
 }
 
-async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: bool) -> Result<()> {
+async fn assert_exec_process_signal_terminates_on_windows(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
     let session = context
         .backend
@@ -956,21 +956,13 @@ async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: b
         })
         .await?;
 
-    let err = match session.process.signal(ProcessSignal::Interrupt).await {
-        Ok(()) => anyhow::bail!("Windows non-TTY signal should report unsupported"),
-        Err(err) => err,
-    };
-    let message = err.to_string();
-    assert!(
-        message.contains("failed to signal process"),
-        "unexpected signal error: {message}"
-    );
-    assert!(
-        message.contains("process interrupt is not supported by this process backend"),
-        "unexpected signal error: {message}"
-    );
+    let StartedExecProcess { process, .. } = session;
+    let wake_rx = process.subscribe_wake();
+    process.signal(ProcessSignal::Interrupt).await?;
+    let (_output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
-    session.process.terminate().await?;
+    assert_eq!(exit_code, Some(1));
+    assert!(closed);
     Ok(())
 }
 
@@ -1268,8 +1260,8 @@ async fn exec_process_signal_interrupts_process(use_remote: bool) -> Result<()> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // Serialize tests that launch a real exec-server process through the full CLI.
 #[serial_test::serial(remote_exec_server)]
-async fn exec_process_signal_reports_unsupported_on_windows(use_remote: bool) -> Result<()> {
-    assert_exec_process_signal_reports_unsupported_on_windows(use_remote).await
+async fn exec_process_signal_terminates_on_windows(use_remote: bool) -> Result<()> {
+    assert_exec_process_signal_terminates_on_windows(use_remote).await
 }
 
 #[test_case(false ; "local")]

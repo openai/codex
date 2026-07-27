@@ -232,6 +232,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
             } else {
                 None
             },
+            tty,
         },
         stdin_open,
     ))

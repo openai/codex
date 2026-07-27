@@ -470,6 +470,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             Box::new(move |size| resize_conpty_handle(&hpc, size))
                 as Box<dyn FnMut(TerminalSize) -> Result<()> + Send>
         }),
+        tty,
     };
 
     Ok(finish_driver_spawn(driver, stdin_open))

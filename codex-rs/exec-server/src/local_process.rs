@@ -1764,6 +1764,8 @@ mod tests {
             terminator: None,
             writer_handle: None,
             resizer: None,
+            #[cfg(windows)]
+            tty: false,
         })
         .session
     }
