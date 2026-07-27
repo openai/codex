@@ -46,6 +46,7 @@ use crate::render::MAX_SKILL_NAME_BYTES;
 use crate::render::MAX_SKILL_PATH_BYTES;
 use crate::render::SkillCatalogRenderPolicy;
 use crate::render::SkillMetadataBudget;
+use crate::render::SkillRenderReport;
 use crate::render::capped_skill_metadata_budget;
 use crate::render::render_available_skills;
 use crate::render::truncate_main_prompt_contents;
@@ -87,6 +88,12 @@ fn render_catalog(
     budget: SkillMetadataBudget,
 ) -> RenderedCatalog {
     let Some(rendered) = render_available_skills(catalog, policy, budget) else {
+        record_catalog_render(
+            extension_metrics,
+            catalog_surface,
+            budget,
+            &SkillRenderReport::default(),
+        );
         return RenderedCatalog::default();
     };
     record_catalog_render(extension_metrics, catalog_surface, budget, &rendered.report);
@@ -97,6 +104,10 @@ fn render_catalog(
         warning_message,
     }
 }
+
+#[cfg(test)]
+#[path = "extension_tests.rs"]
+mod tests;
 
 impl<C> ThreadLifecycleContributor<C> for SkillsExtension<C>
 where

@@ -88,7 +88,7 @@ pub(crate) enum SkillMetadataBudget {
     Characters(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct SkillRenderReport {
     pub(crate) total_count: usize,
     pub(crate) included_count: usize,

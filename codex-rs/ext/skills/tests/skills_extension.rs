@@ -41,6 +41,7 @@ use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_skills::SkillMetadata;
+use codex_skills_extension::HostSkillProvider;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;
@@ -196,6 +197,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
         path_to_skills_md: skill_path,
         scope: SkillScope::User,
         plugin_id: None,
+        remote_plugin_id: None,
     });
     let turn_store = ExtensionData::new("turn-1");
     turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome.clone())));
@@ -222,19 +224,13 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
             .render_diff(PreviousWorldStateSection::Absent)
             .is_some()
     );
-    let expected_samples = |count| {
-        vec![
-            (THREAD_SKILLS_ENABLED_TOTAL_METRIC.to_string(), count),
-            (THREAD_SKILLS_KEPT_TOTAL_METRIC.to_string(), count),
-            (THREAD_SKILLS_TRUNCATED_METRIC.to_string(), 0),
-            (
-                THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC.to_string(),
-                0,
-            ),
-        ]
-    };
+    let mut expected = expected_catalog_metric_samples("executor_world_state", /*count*/ 0);
+    expected.extend(expected_catalog_metric_samples(
+        "host_world_state",
+        /*count*/ 1,
+    ));
     assert!(startup_metrics.samples().is_empty());
-    assert_eq!(turn_metrics.samples(), expected_samples(1));
+    assert_eq!(turn_metrics.samples(), expected);
 
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
@@ -254,8 +250,12 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
             .render_diff(PreviousWorldStateSection::Known(&published_snapshot))
             .is_none()
     );
+    expected.extend(expected_catalog_metric_samples(
+        "executor_world_state",
+        /*count*/ 0,
+    ));
     assert!(startup_metrics.samples().is_empty());
-    assert_eq!(turn_metrics.samples(), expected_samples(1));
+    assert_eq!(turn_metrics.samples(), expected);
 
     let second_skill_path =
         AbsolutePathBuf::try_from(test_codex_home().join("skills/other/SKILL.md"))?;
@@ -269,6 +269,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
         path_to_skills_md: second_skill_path,
         scope: SkillScope::User,
         plugin_id: None,
+        remote_plugin_id: None,
     });
     turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
     let sections = registry.context_contributors()[0]
@@ -289,10 +290,102 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
             .render_diff(PreviousWorldStateSection::Known(&published_snapshot))
             .is_some()
     );
-    let mut published_and_changed_samples = expected_samples(1);
-    published_and_changed_samples.extend(expected_samples(2));
+    expected.extend(expected_catalog_metric_samples(
+        "executor_world_state",
+        /*count*/ 0,
+    ));
+    expected.extend(expected_catalog_metric_samples(
+        "host_world_state",
+        /*count*/ 2,
+    ));
     assert!(startup_metrics.samples().is_empty());
-    assert_eq!(turn_metrics.samples(), published_and_changed_samples);
+    assert_eq!(turn_metrics.samples(), expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn nonempty_executor_empty_host_records_catalog_metrics() -> TestResult {
+    let executor_provider = Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: vec![test_entry(
+                SkillSourceKind::Executor,
+                "env-1",
+                "executor/lint-fix",
+                "lint-fix/SKILL.md",
+            )],
+            warnings: Vec::new(),
+        },
+        read_requests: Arc::new(Mutex::new(Vec::new())),
+        list_calls: None,
+        fail_first_list: false,
+    });
+    let providers = SkillProviders::new()
+        .with_host_provider(Arc::new(HostSkillProvider::new()))
+        .with_executor_provider(executor_provider);
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let metrics = Arc::new(RecordingMetrics::default());
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "lint-fix".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "env-1".to_string(),
+            path: PathUri::parse("file:///skills/lint-fix").expect("skill root URI"),
+        },
+    }];
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert(HostSkillsSnapshot::new(Arc::new(
+        SkillLoadOutcome::default(),
+    )));
+
+    let sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
+            extension_metrics: Some(metrics.clone()),
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+
+    assert_eq!(sections.len(), 2);
+    assert!(
+        sections[0]
+            .render_diff(PreviousWorldStateSection::Absent)
+            .is_some()
+    );
+    assert!(
+        sections[1]
+            .render_diff(PreviousWorldStateSection::Absent)
+            .is_none()
+    );
+    let mut expected = expected_catalog_metric_samples("executor_world_state", /*count*/ 1);
+    expected.extend(expected_catalog_metric_samples(
+        "host_world_state",
+        /*count*/ 0,
+    ));
+    assert_eq!(metrics.samples(), expected);
 
     Ok(())
 }
@@ -1420,13 +1513,20 @@ impl ExtensionEventSink for ChannelEventSink {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecordedHistogram {
+    name: String,
+    value: i64,
+    tags: Vec<(String, String)>,
+}
+
 #[derive(Default)]
 struct RecordingMetrics {
-    samples: Mutex<Vec<(String, i64)>>,
+    samples: Mutex<Vec<RecordedHistogram>>,
 }
 
 impl RecordingMetrics {
-    fn samples(&self) -> Vec<(String, i64)> {
+    fn samples(&self) -> Vec<RecordedHistogram> {
         self.samples
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1435,12 +1535,45 @@ impl RecordingMetrics {
 }
 
 impl ExtensionMetrics for RecordingMetrics {
-    fn histogram(&self, name: &str, value: i64, _tags: &[(&str, &str)]) {
+    fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
         self.samples
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((name.to_string(), value));
+            .push(RecordedHistogram {
+                name: name.to_string(),
+                value,
+                tags: tags
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                    .collect(),
+            });
     }
+}
+
+fn expected_catalog_metric_samples(catalog_surface: &str, count: i64) -> Vec<RecordedHistogram> {
+    let tags = vec![("catalog_surface".to_string(), catalog_surface.to_string())];
+    vec![
+        RecordedHistogram {
+            name: THREAD_SKILLS_ENABLED_TOTAL_METRIC.to_string(),
+            value: count,
+            tags: tags.clone(),
+        },
+        RecordedHistogram {
+            name: THREAD_SKILLS_KEPT_TOTAL_METRIC.to_string(),
+            value: count,
+            tags: tags.clone(),
+        },
+        RecordedHistogram {
+            name: THREAD_SKILLS_TRUNCATED_METRIC.to_string(),
+            value: 0,
+            tags: tags.clone(),
+        },
+        RecordedHistogram {
+            name: THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC.to_string(),
+            value: 0,
+            tags,
+        },
+    ]
 }
 
 impl SkillProvider for StaticSkillProvider {

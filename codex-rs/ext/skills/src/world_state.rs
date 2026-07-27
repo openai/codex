@@ -97,7 +97,20 @@ pub(crate) fn host_skills_world_state_section(
     } else {
         None
     };
-    let render_report = available.as_ref().map(|available| available.report.clone());
+    let render_metrics = include_instructions.then(|| {
+        available
+            .as_ref()
+            .map(|available| {
+                let report = &available.report;
+                (
+                    report.total_count,
+                    report.included_count,
+                    report.omitted_count,
+                    report.truncated_description_chars,
+                )
+            })
+            .unwrap_or_default()
+    });
     let body = available.map(|available| {
         AvailableSkillsInstructions::from_available_skills(
             available,
@@ -128,14 +141,16 @@ pub(crate) fn host_skills_world_state_section(
                 }
             }
 
-            if let Some(report) = &render_report {
+            if let Some((total_count, included_count, omitted_count, truncated_description_chars)) =
+                render_metrics
+            {
                 record_catalog_metrics(
                     extension_metrics.as_deref(),
                     CatalogSurface::HostWorldState,
-                    report.total_count,
-                    report.included_count,
-                    report.omitted_count,
-                    report.truncated_description_chars,
+                    total_count,
+                    included_count,
+                    omitted_count,
+                    truncated_description_chars,
                 );
             }
             let body = match body.as_deref() {
