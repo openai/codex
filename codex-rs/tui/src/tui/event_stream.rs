@@ -271,7 +271,8 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
-                crate::terminal_palette::requery_default_colors();
+                // Keep the startup-cached palette: querying terminal colors here blocks the
+                // input loop, and a direct probe would discard keys typed during the refresh.
                 Some(TuiEvent::Draw)
             }
             Event::FocusLost => {
@@ -428,6 +429,36 @@ mod tests {
                 assert_eq!(key, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
             }
             other => panic!("expected key event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn focus_gained_preserves_already_queued_key() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        terminal_focused.store(false, Ordering::Relaxed);
+        let mut stream = make_stream(broker.clone(), draw_rx, terminal_focused.clone());
+        let expected_key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
+
+        handle.send(Ok(Event::FocusGained));
+        handle.send(Ok(Event::Key(expected_key)));
+
+        assert!(matches!(stream.next().await, Some(TuiEvent::Draw)));
+        assert!(terminal_focused.load(Ordering::Relaxed));
+        assert!(matches!(
+            &*broker
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            EventBrokerState::Running(_)
+        ));
+
+        let next = timeout(Duration::from_millis(/*millis*/ 100), stream.next())
+            .await
+            .expect("focus handling discarded an already queued key");
+
+        match next {
+            Some(TuiEvent::Key(key)) => assert_eq!(key, expected_key),
+            other => panic!("expected queued key event, got {other:?}"),
         }
     }
 
