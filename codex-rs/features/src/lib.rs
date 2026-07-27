@@ -186,6 +186,10 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     InAppBrowser,
+    /// Allow desktop apps to perform in-app updates.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    InAppUpdates,
     /// Allow Browser Use agent integration in desktop apps.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -1178,6 +1182,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::InAppBrowser,
         key: "in_app_browser",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::InAppUpdates,
+        key: "in_app_updates",
         stage: Stage::Stable,
         default_enabled: true,
     },

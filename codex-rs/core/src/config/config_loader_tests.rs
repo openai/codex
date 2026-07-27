@@ -32,6 +32,7 @@ use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_requirements_toml;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::LOCAL_FS;
+use codex_features::Feature;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
@@ -1347,6 +1348,43 @@ personality = true
             entries: BTreeMap::from([("personality".to_string(), true)]),
         })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_requirements_control_in_app_updates() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let default_config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .build()
+        .await?;
+    assert!(default_config.features.enabled(Feature::InAppUpdates));
+
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+[features]
+in_app_updates = false
+"#,
+    )
+    .await?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let managed_config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert!(!managed_config.features.enabled(Feature::InAppUpdates));
     Ok(())
 }
 
