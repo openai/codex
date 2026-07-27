@@ -417,10 +417,14 @@ where
                 if host_catalog_in_world_state && host_snapshot.is_some() {
                     shadow_catalog.extend(self.providers.list_host_for_turn(host_query).await);
                 }
-                Some(
-                    self.shadow_selection
-                        .run(&input.user_input, &shadow_catalog),
-                )
+                let shadow_selected_entries =
+                    collect_explicit_skill_mentions(&input.user_input, &shadow_catalog);
+                Some(self.shadow_selection.run(
+                    &input.user_input,
+                    &shadow_catalog,
+                    &shadow_selected_entries,
+                    host_snapshot.as_deref(),
+                ))
             } else {
                 None
             };

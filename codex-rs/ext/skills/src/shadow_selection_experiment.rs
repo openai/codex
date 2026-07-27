@@ -6,12 +6,15 @@ use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_core_skills::HostSkillsSnapshot;
 use codex_otel::MetricsClient;
 use codex_protocol::user_input::UserInput;
 
 use crate::catalog::SkillCatalog;
+use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::dynamic_skill_selector::CharacterNgramSkillSelector;
+use crate::dynamic_skill_selector::CharacterRoutingCardSkillSelector;
 use crate::dynamic_skill_selector::CheapSkillSelection;
 use crate::dynamic_skill_selector::CheapSkillSelector;
 use crate::dynamic_skill_selector::FieldedBm25SkillSelector;
@@ -56,9 +59,15 @@ impl ShadowSelectionExperiment {
         &self,
         inputs: &[UserInput],
         catalog: &SkillCatalog,
+        explicitly_selected: &[SkillCatalogEntry],
+        host_snapshot: Option<&HostSkillsSnapshot>,
     ) -> ShadowSelectionTurnState {
         let query = build_shadow_query(inputs);
         let query_script = query_script_tag(&query.text);
+        let explicitly_selected_skill_resources = explicitly_selected
+            .iter()
+            .map(|entry| normalize_skill_resource(entry.main_prompt.as_str()))
+            .collect::<HashSet<_>>();
         let documents = catalog
             .entries
             .iter()
@@ -71,6 +80,8 @@ impl ShadowSelectionExperiment {
                         &entry.authority.kind,
                         SkillSourceKind::Host | SkillSourceKind::Orchestrator
                     )
+                    && !explicitly_selected_skill_resources
+                        .contains(&normalize_skill_resource(entry.main_prompt.as_str()))
             })
             .map(|(id, entry)| SkillSelectionDocument {
                 id,
@@ -84,9 +95,23 @@ impl ShadowSelectionExperiment {
             .iter()
             .map(|document| document.id)
             .collect::<HashSet<_>>();
-        let mut ranked_selections = Vec::with_capacity(self.selectors.len());
+        let eligible_skill_resources = documents
+            .iter()
+            .map(|document| {
+                normalize_skill_resource(catalog.entries[document.id].main_prompt.as_str())
+            })
+            .collect::<HashSet<_>>();
+        let routing_selector = CharacterRoutingCardSkillSelector::new(catalog, host_snapshot);
+        let mut ranked_selections = Vec::with_capacity(self.selectors.len() + 1);
 
-        for selector in &self.selectors {
+        for selector in self
+            .selectors
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .chain(std::iter::once(
+                &routing_selector as &dyn CheapSkillSelector,
+            ))
+        {
             let start = Instant::now();
             let selection =
                 selector.select(&query.text, &documents, /*limit*/ MAX_SHADOW_RESULTS);
@@ -123,12 +148,16 @@ impl ShadowSelectionExperiment {
         ShadowSelectionTurnState {
             ranked_selections,
             query_script,
+            eligible_skill_resources,
             seen_skill_resources: Mutex::new(HashSet::new()),
         }
     }
 
     pub(crate) fn record_invocation(&self, state: &ShadowSelectionTurnState, skill_resource: &str) {
         let skill_resource = normalize_skill_resource(skill_resource);
+        if !state.eligible_skill_resources.contains(&skill_resource) {
+            return;
+        }
         if !state
             .seen_skill_resources
             .lock()
@@ -208,6 +237,7 @@ impl ShadowSelectionExperiment {
 pub(crate) struct ShadowSelectionTurnState {
     ranked_selections: Vec<RankedSelection>,
     query_script: &'static str,
+    eligible_skill_resources: HashSet<String>,
     seen_skill_resources: Mutex<HashSet<String>>,
 }
 
