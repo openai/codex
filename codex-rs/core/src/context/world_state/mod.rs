@@ -311,8 +311,14 @@ impl WorldState {
             !self.sections.contains_key(id),
             "duplicate world-state section ID: {id}"
         );
-        self.sections
-            .insert(id, Box::new(ExtensionWorldStateSection(section)));
+        let section = Box::new(ExtensionWorldStateSection(section));
+        if id == "host_skills"
+            && let Some(index) = self.sections.get_index_of(PermissionsState::ID)
+        {
+            self.sections.shift_insert(index, id, section);
+        } else {
+            self.sections.insert(id, section);
+        }
     }
 
     pub(crate) fn snapshot(&self) -> WorldStateSnapshot {
