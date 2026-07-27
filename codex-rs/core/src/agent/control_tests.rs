@@ -1209,6 +1209,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
     parent_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Parent root guidance.".to_string());
     parent_config.multi_agent_v2.subagent_usage_hint_text =
@@ -1266,6 +1267,20 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     content: vec![ContentItem::InputText {
                         text: "Parent subagent guidance.".to_string(),
                     }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![
+                        ContentItem::InputText {
+                            text: "Parent developer instructions.".to_string(),
+                        },
+                        ContentItem::InputText {
+                            text: "Preserved developer context.".to_string(),
+                        },
+                    ],
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
                 },
@@ -1333,8 +1348,24 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let mut expected_final_answer =
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer));
     expected_final_answer.set_turn_id_if_missing(&turn_context.sub_id);
+    let mut expected_developer_message = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "Parent developer instructions.".to_string(),
+            },
+            ContentItem::InputText {
+                text: "Preserved developer context.".to_string(),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    expected_developer_message.set_turn_id_if_missing(&turn_context.sub_id);
     let expected_history = [
         expected_parent_seed,
+        expected_developer_message,
         expected_final_answer,
         ResponseItem::Message {
             id: None,
@@ -1393,6 +1424,17 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         !history_contains_text(no_hint_history.raw_items(), "Child subagent guidance."),
         "full-history forked child should not add empty subagent guidance"
     );
+    assert!(
+        history_contains_text(
+            no_hint_history.raw_items(),
+            "Parent developer instructions."
+        ),
+        "full-history forked child should inherit parent developer instructions"
+    );
+    assert!(
+        history_contains_text(no_hint_history.raw_items(), "Preserved developer context."),
+        "full-history forked child should preserve unrelated developer fragments"
+    );
 
     let expected = (
         child_thread_id,
@@ -1435,6 +1477,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
     parent_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Parent root guidance.".to_string());
     parent_config.multi_agent_v2.subagent_usage_hint_text =
@@ -1470,6 +1513,20 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
             content: vec![ContentItem::InputText {
                 text: "Parent root guidance.".to_string(),
             }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "Parent developer instructions.".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "Preserved compacted developer context.".to_string(),
+                },
+            ],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1531,6 +1588,17 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
     assert!(
         !history_contains_text(history.raw_items(), "Parent root guidance."),
         "forked child history should strip stale parent hints from compacted replacement history"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "Parent developer instructions."),
+        "forked child history should inherit compacted parent developer instructions"
+    );
+    assert!(
+        history_contains_text(
+            history.raw_items(),
+            "Preserved compacted developer context."
+        ),
+        "forked child history should preserve unrelated compacted developer fragments"
     );
     assert!(
         history_contains_text(history.raw_items(), "Child subagent guidance."),
@@ -1861,6 +1929,7 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
     parent_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Parent root guidance.".to_string());
     let mut child_config = harness.config.clone();
@@ -1890,6 +1959,20 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
                     content: vec![ContentItem::InputText {
                         text: "Parent root guidance.".to_string(),
                     }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![
+                        ContentItem::InputText {
+                            text: "Parent developer instructions.".to_string(),
+                        },
+                        ContentItem::InputText {
+                            text: "Preserved bounded developer context.".to_string(),
+                        },
+                    ],
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
                 },
@@ -1939,6 +2022,14 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
     assert!(
         !history_contains_text(history.raw_items(), "Parent root guidance."),
         "bounded fork should strip stale parent root hints before the child rebuilds startup context"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "Parent developer instructions."),
+        "bounded fork should inherit parent developer instructions from retained turns"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "Preserved bounded developer context."),
+        "bounded fork should preserve unrelated developer fragments"
     );
 
     let _ = harness
