@@ -2,7 +2,9 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_features::Feature;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -388,15 +390,17 @@ async fn serve_exec_with_pushed_events(
     }
 }
 
-#[test_case(PushedExecScenario::Complete, false ; "complete_event_stream")]
-#[test_case(PushedExecScenario::DirectDenied, false ; "direct_sandbox_denial")]
-#[test_case(PushedExecScenario::LegacyExit, false ; "legacy_exit_metadata")]
-#[test_case(PushedExecScenario::ReplayGap, false ; "truncated_event_replay")]
-#[test_case(PushedExecScenario::Complete, true ; "managed_network_uses_executor_proxy_launch")]
+#[test_case(PushedExecScenario::Complete, false, false ; "complete_event_stream")]
+#[test_case(PushedExecScenario::DirectDenied, false, false ; "direct_sandbox_denial")]
+#[test_case(PushedExecScenario::LegacyExit, false, false ; "legacy_exit_metadata")]
+#[test_case(PushedExecScenario::ReplayGap, false, false ; "truncated_event_replay")]
+#[test_case(PushedExecScenario::Complete, true, true ; "managed_network_uses_executor_proxy_launch")]
+#[test_case(PushedExecScenario::Complete, true, false ; "strict_managed_allowlist_omits_policy_callbacks")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_consumes_pushed_remote_process_events(
     scenario: PushedExecScenario,
     managed_network: bool,
+    policy_callbacks: bool,
 ) -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
@@ -428,8 +432,23 @@ async fn exec_command_consumes_pushed_remote_process_events(
     let exec_server = tokio::spawn(serve_exec_with_pushed_events(listener, scenario));
     let mut builder = test_codex().with_exec_server_url(exec_server_url);
     if managed_network {
+        let cloud_config_bundle = if policy_callbacks {
+            managed_network_requirements_loader()
+        } else {
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[experimental_network]
+enabled = true
+allow_local_binding = true
+managed_allowed_domains_only = true
+
+[experimental_network.domains]
+"allowed.example.com" = "allow"
+"#,
+            )
+        };
         builder = builder
-            .with_cloud_config_bundle(managed_network_requirements_loader())
+            .with_cloud_config_bundle(cloud_config_bundle)
             .with_pre_build_hook(|home| {
                 fs::write(
                     home.join("config.toml"),
@@ -442,14 +461,30 @@ async fn exec_command_consumes_pushed_remote_process_events(
 enabled = true
 mode = "full"
 allow_local_binding = true
+
+[features]
+hooks = true
+
+[hooks]
+
+[[hooks.PermissionRequest]]
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "unused"
+timeout = 900
 "#,
                 )
                 .expect("write managed-network test config");
             });
     }
-    let mut builder = builder.with_config(|config| {
+    let mut builder = builder.with_config(move |config| {
         config.project_doc_max_bytes = 0;
         config.use_experimental_unified_exec_tool = true;
+        if managed_network {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config.bypass_hook_trust = true;
+        }
         config
             .features
             .enable(Feature::UnifiedExec)
@@ -476,7 +511,11 @@ allow_local_binding = true
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                approval_policy: Some(AskForApproval::Never),
+                approval_policy: Some(if managed_network {
+                    AskForApproval::OnRequest
+                } else {
+                    AskForApproval::Never
+                }),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
@@ -522,6 +561,10 @@ allow_local_binding = true
         assert_eq!(params["env"]["HTTP_PROXY"], Value::Null);
         assert_eq!(params["networkProxy"]["proxy"]["enabled"], true);
         assert_eq!(params["networkProxy"]["proxy"]["mode"], "full");
+        assert_eq!(
+            params["networkProxy"]["policyDecisionTimeoutMs"].as_u64(),
+            policy_callbacks.then_some(1_000_000)
+        );
         assert_eq!(params["networkProxy"]["environmentId"], "remote");
         assert!(params["networkProxy"]["executionId"].as_str().is_some());
         timeout(Duration::from_secs(5), async {

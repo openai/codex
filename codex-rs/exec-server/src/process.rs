@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
+use codex_network_proxy::NetworkPolicyDecider;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 
@@ -202,6 +203,19 @@ pub type ExecProcessFuture<'a, T> =
 
 pub trait ExecBackend: Send + Sync {
     fn start(&self, params: ExecParams) -> ExecBackendFuture<'_>;
+
+    /// Starts a process with an authoritative controller-side policy decider.
+    fn start_with_network_policy_decider(
+        &self,
+        _params: ExecParams,
+        _decider: Arc<dyn NetworkPolicyDecider>,
+    ) -> ExecBackendFuture<'_> {
+        Box::pin(async {
+            Err(ExecServerError::Protocol(
+                "exec backend does not support remote network policy decisions".to_string(),
+            ))
+        })
+    }
 }
 
 pub type ExecBackendFuture<'a> =

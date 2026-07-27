@@ -1,5 +1,6 @@
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
+use std::time::Duration;
 use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
@@ -127,6 +128,13 @@ impl Hooks {
         request: &PermissionRequestRequest,
     ) -> Vec<codex_protocol::protocol::HookRunSummary> {
         self.engine.preview_permission_request(request)
+    }
+
+    /// Maximum configured timeout among PermissionRequest hooks.
+    ///
+    /// Matching handlers run concurrently, so their aggregate timeout is bounded by this maximum.
+    pub fn max_permission_request_timeout(&self) -> Duration {
+        self.engine.max_permission_request_timeout()
     }
 
     pub fn preview_post_tool_use(

@@ -34,6 +34,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -163,6 +164,17 @@ impl ClaudeHooksEngine {
         request: &PermissionRequestRequest,
     ) -> Vec<HookRunSummary> {
         crate::events::permission_request::preview(&self.handlers, request)
+    }
+
+    pub(crate) fn max_permission_request_timeout(&self) -> Duration {
+        Duration::from_secs(
+            self.handlers
+                .iter()
+                .filter(|handler| handler.event_name == HookEventName::PermissionRequest)
+                .map(|handler| handler.timeout_sec)
+                .max()
+                .unwrap_or_default(),
+        )
     }
 
     pub(crate) fn preview_post_tool_use(

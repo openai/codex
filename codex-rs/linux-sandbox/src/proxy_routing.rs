@@ -13,6 +13,7 @@ use std::io::Read;
 use std::io::Write;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::net::Shutdown;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -685,8 +686,13 @@ fn harden_bridge_process() -> io::Result<()> {
 fn proxy_bidirectional(mut tcp_stream: TcpStream, mut unix_stream: UnixStream) -> io::Result<()> {
     let mut tcp_reader = tcp_stream.try_clone()?;
     let mut unix_writer = unix_stream.try_clone()?;
-    let tcp_to_unix = std::thread::spawn(move || std::io::copy(&mut tcp_reader, &mut unix_writer));
+    let tcp_to_unix = std::thread::spawn(move || {
+        let result = std::io::copy(&mut tcp_reader, &mut unix_writer);
+        let _ = unix_writer.shutdown(Shutdown::Write);
+        result
+    });
     let unix_to_tcp = std::io::copy(&mut unix_stream, &mut tcp_stream);
+    let _ = tcp_stream.shutdown(Shutdown::Write);
     let tcp_to_unix = tcp_to_unix
         .join()
         .map_err(|_| io::Error::other("bridge thread panicked"))?;

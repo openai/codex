@@ -4,6 +4,8 @@ pub(super) struct ExecutionScope {
     pub(super) environment_id: String,
     pub(super) execution_id: String,
     pub(super) attribution_token: String,
+    // Dropping the execution scope closes this channel and cancels remote reviews.
+    pub(super) lifetime_tx: tokio::sync::watch::Sender<()>,
     state: Arc<NetworkProxyState>,
 }
 
@@ -28,11 +30,13 @@ impl NetworkProxy {
         self.state
             .register_execution(&attribution_token, environment_id, execution_id);
 
+        let (lifetime_tx, _) = tokio::sync::watch::channel(());
         let mut proxy = self.clone();
         proxy.execution_scope = Some(Arc::new(ExecutionScope {
             environment_id: environment_id.to_string(),
             execution_id: execution_id.to_string(),
             attribution_token,
+            lifetime_tx,
             state: Arc::clone(&self.state),
         }));
         Ok(proxy)

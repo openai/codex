@@ -127,22 +127,23 @@ async fn abandoned_process_start_unregisters_and_cleans_up() {
     let start_client = client.clone();
     let start_process_id = process_id.clone();
     let start = tokio::spawn(async move {
+        let params = ExecParams {
+            process_id: start_process_id,
+            argv: vec!["true".to_string()],
+            cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                .expect("cwd URI"),
+            env_policy: None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
+            managed_network: None,
+            network_proxy: None,
+        };
         start_client
-            .start_process(ExecParams {
-                process_id: start_process_id,
-                argv: vec!["true".to_string()],
-                cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
-                    .expect("cwd URI"),
-                env_policy: None,
-                env: Default::default(),
-                tty: false,
-                pipe_stdin: false,
-                arg0: None,
-                sandbox: None,
-                enforce_managed_network: false,
-                managed_network: None,
-                network_proxy: None,
-            })
+            .start_process(params, /*network_policy_decider*/ None)
             .await
     });
     start_seen_rx.await.expect("start should be observed");
