@@ -39,6 +39,8 @@ use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProces
 use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tracing::debug;
 use tracing_subscriber::Layer;
@@ -58,12 +60,17 @@ pub struct OtelProvider {
     pub tracer_provider: Option<SdkTracerProvider>,
     pub tracer: Option<Tracer>,
     pub metrics: Option<MetricsClient>,
+    shutdown_started: AtomicBool,
 }
 
 impl OtelProvider {
+    /// Flushes and shuts down configured exporters at most once.
     pub fn shutdown(&self) {
+        if self.shutdown_started.swap(/*val*/ true, Ordering::AcqRel) {
+            return;
+        }
+
         if let Some(tracer_provider) = &self.tracer_provider {
-            let _ = tracer_provider.force_flush();
             let _ = tracer_provider.shutdown();
         }
         if let Some(metrics) = &self.metrics {
@@ -150,6 +157,7 @@ impl OtelProvider {
             tracer_provider,
             tracer,
             metrics,
+            shutdown_started: AtomicBool::default(),
         }))
     }
 
@@ -196,16 +204,7 @@ impl OtelProvider {
 
 impl Drop for OtelProvider {
     fn drop(&mut self) {
-        if let Some(tracer_provider) = &self.tracer_provider {
-            let _ = tracer_provider.force_flush();
-            let _ = tracer_provider.shutdown();
-        }
-        if let Some(metrics) = &self.metrics {
-            let _ = metrics.shutdown();
-        }
-        if let Some(logger) = &self.logger {
-            let _ = logger.shutdown();
-        }
+        self.shutdown();
     }
 }
 
@@ -455,6 +454,10 @@ fn build_tracer_provider(
         .with_span_processor(processor)
         .build())
 }
+
+#[cfg(test)]
+#[path = "provider_shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {
