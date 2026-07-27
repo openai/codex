@@ -58,8 +58,38 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     merge_toml_values_at_path(base, overlay, &mut Vec::new());
 }
 
+pub(crate) fn is_multi_agent_v2_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
+    match path {
+        [features, feature] => {
+            features.as_ref() == "features" && feature.as_ref() == "multi_agent_v2"
+        }
+        [profiles, _, features, feature] => {
+            profiles.as_ref() == "profiles"
+                && features.as_ref() == "features"
+                && feature.as_ref() == "multi_agent_v2"
+        }
+        _ => false,
+    }
+}
+
 fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
     replace_shell_environment_policy_filter_representation(base, overlay, path);
+
+    if is_multi_agent_v2_feature_path(path) {
+        if let TomlValue::Boolean(enabled) = base
+            && overlay.is_table()
+        {
+            *base = TomlValue::Table(toml::map::Map::from_iter([(
+                "enabled".to_string(),
+                TomlValue::Boolean(*enabled),
+            )]));
+        } else if let TomlValue::Table(table) = base
+            && let TomlValue::Boolean(enabled) = overlay
+        {
+            table.insert("enabled".to_string(), TomlValue::Boolean(*enabled));
+            return;
+        }
+    }
 
     if let TomlValue::Table(overlay_table) = overlay
         && let TomlValue::Table(base_table) = base

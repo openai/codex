@@ -1,4 +1,5 @@
 use crate::ConfigLayerMetadata;
+use crate::merge::is_multi_agent_v2_feature_path;
 use serde_json::Value as JsonValue;
 use sha2::Digest;
 use sha2::Sha256;
@@ -28,6 +29,12 @@ pub(super) fn record_origins(
         }
         _ => {
             if !path.is_empty() {
+                if matches!(value, TomlValue::Boolean(_)) && is_multi_agent_v2_feature_path(path) {
+                    path.push("enabled".to_string());
+                    origins.insert(path.join("."), meta.clone());
+                    path.pop();
+                    return;
+                }
                 origins.insert(path.join("."), meta.clone());
             }
         }
