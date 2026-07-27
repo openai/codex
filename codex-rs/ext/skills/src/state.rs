@@ -4,6 +4,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use codex_extension_api::ExtensionMetrics;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -29,6 +30,7 @@ const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) struct SkillsSessionState {
     pub(crate) mcp_resources: Option<Arc<McpResourceClient>>,
+    pub(crate) extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
 pub(crate) struct SkillsThreadState {

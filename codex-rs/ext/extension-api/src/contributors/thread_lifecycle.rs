@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::ExtensionData;
+use crate::ExtensionMetrics;
 use codex_mcp::McpResourceClient;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -25,6 +26,8 @@ pub struct ThreadStartInput<'a, C> {
     pub environments: &'a [TurnEnvironmentSelection],
     /// MCP resource access supplied by the host for this session.
     pub mcp_resource_client: Option<Arc<McpResourceClient>>,
+    /// Session-attributed metrics supplied by the host.
+    pub extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.

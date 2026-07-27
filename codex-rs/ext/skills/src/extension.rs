@@ -11,6 +11,7 @@ use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
 use codex_extension_api::PromptFragment;
@@ -49,6 +50,8 @@ use crate::render::capped_skill_metadata_budget;
 use crate::render::render_available_skills;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
+use crate::render_observability::CatalogSurface;
+use crate::render_observability::record_catalog_render;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
@@ -76,6 +79,8 @@ struct RenderedCatalog {
 }
 
 fn render_catalog(
+    extension_metrics: Option<&dyn ExtensionMetrics>,
+    catalog_surface: CatalogSurface,
     catalog: &SkillCatalog,
     include_skills_usage_instructions: bool,
     policy: SkillCatalogRenderPolicy,
@@ -84,6 +89,7 @@ fn render_catalog(
     let Some(rendered) = render_available_skills(catalog, policy, budget) else {
         return RenderedCatalog::default();
     };
+    record_catalog_render(extension_metrics, catalog_surface, budget, &rendered.report);
     let warning_message = rendered.report.warning_message();
     let fragment = rendered.into_fragment(include_skills_usage_instructions);
     RenderedCatalog {
@@ -100,6 +106,7 @@ where
         Box::pin(async move {
             input.session_store.insert(SkillsSessionState {
                 mcp_resources: input.mcp_resource_client.clone(),
+                extension_metrics: input.extension_metrics.clone(),
             });
             let orchestrator_skills_available = !input
                 .environments
@@ -178,7 +185,12 @@ where
             let include_usage = thread_store
                 .get::<ModelInfo>()
                 .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+            let extension_metrics = session_store
+                .get::<SkillsSessionState>()
+                .and_then(|state| state.extension_metrics.clone());
             let rendered = render_catalog(
+                extension_metrics.as_deref(),
+                CatalogSurface::ThreadContext,
                 &catalog,
                 include_usage,
                 SkillCatalogRenderPolicy::ExtensionCompatible,
@@ -234,8 +246,11 @@ where
                 .as_deref()
                 .and_then(ModelInfo::resolved_context_window);
             let metadata_budget = capped_skill_metadata_budget(context_window);
+            let extension_metrics = input.extension_metrics.clone();
             let rendered = if config.include_instructions {
                 render_catalog(
+                    extension_metrics.as_deref(),
+                    CatalogSurface::ExecutorWorldState,
                     &catalog,
                     include_usage,
                     SkillCatalogRenderPolicy::ExtensionCompatible,
@@ -266,6 +281,7 @@ where
                     config.include_instructions,
                     include_usage,
                     metadata_budget,
+                    extension_metrics,
                 ));
             }
             sections
@@ -346,6 +362,7 @@ where
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
+        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
@@ -416,6 +433,8 @@ where
                     .and_then(ModelInfo::resolved_context_window);
                 let metadata_budget = capped_skill_metadata_budget(context_window);
                 let rendered = render_catalog(
+                    extension_metrics.as_deref(),
+                    CatalogSurface::TurnInput,
                     &turn_catalog,
                     include_usage,
                     SkillCatalogRenderPolicy::ExtensionCompatible,

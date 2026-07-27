@@ -373,8 +373,8 @@ impl SessionTelemetry {
         &'a self,
         tags: &'a [(&'a str, &'a str)],
     ) -> MetricsResult<Vec<(&'a str, &'a str)>> {
-        let mut merged = self.metadata_tag_refs()?;
-        merged.extend(tags.iter().copied());
+        let mut merged = tags.to_vec();
+        merged.extend(self.metadata_tag_refs()?);
         Ok(merged)
     }
 

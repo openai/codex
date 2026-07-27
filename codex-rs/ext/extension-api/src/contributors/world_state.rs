@@ -7,6 +7,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use serde_json::Value;
 
 use crate::ExtensionData;
+use crate::ExtensionMetrics;
 
 /// Host state available while an extension contributes one sampling step's World State.
 pub struct WorldStateContributionInput<'a> {
@@ -17,6 +18,8 @@ pub struct WorldStateContributionInput<'a> {
     pub ready_selected_capability_roots: &'a [SelectedCapabilityRoot],
     /// Executor-materialized capability files shared by all consumers in this exact step.
     pub executor_capability_discovery: Option<&'a ExecutorCapabilityDiscoverySnapshot>,
+    /// Metrics bound to the effective model for this turn.
+    pub extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     pub session_store: &'a ExtensionData,
     pub thread_store: &'a ExtensionData,
     pub turn_store: &'a ExtensionData,
