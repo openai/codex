@@ -1,9 +1,11 @@
 use crate::model::ExternalAgentSessionImportLimits;
 use crate::sessions::ExternalAgentSessionMigration;
+use crate::sessions::SessionRecordFormat;
 use crate::sessions::ledger::load_import_ledger;
 use crate::sessions::ledger::save_import_ledger;
 use crate::sessions::now_unix_seconds;
-use crate::sessions::records::summarize_session_with_cwd;
+use crate::sessions::records_cla;
+use crate::sessions::records_cur;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fs;
@@ -14,6 +16,7 @@ use std::path::PathBuf;
 pub(super) struct SessionFileCandidate {
     pub path: PathBuf,
     pub fallback_cwd: Option<PathBuf>,
+    pub record_format: SessionRecordFormat,
 }
 
 pub(super) fn detect_recent_sessions(
@@ -57,6 +60,7 @@ pub(super) fn detect_recent_sessions(
             Reverse(modified_at_nanos),
             candidate.path,
             candidate.fallback_cwd,
+            candidate.record_format,
         ));
         if recent.len() > limits.max_sessions {
             recent.pop();
@@ -66,7 +70,7 @@ pub(super) fn detect_recent_sessions(
     drop(source_states);
     let mut migrations = Vec::new();
     let mut ledger_changed = false;
-    for (modified_at, path, fallback_cwd) in recent.into_sorted_vec() {
+    for (modified_at, path, fallback_cwd, record_format) in recent.into_sorted_vec() {
         match ledger.refresh_current_source(&path, modified_at.0) {
             Ok(false) => {}
             Ok(true) => {
@@ -75,7 +79,13 @@ pub(super) fn detect_recent_sessions(
             }
             Err(_) => continue,
         }
-        let Ok(Some(summary)) = summarize_session_with_cwd(&path, fallback_cwd.as_deref()) else {
+        let summary = match record_format {
+            SessionRecordFormat::Cla => records_cla::summarize_session(&path),
+            SessionRecordFormat::Cur => {
+                records_cur::summarize_session(&path, fallback_cwd.as_deref())
+            }
+        };
+        let Ok(Some(summary)) = summary else {
             continue;
         };
         if require_existing_cwd && !summary.migration.cwd.is_dir() {

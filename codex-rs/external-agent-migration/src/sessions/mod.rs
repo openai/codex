@@ -2,7 +2,9 @@
 
 mod export;
 pub(crate) mod ledger;
-pub(crate) mod records;
+pub(crate) mod records_cla;
+mod records_common;
+pub(crate) mod records_cur;
 mod title;
 
 use codex_protocol::protocol::RolloutItem;
@@ -21,10 +23,29 @@ pub use ledger::ImportedConnectorCandidate;
 pub use ledger::has_current_session_been_imported;
 pub use ledger::read_imported_connector_candidates;
 pub use ledger::record_completed_session_imports;
-pub use records::SessionSummary;
-pub use records::summarize_session;
+pub use records_cla::summarize_session;
 
 const SESSION_TITLE_MAX_LEN: usize = 120;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SessionRecordFormat {
+    Cla,
+    Cur,
+}
+
+pub struct SessionSummary {
+    pub latest_timestamp: i64,
+    pub migration: ExternalAgentSessionMigration,
+}
+
+struct ParsedSessionImport {
+    cwd: Option<PathBuf>,
+    custom_title: Option<String>,
+    ai_title: Option<String>,
+    messages: Vec<ConversationMessage>,
+    content_sha256: String,
+    attributed_mcp_server_ids: BTreeSet<String>,
+}
 
 pub(crate) fn normalized_connector_display_name(name: Option<&str>) -> Option<String> {
     name.map(str::trim)
@@ -93,12 +114,12 @@ fn load_importable_session(
     metadata_mode: SessionMetadataMode,
 ) -> io::Result<Option<PendingSessionImport>> {
     let source_path = std::fs::canonicalize(path)?;
-    let fallback_cwd = match metadata_mode {
-        SessionMetadataMode::Embedded => None,
-        SessionMetadataMode::MigrationFallback => Some(fallback_cwd),
+    let (record_format, fallback_cwd) = match metadata_mode {
+        SessionMetadataMode::Embedded => (SessionRecordFormat::Cla, None),
+        SessionMetadataMode::MigrationFallback => (SessionRecordFormat::Cur, Some(fallback_cwd)),
     };
     let Some((imported_session, source_content_sha256, attributed_mcp_server_ids)) =
-        load_session_for_import_with_content_sha256(&source_path, fallback_cwd)?
+        load_session_for_import_with_content_sha256(&source_path, record_format, fallback_cwd)?
     else {
         return Ok(None);
     };

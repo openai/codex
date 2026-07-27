@@ -2,6 +2,7 @@ use super::common::SessionFileCandidate;
 use super::common::detect_recent_sessions;
 use crate::model::ExternalAgentSessionImportLimits;
 use crate::sessions::ExternalAgentSessionMigration;
+use crate::sessions::SessionRecordFormat;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -42,6 +43,7 @@ pub(crate) fn detect_recent_cur_sessions_with_limits(
             candidates.push(SessionFileCandidate {
                 path,
                 fallback_cwd: fallback_cwd.clone(),
+                record_format: SessionRecordFormat::Cur,
             });
         }
     }

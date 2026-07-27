@@ -279,7 +279,7 @@ async fn external_agent_config_secondary_source_imports_session_and_plugin_end_t
                 "message": {
                     "content": [{
                         "type": "text",
-                        "text": "<user_query>first request</user_query>"
+                        "text": "<cursor_commands>\n/verify\n</cursor_commands>\n<timestamp>2026-07-26T18:00:00Z</timestamp>\n<user_query>first request</user_query>"
                     }]
                 }
             })
