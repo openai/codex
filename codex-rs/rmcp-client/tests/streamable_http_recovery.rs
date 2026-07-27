@@ -18,7 +18,9 @@ use serde_json::Value;
 
 use streamable_http_test_support::arm_initialize_post_failure;
 use streamable_http_test_support::arm_initialize_post_json_rpc_failure;
+use streamable_http_test_support::arm_initialize_post_response;
 use streamable_http_test_support::arm_initialized_notification_post_json_rpc_failure;
+use streamable_http_test_support::arm_initialized_notification_post_response;
 use streamable_http_test_support::arm_session_post_failure;
 use streamable_http_test_support::arm_session_post_json_rpc_failure;
 use streamable_http_test_support::call_echo_tool;
@@ -144,6 +146,39 @@ async fn streamable_http_initialize_retries_json_rpc_transient_status() -> anyho
     let result = call_echo_tool(&client, "after-json-status-retry").await?;
 
     assert_eq!(result, expected_echo_result("after-json-status-retry"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_rejects_empty_ok_for_initialize_request() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+
+    arm_initialize_post_response(&base_url, /*status*/ 200, /*remaining*/ 10, "").await?;
+
+    let Err(_) = create_client(&base_url).await else {
+        anyhow::bail!("empty response unexpectedly accepted for initialize request");
+    };
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_accepts_empty_ok_for_initialized_notification() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+
+    arm_initialized_notification_post_response(
+        &base_url, /*status*/ 200, /*remaining*/ 10, "",
+    )
+    .await?;
+
+    let client = create_client(&base_url).await?;
+    let result = call_echo_tool(&client, "after-empty-notification-response").await?;
+
+    assert_eq!(
+        result,
+        expected_echo_result("after-empty-notification-response")
+    );
 
     Ok(())
 }
