@@ -10,7 +10,10 @@ use codex_core_plugins::store::PluginStore;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_plugin::PluginId;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -40,6 +43,7 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
@@ -308,6 +312,7 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
 
     let mut builder = test_codex()
         .with_home(Arc::clone(&codex_home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model("gpt-5.2");
     let test_codex = builder.build_with_auto_env(&server).await?;
     let codex = Arc::clone(&test_codex.codex);
@@ -431,6 +436,260 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         developer_text.contains("sample:sample-search: inspect sample data"),
         "expected namespaced plugin skill summary in developer message: {developer_messages:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_turns_route_curated_plugin_skills_after_auth_switch() -> Result<()> {
+    const CHATGPT_CURATED_PLUGIN_SKILL: &str = "chatgpt-plugin:chatgpt-skill";
+    const API_CURATED_PLUGIN_SKILL: &str = "api-plugin:api-skill";
+    const CURATED_PLUGIN_SKILLS: &[&str] =
+        &[CHATGPT_CURATED_PLUGIN_SKILL, API_CURATED_PLUGIN_SKILL];
+
+    #[derive(Clone, Copy)]
+    enum TargetAuth {
+        Chatgpt,
+        ApiKey,
+        BedrockApiKey,
+        NoCodexAuth,
+    }
+
+    #[derive(Clone, Copy)]
+    struct Fixture {
+        name: &'static str,
+        target_auth: TargetAuth,
+        target_model_provider_id: &'static str,
+        target_prompt: &'static str,
+        expected_target_loaded_plugin_skills: &'static [&'static str],
+        expected_target_skill_description: &'static str,
+    }
+
+    const FIXTURES: &[Fixture] = &[
+        Fixture {
+            name: "ChatGPT",
+            target_auth: TargetAuth::Chatgpt,
+            target_model_provider_id: OPENAI_PROVIDER_ID,
+            target_prompt: "chatgpt target turn",
+            expected_target_loaded_plugin_skills: &[CHATGPT_CURATED_PLUGIN_SKILL],
+            expected_target_skill_description: "chatgpt description",
+        },
+        Fixture {
+            name: "API key",
+            target_auth: TargetAuth::ApiKey,
+            target_model_provider_id: OPENAI_PROVIDER_ID,
+            target_prompt: "api key target turn",
+            expected_target_loaded_plugin_skills: &[API_CURATED_PLUGIN_SKILL],
+            expected_target_skill_description: "api description before",
+        },
+        Fixture {
+            name: "Bedrock API key",
+            target_auth: TargetAuth::BedrockApiKey,
+            target_model_provider_id: AMAZON_BEDROCK_PROVIDER_ID,
+            target_prompt: "bedrock key target turn",
+            expected_target_loaded_plugin_skills: &[API_CURATED_PLUGIN_SKILL],
+            expected_target_skill_description: "api description before",
+        },
+        Fixture {
+            name: "ambient Bedrock",
+            target_auth: TargetAuth::NoCodexAuth,
+            target_model_provider_id: AMAZON_BEDROCK_PROVIDER_ID,
+            target_prompt: "ambient bedrock target turn",
+            expected_target_loaded_plugin_skills: &[API_CURATED_PLUGIN_SKILL],
+            expected_target_skill_description: "api description before",
+        },
+    ];
+
+    async fn skills_for_agent_turn(
+        test_codex: &TestCodex,
+        response: &ResponseMock,
+        model_provider_id: &str,
+        prompt: &str,
+        expected_request_count: usize,
+    ) -> Result<String> {
+        let mut config = test_codex.config.clone();
+        config.model_provider_id = model_provider_id.to_string();
+        let thread = test_codex
+            .thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(config))
+            .await?
+            .thread;
+        thread
+            .submit(Op::UserInput {
+                items: vec![codex_protocol::user_input::UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
+        wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+        let requests = response.requests();
+        assert_eq!(requests.len(), expected_request_count);
+        Ok(requests
+            .last()
+            .expect("agent turn should send a request")
+            .message_input_text_groups("developer")
+            .into_iter()
+            .rev()
+            .find(|texts| texts.iter().any(|text| text.contains("## Skills")))
+            .expect("agent turn should include a skills developer message")
+            .join("\n"))
+    }
+
+    skip_if_no_network!(Ok(()));
+    let assert_loaded_plugin_skills =
+        |fixture_name: &str, phase: &str, skills: &str, expected: &[&str]| {
+            let loaded_plugin_skills = CURATED_PLUGIN_SKILLS
+                .iter()
+                .copied()
+                .filter(|plugin_skill| skills.contains(plugin_skill))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                loaded_plugin_skills.as_slice(),
+                expected,
+                "unexpected curated plugin skills for {fixture_name} during {phase}: {skills:?}"
+            );
+        };
+
+    for fixture in FIXTURES {
+        let server = start_mock_server().await;
+        let response = mount_sse_sequence(
+            &server,
+            vec![
+                sse(vec![
+                    ev_response_created("resp-initial"),
+                    ev_completed("resp-initial"),
+                ]),
+                sse(vec![
+                    ev_response_created("resp-target"),
+                    ev_completed("resp-target"),
+                ]),
+            ],
+        )
+        .await;
+
+        let codex_home = Arc::new(TempDir::new()?);
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"[features]
+plugins = true
+remote_plugin = false
+
+[plugins."chatgpt-plugin@openai-curated"]
+enabled = true
+
+[plugins."api-plugin@openai-api-curated"]
+enabled = true
+"#,
+        )?;
+        for (marketplace_name, plugin_name, skill_name, description) in [
+            (
+                "openai-curated",
+                "chatgpt-plugin",
+                "chatgpt-skill",
+                "chatgpt description",
+            ),
+            (
+                "openai-api-curated",
+                "api-plugin",
+                "api-skill",
+                "api description before",
+            ),
+        ] {
+            let plugin_root = codex_home
+                .path()
+                .join("plugins/cache")
+                .join(marketplace_name)
+                .join(plugin_name)
+                .join("local");
+            std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+            std::fs::write(
+                plugin_root.join(".codex-plugin/plugin.json"),
+                format!(r#"{{"name":"{plugin_name}","description":"{plugin_name}"}}"#),
+            )?;
+            let skill_dir = plugin_root.join("skills").join(skill_name);
+            std::fs::create_dir_all(&skill_dir)?;
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\ndescription: {description}\n---\n\n# body\n"),
+            )?;
+        }
+
+        let mut builder = test_codex()
+            .with_home(Arc::clone(&codex_home))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let test_codex = builder.build_with_auto_env(&server).await?;
+        let plugins_manager = test_codex.thread_manager.plugins_manager();
+        let skills_service = test_codex.thread_manager.skills_service();
+
+        let initial_skills = skills_for_agent_turn(
+            &test_codex,
+            &response,
+            OPENAI_PROVIDER_ID,
+            "initial chatgpt turn",
+            /*expected_request_count*/ 1,
+        )
+        .await?;
+        assert_loaded_plugin_skills(
+            fixture.name,
+            "initial ChatGPT turn",
+            &initial_skills,
+            &[CHATGPT_CURATED_PLUGIN_SKILL],
+        );
+        assert!(initial_skills.contains("chatgpt description"));
+
+        std::fs::write(
+            codex_home.path().join(
+                "plugins/cache/openai-api-curated/api-plugin/local/skills/api-skill/SKILL.md",
+            ),
+            "---\ndescription: api description after\n---\n\n# body\n",
+        )?;
+
+        match fixture.target_auth {
+            TargetAuth::Chatgpt => {}
+            TargetAuth::ApiKey => {
+                plugins_manager.set_auth_mode(Some(AuthMode::ApiKey));
+            }
+            TargetAuth::BedrockApiKey => {
+                plugins_manager.set_auth_mode(Some(AuthMode::BedrockApiKey));
+            }
+            TargetAuth::NoCodexAuth => {
+                test_codex.thread_manager.auth_manager().logout().await?;
+                assert_eq!(
+                    test_codex.thread_manager.auth_manager().get_api_auth_mode(),
+                    None
+                );
+                plugins_manager.set_auth_mode(/*auth_mode*/ None);
+            }
+        }
+        skills_service.clear_cache();
+        let target_skills = skills_for_agent_turn(
+            &test_codex,
+            &response,
+            fixture.target_model_provider_id,
+            fixture.target_prompt,
+            /*expected_request_count*/ 2,
+        )
+        .await?;
+        assert_loaded_plugin_skills(
+            fixture.name,
+            "target turn",
+            &target_skills,
+            fixture.expected_target_loaded_plugin_skills,
+        );
+        assert!(
+            target_skills.contains(fixture.expected_target_skill_description),
+            "expected {:?} in current skills: {skills:?}",
+            fixture.expected_target_skill_description,
+            skills = target_skills
+        );
+        assert!(!target_skills.contains("api description after"));
+    }
 
     Ok(())
 }

@@ -229,19 +229,29 @@ impl AccountRequestProcessor {
                     Arc::clone(thread_manager),
                     config_manager.clone(),
                 );
+                let plugins_config = config.plugins_config_input();
                 let refresh_thread_manager = Arc::clone(thread_manager);
                 let refresh_config_manager = config_manager.clone();
+                let on_effective_plugins_changed: Arc<
+                    dyn Fn(codex_core_plugins::EffectivePluginsChange) + Send + Sync,
+                > = Arc::new(move |_change| {
+                    Self::spawn_effective_plugins_changed_task(
+                        Arc::clone(&refresh_thread_manager),
+                        refresh_config_manager.clone(),
+                    );
+                });
+                thread_manager
+                    .plugins_manager()
+                    .maybe_start_curated_repo_sync_for_config(
+                        &plugins_config,
+                        Some(Arc::clone(&on_effective_plugins_changed)),
+                    );
                 thread_manager
                     .plugins_manager()
                     .maybe_start_remote_plugin_caches_refresh(
-                        &config.plugins_config_input(),
+                        &plugins_config,
                         auth,
-                        Some(Arc::new(move |_change| {
-                            Self::spawn_effective_plugins_changed_task(
-                                Arc::clone(&refresh_thread_manager),
-                                refresh_config_manager.clone(),
-                            );
-                        })),
+                        Some(on_effective_plugins_changed),
                     );
             }
             Err(err) => {

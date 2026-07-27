@@ -72,8 +72,8 @@ use super::exec_server_test_support::read_exec_server_json;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_COMPACT_LIMIT: i64 = 1024;
 const LARGE_OUTPUT_AUTO_COMPACT_LIMIT: i64 = 1_000_000;
-const TEST_SERVER_NAME: &str = "tool_server";
-const TEST_TOOL_NAME: &str = "echo_tool";
+pub(super) const TEST_SERVER_NAME: &str = "tool_server";
+pub(super) const TEST_TOOL_NAME: &str = "echo_tool";
 const LARGE_RESPONSE_MESSAGE: &str = "large";
 const ELICITATION_TRIGGER_MESSAGE: &str = "confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
@@ -708,7 +708,7 @@ impl ServerHandler for ToolAppsMcpServer {
     }
 }
 
-async fn start_mcp_server() -> Result<(String, JoinHandle<()>)> {
+pub(super) async fn start_mcp_server() -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let mcp_service = StreamableHttpService::new(

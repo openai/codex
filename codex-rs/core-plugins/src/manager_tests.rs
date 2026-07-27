@@ -138,6 +138,54 @@ fn plugins_manager_tracks_auth_mode() {
     assert_eq!(manager_with_auth.auth_mode(), Some(AuthMode::Chatgpt));
 }
 
+#[test]
+fn curated_repo_sync_stays_deferred_for_remote_chatgpt_catalog() {
+    CURATED_REPO_SYNC_STARTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    let tmp = TempDir::new().unwrap();
+    let config = PluginsConfigInput::new(
+        unrestricted_config_layer_stack(),
+        "openai".to_string(),
+        /*plugins_enabled*/ true,
+        /*remote_plugin_enabled*/ true,
+        "https://chatgpt.com".to_string(),
+        test_http_client_factory(),
+    );
+    let manager = Arc::new(PluginsManager::new_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    ));
+
+    manager.maybe_start_curated_repo_sync_for_config(
+        &config, /*on_effective_plugins_changed*/ None,
+    );
+
+    assert!(!CURATED_REPO_SYNC_STARTED.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn marketplace_source_refresh_notifies_only_after_installed_cache_changes() {
+    let tmp = TempDir::new().unwrap();
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let callback_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let callback_count_for_callback = Arc::clone(&callback_count);
+    let callback: EffectivePluginsChangedCallback = Arc::new(move |_change| {
+        callback_count_for_callback.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    manager.clear_caches_after_marketplace_source_refresh(
+        /*installed_plugin_cache_refreshed*/ false,
+        Some(&callback),
+    );
+    assert_eq!(callback_count.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+    manager.clear_caches_after_marketplace_source_refresh(
+        /*installed_plugin_cache_refreshed*/ true,
+        Some(&callback),
+    );
+    assert_eq!(callback_count.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
 #[tokio::test]
 async fn marketplace_policy_projection_disables_installed_plugin_and_invalidates_cache() {
     let codex_home = TempDir::new().expect("create Codex home");
@@ -805,6 +853,16 @@ fn write_cached_plugin(codex_home: &Path, marketplace_name: &str, plugin_name: &
     );
 }
 
+async fn loaded_plugin_names(manager: &PluginsManager, config: &PluginsConfigInput) -> Vec<String> {
+    manager
+        .plugins_for_config(config)
+        .await
+        .plugins()
+        .iter()
+        .map(|plugin| plugin.config_name.clone())
+        .collect()
+}
+
 #[tokio::test]
 async fn load_plugins_loads_default_skills_and_mcp_servers() {
     let codex_home = TempDir::new().unwrap();
@@ -1286,32 +1344,65 @@ enabled = true
 
 [plugins."calendar@openai-curated"]
 enabled = true
+
+[plugins."linear@openai-api-curated"]
+enabled = true
 "#,
     );
     write_cached_plugin(codex_home.path(), "openai-curated", "linear");
     write_cached_plugin(codex_home.path(), "openai-curated", "calendar");
+    write_cached_plugin(codex_home.path(), "openai-api-curated", "linear");
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
-    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
     manager.write_remote_installed_plugins_cache(vec![
         remote_installed_plugin("linear"),
         remote_installed_plugin("remote-only"),
     ]);
 
-    let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
-        outcome
-            .plugins()
-            .iter()
-            .map(|plugin| plugin.config_name.clone())
-            .collect::<Vec<_>>(),
+        loaded_plugin_names(&manager, &config).await,
         vec![
             "calendar@openai-curated".to_string(),
             "linear@openai-curated".to_string(),
             "remote-only@openai-curated-remote".to_string(),
         ]
+    );
+}
+
+#[tokio::test]
+async fn api_curated_plugin_does_not_suppress_remote_curated_conflict_for_chatgpt() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = false
+
+[plugins."linear@openai-api-curated"]
+enabled = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "openai-api-curated", "linear");
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("linear")]);
+
+    assert_eq!(
+        loaded_plugin_names(&manager, &config).await,
+        vec!["linear@openai-curated-remote".to_string()]
     );
 }
 
@@ -1350,15 +1441,9 @@ enabled = true
         remote_installed_plugin("remote-only"),
     ]);
 
-    let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
-        outcome
-            .plugins()
-            .iter()
-            .map(|plugin| plugin.config_name.clone())
-            .collect::<Vec<_>>(),
+        loaded_plugin_names(&manager, &config).await,
         vec![
-            "linear@openai-api-curated".to_string(),
             "linear@openai-curated-remote".to_string(),
             "remote-only@openai-curated-remote".to_string(),
         ]
@@ -1366,7 +1451,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn remote_plugin_feature_keeps_local_curated_without_codex_backend() {
+async fn non_chatgpt_auth_rejects_cached_remote_curated_plugins_after_auth_switch() {
     let codex_home = TempDir::new().unwrap();
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
@@ -1382,26 +1467,46 @@ enabled = true
     );
     write_cached_plugin(codex_home.path(), "openai-curated", "linear");
     write_cached_plugin(codex_home.path(), "openai-api-curated", "linear");
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
 
-    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let mut config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new_with_options(
         codex_home.path().to_path_buf(),
         Some(Product::Codex),
-        Some(AuthMode::ApiKey),
+        Some(AuthMode::Chatgpt),
+    );
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("remote-only")]);
+    assert_eq!(
+        loaded_plugin_names(&manager, &config).await,
+        vec!["remote-only@openai-curated-remote".to_string()]
     );
 
-    let outcome = manager.plugins_for_config(&config).await;
-
+    manager.set_auth_mode(/*auth_mode*/ None);
     assert_eq!(
-        outcome
-            .plugins()
-            .iter()
-            .map(|plugin| plugin.config_name.clone())
-            .collect::<Vec<_>>(),
-        vec![
-            "linear@openai-api-curated".to_string(),
-            "linear@openai-curated".to_string(),
-        ]
+        loaded_plugin_names(&manager, &config).await,
+        vec!["linear@openai-curated".to_string()]
+    );
+
+    for auth_mode in [AuthMode::ApiKey, AuthMode::BedrockApiKey] {
+        manager.set_auth_mode(Some(auth_mode));
+
+        assert_eq!(
+            loaded_plugin_names(&manager, &config).await,
+            vec!["linear@openai-api-curated".to_string()]
+        );
+    }
+
+    manager.set_auth_mode(/*auth_mode*/ None);
+    config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+    assert_eq!(
+        loaded_plugin_names(&manager, &config).await,
+        vec!["linear@openai-api-curated".to_string()]
+    );
+
+    manager.set_auth_mode(Some(AuthMode::Chatgpt));
+    assert_eq!(
+        loaded_plugin_names(&manager, &config).await,
+        vec!["remote-only@openai-curated-remote".to_string()]
     );
 }
 
@@ -2715,7 +2820,11 @@ enabled = true
             .write_remote_plugin_id(&plugin_id, "plugins~Plugin_persisted")
             .expect("persist remote plugin id");
         let config = load_config(codex_home.path(), codex_home.path()).await;
-        let manager = PluginsManager::new(codex_home.path().to_path_buf());
+        let manager = PluginsManager::new_with_options(
+            codex_home.path().to_path_buf(),
+            Some(Product::Codex),
+            Some(AuthMode::Chatgpt),
+        );
         if let Some(installed_plugins) = installed_plugins {
             manager.write_remote_installed_plugins_cache(installed_plugins);
         }
@@ -4528,6 +4637,42 @@ plugins = true
 }
 
 #[tokio::test]
+async fn list_marketplaces_uses_chatgpt_curated_manifest_for_bedrock_with_chatgpt_auth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"model_provider = "amazon-bedrock"
+
+[features]
+plugins = true
+"#,
+    );
+    write_openai_curated_marketplace(&curated_root, &["chatgpt-plugin"]);
+    write_openai_api_curated_marketplace(&curated_root, &["api-plugin"]);
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    manager.set_auth_mode(Some(AuthMode::Chatgpt));
+    let marketplaces = manager
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+        .unwrap()
+        .marketplaces;
+
+    assert!(
+        marketplaces
+            .iter()
+            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+    );
+    assert!(
+        marketplaces
+            .iter()
+            .all(|marketplace| marketplace.name != OPENAI_API_CURATED_MARKETPLACE_NAME)
+    );
+}
+
+#[tokio::test]
 async fn list_marketplaces_skips_missing_api_curated_manifest() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
@@ -6156,6 +6301,97 @@ async fn plugin_hooks_for_layer_stack_loads_configured_plugin_hooks() {
         "hooks/hooks.json"
     );
     assert_eq!(outcome.hook_load_warnings, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn plugin_hooks_for_layer_stack_follow_auth_mode_and_provider() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"model_provider = "amazon-bedrock"
+
+[features]
+plugins = true
+remote_plugin = false
+
+[plugins."linear@openai-curated"]
+enabled = true
+
+[plugins."linear@openai-api-curated"]
+enabled = true
+"#,
+    );
+    for marketplace_name in [
+        OPENAI_CURATED_MARKETPLACE_NAME,
+        OPENAI_API_CURATED_MARKETPLACE_NAME,
+    ] {
+        write_cached_plugin(codex_home.path(), marketplace_name, "linear");
+        write_file(
+            &codex_home
+                .path()
+                .join("plugins/cache")
+                .join(marketplace_name)
+                .join("linear/local/hooks/hooks.json"),
+            r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+        );
+    }
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+
+    let chatgpt_hooks = manager
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
+        .await;
+    assert_eq!(
+        chatgpt_hooks
+            .hook_sources
+            .iter()
+            .map(|source| source.plugin_id.as_key())
+            .collect::<Vec<_>>(),
+        vec!["linear@openai-curated"]
+    );
+
+    assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    let api_hooks = manager
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
+        .await;
+    assert_eq!(
+        api_hooks
+            .hook_sources
+            .iter()
+            .map(|source| source.plugin_id.as_key())
+            .collect::<Vec<_>>(),
+        vec!["linear@openai-api-curated"]
+    );
+
+    assert!(manager.set_auth_mode(/*auth_mode*/ None));
+    let bedrock_hooks = manager
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
+        .await;
+    assert_eq!(
+        bedrock_hooks
+            .hook_sources
+            .iter()
+            .map(|source| source.plugin_id.as_key())
+            .collect::<Vec<_>>(),
+        vec!["linear@openai-api-curated"]
+    );
 }
 
 #[test]

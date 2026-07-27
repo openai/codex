@@ -9,6 +9,7 @@ use anyhow::Result;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
+use codex_login::CODEX_API_KEY_ENV_VAR;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
@@ -53,6 +54,58 @@ fn list_shows_empty_state() -> Result<()> {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("No MCP servers configured yet."));
+
+    Ok(())
+}
+
+#[test]
+fn api_key_auth_exposes_api_curated_plugin_mcp_servers() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+remote_plugin = false
+
+[plugins."api-docs@openai-api-curated"]
+enabled = true
+"#,
+    )?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache/openai-api-curated/api-docs/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"api-docs","version":"local"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "api-docs": {
+      "type": "stdio",
+      "command": "api-docs-mcp"
+    }
+  }
+}"#,
+    )?;
+
+    let mut list_cmd = codex_command(codex_home.path())?;
+    list_cmd
+        .env(CODEX_API_KEY_ENV_VAR, "sk-test")
+        .args(["mcp", "list", "--json"])
+        .assert()
+        .success()
+        .stdout(contains(r#""name": "api-docs""#));
+
+    let mut get_cmd = codex_command(codex_home.path())?;
+    get_cmd
+        .env(CODEX_API_KEY_ENV_VAR, "sk-test")
+        .args(["mcp", "get", "api-docs", "--json"])
+        .assert()
+        .success()
+        .stdout(contains(r#""name": "api-docs""#));
 
     Ok(())
 }
