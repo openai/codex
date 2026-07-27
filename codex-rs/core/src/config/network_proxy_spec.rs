@@ -97,7 +97,7 @@ impl NetworkProxySpec {
         self.config.allow_local_binding
     }
 
-    pub(crate) fn from_config_and_constraints(
+    pub fn from_config_and_constraints(
         config: NetworkProxyConfig,
         requirements: Option<NetworkConstraints>,
         permission_profile: &PermissionProfile,
