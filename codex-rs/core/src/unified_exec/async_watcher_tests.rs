@@ -40,6 +40,8 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
         terminator: None,
         writer_handle: None,
         resizer: None,
+        #[cfg(windows)]
+        tty: false,
     });
     let process = Arc::new(
         UnifiedExecProcess::from_spawned(spawned, SandboxType::None, Box::new(NoopSpawnLifecycle))
