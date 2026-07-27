@@ -1,3 +1,6 @@
+# Require approval from a Codex engineer for all internal changes.
+* @openai/codex-eng
+
 # Core crate ownership.
 /codex-rs/arg0/ @openai/codex-core-agent-team
 /codex-rs/codex-mcp/ @openai/codex-core-agent-team
@@ -8,6 +11,7 @@
 /codex-rs/model-provider/ @openai/codex-core-agent-team
 /codex-rs/models-manager/ @openai/codex-core-agent-team
 /codex-rs/prompts/ @openai/codex-core-agent-team
+/codex-rs/rollout/ @openai/codex-core-agent-team
 /codex-rs/utils/path-uri/ @openai/codex-core-agent-team
 
 # Keep macOS AKV signing changes reviewed by Codex maintainers.
