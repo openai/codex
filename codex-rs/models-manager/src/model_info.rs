@@ -115,6 +115,7 @@ fn clear_instruction_messages(model: &mut ModelInfo) {
         if model_messages.approvals.is_none()
             && model_messages.auto_review.is_none()
             && model_messages.permissions.is_none()
+            && model_messages.token_budget.is_none()
         {
             model.model_messages = None;
         }
@@ -181,6 +182,7 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
             approvals: None,
             auto_review: None,
             permissions: None,
+            token_budget: None,
         }),
         _ => None,
     }

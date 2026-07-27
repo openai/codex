@@ -536,6 +536,7 @@ impl Session {
         );
 
         let mut per_turn_config = per_turn_config;
+        super::token_budget::apply_model_defaults(&mut per_turn_config, &model_info);
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
             per_turn_config.features.enabled(Feature::FastMode),

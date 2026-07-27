@@ -1453,6 +1453,7 @@ mod tests {
                 policy_template: Some(catalog_template.to_string()),
             }),
             permissions: None,
+            token_budget: None,
         };
 
         let guardian_config = build_guardian_review_session_config(
@@ -1485,6 +1486,7 @@ mod tests {
                 policy_template: None,
             }),
             permissions: None,
+            token_budget: None,
         };
 
         let guardian_config = build_guardian_review_session_config(
@@ -1525,6 +1527,7 @@ mod tests {
                 policy_template: Some(String::new()),
             }),
             permissions: None,
+            token_budget: None,
         };
 
         let guardian_config = build_guardian_review_session_config(

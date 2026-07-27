@@ -509,6 +509,18 @@ pub struct ModelMessages {
     pub approvals: Option<ApprovalMessages>,
     pub auto_review: Option<AutoReviewMessages>,
     pub permissions: Option<PermissionMessages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<ModelTokenBudgetConfig>,
+}
+
+/// Model-owned defaults for the context-window token-budget feature.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelTokenBudgetConfig {
+    pub reminder_threshold_tokens: i64,
+    pub reminder_message_template: String,
+    pub guidance_message: String,
+    pub auto_compact_fallback_prompt: String,
+    pub auto_compact_fallback_buffer_tokens: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -922,6 +934,7 @@ mod tests {
             approvals: None,
             auto_review: None,
             permissions: None,
+            token_budget: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
@@ -941,6 +954,7 @@ mod tests {
             approvals: None,
             auto_review: None,
             permissions: None,
+            token_budget: None,
         }));
         assert_eq!(
             model.get_model_instructions(Some(Personality::Friendly)),
@@ -969,6 +983,7 @@ mod tests {
             approvals: None,
             auto_review: None,
             permissions: None,
+            token_budget: None,
         }));
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Friendly)),
@@ -1000,6 +1015,7 @@ mod tests {
             approvals: None,
             auto_review: None,
             permissions: None,
+            token_budget: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));

@@ -7,6 +7,7 @@ use crate::context::ApprovalPromptContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::CollaborationModeState;
+use crate::context::world_state::ContextWindowGuidanceState;
 use crate::context::world_state::EnvironmentsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::ModelInstructionsState;
@@ -81,6 +82,17 @@ impl Session {
                 personality_instructions,
                 personality_is_baked,
             ));
+        }
+        if turn_context.config.features.enabled(Feature::TokenBudget)
+            && turn_context.model_context_window().is_some()
+            && let Some(guidance) = turn_context
+                .config
+                .token_budget
+                .as_ref()
+                .and_then(|config| config.guidance_message.as_deref())
+                .filter(|message| !message.trim().is_empty())
+        {
+            world_state.add_section(ContextWindowGuidanceState::new(guidance));
         }
         world_state.add_section(RealtimeState::new(
             turn_context.realtime_active,

@@ -33,6 +33,7 @@ fn base_instruction_override_preserves_catalog_approval_messages() {
         approvals: Some(approvals.clone()),
         auto_review: None,
         permissions: None,
+        token_budget: None,
     });
     let config = ModelsManagerConfig {
         base_instructions: Some("override".to_string()),
@@ -49,6 +50,7 @@ fn base_instruction_override_preserves_catalog_approval_messages() {
             approvals: Some(approvals),
             auto_review: None,
             permissions: None,
+            token_budget: None,
         })
     );
 }
@@ -68,6 +70,7 @@ fn disabled_personality_preserves_catalog_approval_messages() {
         approvals: Some(approvals.clone()),
         auto_review: None,
         permissions: None,
+        token_budget: None,
     });
     let config = ModelsManagerConfig {
         personality_enabled: false,
@@ -84,6 +87,7 @@ fn disabled_personality_preserves_catalog_approval_messages() {
             approvals: Some(approvals),
             auto_review: None,
             permissions: None,
+            token_budget: None,
         })
     );
 }
@@ -101,6 +105,7 @@ fn base_instruction_override_preserves_catalog_auto_review_messages() {
         approvals: None,
         auto_review: Some(auto_review.clone()),
         permissions: None,
+        token_budget: None,
     });
     let config = ModelsManagerConfig {
         base_instructions: Some("override".to_string()),
@@ -117,6 +122,7 @@ fn base_instruction_override_preserves_catalog_auto_review_messages() {
             approvals: None,
             auto_review: Some(auto_review),
             permissions: None,
+            token_budget: None,
         })
     );
 }
@@ -135,6 +141,7 @@ fn base_instruction_override_preserves_catalog_permission_messages() {
         approvals: None,
         auto_review: None,
         permissions: Some(permissions.clone()),
+        token_budget: None,
     });
     let config = ModelsManagerConfig {
         base_instructions: Some("override".to_string()),
@@ -151,6 +158,7 @@ fn base_instruction_override_preserves_catalog_permission_messages() {
             approvals: None,
             auto_review: None,
             permissions: Some(permissions),
+            token_budget: None,
         })
     );
 }
@@ -187,6 +195,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
             approvals: None,
             auto_review: None,
             permissions: None,
+            token_budget: None,
         });
 
         let updated = with_config_overrides(model, &config);
