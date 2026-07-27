@@ -1,0 +1,72 @@
+use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_config::CloudConfigBundleLoader;
+use codex_config::ConfigLoadOptions;
+use codex_core::config::load_config_toml_with_layer_stack;
+use codex_core::config::resolve_bootstrap_auth_keyring_backend_kind;
+use codex_core::config::resolve_bootstrap_auth_route_config;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use toml::Value as TomlValue;
+
+use super::DebugSandboxConfigOptions;
+use super::ManagedRequirementsMode;
+
+pub(super) async fn bootstrap_cloud_config_bundle(
+    cli_overrides: &[(String, TomlValue)],
+    options: &DebugSandboxConfigOptions,
+    resolve_codex_home: impl FnOnce() -> std::io::Result<AbsolutePathBuf>,
+    strict_config: bool,
+) -> anyhow::Result<CloudConfigBundleLoader> {
+    if options.permissions_profile.is_none()
+        || !matches!(
+            options.managed_requirements_mode,
+            ManagedRequirementsMode::Include
+        )
+    {
+        return Ok(CloudConfigBundleLoader::default());
+    }
+
+    let codex_home = resolve_codex_home()?;
+    let cwd = match options.cwd.as_deref() {
+        Some(cwd) => AbsolutePathBuf::relative_to_current_dir(cwd)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+    let bootstrap_config = load_config_toml_with_layer_stack(
+        codex_home.as_path(),
+        Some(&cwd),
+        cli_overrides.to_vec(),
+        ConfigLoadOptions {
+            loader_overrides: options.loader_overrides.clone(),
+            strict_config,
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
+        },
+    )
+    .await?;
+    let bootstrap_config_toml = &bootstrap_config.config_toml;
+    let auth_route_config = resolve_bootstrap_auth_route_config(
+        bootstrap_config_toml,
+        bootstrap_config
+            .config_layer_stack
+            .requirements()
+            .feature_requirements
+            .as_ref(),
+    )?;
+
+    Ok(cloud_config_bundle_loader_for_storage(
+        codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        bootstrap_config_toml
+            .cli_auth_credentials_store
+            .unwrap_or_default(),
+        resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
+        bootstrap_config_toml
+            .chatgpt_base_url
+            .clone()
+            .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string()),
+        auth_route_config,
+    )
+    .await)
+}
+
+#[cfg(test)]
+#[path = "cloud_config_tests.rs"]
+mod tests;
