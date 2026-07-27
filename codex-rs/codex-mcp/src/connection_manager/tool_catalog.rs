@@ -143,6 +143,19 @@ impl McpConnectionSet {
                 .startup_complete
                 .load(Ordering::Acquire)
             {
+                if view.connection.client.has_cached_tools() {
+                    if let Some(server_tools) =
+                        view.listed_tools(&self.tool_plugin_provenance).await
+                    {
+                        listed_tools.extend(server_tools.into_iter().map(|mut tool| {
+                            if let Some(annotations) = tool.tool.annotations.as_mut() {
+                                annotations.read_only_hint = None;
+                            }
+                            Self::with_server_metadata(tool, &view.metadata)
+                        }));
+                    }
+                    continue;
+                }
                 let _ = view.connection.client.client().await;
             }
             view.connection.client.reconnect_failed_startup().await;
@@ -186,6 +199,7 @@ impl McpConnectionSet {
                 continue;
             }
             let Some(client) = clients.client(&tool_info.server_name) else {
+                tools.push(tool_info);
                 continue;
             };
             let Some(call) = self.prepare_call(&tool_info, client, Arc::clone(&config), *revision)

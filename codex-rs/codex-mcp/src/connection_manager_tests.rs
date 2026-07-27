@@ -1513,20 +1513,21 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
 }
 
 #[tokio::test]
-async fn capture_binding_waits_for_fresh_startup_even_with_cached_tools() {
+async fn capture_binding_exposes_cached_tools_before_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cache_context = create_codex_apps_tools_cache_context(
         codex_home.path().to_path_buf(),
         Some("account-one"),
         Some("user-one"),
     );
-    store_current_tools(
-        &cache_context,
-        vec![create_test_tool(
-            CODEX_APPS_MCP_SERVER_NAME,
-            "shared_cached_tool",
-        )],
+    let mut cached_tool = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "shared_cached_tool");
+    cached_tool.tool.annotations = Some(
+        rmcp::model::ToolAnnotations::new()
+            .read_only(true)
+            .destructive(false)
+            .open_world(false),
     );
+    store_current_tools(&cache_context, vec![cached_tool]);
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let startup_complete_for_client = Arc::clone(&startup_complete);
     let (startup_started, wait_for_startup) = tokio::sync::oneshot::channel();
@@ -1575,14 +1576,41 @@ async fn capture_binding_waits_for_fresh_startup_even_with_cached_tools() {
         },
     );
     let manager = Arc::new(manager);
-    let manager_for_capture = Arc::clone(&manager);
-    let capture = tokio::spawn(async move { capture_binding(&manager_for_capture).await });
+    let cached_binding = capture_binding(&manager).await;
+    assert_eq!(
+        cached_binding
+            .tools()
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["shared_cached_tool"]
+    );
+    assert_eq!(
+        cached_binding.tools()[0].tool.annotations,
+        Some(
+            rmcp::model::ToolAnnotations::new()
+                .destructive(false)
+                .open_world(false)
+        )
+    );
+    assert!(
+        cached_binding
+            .prepare_call(CODEX_APPS_MCP_SERVER_NAME, "shared_cached_tool")
+            .is_none()
+    );
+
+    let manager_for_startup = Arc::clone(&manager);
+    let startup = tokio::spawn(async move {
+        manager_for_startup
+            .wait_for_server_startup(CODEX_APPS_MCP_SERVER_NAME)
+            .await
+    });
 
     wait_for_startup.await.expect("client startup should begin");
-    assert!(!capture.is_finished());
     release_startup.send(()).expect("release client startup");
+    assert!(startup.await.expect("startup task"));
 
-    let step = capture.await.expect("capture task");
+    let step = capture_binding(&manager).await;
     assert_eq!(
         step.tools()
             .iter()

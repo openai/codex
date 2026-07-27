@@ -539,6 +539,13 @@ impl McpConnectionSet {
         self.servers.contains_key(server_name)
     }
 
+    pub(crate) async fn wait_for_server_startup(&self, server_name: &str) -> bool {
+        let Some(view) = self.servers.get(server_name) else {
+            return false;
+        };
+        view.connection.client().await.is_ok()
+    }
+
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.
     pub async fn shutdown(&self) {
         let connections = self

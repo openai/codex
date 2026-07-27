@@ -240,6 +240,21 @@ impl McpRuntime {
         }
     }
 
+    /// Captures the current runtime after its selected server has finished startup.
+    pub async fn current_binding_for_call(&self, server: &str) -> Option<Arc<McpBinding>> {
+        let current = self.current.load_full();
+        let config = Arc::clone(current.config.as_ref()?);
+        if !current.connections.wait_for_server_startup(server).await {
+            return None;
+        }
+        Some(Arc::new(
+            current
+                .connections
+                .capture_binding_with_metadata(config, current.plugins_available)
+                .await,
+        ))
+    }
+
     /// Returns the latest published configuration without waiting for clients.
     pub fn current_config(&self) -> Option<Arc<McpConfig>> {
         self.current.load().config.clone()

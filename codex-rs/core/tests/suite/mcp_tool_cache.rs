@@ -248,30 +248,31 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
         .await;
         anyhow::Ok(called_process)
     });
-    fixture.codex.shutdown_and_wait().await?;
-    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
-        .await?;
     tokio::time::timeout(Duration::from_secs(2), async {
         while cached_response.requests().is_empty() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .context("live MCP definitions should reach inference after initialization")?;
+    .context("cached MCP definitions should reach inference before initialization")?;
     assert_definition(
         &cached_response,
-        &format!("Use the tools from {second_process}."),
-        &format!("Echo from {second_process}."),
+        &format!("Tools in the {NAMESPACE} namespace."),
+        &format!("Echo from {first_process}."),
     );
 
+    fixture.codex.shutdown_and_wait().await?;
+    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
+        .await?;
+    let expected_error = format!("MCP tool `{SERVER_NAME}/cwd` is not available to the model");
     assert_eq!(cached_turn.await??, second_process);
     let output = cached_done_response
         .single_request()
         .function_call_output_text(app_only_call_id)
         .expect("app-only tool error should be returned to the model");
     assert!(
-        output.contains("is not available to the model") || output.contains("unsupported call"),
-        "app-only tools must be rejected before reaching the MCP server: {output}"
+        output.contains(&expected_error),
+        "model-visible tool output should contain the live visibility error: {output}"
     );
     let output = cached_done_response
         .single_request()
