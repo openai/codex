@@ -30,7 +30,12 @@ PREFIX = "codex"
 REPOSITORY = "openai/codex"
 RELEASE_METADATA_NAME = "release.json"
 INSTALLER_NAMES = ("install.sh", "install.ps1")
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+)?)?$")
+# Keep this pattern in sync with release-tag validation in
+# .github/workflows/rust-release.yml.
+VERSION_RE = re.compile(
+    r"^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha(?:\.[0-9]+){0,2}"
+    r"|beta(?:\.[0-9]+)?))?$"
+)
 CRC64_RE = re.compile(r"^[A-Za-z0-9+/]{11}=$")
 SHA256_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 
