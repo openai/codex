@@ -231,6 +231,14 @@ fn initial_exec_yield_time_uses_windows_floor() {
         clamp_yield_time(/*yield_time_ms*/ 1_000),
         crate::unified_exec::WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS
     );
+    assert_eq!(
+        clamp_yield_time(/*yield_time_ms*/ 2_000),
+        crate::unified_exec::WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS
+    );
+    assert_eq!(
+        clamp_yield_time(/*yield_time_ms*/ 5_000),
+        crate::unified_exec::WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS
+    );
     assert_eq!(clamp_yield_time(/*yield_time_ms*/ 10_000), 10_000);
     assert_eq!(
         clamp_yield_time(/*yield_time_ms*/ above_max_yield_time_ms),

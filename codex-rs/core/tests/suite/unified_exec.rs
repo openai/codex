@@ -2267,9 +2267,11 @@ async fn write_stdin_ctrl_c_terminates_non_tty_session_on_windows() -> Result<()
     )
     .await?;
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(20),
+    )
     .await;
 
     let start_output = request_log
