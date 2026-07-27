@@ -133,7 +133,18 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
+    let _response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-exec-0"),
+                responses::ev_assistant_message("msg-exec-0", "exec response"),
+                responses::ev_completed_with_tokens("resp-exec-0", /*total_tokens*/ 7),
+            ]),
+            exec_sse_response(/*index*/ 1),
+        ],
+    )
+    .await;
     let repo_root = exec_repo_root()?;
 
     // 1) First run: create a session with a unique marker in the content.
@@ -157,15 +168,26 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     let marker2 = format!("resume-last-2-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
 
-    test.cmd_with_server(&server)
+    let output = test
+        .cmd_with_server(&server)
+        .env("RUST_LOG", "codex_app_server::outgoing_message=trace")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
         .arg("--last")
-        .assert()
-        .success();
+        .output()
+        .context("resume run should succeed")?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "resume failed: {stderr}");
+    assert_eq!(
+        stderr
+            .matches("app-server event: thread/tokenUsage/updated")
+            .count(),
+        1,
+        "resume should not replay restored token usage: {stderr}"
+    );
 
     // Ensure the same file was updated and contains both markers.
     let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
