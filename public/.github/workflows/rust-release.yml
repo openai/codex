@@ -40,6 +40,8 @@ jobs:
             || { echo "❌  Not a tag ref"; exit 1; }
 
           # Release tags must match the version in Cargo.toml.
+          # Keep this pattern in sync with VERSION_RE in
+          # .github/scripts/publish_r2_release.py.
           [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
