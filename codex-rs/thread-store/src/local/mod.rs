@@ -675,6 +675,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paginated_resume_prefers_explicit_rollout_path_over_stale_sqlite_path() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let uuid = uuid::Uuid::from_u128(228);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T12-00-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("paginated session file");
+        let stale_rollout_path = home.path().join("stale-rollout.jsonl");
+        tokio::fs::write(&stale_rollout_path, "malformed session metadata\n")
+            .await
+            .expect("write stale rollout");
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            stale_rollout_path,
+            chrono::Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.history_mode = ThreadHistoryMode::Paginated;
+        builder.cwd = home.path().to_path_buf();
+        let mut metadata = builder.build("test-provider");
+        metadata.preview = Some("original user message".to_string());
+        metadata.first_user_message = Some("original user message".to_string());
+        metadata.title = "original user message".to_string();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("update stale sqlite rollout path");
+
+        let resumed = LiveThread::resume(
+            store,
+            ThreadHistoryMode::Paginated,
+            ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path.clone()),
+                history: Some(Arc::new(vec![user_message_item("bounded suffix")])),
+                include_archived: false,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: Some(home.path().to_path_buf()),
+                    model_provider: "test-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+            },
+        )
+        .await
+        .expect("resume paginated thread from its requested rollout");
+        assert_eq!(
+            resumed.local_rollout_path().await.expect("live rollout"),
+            Some(rollout_path)
+        );
+        resumed.shutdown().await.expect("shutdown resumed writer");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            (
+                metadata.preview.as_deref(),
+                metadata.title.as_str(),
+                metadata.first_user_message.as_deref(),
+            ),
+            (
+                Some("original user message"),
+                "original user message",
+                Some("original user message"),
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn live_thread_does_not_derive_metadata_from_inherited_items() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());

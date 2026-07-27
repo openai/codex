@@ -1273,7 +1273,7 @@ async fn paginated_thread_name_set_is_reflected_in_read_list_and_metadata_resume
         .await?;
 
     // Set a user-facing thread title.
-    let new_name = "Saved user message";
+    let new_name = "Custom saved name";
     let set_id = mcp
         .send_thread_set_name_request(ThreadSetNameParams {
             thread_id: conversation_id.clone(),

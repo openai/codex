@@ -151,7 +151,20 @@ impl LiveThread {
         let thread_id = params.thread_id;
         let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
-        let mut metadata_sync = ThreadMetadataSync::for_resume(&params);
+        let metadata = if history_mode == ThreadHistoryMode::Paginated
+            && let Some(local_store) = thread_store.as_any().downcast_ref::<LocalThreadStore>()
+            && let Some(state_db) = local_store.state_db().await
+        {
+            state_db
+                .get_thread(thread_id)
+                .await
+                .map_err(|err| ThreadStoreError::Internal {
+                    message: format!("failed to read thread metadata for {thread_id}: {err}"),
+                })?
+        } else {
+            None
+        };
+        let mut metadata_sync = ThreadMetadataSync::for_resume(&params, metadata.as_ref());
         thread_store.resume_thread(params).await?;
         if should_load_history {
             match thread_store

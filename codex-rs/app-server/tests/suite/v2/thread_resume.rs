@@ -77,6 +77,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::McpInvocation;
@@ -135,7 +136,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
-async fn thread_resume_paginated_metadata_only_uses_model_context() -> Result<()> {
+async fn thread_resume_paginated_model_context_preserves_original_metadata() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri()).write(codex_home.path())?;
@@ -147,6 +148,19 @@ async fn thread_resume_paginated_metadata_only_uses_model_context() -> Result<()
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
+    let path = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &conversation_id);
+    append_rollout_item_to_path(
+        &path,
+        &RolloutItem::Compacted(CompactedItem {
+            message: "compacted history".to_string(),
+            replacement_history: Some(Vec::new()),
+            window_number: Some(1),
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+        }),
+    )
+    .await?;
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -166,7 +180,76 @@ async fn thread_resume_paginated_metadata_only_uses_model_context() -> Result<()
     } = timeout(DEFAULT_READ_TIMEOUT, primary.read_response(resume_id)).await??;
     assert_eq!(resumed.id, conversation_id);
     assert_eq!(resumed.history_mode, ThreadHistoryMode::Paginated);
+    assert_eq!(resumed.preview, "Saved user message");
     assert!(resumed.turns.is_empty());
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: conversation_id.clone(),
+            input: vec![UserInput::Text {
+                text: "bounded suffix user message".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+    timeout(DEFAULT_READ_TIMEOUT, primary.shutdown_gracefully()).await??;
+
+    let mut secondary = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let resume_id = secondary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            path: Some(path),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = timeout(DEFAULT_READ_TIMEOUT, secondary.read_response(resume_id)).await??;
+    assert_eq!(resumed.preview, "Saved user message");
+    assert!(resumed.turns.is_empty());
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: conversation_id.clone(),
+            input: vec![UserInput::Text {
+                text: "resumed user message".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
+    let metadata = state_db
+        .get_thread(ThreadId::from_string(&conversation_id)?)
+        .await?
+        .expect("thread metadata should exist");
+    assert_eq!(
+        (
+            metadata.preview.as_deref(),
+            metadata.title.as_str(),
+            metadata.first_user_message.as_deref(),
+        ),
+        (
+            Some("Saved user message"),
+            "Saved user message",
+            Some("Saved user message"),
+        )
+    );
     Ok(())
 }
 

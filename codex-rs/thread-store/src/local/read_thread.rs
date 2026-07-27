@@ -51,7 +51,10 @@ pub(super) async fn read_thread(
     {
         let metadata_sandbox_policy = metadata.sandbox_policy.clone();
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await?;
-        if !params.include_history
+        // Paginated history may contain only a suffix, so its display metadata lives in SQLite.
+        // Legacy display metadata remains rollout-derived.
+        if thread.history_mode == ThreadHistoryMode::Legacy
+            && !params.include_history
             && let Some(rollout_path) = thread.rollout_path.clone()
             && let Ok(mut rollout_thread) = read_thread_from_rollout_path(store, rollout_path).await
             && rollout_thread.thread_id == thread_id
@@ -115,27 +118,21 @@ pub(super) async fn read_thread_by_rollout_path(
     include_history: bool,
 ) -> ThreadStoreResult<StoredThread> {
     let path = resolve_requested_rollout_path(store, rollout_path).await?;
-    let mut thread = read_thread_from_rollout_path(store, path).await?;
+    let mut thread = read_thread_from_rollout_path(store, path.clone()).await?;
     if !include_archived && thread.archived_at.is_some() {
         return Err(ThreadStoreError::InvalidRequest {
             message: format!("thread {} is archived", thread.thread_id),
         });
     }
-    if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
+    if let Some(mut metadata) = read_sqlite_metadata(store, thread.thread_id).await {
         if thread.history_mode == ThreadHistoryMode::Paginated {
-            thread.name = sqlite_thread_name(&metadata);
-        }
-        thread.recency_at = metadata.recency_at;
-        thread.is_pinned = metadata.is_pinned;
-        thread.git_info = if thread.history_mode == ThreadHistoryMode::Paginated {
-            // A paginated rollout only has the initial Git tuple. Do not turn an explicit SQLite
-            // clear back into the stale rollout value while reading by path.
-            git_info_from_parts(
-                metadata.git_sha,
-                metadata.git_branch,
-                metadata.git_origin_url,
-            )
+            // Paginated display metadata lives in SQLite because rollout history may be partial.
+            metadata.rollout_path = path;
+            metadata.archived_at = thread.archived_at;
+            thread = stored_thread_from_sqlite_metadata(store, metadata).await?;
         } else {
+            thread.recency_at = metadata.recency_at;
+            thread.is_pinned = metadata.is_pinned;
             let (fallback_sha, fallback_branch, fallback_origin_url) = match thread.git_info.take()
             {
                 Some(info) => (
@@ -145,12 +142,12 @@ pub(super) async fn read_thread_by_rollout_path(
                 ),
                 None => (None, None, None),
             };
-            git_info_from_parts(
+            thread.git_info = git_info_from_parts(
                 metadata.git_sha.or(fallback_sha),
                 metadata.git_branch.or(fallback_branch),
                 metadata.git_origin_url.or(fallback_origin_url),
-            )
-        };
+            );
+        }
     }
     reject_paginated_history(&thread, include_history)?;
     attach_history_if_requested(&mut thread, include_history).await?;
@@ -528,9 +525,15 @@ mod tests {
 
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ItemCompletedEvent;
+    use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadHistoryMode;
+    use codex_protocol::user_input::UserInput;
     use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -803,7 +806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_paginated_thread_uses_sqlite_name_over_legacy_compatibility() {
+    async fn read_paginated_thread_prefers_sqlite_display_metadata() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let uuid = Uuid::from_u128(228);
@@ -815,6 +818,20 @@ mod tests {
             ThreadHistoryMode::Paginated,
         )
         .expect("session file");
+        codex_rollout::append_rollout_item_to_path(
+            &rollout_path,
+            &RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: "turn-1".to_string(),
+                item: TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {
+                    text: "Rollout user message".to_string(),
+                    text_elements: Vec::new(),
+                }])),
+                completed_at_ms: 0,
+            })),
+        )
+        .await
+        .expect("append rollout user message");
         let runtime = codex_state::StateRuntime::init(
             config.sqlite.clone(),
             config.default_model_provider_id.clone(),
@@ -822,14 +839,21 @@ mod tests {
         .await
         .expect("state db should initialize");
         let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
-        let mut builder =
-            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
         builder.history_mode = ThreadHistoryMode::Paginated;
-        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.model_provider = Some("Canonical SQLite provider".to_string());
         builder.cwd = home.path().to_path_buf();
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.name = Some("Canonical SQLite name".to_string());
-        metadata.title = "Stale title name".to_string();
+        metadata.preview = Some("Canonical SQLite preview".to_string());
+        metadata.first_user_message = Some("Canonical SQLite first user message".to_string());
+        metadata.title = "Canonical SQLite derived title".to_string();
+        metadata.model = Some("Canonical SQLite model".to_string());
         runtime
             .upsert_thread(&metadata)
             .await
@@ -838,7 +862,7 @@ mod tests {
             .await
             .expect("append legacy thread name");
 
-        let thread = store
+        let thread_by_id = store
             .read_thread(ReadThreadParams {
                 thread_id,
                 include_archived: false,
@@ -846,8 +870,33 @@ mod tests {
             })
             .await
             .expect("read thread");
+        let thread_by_path = store
+            .read_thread_by_rollout_path(
+                rollout_path,
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read thread by rollout path");
 
-        assert_eq!(thread.name.as_deref(), Some("Canonical SQLite name"));
+        for thread in [thread_by_id, thread_by_path] {
+            assert_eq!(
+                (
+                    thread.name.as_deref(),
+                    thread.preview.as_str(),
+                    thread.first_user_message.as_deref(),
+                    thread.model_provider.as_str(),
+                    thread.model.as_deref(),
+                ),
+                (
+                    Some("Canonical SQLite name"),
+                    "Canonical SQLite preview",
+                    Some("Canonical SQLite first user message"),
+                    "Canonical SQLite provider",
+                    Some("Canonical SQLite model"),
+                )
+            );
+        }
     }
 
     #[tokio::test]
