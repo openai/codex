@@ -10,6 +10,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use bytes::Bytes;
+use futures::stream;
 use pretty_assertions::assert_eq;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -36,6 +38,47 @@ fn request_builder_debug_redacts_url_secrets() {
             "url: Some(\"<redacted>\"), .. }"
         )
     );
+}
+
+#[tokio::test]
+async fn streams_request_bodies_without_exposing_reqwest_body() {
+    let (address, server) = spawn_response_server(vec![
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+    ]);
+    let pool = RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        ClientRouteClass::Api,
+    );
+    let response = pool
+        .put(format!("http://{address}/upload"))
+        .header(http::header::CONTENT_LENGTH, /*value*/ 5)
+        .body_stream(stream::iter(vec![Ok::<_, io::Error>(Bytes::from_static(
+            b"hello",
+        ))]))
+        .send()
+        .await
+        .expect("streaming request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = server.join().expect("response server should finish");
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].ends_with("\r\n\r\nhello"));
+}
+
+#[tokio::test]
+async fn without_url_redacts_transport_error_urls() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+    let address = listener.local_addr().expect("listener should have address");
+    drop(listener);
+    let secret = "signed-secret";
+    let error = reqwest::Client::new()
+        .get(format!("http://{address}/upload?sig={secret}"))
+        .send()
+        .await
+        .expect_err("closed listener should reject request");
+    let error = RouteAwareRequestError::from(error).without_url();
+
+    assert!(!error.to_string().contains(secret));
 }
 
 #[tokio::test]

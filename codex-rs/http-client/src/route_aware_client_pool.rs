@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use bytes::Bytes;
+use futures::TryStream;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
@@ -99,6 +101,24 @@ impl RouteAwareRequestError {
 
     pub fn is_connect(&self) -> bool {
         matches!(self, Self::Request(error) if error.is_connect())
+    }
+
+    pub fn is_body(&self) -> bool {
+        matches!(self, Self::Request(error) if error.is_body())
+    }
+
+    pub fn is_request(&self) -> bool {
+        matches!(self, Self::Request(error) if error.is_request())
+    }
+
+    /// Removes a request URL from the underlying transport error before it is logged or returned.
+    ///
+    /// Use this for requests whose URL can contain credentials, such as signed blob uploads.
+    pub fn without_url(self) -> Self {
+        match self {
+            Self::Request(error) => Self::Request(error.without_url()),
+            other => other,
+        }
     }
 }
 
@@ -207,6 +227,19 @@ impl RouteAwareRequestBuilder {
     {
         if let Ok(request) = &mut self.request {
             *request.body_mut() = Some(body.into());
+        }
+        self
+    }
+
+    /// Sets a streaming request body without exposing the underlying HTTP implementation.
+    pub fn body_stream<S>(mut self, stream: S) -> Self
+    where
+        S: TryStream + Send + 'static,
+        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        Bytes: From<S::Ok>,
+    {
+        if let Ok(request) = &mut self.request {
+            *request.body_mut() = Some(reqwest::Body::wrap_stream(stream));
         }
         self
     }
