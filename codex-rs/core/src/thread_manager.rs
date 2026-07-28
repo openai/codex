@@ -24,7 +24,9 @@ use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
+use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
+use codex_code_mode::CodeModeSessionProviderFuture;
 use codex_code_mode::InProcessCodeModeSessionProvider;
 use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
@@ -95,6 +97,20 @@ use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
+
+struct DisabledCodeModeSessionProvider;
+
+impl CodeModeSessionProvider for DisabledCodeModeSessionProvider {
+    fn create_session<'a>(
+        &'a self,
+        _delegate: Arc<dyn CodeModeSessionDelegate>,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        Box::pin(async {
+            Err("code-mode host is disabled and in-process fallback is disabled".to_string())
+        })
+    }
+}
+
 /// Test-only override for enabling thread-manager behaviors used by integration
 /// tests.
 ///
@@ -382,6 +398,8 @@ impl ThreadManager {
                 } else {
                     Arc::new(provider)
                 }
+            } else if config.code_mode.disable_in_process_fallback {
+                Arc::new(DisabledCodeModeSessionProvider)
             } else {
                 Arc::new(InProcessCodeModeSessionProvider)
             };

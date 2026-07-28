@@ -286,6 +286,35 @@ async fn missing_process_host_fails_when_in_process_fallback_is_disabled() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disabled_process_host_fails_when_in_process_fallback_is_disabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("code mode should be enabled");
+            config
+                .features
+                .disable(Feature::CodeModeHost)
+                .expect("code-mode host should be disabled");
+            config.code_mode.disable_in_process_fallback = true;
+        });
+    let (_test, follow_up_mock) =
+        run_code_mode_turn_with_builder(&server, "Run code mode", "text('unreachable')", builder)
+            .await?;
+
+    let (output, _) =
+        custom_tool_output_body_and_success(&follow_up_mock.single_request(), "call-1");
+    assert!(output.contains("code-mode host is disabled and in-process fallback is disabled"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_process_host_error_is_bounded_when_in_process_fallback_is_disabled() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
