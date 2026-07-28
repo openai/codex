@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -30,6 +31,7 @@ use crate::tools::normalize_tools_for_model_with_prefix;
 const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
+const OPTIONAL_MCP_STARTUP_GRACE: Duration = Duration::from_secs(1);
 
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
@@ -132,10 +134,14 @@ impl McpConnectionSet {
         self: &Arc<Self>,
         config: Arc<crate::McpConfig>,
         plugins_available: bool,
+        required_servers: &[String],
     ) -> McpBinding {
         let revision = self.tool_catalog_revision.read().await;
         let mut listed_tools = Vec::new();
         let mut clients = std::collections::HashMap::new();
+        let optional_startup_deadline = *self
+            .optional_startup_deadline
+            .get_or_init(|| tokio::time::Instant::now() + OPTIONAL_MCP_STARTUP_GRACE);
         for (server_name, view) in &self.servers {
             if !view
                 .connection
@@ -143,7 +149,15 @@ impl McpConnectionSet {
                 .startup_complete
                 .load(Ordering::Acquire)
             {
-                if view.connection.client.has_cached_tools() {
+                let required = self.required_servers.binary_search(server_name).is_ok();
+                let has_cached_tools = view.connection.client.has_cached_tools();
+                let must_wait_for_startup = required
+                    || self.is_selected_plugin_mcp_server(server_name)
+                    || required_servers
+                        .iter()
+                        .any(|required| required == server_name)
+                    || (server_name == CODEX_APPS_MCP_SERVER_NAME && !has_cached_tools);
+                if !must_wait_for_startup && has_cached_tools {
                     if let Some(server_tools) =
                         view.listed_tools(&self.tool_plugin_provenance).await
                     {
@@ -154,6 +168,17 @@ impl McpConnectionSet {
                             Self::with_server_metadata(tool, &view.metadata)
                         }));
                     }
+                    continue;
+                }
+                if !must_wait_for_startup
+                    && tokio::time::timeout_at(
+                        optional_startup_deadline,
+                        view.connection.client.client(),
+                    )
+                    .await
+                    .is_err()
+                {
+                    trace!(server_name = %server_name, "omitting pending optional MCP server");
                     continue;
                 }
                 let _ = view.connection.client.client().await;

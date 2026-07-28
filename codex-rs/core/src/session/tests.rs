@@ -8096,7 +8096,11 @@ async fn refresh_mcp_servers_uses_latest_state_for_existing_turns() {
         .await
         .expect("a fresh cancellation token cannot be cancelled");
     let rematerialized_old = session
-        .mcp_runtime_for_step(&turn_context, /*selected_capability_roots*/ &[])
+        .mcp_runtime_for_step(
+            &turn_context,
+            /*selected_capability_roots*/ &[],
+            /*required_servers*/ &[],
+        )
         .await;
 
     let configured_servers = codex_mcp::configured_mcp_servers(new_step.mcp.config());

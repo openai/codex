@@ -86,6 +86,7 @@ impl McpConnectionSet {
         Self {
             servers: HashMap::new(),
             required_servers: Vec::new(),
+            optional_startup_deadline: OnceLock::new(),
             tool_catalog_revision: Arc::new(RwLock::new(0)),
             codex_apps_tools_override: RwLock::new(None),
             codex_apps_refresh_lock: Mutex::new(()),
@@ -194,6 +195,7 @@ async fn capture_binding(manager: &Arc<McpConnectionSet>) -> McpBinding {
         .capture_binding_with_metadata(
             Arc::new(crate::mcp::tests::test_mcp_config(std::env::temp_dir())),
             /*plugins_available*/ false,
+            /*required_servers*/ &[],
         )
         .await
 }
@@ -1664,6 +1666,87 @@ async fn capture_binding_exposes_cached_tools_before_startup() {
             .collect::<Vec<_>>(),
         vec!["client_local_tool"]
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn capture_binding_skips_pending_optional_servers_after_one_shared_startup_grace() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionSet::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let mut plugin_config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
+    let mut catalog = crate::ResolvedMcpCatalog::builder();
+    catalog.register(crate::McpServerRegistration::from_plugin(
+        "pending-one".to_string(),
+        crate::McpPluginAttribution::new("optional-plugin".to_string(), "Optional".to_string()),
+        /*plugin_order*/ 0,
+        serde_json::from_value(serde_json::json!({ "command": "optional-plugin" }))
+            .expect("optional plugin MCP config"),
+    ));
+    plugin_config.mcp_server_catalog = catalog.build();
+    manager.tool_plugin_provenance = Arc::new(crate::tool_plugin_provenance(&plugin_config));
+    for server_name in ["pending-one", "pending-two"] {
+        manager.insert_test_client(
+            server_name.to_string(),
+            AsyncManagedClient {
+                client: futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+                    .boxed()
+                    .shared(),
+                is_codex_apps_mcp_server: false,
+                cached_server_info: None,
+                codex_apps_tools_cache_context: None,
+                tool_catalog_cache_context: None,
+                startup_complete: Arc::new(AtomicBool::new(false)),
+                startup_reconnect: None,
+                cancel_token: CancellationToken::new(),
+            },
+        );
+    }
+
+    let manager = Arc::new(manager);
+    let binding = tokio::time::timeout(Duration::from_millis(1500), capture_binding(&manager))
+        .await
+        .expect("all optional servers should share a single startup grace");
+    assert!(binding.tools().is_empty());
+
+    let binding = tokio::time::timeout(Duration::from_millis(1), capture_binding(&manager))
+        .await
+        .expect("later bindings must not restart the optional startup grace");
+    assert!(binding.tools().is_empty());
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(1),
+            binding.list_resources("pending-one", /*params*/ None),
+        )
+        .await
+        .is_err(),
+        "resources must wait for an omitted server instead of failing immediately"
+    );
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(1),
+            binding.list_all_resources(|server| server == "pending-one"),
+        )
+        .await
+        .is_ok(),
+        "resource discovery must not wait for an omitted optional server"
+    );
+
+    let required_servers = vec!["pending-one".to_string()];
+    let binding = tokio::time::timeout(
+        Duration::from_millis(1),
+        manager.capture_binding_with_metadata(
+            Arc::new(crate::mcp::tests::test_mcp_config(std::env::temp_dir())),
+            /*plugins_available*/ false,
+            &required_servers,
+        ),
+    )
+    .await;
+    assert!(binding.is_err(), "explicitly requested servers must wait");
 }
 
 #[tokio::test]

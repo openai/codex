@@ -96,7 +96,11 @@ impl McpBinding {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
-        self.clients.list_resources(server, params).await
+        if self.clients.client(server).is_some() {
+            self.clients.list_resources(server, params).await
+        } else {
+            self.connections.list_resources(server, params).await
+        }
     }
 
     pub async fn list_all_resources(
@@ -111,7 +115,13 @@ impl McpBinding {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
-        self.clients.list_resource_templates(server, params).await
+        if self.clients.client(server).is_some() {
+            self.clients.list_resource_templates(server, params).await
+        } else {
+            self.connections
+                .list_resource_templates(server, params)
+                .await
+        }
     }
 
     pub async fn list_all_resource_templates(
@@ -128,7 +138,11 @@ impl McpBinding {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
-        self.clients.read_resource(server, params).await
+        if self.clients.client(server).is_some() {
+            self.clients.read_resource(server, params).await
+        } else {
+            self.connections.read_resource(server, params).await
+        }
     }
 }
 
