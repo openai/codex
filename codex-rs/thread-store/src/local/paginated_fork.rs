@@ -44,6 +44,11 @@ pub(super) async fn prepare(
         .ok_or_else(|| ThreadStoreError::Internal {
             message: "fork lineage has no source segment".to_string(),
         })?;
+    if store.state_db.is_none() {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "prepare_fork",
+        });
+    }
     if !matches!(boundary, ForkBoundary::Latest) {
         for segment in lineage
             .segments()

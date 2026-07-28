@@ -40,6 +40,9 @@ pub(super) async fn projection_state(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<Option<RolloutProjectionState>> {
+    if store.state_db.is_none() {
+        return Ok(None);
+    }
     let db_path = store.config.sqlite.thread_history_db_path();
     if !tokio::fs::try_exists(db_path.as_path())
         .await

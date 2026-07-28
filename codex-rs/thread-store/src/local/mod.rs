@@ -207,6 +207,11 @@ impl LocalThreadStore {
     }
 
     async fn thread_history_db(&self) -> ThreadStoreResult<&sqlx::SqlitePool> {
+        if self.state_db.is_none() {
+            return Err(ThreadStoreError::Unsupported {
+                operation: "paginated_history",
+            });
+        }
         self.thread_history_db
             .get_or_try_init(|| async {
                 codex_state::open_thread_history_db(&self.config.sqlite).await
@@ -452,7 +457,7 @@ impl ThreadStore for LocalThreadStore {
     }
 
     fn supports_paginated_history_lists(&self) -> bool {
-        true
+        self.state_db.is_some()
     }
 
     fn list_turns(&self, params: ListTurnsParams) -> ThreadStoreFuture<'_, TurnPage> {

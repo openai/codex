@@ -26,6 +26,9 @@ pub(super) async fn materialize_to_sqlite(
     thread_id: ThreadId,
     rollout_path: &Path,
 ) -> ThreadStoreResult<()> {
+    if store.state_db.is_none() {
+        return Ok(());
+    }
     let start_offset = super::thread_history::projection_state(store, thread_id)
         .await?
         .map_or(0, |state| state.next_byte_offset);

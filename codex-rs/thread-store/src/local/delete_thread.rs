@@ -154,6 +154,8 @@ async fn delete_thread_after_reference_check(
             });
         }
     }
+    super::thread_history::delete_thread(store, thread_id).await?;
+
     // Drop the recorder before removing files, but retain its writer lock until cleanup finishes.
     if let Some(writer_lock) = store
         .live_recorders
@@ -173,9 +175,6 @@ async fn delete_thread_after_reference_check(
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to delete thread name index entries for {thread_id}: {err}"),
         })?;
-    // Keep this before ThreadNotFound so a retry can finish cleanup after an earlier attempt
-    // already removed the rollout file.
-    super::thread_history::delete_thread(store, thread_id).await?;
 
     if !found_rollout_path {
         return Err(ThreadStoreError::ThreadNotFound { thread_id });
@@ -505,9 +504,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_thread_without_state_db_preserves_materialized_thread_history() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone(), /*state_db*/ None);
+        let uuid = Uuid::from_u128(312);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T12-00-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("session file");
+        let pool = codex_state::open_thread_history_db(&config.sqlite)
+            .await
+            .expect("open existing thread history database");
+        let thread_id_string = thread_id.to_string();
+        sqlx::query(
+            "INSERT INTO thread_turns (thread_id, turn_id, rollout_ordinal, status) VALUES (?, 'turn-1', 1, 'completed')",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert turn");
+        sqlx::query(
+            "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json) VALUES (?, 'turn-1', 'item-1', 2, 1, '{}')",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert item");
+        sqlx::query(
+            "INSERT INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, 3, 3)",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert projection state");
+
+        let error = store
+            .delete_thread(DeleteThreadParams { thread_id })
+            .await
+            .expect_err("projected history without a state database should prevent deletion");
+
+        assert!(matches!(
+            error,
+            ThreadStoreError::Unsupported {
+                operation: "paginated_history"
+            }
+        ));
+        assert!(rollout_path.exists());
+        let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+            r#"
+SELECT
+    (SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?),
+    (SELECT COUNT(*) FROM thread_items WHERE thread_id = ?),
+    (SELECT COUNT(*) FROM thread_history_projection_state WHERE thread_id = ?)
+            "#,
+        )
+        .bind(thread_id_string.as_str())
+        .bind(thread_id_string.as_str())
+        .bind(thread_id_string.as_str())
+        .fetch_one(&pool)
+        .await
+        .expect("read preserved history rows");
+        assert_eq!(counts, (1, 1, 1));
+    }
+
+    #[tokio::test]
     async fn delete_thread_removes_materialized_thread_history() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let config = test_config(home.path());
+        let state_db = codex_state::StateRuntime::init(
+            config.sqlite.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("initialize state database for materialized history");
+        let store = LocalThreadStore::new(config, Some(state_db));
         let uuid = Uuid::from_u128(306);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_session_file_with_history_mode(

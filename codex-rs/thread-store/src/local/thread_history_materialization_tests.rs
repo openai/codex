@@ -51,6 +51,45 @@ use crate::ThreadPersistenceMetadata;
 use crate::ThreadSortKey;
 use crate::ThreadStore;
 
+#[tokio::test]
+async fn paginated_history_without_state_db_does_not_initialize_sqlite() {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let sqlite = config.sqlite.clone();
+    let store = LocalThreadStore::new(config, /*state_db*/ None);
+    let thread_id = ThreadId::default();
+
+    assert!(!store.supports_paginated_history_lists());
+    create_paginated_thread(&store, thread_id).await;
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![turn_started("turn-1")],
+        })
+        .await
+        .expect("append paginated rollout");
+    store
+        .persist_thread(thread_id)
+        .await
+        .expect("persist paginated rollout");
+    store
+        .flush_thread(thread_id)
+        .await
+        .expect("flush paginated rollout");
+    store
+        .shutdown_thread(thread_id)
+        .await
+        .expect("shutdown paginated rollout");
+
+    for runtime_db in sqlite.runtime_db_paths() {
+        assert!(
+            !runtime_db.path.exists(),
+            "expected no SQLite initialization for {}",
+            runtime_db.path.display()
+        );
+    }
+}
+
 /// Separate Codex and SQLite homes must work together across startup backfill,
 /// thread listing, and projection-backed paginated history reads.
 #[tokio::test]
@@ -242,7 +281,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
 #[tokio::test]
 async fn paginated_live_append_materializes_turn_items_and_state() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
@@ -383,7 +422,7 @@ WHERE thread_id = ?
 #[tokio::test]
 async fn referenced_paginated_rollout_projects_inherited_ordinal_range() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let source_id = ThreadId::default();
     create_paginated_thread(&store, source_id).await;
     store
@@ -498,7 +537,7 @@ async fn referenced_paginated_rollout_projects_inherited_ordinal_range() {
 #[tokio::test]
 async fn named_fork_boundaries_reject_invisible_and_noncanonical_turns() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let source_id = ThreadId::default();
     create_paginated_thread(&store, source_id).await;
     store
@@ -601,7 +640,7 @@ async fn named_fork_boundaries_reject_invisible_and_noncanonical_turns() {
 #[tokio::test]
 async fn active_turn_stores_only_its_start_position() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
 
@@ -662,7 +701,7 @@ async fn active_turn_stores_only_its_start_position() {
 #[tokio::test]
 async fn paginated_fork_persists_empty_source() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     let rollout_path = store
@@ -684,7 +723,7 @@ async fn paginated_fork_persists_empty_source() {
 #[tokio::test]
 async fn paginated_fork_materializes_compressed_source_and_ancestor() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let ancestor_thread_id = ThreadId::default();
     create_paginated_thread(&store, ancestor_thread_id).await;
     store
@@ -794,7 +833,7 @@ async fn paginated_fork_materializes_compressed_source_and_ancestor() {
 #[tokio::test]
 async fn cancelled_fork_keeps_source_reserved_until_lineage_materialization_finishes() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let ancestor_thread_id = ThreadId::default();
     create_paginated_thread(&store, ancestor_thread_id).await;
     store
@@ -878,7 +917,7 @@ async fn cancelled_fork_keeps_source_reserved_until_lineage_materialization_fini
 #[tokio::test]
 async fn prepared_fork_reserves_source_until_child_reference_is_durable() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let source_thread_id = ThreadId::default();
     create_paginated_thread(&store, source_thread_id).await;
     store
@@ -958,7 +997,7 @@ async fn prepared_fork_reserves_source_until_child_reference_is_durable() {
 #[tokio::test]
 async fn subagent_prefix_advances_projection_without_materializing_history() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_subagent_thread(
         &store,
@@ -1039,7 +1078,7 @@ async fn subagent_prefix_advances_projection_without_materializing_history() {
 #[tokio::test]
 async fn unexpected_duplicate_item_completion_does_not_poison_projection() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
 
@@ -1118,7 +1157,7 @@ WHERE thread_id = ? AND turn_id = ? AND item_id = ?
 #[tokio::test]
 async fn terminal_turn_does_not_change_after_later_records() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
 
@@ -1325,7 +1364,7 @@ async fn summary_items_use_final_answers_and_ignore_commentary() {
 #[tokio::test]
 async fn next_write_catches_up_unprojected_durable_suffix() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
@@ -1409,7 +1448,7 @@ SELECT
 #[tokio::test]
 async fn synchronized_catch_up_does_not_replay_old_rows() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
@@ -1452,7 +1491,7 @@ async fn synchronized_catch_up_does_not_replay_old_rows() {
 #[tokio::test]
 async fn catch_up_preserves_trailing_partial_line_boundaries() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
@@ -1531,7 +1570,7 @@ async fn catch_up_rejects_invalid_complete_suffixes_without_advancing_state() {
     ];
     for (name, suffix) in cases {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = projection_store(home.path()).await;
         let thread_id = ThreadId::default();
         create_paginated_thread(&store, thread_id).await;
         store
@@ -1602,7 +1641,7 @@ async fn jsonl_failure_does_not_create_projection_database() {
 #[tokio::test]
 async fn catch_up_rejects_missing_rollout_after_projection() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
@@ -1627,11 +1666,9 @@ async fn catch_up_rejects_missing_rollout_after_projection() {
 #[tokio::test]
 async fn sqlite_failure_does_not_fail_durable_jsonl_write() {
     let home = TempDir::new().expect("temp dir");
-    let sqlite_home = home.path().join("not-a-directory");
-    fs::write(sqlite_home.as_path(), "not a directory").expect("block sqlite home");
-    let mut config = test_config(home.path());
-    config.sqlite = codex_state::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
-    let store = LocalThreadStore::new(config, /*state_db*/ None);
+    let store = projection_store(home.path()).await;
+    fs::create_dir(store.config.sqlite.thread_history_db_path())
+        .expect("block thread history database");
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
 
@@ -1662,7 +1699,7 @@ async fn sqlite_failure_does_not_fail_durable_jsonl_write() {
 #[tokio::test]
 async fn blank_and_rejected_rollout_lines_do_not_poison_projection() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
@@ -1720,7 +1757,7 @@ async fn blank_and_rejected_rollout_lines_do_not_poison_projection() {
 #[tokio::test]
 async fn shutdown_materializes_items_queued_without_a_flush() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     let recorder = store
@@ -1760,7 +1797,7 @@ async fn shutdown_materializes_items_queued_without_a_flush() {
 #[tokio::test]
 async fn delete_waits_for_in_flight_projection_before_removing_rows() {
     let home = TempDir::new().expect("temp dir");
-    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let store = projection_store(home.path()).await;
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
@@ -1815,6 +1852,17 @@ SELECT
     .await
     .expect("read history row counts");
     assert_eq!(counts, (0, 0, 0));
+}
+
+async fn projection_store(codex_home: &Path) -> LocalThreadStore {
+    let config = test_config(codex_home);
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .expect("initialize state database for paginated history");
+    LocalThreadStore::new(config, Some(state_db))
 }
 
 async fn create_paginated_thread(store: &LocalThreadStore, thread_id: ThreadId) {
