@@ -6,6 +6,7 @@ use codex_feedback::CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME;
 use codex_feedback::CODEX_APPS_TOOLS_CACHE_ATTACHMENT_FILENAME;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
+use codex_rollout::RolloutRecorder;
 
 const MAX_FEEDBACK_TREE_THREADS: usize = 8;
 
@@ -74,6 +75,20 @@ impl FeedbackRequestProcessor {
             },
             None => None,
         };
+
+        if let Some(conversation_id) = conversation_id
+            && let Some(rollout_path) = self
+                .resolve_rollout_path(conversation_id, self.state_db.as_ref())
+                .await
+            && let Some((model, reasoning_effort)) = feedback_model_and_effort_from_rollout(
+                &rollout_path,
+                upload_tags.get("turn_id").map(String::as_str),
+            )
+            .await
+        {
+            upload_tags.insert("model".to_string(), model);
+            upload_tags.insert("effort".to_string(), format!("{reasoning_effort:?}"));
+        }
 
         let auth = self.auth_manager.auth_cached();
         if let Some(chatgpt_user_id) = auth
@@ -285,6 +300,24 @@ impl FeedbackRequestProcessor {
     }
 }
 
+async fn feedback_model_and_effort_from_rollout(
+    rollout_path: &Path,
+    turn_id: Option<&str>,
+) -> Option<(String, Option<ReasoningEffort>)> {
+    let (items, _, _) = RolloutRecorder::load_rollout_items(rollout_path)
+        .await
+        .ok()?;
+
+    items.into_iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(context)
+            if turn_id.is_none() || context.turn_id.as_deref() == turn_id =>
+        {
+            Some((context.model, context.effort))
+        }
+        _ => None,
+    })
+}
+
 fn tool_cache_feedback_attachments(
     codex_home: &Path,
     chatgpt_base_url: &str,
@@ -349,7 +382,113 @@ fn windows_sandbox_log_attachment(_codex_home: &Path) -> Option<FeedbackAttachme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::TurnContextItem;
     use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn feedback_model_and_effort_use_the_reported_turn() {
+        let (_tempdir, rollout_path) = feedback_rollout(&[
+            ("turn-1", "reported-model", Some(ReasoningEffort::High)),
+            ("turn-2", "newer-model", Some(ReasoningEffort::Ultra)),
+        ]);
+
+        assert_eq!(
+            feedback_model_and_effort_from_rollout(&rollout_path, Some("turn-1")).await,
+            Some(("reported-model".to_string(), Some(ReasoningEffort::High)))
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_model_and_effort_use_the_latest_turn_when_no_turn_is_reported() {
+        let (_tempdir, rollout_path) = feedback_rollout(&[
+            ("turn-1", "older-model", Some(ReasoningEffort::High)),
+            ("turn-2", "latest-model", Some(ReasoningEffort::Ultra)),
+        ]);
+
+        assert_eq!(
+            feedback_model_and_effort_from_rollout(&rollout_path, /*turn_id*/ None).await,
+            Some(("latest-model".to_string(), Some(ReasoningEffort::Ultra)))
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_model_and_effort_do_not_substitute_a_different_turn() {
+        let (_tempdir, rollout_path) =
+            feedback_rollout(&[("turn-1", "different-model", Some(ReasoningEffort::High))]);
+
+        assert_eq!(
+            feedback_model_and_effort_from_rollout(&rollout_path, Some("missing-turn")).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_model_and_effort_preserve_unspecified_effort() {
+        let (_tempdir, rollout_path) =
+            feedback_rollout(&[("turn-1", "reported-model", /*effort*/ None)]);
+
+        assert_eq!(
+            feedback_model_and_effort_from_rollout(&rollout_path, Some("turn-1")).await,
+            Some(("reported-model".to_string(), None))
+        );
+    }
+
+    fn feedback_rollout(
+        turns: &[(&str, &str, Option<ReasoningEffort>)],
+    ) -> (tempfile::TempDir, PathBuf) {
+        let tempdir = tempfile::tempdir().expect("create feedback rollout directory");
+        let rollout_path = tempdir.path().join("feedback-rollout.jsonl");
+        let mut lines = vec![RolloutLine {
+            timestamp: "2026-07-24T00:00:00Z".to_string(),
+            ordinal: None,
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: codex_protocol::protocol::SessionMeta {
+                    cwd: tempdir.path().to_path_buf(),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        }];
+        lines.extend(turns.iter().map(|(turn_id, model, effort)| {
+            RolloutLine {
+                timestamp: "2026-07-24T00:00:01Z".to_string(),
+                ordinal: None,
+                item: RolloutItem::TurnContext(TurnContextItem {
+                    turn_id: Some((*turn_id).to_string()),
+                    cwd: AbsolutePathBuf::from_absolute_path(tempdir.path())
+                        .expect("absolute feedback rollout directory"),
+                    workspace_roots: None,
+                    current_date: None,
+                    timezone: None,
+                    approval_policy: codex_protocol::protocol::AskForApproval::Never,
+                    approvals_reviewer: None,
+                    sandbox_policy: codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+                    permission_profile: None,
+                    network: None,
+                    file_system_sandbox_policy: None,
+                    model: (*model).to_string(),
+                    comp_hash: None,
+                    personality: None,
+                    collaboration_mode: None,
+                    multi_agent_version: None,
+                    multi_agent_mode: None,
+                    realtime_active: None,
+                    effort: effort.clone(),
+                    summary: ReasoningSummary::Auto,
+                }),
+            }
+        }));
+        let contents = lines
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("serialize feedback rollout")
+            .join("\n");
+        std::fs::write(&rollout_path, format!("{contents}\n")).expect("write feedback rollout");
+
+        (tempdir, rollout_path)
+    }
 
     #[test]
     fn tool_cache_feedback_attachments_include_existing_active_cache_files() {
