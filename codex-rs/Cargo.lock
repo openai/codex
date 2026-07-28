@@ -2032,6 +2032,7 @@ dependencies = [
  "shlex",
  "tar",
  "tempfile",
+ "test-case",
  "thiserror 2.0.18",
  "time",
  "tokio",

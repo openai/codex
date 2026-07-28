@@ -140,6 +140,7 @@ serial_test = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 tar = { workspace = true }
+test-case = "3.3.1"
 tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }

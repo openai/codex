@@ -1851,6 +1851,10 @@
         "root_agent_usage_hint_text": {
           "type": "string"
         },
+        "subagent_developer_instructions": {
+          "description": "Overrides inherited developer instructions for subagents without role-specific instructions.",
+          "type": "string"
+        },
         "subagent_usage_hint_text": {
           "type": "string"
         },

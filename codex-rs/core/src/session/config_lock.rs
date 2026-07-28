@@ -262,6 +262,8 @@ mod tests {
     async fn lock_contains_prompts_and_materializes_features() {
         let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
         let mut config = (*sc.original_config_do_not_use).clone();
+        config.multi_agent_v2.subagent_developer_instructions =
+            Some("Locked subagent developer instructions.".to_string());
         config.token_budget = Some(crate::config::TokenBudgetConfig {
             reminder_threshold_tokens: Some(16_000),
             reminder_message_template: "Locked reminder: {n_remaining} tokens.".to_string(),
@@ -346,9 +348,10 @@ mod tests {
                 min_wait_timeout_ms: Some(_),
                 max_wait_timeout_ms: Some(_),
                 default_wait_timeout_ms: Some(_),
+                subagent_developer_instructions: Some(instructions),
                 hide_spawn_agent_metadata: Some(_),
                 ..
-            })
+            }) if instructions == "Locked subagent developer instructions."
         ));
 
         assert_eq!(
