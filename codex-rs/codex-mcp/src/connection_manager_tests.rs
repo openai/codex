@@ -429,6 +429,42 @@ async fn create_ready_async_managed_client(tools: Vec<ToolInfo>) -> AsyncManaged
     }
 }
 
+fn create_gated_async_managed_client(
+    client: ManagedClient,
+) -> (
+    AsyncManagedClient,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let startup_complete = Arc::new(AtomicBool::new(false));
+    let startup_complete_for_client = Arc::clone(&startup_complete);
+    let client = async move {
+        started_tx.send(()).expect("signal client startup");
+        release_rx.await.expect("release client startup");
+        startup_complete_for_client.store(true, std::sync::atomic::Ordering::Release);
+        Ok(client)
+    }
+    .boxed()
+    .shared();
+
+    (
+        AsyncManagedClient {
+            client,
+            is_codex_apps_mcp_server: false,
+            cached_server_info: None,
+            codex_apps_tools_cache_context: None,
+            tool_catalog_cache_context: None,
+            startup_complete,
+            startup_reconnect: None,
+            cancel_token: CancellationToken::new(),
+        },
+        started_rx,
+        release_tx,
+    )
+}
+
 async fn create_test_manager_with_ready_apps_client(
     cache_context: ConnectorRuntimeContext<ToolInfo>,
     tool_name: &str,
@@ -1750,6 +1786,99 @@ async fn capture_binding_skips_pending_optional_servers_after_one_shared_startup
 }
 
 #[tokio::test]
+async fn capture_binding_resolves_concurrently_and_rechecks_cached_clients() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "shared_cached_tool",
+        )],
+    );
+    let ready_apps_client = create_test_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "client_local_tool",
+    )])
+    .await;
+    let (mut apps_client, apps_started, release_apps) =
+        create_gated_async_managed_client(ready_apps_client);
+    apps_client.is_codex_apps_mcp_server = true;
+    apps_client.codex_apps_tools_cache_context = Some(cache_context);
+    let first_client =
+        create_test_managed_client(vec![create_test_tool("first", "first_tool")]).await;
+    let second_client =
+        create_test_managed_client(vec![create_test_tool("second", "second_tool")]).await;
+    let (first_client, first_started, release_first) =
+        create_gated_async_managed_client(first_client);
+    let (second_client, second_started, release_second) =
+        create_gated_async_managed_client(second_client);
+
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionSet::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.insert_test_client(CODEX_APPS_MCP_SERVER_NAME, apps_client);
+    manager.insert_test_client("first", first_client);
+    manager.insert_test_client("second", second_client);
+    let manager = Arc::new(manager);
+
+    let manager_for_startup = Arc::clone(&manager);
+    let startup = tokio::spawn(async move {
+        manager_for_startup
+            .wait_for_server_startup(CODEX_APPS_MCP_SERVER_NAME)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), apps_started)
+        .await
+        .expect("Codex Apps startup should begin")
+        .expect("signal Codex Apps startup");
+
+    let manager_for_binding = Arc::clone(&manager);
+    let binding = tokio::spawn(async move { capture_binding(&manager_for_binding).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        first_started.await.expect("first server startup");
+        second_started.await.expect("second server startup");
+    })
+    .await
+    .expect("both uncached servers should start before either is released");
+
+    release_apps.send(()).expect("release Codex Apps startup");
+    assert!(startup.await.expect("Codex Apps startup task"));
+    release_first.send(()).expect("release first server");
+    release_second.send(()).expect("release second server");
+
+    let binding = binding.await.expect("binding capture should complete");
+    assert_eq!(
+        binding
+            .tools()
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<HashSet<_>>(),
+        HashSet::from(["client_local_tool", "first_tool", "second_tool"])
+    );
+    assert!(
+        binding
+            .prepare_call(CODEX_APPS_MCP_SERVER_NAME, "client_local_tool")
+            .is_some()
+    );
+    assert!(
+        binding
+            .prepare_call(CODEX_APPS_MCP_SERVER_NAME, "shared_cached_tool")
+            .is_none()
+    );
+    assert!(binding.prepare_call("first", "first_tool").is_some());
+    assert!(binding.prepare_call("second", "second_tool").is_some());
+}
+
+#[tokio::test]
 async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
     let managed_client =
         create_ready_async_managed_client(vec![create_test_tool("rmcp", "echo")]).await;
@@ -1777,6 +1906,47 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
             tool.tool.name.as_ref(),
         ),
         expected
+    );
+}
+
+#[tokio::test]
+async fn list_all_tools_resolves_server_catalogs_concurrently() {
+    let first_client = create_test_managed_client(vec![create_test_tool("first", "search")]).await;
+    let second_client =
+        create_test_managed_client(vec![create_test_tool("second", "lookup")]).await;
+    let (first_client, first_started, release_first) =
+        create_gated_async_managed_client(first_client);
+    let (second_client, second_started, release_second) =
+        create_gated_async_managed_client(second_client);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionSet::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.insert_test_client("first", first_client);
+    manager.insert_test_client("second", second_client);
+    let manager = Arc::new(manager);
+    let manager_for_listing = Arc::clone(&manager);
+    let listing = tokio::spawn(async move { manager_for_listing.list_all_tools().await });
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        first_started.await.expect("first server startup");
+        second_started.await.expect("second server startup");
+    })
+    .await
+    .expect("both server catalogs should start before either is released");
+    release_first.send(()).expect("release first server");
+    release_second.send(()).expect("release second server");
+
+    let tools = listing.await.expect("tool listing should complete");
+    assert_eq!(
+        model_tool_names(&tools),
+        HashSet::from([
+            ToolName::namespaced("mcp__first", "search"),
+            ToolName::namespaced("mcp__second", "lookup"),
+        ])
     );
 }
 
