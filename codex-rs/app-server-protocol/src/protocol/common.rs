@@ -2068,6 +2068,7 @@ mod tests {
                 name: "server-a".to_string(),
                 thread_id: None,
                 scopes: None,
+                client_metadata_url_base: None,
                 timeout_secs: None,
             },
         };

@@ -235,6 +235,7 @@ async fn perform_oauth_login_retry_without_scopes(
         &resolved_scopes.scopes,
         oauth_client_id,
         oauth_resource,
+        /*client_metadata_url_base*/ None,
         callback_port,
         callback_url,
     )
@@ -253,6 +254,7 @@ async fn perform_oauth_login_retry_without_scopes(
                 &[],
                 oauth_client_id,
                 oauth_resource,
+                /*client_metadata_url_base*/ None,
                 callback_port,
                 callback_url,
             )
