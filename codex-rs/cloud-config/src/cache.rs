@@ -1,7 +1,8 @@
 //! Signed on-disk cache for cloud config bundles.
 //!
-//! The cache is scoped to the authenticated ChatGPT user and account, has a
-//! short TTL, and is HMAC-signed so malformed or edited files fail closed.
+//! The cache is scoped to the authenticated ChatGPT user and account. Entries
+//! refresh after a short interval but remain eligible as a bounded fallback,
+//! and are HMAC-signed so malformed or edited files fail closed.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -16,13 +17,17 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Sha256;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::fs;
 
 const CLOUD_CONFIG_BUNDLE_CACHE_VERSION: u32 = 1;
 pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_FILENAME: &str = "cloud-config-bundle-cache.json";
-const CLOUD_CONFIG_BUNDLE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_LOCK_FILENAME: &str = "cloud-config-bundle-cache.lock";
+pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL: Duration =
+    Duration::from_secs(15 * 60);
+pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_HARD_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY: &[u8] =
     b"codex-cloud-config-bundle-cache-v1-6160ae70-bcfd-4ca8-a99b-40f73b3b072e";
 const CLOUD_CONFIG_BUNDLE_CACHE_READ_HMAC_KEYS: &[&[u8]] =
@@ -33,6 +38,11 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Clone)]
 pub(super) struct CloudConfigBundleCache {
     path: AbsolutePathBuf,
+}
+
+pub(super) enum CacheLockAttempt {
+    Acquired(std::fs::File),
+    Contended,
 }
 
 impl CloudConfigBundleCache {
@@ -46,11 +56,41 @@ impl CloudConfigBundleCache {
         &self.path
     }
 
+    pub(super) async fn try_acquire_lock(&self) -> std::io::Result<CacheLockAttempt> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let lock_path = self
+            .path
+            .as_path()
+            .parent()
+            .map(|parent| parent.join(CLOUD_CONFIG_BUNDLE_CACHE_LOCK_FILENAME))
+            .unwrap_or_else(|| PathBuf::from(CLOUD_CONFIG_BUNDLE_CACHE_LOCK_FILENAME));
+        // The file intentionally persists between owners. Lock ownership is
+        // attached to this handle and is released when the handle is dropped.
+        let lock_file = tokio::task::spawn_blocking(move || {
+            std::fs::File::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(lock_path)
+        })
+        .await
+        .map_err(|err| std::io::Error::other(format!("cache lock task failed: {err}")))??;
+
+        match lock_file.try_lock() {
+            Ok(()) => Ok(CacheLockAttempt::Acquired(lock_file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(CacheLockAttempt::Contended),
+            Err(std::fs::TryLockError::Error(err)) => Err(err),
+        }
+    }
+
     pub(super) async fn load(
         &self,
         chatgpt_user_id: Option<&str>,
         account_id: Option<&str>,
-    ) -> Result<CloudConfigBundleCacheSignedPayload, CacheLoadStatus> {
+    ) -> Result<LoadedCloudConfigBundleCache, CacheLoadStatus> {
         let (Some(chatgpt_user_id), Some(account_id)) = (chatgpt_user_id, account_id) else {
             return Err(CacheLoadStatus::AuthIdentityIncomplete);
         };
@@ -99,11 +139,37 @@ impl CloudConfigBundleCache {
             return Err(CacheLoadStatus::CacheIdentityMismatch);
         }
 
-        if cache_file.signed_payload.expires_at <= Utc::now() {
+        let now = Utc::now();
+        let cache_age = now
+            .signed_duration_since(cache_file.signed_payload.cached_at)
+            .to_std()
+            .map_err(|_| CacheLoadStatus::CacheExpired)?;
+        if cache_file.signed_payload.expires_at <= now
+            || cache_age >= CLOUD_CONFIG_BUNDLE_CACHE_HARD_TTL
+        {
             return Err(CacheLoadStatus::CacheExpired);
         }
 
-        Ok(cache_file.signed_payload)
+        let expires_in = cache_file
+            .signed_payload
+            .expires_at
+            .signed_duration_since(now)
+            .to_std()
+            .map_err(|_| CacheLoadStatus::CacheExpired)?;
+        let hard_ttl_remaining = CLOUD_CONFIG_BUNDLE_CACHE_HARD_TTL
+            .checked_sub(cache_age)
+            .ok_or(CacheLoadStatus::CacheExpired)?;
+        let freshness = match CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL.checked_sub(cache_age) {
+            Some(refresh_in) => CacheFreshness::Fresh {
+                refresh_in: refresh_in.min(expires_in).min(hard_ttl_remaining),
+            },
+            None => CacheFreshness::Stale,
+        };
+
+        Ok(LoadedCloudConfigBundleCache {
+            signed_payload: cache_file.signed_payload,
+            freshness,
+        })
     }
 
     pub(super) fn log_load_status(&self, status: &CacheLoadStatus) {
@@ -130,11 +196,11 @@ impl CloudConfigBundleCache {
         chatgpt_user_id: Option<String>,
         account_id: Option<String>,
         bundle: CloudConfigBundle,
-    ) -> Result<(), CloudConfigBundleCacheError> {
+    ) -> Result<Duration, CloudConfigBundleCacheError> {
         let now = Utc::now();
         let expires_at = now
             .checked_add_signed(
-                ChronoDuration::from_std(CLOUD_CONFIG_BUNDLE_CACHE_TTL)
+                ChronoDuration::from_std(CLOUD_CONFIG_BUNDLE_CACHE_HARD_TTL)
                     .map_err(|_| CloudConfigBundleCacheError)?,
             )
             .ok_or(CloudConfigBundleCacheError)?;
@@ -163,7 +229,16 @@ impl CloudConfigBundleCache {
         fs::write(&self.path, serialized)
             .await
             .map_err(|_| CloudConfigBundleCacheError)?;
-        Ok(())
+        let refresh_at = now
+            .checked_add_signed(
+                ChronoDuration::from_std(CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL)
+                    .map_err(|_| CloudConfigBundleCacheError)?,
+            )
+            .ok_or(CloudConfigBundleCacheError)?;
+        refresh_at
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .map_err(|_| CloudConfigBundleCacheError)
     }
 }
 
@@ -194,6 +269,20 @@ pub(super) enum CacheLoadStatus {
 #[derive(Debug, Error)]
 #[error("failed to write cloud config bundle cache")]
 pub(super) struct CloudConfigBundleCacheError;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct LoadedCloudConfigBundleCache {
+    pub(super) signed_payload: CloudConfigBundleCacheSignedPayload,
+    pub(super) freshness: CacheFreshness,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum CacheFreshness {
+    /// The entry may be used immediately and refreshed after this delay.
+    Fresh { refresh_in: Duration },
+    /// The entry must be refreshed, but remains eligible as a failure fallback.
+    Stale,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct CloudConfigBundleCacheFile {
