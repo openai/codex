@@ -56,11 +56,10 @@ pub(crate) fn emit_agent_communication_send(
             state = "send",
             sender_thread_id = %context.sender_thread_id,
             receiver_thread_id = %receiver_thread_id,
-            content = if communication.content.is_empty() {
-                communication.encrypted_content.as_deref().unwrap_or_default()
-            } else {
-                communication.content.as_str()
-            },
+            content = communication
+                .encrypted_content
+                .as_deref()
+                .unwrap_or("[plaintext]"),
         },
         "agent communication"
     );

@@ -254,9 +254,18 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_openai_responses_requests_include_item_ids_without_passthrough_metadata() {
     let server = MockServer::start().await;
-    let response_mock = mount_sse_once(
+    let mut private_function_call = ev_function_call("private-call", "unsupported_tool", "{}");
+    private_function_call["item"]["encrypted_function_args"] = json!(["message"]);
+    let response_mock = mount_sse_sequence(
         &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                private_function_call,
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
     )
     .await;
     let mut provider =
@@ -289,7 +298,11 @@ async fn non_openai_responses_requests_include_item_ids_without_passthrough_meta
         .unwrap();
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let body = response_mock.single_request().body_json();
+    let body = response_mock
+        .requests()
+        .pop()
+        .expect("follow-up request")
+        .body_json();
     let input = body["input"]
         .as_array()
         .expect("request should include input items");
@@ -299,6 +312,10 @@ async fn non_openai_responses_requests_include_item_ids_without_passthrough_meta
             item.get("internal_chat_message_metadata_passthrough")
                 .is_none(),
             "input item should omit internal chat message metadata passthrough: {item}"
+        );
+        assert!(
+            item.get("encrypted_function_args").is_none(),
+            "input item should omit private encrypted function metadata: {item}"
         );
         assert!(
             item.get("id").and_then(serde_json::Value::as_str).is_some(),
@@ -508,6 +525,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: function_call_id.to_string(),
+                encrypted_function_args: None,
                 internal_chat_message_metadata_passthrough: None,
             }),
         },
@@ -1169,6 +1187,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 namespace: None,
                 arguments: "{\"path\":\"/tmp/example.png\"}".to_string(),
                 call_id: function_call_id.to_string(),
+                encrypted_function_args: None,
                 internal_chat_message_metadata_passthrough: None,
             }),
         },
@@ -3276,6 +3295,7 @@ async fn azure_responses_request_includes_store_and_prefixed_item_ids() {
         namespace: None,
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
+        encrypted_function_args: None,
         internal_chat_message_metadata_passthrough: None,
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {

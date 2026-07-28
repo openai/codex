@@ -550,6 +550,7 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
@@ -631,6 +632,7 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
@@ -851,6 +853,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
@@ -880,6 +883,7 @@ fn remove_first_item_removes_matching_call_for_output() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
     ];
@@ -1392,6 +1396,7 @@ fn normalize_adds_missing_output_for_function_call() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
+        encrypted_function_args: None,
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
@@ -1407,6 +1412,7 @@ fn normalize_adds_missing_output_for_function_call() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
+                encrypted_function_args: None,
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
@@ -1548,6 +1554,7 @@ fn normalize_mixed_inserts_and_removals() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         // Orphan output that should be removed
@@ -1595,6 +1602,7 @@ fn normalize_mixed_inserts_and_removals() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                encrypted_function_args: None,
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
@@ -1650,6 +1658,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
+        encrypted_function_args: None,
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
@@ -1663,6 +1672,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
+                encrypted_function_args: None,
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
@@ -1684,6 +1694,7 @@ fn for_prompt_assigns_stable_id_to_synthetic_output_without_reordering_history()
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-x".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
@@ -1894,6 +1905,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {

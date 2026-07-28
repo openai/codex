@@ -100,6 +100,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "mcp-call".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {

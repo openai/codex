@@ -150,6 +150,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            encrypted_function_args: None,
             internal_chat_message_metadata_passthrough: None,
         }
     ));
