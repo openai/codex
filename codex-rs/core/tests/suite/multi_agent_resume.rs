@@ -5,6 +5,10 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::Submission;
+use codex_protocol::user_input::UserInput;
+use core_test_support::responses::assert_parent_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -23,12 +27,17 @@ use tokio::time::sleep;
 
 const COLLABORATION_NAMESPACE: &str = "collaboration";
 const SPAWN_CALL_ID: &str = "spawn-worker";
+const NESTED_CALL_ID: &str = "spawn-grandchild";
+const QUEUE_CALL_ID: &str = "queue-worker-message";
 const FOLLOWUP_CALL_ID: &str = "followup-worker";
 const SIBLING_SPAWN_CALL_ID: &str = "spawn-survivor";
 const SIBLING_FOLLOWUP_CALL_ID: &str = "followup-survivor";
 const INTERRUPT_CALL_ID: &str = "interrupt-worker";
 const INITIAL_PROMPT: &str = "spawn a durable worker";
 const INITIAL_TASK: &str = "inspect the repository";
+const NESTED_TASK: &str = "inspect the nested repository";
+const QUEUE_PROMPT: &str = "queue context for the durable worker";
+const QUEUED_MESSAGE: &str = "queue-only context from an earlier parent turn";
 const FOLLOWUP_PROMPT: &str = "continue the durable worker";
 const FOLLOWUP_TASK: &str = "inspect the tests too";
 const SIBLING_PROMPT: &str = "spawn a second durable worker";
@@ -134,6 +143,7 @@ fn configure_multi_agent_v2_with_role(
         .expect("test config should allow feature update");
     config.multi_agent_v2.subagent_developer_instructions =
         Some(SUBAGENT_DEVELOPER_INSTRUCTIONS.to_string());
+    config.multi_agent_v2.max_concurrent_threads_per_session = 3;
     let role_path = config.codex_home.join("durable-worker-role.toml");
     std::fs::write(
         &role_path,
@@ -185,11 +195,37 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         },
         sse(vec![
             ev_response_created("resp-worker-1"),
-            ev_assistant_message("msg-worker-1", "initial task complete"),
+            ev_function_call_with_namespace(
+                NESTED_CALL_ID,
+                COLLABORATION_NAMESPACE,
+                "spawn_agent",
+                r#"{"message":"inspect the nested repository","task_name":"grandchild","fork_turns":"none"}"#,
+            ),
             ev_completed("resp-worker-1"),
         ]),
     )
     .await;
+    let nested_mock = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, NESTED_TASK)
+                && request_has_input_type(request, "agent_message")
+                && !body_contains(request, NESTED_CALL_ID)
+        },
+        sse(vec![ev_completed("resp-parent-turn-assistant")]),
+    )
+    .await;
+    for (text, is_subagent) in [(NESTED_CALL_ID, true), (QUEUE_CALL_ID, false)] {
+        mount_sse_once_match(
+            &server,
+            move |request: &wiremock::Request| {
+                body_contains(request, text)
+                    && request_has_input_type(request, "agent_message") == is_subagent
+            },
+            sse(vec![ev_completed("resp-parent-turn-assistant")]),
+        )
+        .await;
+    }
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -215,16 +251,46 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         .rollout_path()
         .expect("root rollout path")
         .to_path_buf();
-    initial.submit_turn(INITIAL_PROMPT).await?;
+    let mut op = vec![UserInput::Text {
+        text: INITIAL_PROMPT.to_string(),
+        text_elements: Vec::new(),
+    }]
+    .into();
+    if let Op::UserInput {
+        thread_settings, ..
+    } = &mut op
+    {
+        thread_settings.permission_profile = Some(PermissionProfile::Disabled);
+    }
+    initial
+        .codex
+        .submit_with_id(Submission {
+            id: "spoofed-root-turn".to_string(),
+            op,
+            client_user_message_id: None,
+            trace: None,
+            parent_turn_id: Some("spoofed-parent-turn".to_string()),
+        })
+        .await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let worker_thread_id = loop {
-        if let Some(thread_id) = initial
-            .thread_manager
-            .list_thread_ids()
-            .await
+        if let Some(thread_id) = initial_child_request
+            .requests()
             .into_iter()
-            .find(|thread_id| *thread_id != root_thread_id)
+            .find_map(|request| {
+                let body = request.body_json();
+                if body["client_metadata"]["x-codex-parent-thread-id"] != json!(root_thread_id) {
+                    return None;
+                }
+                body["client_metadata"]["thread_id"]
+                    .as_str()
+                    .and_then(|thread_id| codex_protocol::ThreadId::from_string(thread_id).ok())
+            })
         {
             break thread_id;
         }
@@ -299,12 +365,14 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     .await;
     initial.submit_turn(SIBLING_PROMPT).await?;
 
+    let grandchild = nested_mock.last_request().expect("grandchild").body_json();
+    let nested_id = &grandchild["client_metadata"]["thread_id"];
     let sibling_thread_id = initial
         .thread_manager
         .list_thread_ids()
         .await
         .into_iter()
-        .find(|thread_id| *thread_id != root_thread_id && *thread_id != worker_thread_id)
+        .find(|id| ![root_thread_id, worker_thread_id].contains(id) && &json!(id) != nested_id)
         .ok_or_else(|| anyhow::anyhow!("spawned sibling should be registered"))?;
     let sibling_thread = initial.thread_manager.get_thread(sibling_thread_id).await?;
     wait_for_event(sibling_thread.as_ref(), |event| {
@@ -343,6 +411,7 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
             request_has_model(request, ROLE_MODEL)
                 && request_has_input_type(request, "agent_message")
                 && body_contains(request, FOLLOWUP_TASK)
+                && body_contains(request, QUEUED_MESSAGE)
         },
         sse(vec![
             ev_response_created("resp-worker-2"),
@@ -388,13 +457,29 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
             .is_err()
     );
 
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, QUEUE_PROMPT),
+        sse(vec![
+            ev_response_created("resp-queue"),
+            ev_function_call_with_namespace(
+                QUEUE_CALL_ID,
+                COLLABORATION_NAMESPACE,
+                "send_message",
+                r#"{"target":"worker","message":"queue-only context from an earlier parent turn"}"#,
+            ),
+            ev_completed("resp-queue"),
+        ]),
+    )
+    .await;
+    resumed.submit_turn(QUEUE_PROMPT).await?;
     resumed.submit_turn(FOLLOWUP_PROMPT).await?;
 
     let reloaded_worker = resumed
         .thread_manager
         .get_thread(worker_thread_id)
         .await
-        .expect("follow-up should lazily reload the original worker");
+        .expect("queued message should lazily reload the original worker");
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if matches!(
@@ -413,6 +498,61 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
             && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
             && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
     }));
+    let requests = server
+        .received_requests()
+        .await
+        .expect("captured response requests");
+    assert!(!followup_child_request.requests().iter().any(|request| {
+        request.body_json()["client_metadata"]["thread_id"] == json!(worker_thread_id)
+            && request.body_contains_text(QUEUED_MESSAGE)
+            && !request.body_contains_text(FOLLOWUP_TASK)
+    }));
+    let body_for = |text: &str, thread: codex_protocol::ThreadId| {
+        requests
+            .iter()
+            .find_map(|request| {
+                let body: Value = serde_json::from_slice(&decoded_body(request)?).ok()?;
+                (body_contains(request, text)
+                    && body["client_metadata"]["thread_id"] == json!(thread))
+                .then_some(body)
+            })
+            .expect("matching model request for expected thread")
+    };
+    let initial_root = body_for(INITIAL_PROMPT, root_thread_id);
+    let queue_root = body_for(QUEUE_PROMPT, root_thread_id);
+    let followup_root = body_for(FOLLOWUP_PROMPT, root_thread_id);
+    let initial_child = body_for(INITIAL_TASK, worker_thread_id);
+    let followup_child = body_for(FOLLOWUP_TASK, worker_thread_id);
+    let initial_parent = initial_root["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("initial parent turn");
+    let queue_parent = queue_root["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("queue-only parent turn");
+    let followup_parent = followup_root["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("follow-up parent turn");
+    assert_ne!(followup_parent, initial_parent);
+    assert_ne!(followup_parent, queue_parent);
+    let nested_parent = initial_child["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("nested worker parent turn");
+    for (body, parent_thread, parent_turn) in [
+        (&initial_root, None, None),
+        (&queue_root, None, None),
+        (&followup_root, None, None),
+        (&initial_child, Some(root_thread_id), Some(initial_parent)),
+        (&followup_child, Some(root_thread_id), Some(followup_parent)),
+        (&grandchild, Some(worker_thread_id), Some(nested_parent)),
+    ] {
+        if let Some(parent_thread) = parent_thread {
+            assert_eq!(
+                body["client_metadata"]["x-codex-parent-thread-id"],
+                json!(parent_thread)
+            );
+        }
+        assert_parent_turn(body, parent_turn)?;
+    }
     let reloaded_worker_config = reloaded_worker.config_snapshot().await;
     let reloaded_worker_role_config = (
         reloaded_worker_config.model,

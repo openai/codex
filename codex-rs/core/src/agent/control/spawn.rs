@@ -527,8 +527,13 @@ impl AgentControl {
 
         match initial_input {
             SpawnInitialInput::UserInput(input) => {
-                self.send_input_after_capacity_check(new_thread.thread_id, &state, input)
-                    .await?;
+                self.send_input_after_capacity_check(
+                    new_thread.thread_id,
+                    &state,
+                    input,
+                    options.parent_turn_id,
+                )
+                .await?;
             }
             SpawnInitialInput::InterAgentCommunication(communication, context) => {
                 self.send_inter_agent_communication_after_capacity_check(
@@ -536,6 +541,7 @@ impl AgentControl {
                     &state,
                     communication,
                     context,
+                    options.parent_turn_id,
                 )
                 .await?;
             }

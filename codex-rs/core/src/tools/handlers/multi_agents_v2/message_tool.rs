@@ -107,10 +107,17 @@ pub(crate) async fn handle_message_string_tool(
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
     };
     let context = AgentCommunicationContext::new(kind, session.thread_id);
+    let parent_turn_id =
+        matches!(mode, MessageDeliveryMode::TriggerTurn).then(|| turn.sub_id.clone());
     let result = session
         .services
         .agent_control
-        .send_inter_agent_communication(receiver_thread_id, mode.apply(communication), context)
+        .send_inter_agent_communication(
+            receiver_thread_id,
+            mode.apply(communication),
+            context,
+            parent_turn_id,
+        )
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
     result?;

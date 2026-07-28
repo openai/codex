@@ -5,6 +5,7 @@ use crate::codex_thread::TryStartTurnIfIdleError;
 use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
+use crate::tasks::MailboxParentProvenance;
 use crate::tasks::RegularTask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ResponseItem;
@@ -124,8 +125,13 @@ impl Session {
                 input.into_iter().map(TurnInput::ResponseItem).collect(),
             )
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+        self.start_task(
+            turn_context,
+            Vec::new(),
+            RegularTask::new(),
+            MailboxParentProvenance::Ignore,
+        )
+        .await;
         Ok(())
     }
 

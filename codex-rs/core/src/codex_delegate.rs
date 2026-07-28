@@ -218,6 +218,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
+    let parent_turn_id = parent_ctx.sub_id.clone();
     let (session, io) = Box::pin(run_codex_thread_interactive(
         config,
         auth_manager,
@@ -233,13 +234,17 @@ pub(crate) async fn run_codex_thread_one_shot(
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
-    io.submit(Op::UserInput {
-        items: input,
-        final_output_json_schema,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
-        thread_settings: Default::default(),
-    })
+    io.submit_with_trace(
+        Op::UserInput {
+            items: input,
+            final_output_json_schema,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        },
+        /*trace*/ None,
+        Some(parent_turn_id),
+    )
     .await?;
 
     // Bridge events so we can observe completion and shut down automatically.
@@ -262,6 +267,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                         op: Op::Shutdown {},
                         client_user_message_id: None,
                         trace: None,
+                        parent_turn_id: None,
                     })
                     .await;
                 child_cancel.cancel();

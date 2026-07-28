@@ -80,6 +80,19 @@ impl ResponseMock {
     }
 }
 
+pub fn assert_parent_turn(body: &Value, expected: Option<&str>) -> Result<()> {
+    let metadata = &body["client_metadata"];
+    let payload = metadata["x-codex-turn-metadata"]
+        .as_str()
+        .expect("canonical turn metadata");
+    let canonical: Value = serde_json::from_str(payload)?;
+    let expected = expected.map(Value::from);
+    let key = "parent_turn_id";
+    let actual = (metadata.get(key), canonical.get(key));
+    assert_eq!(actual, (expected.as_ref(), expected.as_ref()));
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct ResponsesRequest(wiremock::Request);
 

@@ -277,7 +277,9 @@ impl CodexThread {
         op: Op,
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
-        self.io.submit_with_trace(op, trace).await
+        self.io
+            .submit_with_trace(op, trace, /*parent_turn_id*/ None)
+            .await
     }
 
     pub async fn submit_user_input_with_client_user_message_id(
@@ -429,7 +431,8 @@ impl CodexThread {
     }
 
     /// Use sparingly: this is intended to be removed soon.
-    pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
+    pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
+        sub.parent_turn_id = None;
         self.io.submit_with_id(sub).await
     }
 

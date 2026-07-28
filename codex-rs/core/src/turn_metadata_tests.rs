@@ -4,6 +4,7 @@ use crate::responses_metadata::CODE_MODE_TOOL_NAMES_KEY;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
+use crate::responses_metadata::PARENT_TURN_ID_KEY;
 use crate::responses_metadata::WINDOW_ID_KEY;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_analytics::CompactionImplementation;
@@ -560,6 +561,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
             "parent_thread_id".to_string(),
             "client-supplied".to_string(),
         ),
+        ("parent_turn_id".to_string(), "client-supplied".to_string()),
         ("subagent_kind".to_string(), "client-supplied".to_string()),
     ]));
 
@@ -570,6 +572,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     assert!(json.get("turn_started_at_unix_ms").is_none());
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
+    assert!(json.get("parent_turn_id").is_none());
     assert!(json.get("subagent_kind").is_none());
 }
 
@@ -602,6 +605,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
     );
+    state.set_parent_turn_id("parent-turn-a".to_string());
     state.set_responsesapi_client_metadata(HashMap::from([
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
         ("origin".to_string(), "東京".to_string()),
@@ -634,6 +638,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "parent_thread_id".to_string(),
             "client-supplied".to_string(),
         ),
+        ("parent_turn_id".to_string(), "client-supplied".to_string()),
         ("subagent_kind".to_string(), "client-supplied".to_string()),
         (
             CODE_MODE_TOOL_NAMES_KEY.to_string(),
@@ -694,6 +699,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         json["parent_thread_id"].as_str(),
         Some("55555555-5555-4555-8555-555555555555")
     );
+    assert_eq!(json["parent_turn_id"].as_str(), Some("parent-turn-a"));
     assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
     assert_eq!(json["thread_source"].as_str(), Some("automation"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
@@ -727,6 +733,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(meta["model"].as_str(), Some("gpt-5.4"));
     assert_eq!(meta["reasoning_effort"].as_str(), Some("high"));
     assert!(meta.get(CODE_MODE_TOOL_NAMES_KEY).is_none());
+    assert!(meta.get(PARENT_TURN_ID_KEY).is_none());
     assert!(meta.get(WINDOW_ID_KEY).is_none());
     assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));
 }

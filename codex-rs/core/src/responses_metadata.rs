@@ -36,6 +36,7 @@ pub(crate) const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 
 pub(crate) const FORKED_FROM_THREAD_ID_KEY: &str = "forked_from_thread_id";
 pub(crate) const PARENT_THREAD_ID_KEY: &str = "parent_thread_id";
+pub(crate) const PARENT_TURN_ID_KEY: &str = "parent_turn_id";
 pub(crate) const SUBAGENT_KIND_KEY: &str = "subagent_kind";
 pub(crate) const THREAD_SOURCE_KEY: &str = "thread_source";
 pub(crate) const SANDBOX_KEY: &str = "sandbox";
@@ -60,6 +61,7 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     TURN_STARTED_AT_UNIX_MS_KEY,
     FORKED_FROM_THREAD_ID_KEY,
     PARENT_THREAD_ID_KEY,
+    PARENT_TURN_ID_KEY,
     SUBAGENT_KIND_KEY,
     THREAD_SOURCE_KEY,
     SANDBOX_KEY,
@@ -163,6 +165,7 @@ pub struct CodexResponsesMetadata {
     pub(crate) request_kind: Option<CodexResponsesRequestKind>,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) parent_turn_id: Option<String>,
     pub(crate) subagent_header: Option<String>,
     pub(crate) subagent_kind: Option<String>,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -189,6 +192,7 @@ impl CodexResponsesMetadata {
             request_kind: None,
             forked_from_thread_id: None,
             parent_thread_id: None,
+            parent_turn_id: None,
             subagent_header: None,
             subagent_kind: None,
             thread_source: None,
@@ -236,6 +240,9 @@ impl CodexResponsesMetadata {
                 X_CODEX_PARENT_THREAD_ID_HEADER.to_string(),
                 parent_thread_id.to_string(),
             );
+        }
+        if let Some(parent_turn_id) = &self.parent_turn_id {
+            client_metadata.insert(PARENT_TURN_ID_KEY.to_string(), parent_turn_id.clone());
         }
         if self.has_turn_metadata()
             && let Some(turn_metadata_json) = self.turn_metadata_json()
@@ -296,6 +303,7 @@ impl CodexResponsesMetadata {
             request_kind: request_kind_value,
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
+            parent_turn_id: self.parent_turn_id.as_deref(),
             subagent_kind: self.subagent_kind.as_deref(),
             thread_source: self.thread_source.as_ref(),
             sandbox: self.sandbox.as_deref(),
@@ -382,6 +390,8 @@ struct CodexTurnMetadataPayload<'a> {
     forked_from_thread_id: Option<ThreadId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_turn_id: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_kind: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

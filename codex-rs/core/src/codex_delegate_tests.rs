@@ -175,6 +175,7 @@ async fn forward_ops_preserves_submission_trace_context() {
             ),
             tracestate: Some("vendor=state".to_string()),
         }),
+        parent_turn_id: Some("parent-turn".to_string()),
     };
     tx_ops.send(submission.clone()).await.unwrap();
     drop(tx_ops);
@@ -186,6 +187,7 @@ async fn forward_ops_preserves_submission_trace_context() {
     assert_eq!(submission.id, forwarded.id);
     assert_eq!(submission.op, forwarded.op);
     assert_eq!(submission.trace, forwarded.trace);
+    assert_eq!(submission.parent_turn_id, forwarded.parent_turn_id);
 
     timeout(Duration::from_secs(1), forward)
         .await

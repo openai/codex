@@ -34,7 +34,12 @@ pub(crate) struct TurnInputQueue {
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
-    mailbox_pending_mails: Mutex<VecDeque<InterAgentCommunication>>,
+    mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,
+}
+
+struct PendingMailboxCommunication {
+    communication: InterAgentCommunication,
+    parent_turn_id: Option<String>,
 }
 
 impl InputQueue {
@@ -72,11 +77,15 @@ impl InputQueue {
     pub(crate) async fn enqueue_mailbox_communication(
         &self,
         communication: InterAgentCommunication,
+        parent_turn_id: Option<String>,
     ) {
         self.mailbox_pending_mails
             .lock()
             .await
-            .push_back(communication);
+            .push_back(PendingMailboxCommunication {
+                communication,
+                parent_turn_id,
+            });
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
     }
 
@@ -89,16 +98,27 @@ impl InputQueue {
             .lock()
             .await
             .iter()
-            .any(|mail| mail.trigger_turn)
+            .any(|mail| mail.communication.trigger_turn)
     }
 
-    pub(crate) async fn drain_mailbox_input_items(&self) -> Vec<TurnInput> {
-        self.mailbox_pending_mails
+    pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, Option<String>) {
+        let pending_mails = self
+            .mailbox_pending_mails
             .lock()
             .await
             .drain(..)
-            .map(TurnInput::InterAgentCommunication)
-            .collect()
+            .collect::<Vec<_>>();
+        let parent_turn_id = pending_mails
+            .iter()
+            .filter(|mail| mail.communication.trigger_turn)
+            .map(|mail| mail.parent_turn_id.as_deref())
+            .reduce(|expected, candidate| expected.filter(|id| candidate == Some(*id)))
+            .and_then(|id| id.filter(|id| !id.trim().is_empty()).map(str::to_string));
+        let items = pending_mails
+            .into_iter()
+            .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
+            .collect();
+        (items, parent_turn_id)
     }
 
     pub(crate) async fn turn_state_for_sub_id(
@@ -204,7 +224,7 @@ impl InputQueue {
     pub(crate) async fn get_pending_input(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> Vec<TurnInput> {
+    ) -> (Vec<TurnInput>, Option<String>) {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -223,15 +243,15 @@ impl InputQueue {
             }
         };
         if !accepts_mailbox_delivery {
-            return pending_input;
+            return (pending_input, None);
         }
-        let mailbox_items = self.drain_mailbox_input_items().await.into_iter();
+        let (mailbox_items, parent_turn_id) = self.drain_mailbox_input_items().await;
         if pending_input.is_empty() {
-            mailbox_items.collect()
+            (mailbox_items, parent_turn_id)
         } else {
             let mut pending_input = pending_input;
             pending_input.extend(mailbox_items);
-            pending_input
+            (pending_input, parent_turn_id)
         }
     }
 
@@ -299,21 +319,23 @@ mod tests {
             input_queue.subscribe_activity(/*turn_state*/ None).await;
         assert_eq!(pending_activity, None);
 
+        let mail_one = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "one",
+            /*trigger_turn*/ false,
+        );
         input_queue
-            .enqueue_mailbox_communication(make_mail(
-                AgentPath::root(),
-                AgentPath::try_from("/root/worker").expect("agent path"),
-                "one",
-                /*trigger_turn*/ false,
-            ))
+            .enqueue_mailbox_communication(mail_one, /*parent_turn_id*/ None)
             .await;
+        let mail_two = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "two",
+            /*trigger_turn*/ false,
+        );
         input_queue
-            .enqueue_mailbox_communication(make_mail(
-                AgentPath::root(),
-                AgentPath::try_from("/root/worker").expect("agent path"),
-                "two",
-                /*trigger_turn*/ false,
-            ))
+            .enqueue_mailbox_communication(mail_two, /*parent_turn_id*/ None)
             .await;
 
         activity_rx.changed().await.expect("mailbox update");
@@ -388,14 +410,14 @@ mod tests {
         );
 
         input_queue
-            .enqueue_mailbox_communication(mail_one.clone())
+            .enqueue_mailbox_communication(mail_one.clone(), /*parent_turn_id*/ None)
             .await;
         input_queue
-            .enqueue_mailbox_communication(mail_two.clone())
+            .enqueue_mailbox_communication(mail_two.clone(), /*parent_turn_id*/ None)
             .await;
 
         assert_eq!(
-            input_queue.drain_mailbox_input_items().await,
+            input_queue.drain_mailbox_input_items().await.0,
             vec![
                 TurnInput::InterAgentCommunication(mail_one),
                 TurnInput::InterAgentCommunication(mail_two)
@@ -405,26 +427,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn input_queue_requires_one_unambiguous_trigger_parent() {
+        for (pending_mails, expected_parent_turn_id) in [
+            (Vec::new(), None),
+            (vec![(false, Some("q"))], None),
+            (vec![(true, Some(""))], None),
+            (vec![(true, Some("   "))], None),
+            (vec![(true, None)], None),
+            (vec![(true, Some("a")), (true, Some("b"))], None),
+            (vec![(true, Some("a")), (true, None)], None),
+            (vec![(true, Some("a")), (true, Some("a"))], Some("a")),
+            (vec![(false, Some("q")), (true, Some("a"))], Some("a")),
+        ] {
+            let input_queue = InputQueue::new();
+            for (trigger_turn, parent_turn_id) in pending_mails {
+                input_queue
+                    .enqueue_mailbox_communication(
+                        make_mail(AgentPath::root(), AgentPath::root(), "task", trigger_turn),
+                        parent_turn_id.map(str::to_string),
+                    )
+                    .await;
+            }
+            let (_, parent_turn_id) = input_queue.drain_mailbox_input_items().await;
+            assert_eq!(parent_turn_id.as_deref(), expected_parent_turn_id);
+        }
+    }
+
+    #[tokio::test]
     async fn input_queue_tracks_pending_trigger_turn_mail() {
         let input_queue = InputQueue::new();
 
+        let queued_mail = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "queued",
+            /*trigger_turn*/ false,
+        );
         input_queue
-            .enqueue_mailbox_communication(make_mail(
-                AgentPath::root(),
-                AgentPath::try_from("/root/worker").expect("agent path"),
-                "queued",
-                /*trigger_turn*/ false,
-            ))
+            .enqueue_mailbox_communication(queued_mail, /*parent_turn_id*/ None)
             .await;
         assert!(!input_queue.has_trigger_turn_mailbox_items().await);
 
+        let trigger_mail = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "wake",
+            /*trigger_turn*/ true,
+        );
         input_queue
-            .enqueue_mailbox_communication(make_mail(
-                AgentPath::root(),
-                AgentPath::try_from("/root/worker").expect("agent path"),
-                "wake",
-                /*trigger_turn*/ true,
-            ))
+            .enqueue_mailbox_communication(trigger_mail, /*parent_turn_id*/ None)
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
     }

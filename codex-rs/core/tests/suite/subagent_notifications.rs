@@ -8,6 +8,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -17,6 +18,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::assert_parent_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -951,17 +953,22 @@ async fn spawned_child_receives_forked_parent_context(
             config.agent_default_subagent_model = Some(REQUESTED_MODEL.to_string());
             config.agent_default_subagent_reasoning_effort = Some(REQUESTED_REASONING_EFFORT);
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn(TURN_0_FORK_PROMPT).await?;
     let _ = seed_turn.single_request();
 
     test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = spawn_turn.single_request();
+    let parent_body = spawn_turn.single_request().body_json();
 
     let child_request = wait_for_request_with_model(&child_request_log, REQUESTED_MODEL).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
     let child_body = child_request.body_json();
+    let original_parent_turn_id = parent_body["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("legacy spawn parent turn id");
+    assert_parent_turn(&parent_body, /*expected*/ None)?;
+    assert_parent_turn(&child_body, Some(original_parent_turn_id))?;
     assert_eq!(
         (
             child_body["model"].clone(),
@@ -972,7 +979,59 @@ async fn spawned_child_receives_forked_parent_context(
             json!(REQUESTED_REASONING_EFFORT.to_string()),
         )
     );
+    let child_thread_id = ThreadId::from_string(
+        child_body["client_metadata"]["thread_id"]
+            .as_str()
+            .expect("legacy child thread id"),
+    )?;
+    let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !matches!(child_thread.agent_status().await, AgentStatus::Completed(_)) {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let args = serde_json::to_string(&json!({
+        "target": child_thread_id.to_string(),
+        "message": "legacy child follow-up",
+    }))?;
+    let parent = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, "reuse the legacy child"),
+        sse(vec![
+            ev_response_created("resp-legacy-reuse"),
+            ev_function_call_with_namespace(
+                "legacy-reuse-call",
+                MULTI_AGENT_V1_NAMESPACE,
+                "send_input",
+                &args,
+            ),
+            ev_completed("resp-legacy-reuse"),
+        ]),
+    )
+    .await;
+    let followup = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("resp-legacy-child-reuse")]),
+            sse(vec![ev_completed("resp-legacy-reuse-complete")]),
+        ],
+    )
+    .await;
 
+    test.submit_turn("reuse the legacy child").await?;
+    let followup_parent_body = parent.single_request().body_json();
+    let reused_child_body = wait_for_request_with_model(&followup, REQUESTED_MODEL)
+        .await?
+        .body_json();
+    let followup_parent_turn_id = followup_parent_body["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("legacy follow-up parent turn id");
+    assert_ne!(followup_parent_turn_id, original_parent_turn_id);
+    let metadata = &reused_child_body["client_metadata"];
+    assert_eq!(metadata["thread_id"], json!(child_thread_id));
+    assert_parent_turn(&followup_parent_body, /*expected*/ None)?;
+    assert_parent_turn(&reused_child_body, Some(followup_parent_turn_id))?;
     Ok(())
 }
 

@@ -12,12 +12,16 @@ impl AgentControl {
             let result = if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
                 Ok(String::new())
             } else {
-                state.send_op(agent_id, Op::Shutdown {}).await
+                state
+                    .send_op(agent_id, Op::Shutdown {}, /*parent_turn_id*/ None)
+                    .await
             };
             thread.wait_until_terminated().await;
             result
         } else {
-            state.send_op(agent_id, Op::Shutdown {}).await
+            state
+                .send_op(agent_id, Op::Shutdown {}, /*parent_turn_id*/ None)
+                .await
         };
         let _ = state.remove_thread(&agent_id).await;
         self.forget_v2_residency(agent_id);

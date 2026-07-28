@@ -83,8 +83,9 @@ pub async fn user_input_or_turn(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
+    parent_turn_id: Option<String>,
 ) {
-    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id).await;
+    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id, parent_turn_id).await;
 }
 
 pub async fn update_thread_settings(
@@ -178,6 +179,7 @@ pub(super) async fn user_input_or_turn_inner(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
+    parent_turn_id: Option<String>,
 ) {
     let Op::UserInput {
         items,
@@ -224,6 +226,9 @@ pub(super) async fn user_input_or_turn_inner(
             current_context.session_telemetry.user_prompt(&items);
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
+            if let Some(id) = parent_turn_id {
+                current_context.turn_metadata_state.set_parent_turn_id(id);
+            }
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                 current_context
                     .turn_metadata_state
@@ -268,10 +273,11 @@ pub async fn inter_agent_communication(
     sess: &Arc<Session>,
     sub_id: String,
     communication: InterAgentCommunication,
+    parent_turn_id: Option<String>,
 ) {
     let trigger_turn = communication.trigger_turn;
     sess.input_queue
-        .enqueue_mailbox_communication(communication)
+        .enqueue_mailbox_communication(communication, parent_turn_id.filter(|_| trigger_turn))
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
@@ -746,8 +752,14 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. } => {
-                    user_input_or_turn(&sess, sub.id.clone(), sub.op, sub.client_user_message_id)
-                        .await;
+                    user_input_or_turn(
+                        &sess,
+                        sub.id.clone(),
+                        sub.op,
+                        sub.client_user_message_id,
+                        sub.parent_turn_id,
+                    )
+                    .await;
                     false
                 }
                 Op::ThreadSettings { thread_settings } => {
@@ -755,7 +767,13 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::InterAgentCommunication { communication } => {
-                    inter_agent_communication(&sess, sub.id.clone(), communication).await;
+                    inter_agent_communication(
+                        &sess,
+                        sub.id.clone(),
+                        communication,
+                        sub.parent_turn_id,
+                    )
+                    .await;
                     false
                 }
                 Op::ExecApproval {

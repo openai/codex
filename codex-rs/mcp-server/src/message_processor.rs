@@ -560,6 +560,7 @@ impl MessageProcessor {
                 op: codex_protocol::protocol::Op::Interrupt,
                 client_user_message_id: None,
                 trace: None,
+                parent_turn_id: None,
             })
             .await
         {

@@ -182,6 +182,8 @@ pub struct Submission {
     pub client_user_message_id: Option<String>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     pub trace: Option<W3cTraceContext>,
+    /// Core-provided ID of the parent turn that directly initiated this submission.
+    pub parent_turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
