@@ -7,6 +7,16 @@ const DEFAULT_ANALYTICS_ENABLED: bool = false;
 const DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
 const OTEL_SERVICE_NAME: &str = "codex-exec-server";
 
+pub(crate) enum ParentLifetime {
+    Independent,
+    StdinPipe,
+}
+
+pub(crate) enum ShutdownBehavior {
+    Immediate,
+    Graceful(tokio::sync::oneshot::Sender<()>),
+}
+
 pub(crate) fn init(
     config: Option<&codex_core::config::Config>,
 ) -> (impl Send + Sync, codex_exec_server::ExecServerTelemetry) {
@@ -45,10 +55,37 @@ pub(crate) fn init(
     (otel, telemetry)
 }
 
-pub(crate) async fn run_until_shutdown<F, E>(run: F) -> Result<(), E>
+pub(crate) async fn run_until_shutdown<F, E>(
+    run: F,
+    parent_lifetime: ParentLifetime,
+    shutdown_behavior: ShutdownBehavior,
+) -> Result<(), E>
 where
     F: Future<Output = Result<(), E>>,
 {
+    let parent_disconnected = match parent_lifetime {
+        ParentLifetime::Independent => None,
+        ParentLifetime::StdinPipe => {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                if let Err(error) =
+                    std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink())
+                {
+                    tracing::warn!(%error, "Could not read exec-server parent lifetime pipe");
+                }
+                let _ = sender.send(());
+            });
+            Some(receiver)
+        }
+    };
+    let parent_disconnected = async {
+        match parent_disconnected {
+            Some(receiver) => {
+                let _ = receiver.await;
+            }
+            None => std::future::pending().await,
+        }
+    };
     let shutdown_signal = match shutdown_signal() {
         Ok(signal) => Some(signal),
         Err(error) => {
@@ -56,23 +93,55 @@ where
             None
         }
     };
-    tokio::pin!(run);
+    let shutdown_signal = async {
+        match shutdown_signal {
+            Some(signal) => wait_for_shutdown_signal(signal).await,
+            None => std::future::pending().await,
+        }
+    };
+    run_until_shutdown_with_signals(run, parent_disconnected, shutdown_signal, shutdown_behavior)
+        .await
+}
 
-    if let Some(shutdown_signal) = shutdown_signal {
+async fn run_until_shutdown_with_signals<F, E, P, S>(
+    run: F,
+    parent_disconnected: P,
+    shutdown_signal: S,
+    shutdown_behavior: ShutdownBehavior,
+) -> Result<(), E>
+where
+    F: Future<Output = Result<(), E>>,
+    P: Future<Output = ()>,
+    S: Future<Output = std::io::Result<()>>,
+{
+    tokio::pin!(run, parent_disconnected, shutdown_signal);
+    let mut signal_enabled = true;
+
+    loop {
         tokio::select! {
-            result = &mut run => result,
-            signal = wait_for_shutdown_signal(shutdown_signal) => {
+            result = &mut run => return result,
+            _ = &mut parent_disconnected => {
+                tracing::info!("Stopping exec-server after its parent closed stdin");
+                break;
+            }
+            signal = &mut shutdown_signal, if signal_enabled => {
                 match signal {
-                    Ok(()) => Ok(()),
+                    Ok(()) => break,
                     Err(error) => {
                         eprintln!("Could not listen for exec-server shutdown signal: {error}");
-                        run.await
+                        signal_enabled = false;
                     }
                 }
             }
         }
-    } else {
-        run.await
+    }
+
+    match shutdown_behavior {
+        ShutdownBehavior::Immediate => Ok(()),
+        ShutdownBehavior::Graceful(sender) => {
+            let _ = sender.send(());
+            run.await
+        }
     }
 }
 
@@ -114,3 +183,7 @@ fn stderr_env_filter() -> EnvFilter {
         .or_else(|_| EnvFilter::try_new(DEFAULT_LOG_FILTER))
         .unwrap_or_else(|_| EnvFilter::new("error"))
 }
+
+#[cfg(test)]
+#[path = "exec_server_telemetry_tests.rs"]
+mod tests;

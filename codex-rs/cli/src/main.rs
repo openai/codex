@@ -587,6 +587,14 @@ struct ExecServerCommand {
     /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
     #[arg(long = "use-agent-identity-auth", requires = "remote")]
     use_agent_identity_auth: bool,
+
+    /// Exit when the parent-owned standard-input pipe closes.
+    #[arg(
+        long = "exit-on-stdin-close",
+        env = codex_exec_server::CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE_ENV_VAR,
+        requires_if("true", "remote")
+    )]
+    exit_on_stdin_close: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1724,9 +1732,26 @@ async fn run_exec_server_command(
             remote_config.name = name;
         }
         let remote_config = remote_config.with_telemetry(telemetry);
-        exec_server_telemetry::run_until_shutdown(async move {
-            codex_exec_server::run_remote_environment(remote_config, runtime_paths).await
-        })
+        let parent_lifetime = if cmd.exit_on_stdin_close {
+            exec_server_telemetry::ParentLifetime::StdinPipe
+        } else {
+            exec_server_telemetry::ParentLifetime::Independent
+        };
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
+        exec_server_telemetry::run_until_shutdown(
+            async move {
+                codex_exec_server::run_remote_environment_until_shutdown(
+                    remote_config,
+                    runtime_paths,
+                    async move {
+                        let _ = shutdown_receiver.await;
+                    },
+                )
+                .await
+            },
+            parent_lifetime,
+            exec_server_telemetry::ShutdownBehavior::Graceful(shutdown_sender),
+        )
         .await?;
         Ok(())
     } else {
@@ -1748,15 +1773,19 @@ async fn run_exec_server_command(
         let listen_url = cmd
             .listen
             .unwrap_or_else(|| codex_exec_server::DEFAULT_LISTEN_URL.to_string());
-        exec_server_telemetry::run_until_shutdown(async move {
-            codex_exec_server::run_main_with_telemetry(
-                &listen_url,
-                runtime_paths,
-                telemetry,
-                http_client_factory,
-            )
-            .await
-        })
+        exec_server_telemetry::run_until_shutdown(
+            async move {
+                codex_exec_server::run_main_with_telemetry(
+                    &listen_url,
+                    runtime_paths,
+                    telemetry,
+                    http_client_factory,
+                )
+                .await
+            },
+            exec_server_telemetry::ParentLifetime::Independent,
+            exec_server_telemetry::ShutdownBehavior::Immediate,
+        )
         .await
         .map_err(anyhow::Error::from_boxed)
     }

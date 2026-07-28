@@ -514,6 +514,20 @@ pub async fn run_remote_environment(
     config: RemoteEnvironmentConfig,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
+    run_remote_environment_until_shutdown(config, runtime_paths, std::future::pending()).await
+}
+
+/// Serve a remote environment until its owner requests graceful shutdown.
+///
+/// Active sessions and their processes are drained before this function returns.
+pub async fn run_remote_environment_until_shutdown<F>(
+    config: RemoteEnvironmentConfig,
+    runtime_paths: ExecServerRuntimePaths,
+    shutdown: F,
+) -> Result<(), ExecServerError>
+where
+    F: std::future::Future<Output = ()>,
+{
     ensure_rustls_crypto_provider();
     let client = EnvironmentRegistryClient::new_with_telemetry(
         config.base_url.clone(),
@@ -526,6 +540,24 @@ pub async fn run_remote_environment(
         config.telemetry.clone(),
         config.http_client_factory.clone(),
     );
+
+    let result = {
+        let run = run_remote_environment_connections(config, client, processor.clone());
+        tokio::pin!(run, shutdown);
+        tokio::select! {
+            result = &mut run => result,
+            _ = &mut shutdown => Ok(()),
+        }
+    };
+    processor.shutdown().await;
+    result
+}
+
+async fn run_remote_environment_connections(
+    config: RemoteEnvironmentConfig,
+    client: EnvironmentRegistryClient,
+    processor: ConnectionProcessor,
+) -> Result<(), ExecServerError> {
     let identity = NoiseChannelIdentity::generate().map_err(|error| {
         ExecServerError::Protocol(format!("failed to generate Noise relay identity: {error}"))
     })?;
