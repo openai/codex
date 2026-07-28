@@ -7,6 +7,8 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::AgentPath;
 use codex_state::SqliteConfig;
 use futures::SinkExt;
@@ -14,6 +16,7 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use std::sync::Mutex;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -36,6 +39,7 @@ fn take_backfill_counts(requests: &Arc<Mutex<Vec<String>>>) -> (usize, usize) {
 /// Starts an embedded app server behind a loopback WebSocket proxy that records JSON-RPC methods.
 async fn start_recording_app_server(
     config: &Config,
+    mut blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
 ) -> Result<(
     AppServerSession,
     Arc<Mutex<Vec<String>>>,
@@ -93,6 +97,14 @@ async fn start_recording_app_server(
                     let request_id = request.id.clone();
                     let request =
                         serde_json::from_value::<ClientRequest>(serde_json::to_value(request)?)?;
+                    if let ClientRequest::ThreadList { params, .. } = &request
+                        && let Some((root, started, release)) = blocked_thread_list.take()
+                    {
+                        assert_eq!(params.ancestor_thread_id, Some(root.to_string()));
+                        assert_eq!(params.sort_direction, Some(SortDirection::Desc));
+                        let _ = started.send(());
+                        let _ = release.await;
+                    }
                     let response = match embedded.request(request).await? {
                         Ok(result) => JSONRPCMessage::Response(JSONRPCResponse {
                             id: request_id,
@@ -155,7 +167,7 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                 app.config.codex_home = codex_home.path().to_path_buf().abs();
                 app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
                 let (mut app_server, requests, proxy) =
-                    start_recording_app_server(&app.config).await?;
+                    start_recording_app_server(&app.config, /*blocked_thread_list*/ None).await?;
                 let mut tui = crate::tui::test_support::make_test_tui()?;
 
                 app.start_fresh_session_with_summary_hint(
@@ -206,7 +218,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                 .enable_all()
                 .build()?;
             runtime.block_on(async {
-                let mut app = make_test_app().await;
+                let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
                 let codex_home = tempdir()?;
                 app.config.codex_home = codex_home.path().to_path_buf().abs();
                 app.config.sqlite =
@@ -250,8 +262,13 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     root_timestamp,
                     &root_thread_id.to_string(),
                 );
-                let (mut app_server, requests, proxy) =
-                    start_recording_app_server(&app.config).await?;
+                let (started_tx, started_rx) = oneshot::channel();
+                let (release_tx, release_rx) = oneshot::channel();
+                let (mut app_server, requests, proxy) = start_recording_app_server(
+                    &app.config,
+                    Some((root_thread_id, started_tx, release_rx)),
+                )
+                .await?;
                 let root = app_server
                     .resume_thread(
                         app.config.clone(),
@@ -336,11 +353,107 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     })
                 );
 
-                Box::pin(app.open_agent_picker(&mut app_server)).await;
+                let child_store = Arc::clone(
+                    &app.thread_event_channels
+                        .entry(child_thread_id)
+                        .or_insert_with(|| ThreadEventChannel::new(/*capacity*/ 1))
+                        .store,
+                );
+                let child_store_guard = child_store.lock().await;
+                futures::FutureExt::now_or_never(app.open_agent_picker(&mut app_server))
+                    .expect("opening the agent picker waited for the app server");
+                drop(child_store_guard);
+                insta::assert_snapshot!(
+                    render_bottom_popup(&app.chat_widget, /*width*/ 80)
+                        .replace(&root_thread_id.to_string(), "[root]")
+                        .replace(&child_thread_id.to_string(), "[child]"),
+                    @r###"
+                      Subagents
+                      Select an agent to watch. ⌥ + ← previous, ⌥ + → next.
 
-                // The picker refreshes the primary thread once. Discovered children were already
-                // refreshed by the picker's initial backfill and must not be read a second time.
-                assert_eq!(take_backfill_counts(&requests), (1, expected_reads + 1));
+                    › 1. • Main [default] (current)  [root]
+                      2. • /root/worker              [child]
+
+                      Press enter to confirm or esc to go back
+                    "###
+                );
+                assert_eq!(take_backfill_counts(&requests), (0, 0));
+                tokio::time::timeout(Duration::from_secs(5), started_rx).await??;
+                app.chat_widget
+                    .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                futures::FutureExt::now_or_never(app.open_agent_picker(&mut app_server))
+                    .expect("reopening the agent picker waited for the app server");
+                assert_eq!(
+                    requests
+                        .lock()
+                        .expect("request recorder lock")
+                        .iter()
+                        .filter(|method| *method == "thread/list")
+                        .count(),
+                    1
+                );
+                app.chat_widget
+                    .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+                app.chat_widget.handle_server_request(
+                    exec_approval_request(
+                        root_thread_id,
+                        "turn",
+                        "item",
+                        /*approval_id*/ None,
+                    ),
+                    /*replay_kind*/ None,
+                );
+                app.agent_navigation.mark_stopped(child_thread_id);
+                release_tx.send(()).expect("release blocked thread list");
+                let discovered_thread_id = ThreadId::new();
+                let mut completion = tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let event = app_event_rx.recv().await.expect("app event channel");
+                        if matches!(event, AppEvent::AgentPickerThreadsLoaded { .. }) {
+                            break event;
+                        }
+                    }
+                })
+                .await?;
+                if let AppEvent::AgentPickerThreadsLoaded {
+                    result: Ok(threads),
+                    ..
+                } = &mut completion
+                {
+                    let child = threads
+                        .iter_mut()
+                        .find(|thread| thread.id == child_thread_id.to_string())
+                        .expect("root-scoped response includes the cached child");
+                    let mut discovered = child.clone();
+                    discovered.id = discovered_thread_id.to_string();
+                    discovered.can_accept_direct_input = None;
+                    child.status = ThreadStatus::Active {
+                        active_flags: Vec::new(),
+                    };
+                    threads.push(discovered);
+                }
+                app.handle_event(&mut tui, &mut app_server, completion)
+                    .await?;
+                assert_eq!(
+                    app.agent_navigation
+                        .ordered_threads()
+                        .last()
+                        .map(|(thread_id, _)| *thread_id),
+                    Some(discovered_thread_id)
+                );
+                assert!(!app.agent_navigation.is_parent_owned(discovered_thread_id));
+                assert_eq!(
+                    app.chat_widget.selected_index_for_present_view(
+                        super::super::agent_picker::AGENT_PICKER_VIEW_ID
+                    ),
+                    Some(1)
+                );
+                assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("echo hello"));
+                assert!(
+                    app.agent_navigation
+                        .get(&child_thread_id)
+                        .is_some_and(|entry| !entry.is_running)
+                );
                 app_server.shutdown().await?;
                 proxy.await??;
                 Ok(())

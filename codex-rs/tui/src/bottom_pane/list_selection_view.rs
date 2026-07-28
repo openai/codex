@@ -487,6 +487,11 @@ impl ListSelectionView {
             .selected_actual_idx()
             .filter(|actual_idx| self.enabled_actual_idx(*actual_idx).is_some())
             .or_else(|| {
+                self.initial_selected_idx
+                    .take()
+                    .filter(|actual_idx| self.enabled_actual_idx(*actual_idx).is_some())
+            })
+            .or_else(|| {
                 (!self.is_searchable)
                     .then(|| {
                         self.active_items()
@@ -494,11 +499,6 @@ impl ListSelectionView {
                             .position(|item| item.is_current && Self::item_is_enabled(item))
                     })
                     .flatten()
-            })
-            .or_else(|| {
-                self.initial_selected_idx
-                    .take()
-                    .filter(|actual_idx| self.enabled_actual_idx(*actual_idx).is_some())
             });
 
         if self.is_searchable && !self.search_query.is_empty() {
