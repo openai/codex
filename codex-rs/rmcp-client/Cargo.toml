@@ -27,14 +27,10 @@ codex-utils-pty = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
+http = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 memchr = { workspace = true }
 oauth2 = "5"
-reqwest = { version = "0.13", default-features = false, features = [
-    "json",
-    "stream",
-    "rustls",
-] }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
     "base64",
@@ -44,7 +40,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "server",
     "transport-async-rw",
     "transport-child-process",
-    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-client",
     "transport-streamable-http-server",
 ] }
 serde = { workspace = true, features = ["derive"] }
@@ -63,11 +59,13 @@ tokio = { workspace = true, features = [
     "time",
 ] }
 tracing = { workspace = true, features = ["log"] }
+url = { workspace = true }
 urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
+codex-http-client = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }

@@ -5,7 +5,7 @@ use std::time::Instant;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_exec_server::ExecServerError;
-use reqwest::StatusCode;
+use http::StatusCode;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpError;

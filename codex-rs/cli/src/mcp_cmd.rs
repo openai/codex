@@ -26,8 +26,8 @@ use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ResolvedMcpOAuthScopes;
 use codex_mcp::compute_auth_statuses;
-use codex_mcp::discover_supported_scopes_with_http_client;
-use codex_mcp::oauth_login_support_with_http_client;
+use codex_mcp::discover_supported_scopes;
+use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
 use codex_protocol::protocol::McpAuthStatus;
@@ -391,7 +391,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     // OAuth discovery uses the local route-aware HTTP client.
     let http_client: Arc<dyn HttpClient> =
         Arc::new(RouteAwareHttpClient::new(config.http_client_factory()));
-    let login_support = oauth_login_support_with_http_client(
+    let login_support = oauth_login_support(
         &transport,
         Arc::clone(&http_client),
         OAuthDiscoveryTimeout::LOCAL,
@@ -502,7 +502,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         Arc::new(RouteAwareHttpClient::new(config.http_client_factory()));
     let explicit_scopes = (!scopes.is_empty()).then_some(scopes);
     let discovered_scopes = if explicit_scopes.is_none() && server.scopes.is_none() {
-        discover_supported_scopes_with_http_client(
+        discover_supported_scopes(
             &server.transport,
             Arc::clone(&http_client),
             OAuthDiscoveryTimeout::LOCAL,

@@ -10,10 +10,6 @@ use anyhow::bail;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_exec_server::HttpClient;
-use codex_exec_server::RouteAwareHttpClient;
-use codex_http_client::HttpClientFactory;
-use codex_http_client::OutboundProxyPolicy;
-use reqwest::Url;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::AuthorizationRequest;
 use rmcp::transport::AuthorizationSession;
@@ -26,6 +22,7 @@ use tiny_http::Response;
 use tiny_http::Server;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use url::Url;
 use urlencoding::decode;
 
 use crate::StoredOAuthTokens;
@@ -191,41 +188,6 @@ async fn perform_oauth_login_with_browser_output(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_oauth_login_return_url(
-    server_name: &str,
-    server_url: &str,
-    store_mode: OAuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
-    http_headers: Option<HashMap<String, String>>,
-    env_http_headers: Option<HashMap<String, String>>,
-    scopes: &[String],
-    oauth_client_id: Option<&str>,
-    oauth_resource: Option<&str>,
-    timeout_secs: Option<i64>,
-    callback_port: Option<u16>,
-    callback_url: Option<&str>,
-) -> Result<OauthLoginHandle> {
-    perform_oauth_login_return_url_with_http_client(
-        server_name,
-        server_url,
-        store_mode,
-        keyring_backend_kind,
-        http_headers,
-        env_http_headers,
-        scopes,
-        oauth_client_id,
-        oauth_resource,
-        timeout_secs,
-        callback_port,
-        callback_url,
-        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
-            OutboundProxyPolicy::ReqwestDefault,
-        ))),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn perform_oauth_login_return_url_with_http_client(
     server_name: &str,
     server_url: &str,
     store_mode: OAuthCredentialsStoreMode,
@@ -757,11 +719,11 @@ mod tests {
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
     use futures::future::BoxFuture;
+    use http::HeaderMap;
     use pretty_assertions::assert_eq;
-    use reqwest::Url;
-    use reqwest::header::HeaderMap;
     use serde_json::json;
     use tokio::net::TcpListener;
+    use url::Url;
 
     use super::CallbackOutcome;
     use super::OAuthHttpClientAdapter;

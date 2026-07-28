@@ -6,6 +6,10 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::RouteAwareHttpClient;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
+use http::HeaderMap;
 use keyring::Error as KeyringError;
 use oauth2::AccessToken;
 use oauth2::TokenResponse;
@@ -41,6 +45,7 @@ use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::refresh_lock::RefreshCredentialLock;
 use crate::oauth::save_oauth_tokens_to_file;
 use crate::oauth::stored_oauth_credentials;
+use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::startup_error::is_authentication_required_error;
 
 const REFRESH_LOCK_CONTENTION_EVENT_TARGET: &str =
@@ -397,7 +402,14 @@ async fn test_context() -> Result<(TempCodexHome, MockServer, StoredOAuthTokens)
 async fn authorization_manager_for(
     tokens: &StoredOAuthTokens,
 ) -> Result<Arc<TokioMutex<AuthorizationManager>>> {
-    let mut state = OAuthState::new(tokens.url.clone(), Some(reqwest::Client::new())).await?;
+    let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new(
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        HeaderMap::new(),
+    ));
+    let mut state =
+        OAuthState::new_with_oauth_http_client(tokens.url.clone(), oauth_http_client).await?;
     state
         .set_credentials(&tokens.client_id, tokens.token_response.0.clone())
         .await?;

@@ -4,14 +4,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_exec_server::HttpClient;
-use codex_exec_server::RouteAwareHttpClient;
-use codex_http_client::HttpClientFactory;
-use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::protocol::McpAuthStatus;
 use futures::FutureExt;
-use reqwest::Client;
-use reqwest::header::AUTHORIZATION;
-use reqwest::header::HeaderMap;
+use http::HeaderMap;
+use http::header::AUTHORIZATION;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::auth::AuthError;
 use tracing::debug;
@@ -74,40 +70,10 @@ enum AuthStatusCheck {
     Discover(HeaderMap),
 }
 
-/// Determine the authentication status for a streamable HTTP MCP server.
-pub async fn determine_streamable_http_auth_status(
-    server_name: &str,
-    url: &str,
-    bearer_token_env_var: Option<&str>,
-    http_headers: Option<HashMap<String, String>>,
-    env_http_headers: Option<HashMap<String, String>>,
-    store_mode: OAuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
-) -> Result<McpAuthState> {
-    let default_headers = match auth_status_before_discovery(
-        server_name,
-        url,
-        bearer_token_env_var,
-        http_headers,
-        env_http_headers,
-        store_mode,
-        keyring_backend_kind,
-    )? {
-        AuthStatusCheck::Complete(status) => return Ok(status),
-        AuthStatusCheck::Discover(default_headers) => default_headers,
-    };
-
-    determine_auth_status_from_discovery(
-        server_name,
-        url,
-        discover_streamable_http_oauth_with_headers(url, &default_headers).await,
-    )
-}
-
 /// Determine authentication status while routing OAuth discovery through the
 /// provided HTTP client.
 #[allow(clippy::too_many_arguments)]
-pub async fn determine_streamable_http_auth_status_with_http_client(
+pub async fn determine_streamable_http_auth_status(
     server_name: &str,
     url: &str,
     bearer_token_env_var: Option<&str>,
@@ -219,25 +185,7 @@ fn determine_auth_status_from_discovery(
     }
 }
 
-/// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
-pub async fn supports_oauth_login(url: &str) -> Result<bool> {
-    Ok(discover_streamable_http_oauth(
-        url, /*http_headers*/ None, /*env_http_headers*/ None,
-    )
-    .await?
-    .is_some())
-}
-
 pub async fn discover_streamable_http_oauth(
-    url: &str,
-    http_headers: Option<HashMap<String, String>>,
-    env_http_headers: Option<HashMap<String, String>>,
-) -> Result<Option<StreamableHttpOAuthDiscovery>> {
-    let default_headers = build_default_headers(http_headers, env_http_headers)?;
-    discover_streamable_http_oauth_with_headers(url, &default_headers).await
-}
-
-pub async fn discover_streamable_http_oauth_with_http_client(
     url: &str,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
@@ -252,32 +200,6 @@ pub async fn discover_streamable_http_oauth_with_http_client(
         discovery_timeout,
     )
     .await
-}
-
-async fn discover_streamable_http_oauth_with_headers(
-    url: &str,
-    default_headers: &HeaderMap,
-) -> Result<Option<StreamableHttpOAuthDiscovery>> {
-    // Use no_proxy to avoid a bug in the system-configuration crate that
-    // can result in a panic. See #8912.
-    let client = Client::builder()
-        .timeout(DISCOVERY_TIMEOUT)
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
-    let oauth_http_client = Arc::new(
-        OAuthHttpClientAdapter::new(
-            Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
-                OutboundProxyPolicy::ReqwestDefault,
-            ))),
-            default_headers.clone(),
-        )
-        .with_local_http_client(client),
-    );
-    let mut authorization_manager =
-        AuthorizationManager::new_with_oauth_http_client(url, oauth_http_client).await?;
-    authorization_manager.set_allow_missing_issuer(true);
-    discover_streamable_http_oauth_with_manager(&authorization_manager).await
 }
 
 async fn discover_streamable_http_oauth_with_headers_and_http_client(
@@ -347,6 +269,9 @@ mod tests {
     use codex_exec_server::HttpRequestParams;
     use codex_exec_server::HttpRequestResponse;
     use codex_exec_server::HttpResponseBodyStream;
+    use codex_exec_server::RouteAwareHttpClient;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
     use futures::future::BoxFuture;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
@@ -366,6 +291,12 @@ mod tests {
         handle: JoinHandle<()>,
     }
 
+    fn test_http_client() -> Arc<dyn HttpClient> {
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        )))
+    }
+
     impl Drop for TestServer {
         fn drop(&mut self) {
             self.handle.abort();
@@ -374,6 +305,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingHttpClient {
+        headers: Mutex<Option<Vec<(String, String)>>>,
         timeout_ms: Mutex<Option<Option<u64>>>,
     }
 
@@ -394,6 +326,16 @@ mod tests {
             params: HttpRequestParams,
         ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>>
         {
+            *self
+                .headers
+                .lock()
+                .expect("header recorder lock should not be poisoned") = Some(
+                params
+                    .headers
+                    .iter()
+                    .map(|header| (header.name.clone(), header.value.clone()))
+                    .collect(),
+            );
             *self
                 .timeout_ms
                 .lock()
@@ -482,6 +424,8 @@ mod tests {
             /*env_http_headers*/ None,
             OAuthCredentialsStoreMode::Keyring,
             AuthKeyringBackendKind::default(),
+            test_http_client(),
+            OAuthDiscoveryTimeout::Requested,
         )
         .await
         .expect("status should compute");
@@ -504,6 +448,8 @@ mod tests {
             )])),
             OAuthCredentialsStoreMode::Keyring,
             AuthKeyringBackendKind::default(),
+            test_http_client(),
+            OAuthDiscoveryTimeout::Requested,
         )
         .await
         .expect("status should compute");
@@ -553,7 +499,11 @@ mod tests {
         });
         let url = format!("http://{address}/mcp");
         let discovery = discover_streamable_http_oauth(
-            &url, /*http_headers*/ None, /*env_http_headers*/ None,
+            &url,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
         )
         .await;
         assert_eq!(
@@ -594,6 +544,8 @@ mod tests {
                 "sensitive-key".to_string(),
             )])),
             /*env_http_headers*/ None,
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
         )
         .await
         .expect("discovery should complete without following the redirect");
@@ -616,6 +568,8 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
         )
         .await
         .expect("discovery should succeed")
@@ -631,7 +585,7 @@ mod tests {
     async fn routed_oauth_discovery_caps_local_discovery_timeout() {
         let http_client = Arc::new(RecordingHttpClient::default());
 
-        let discovery = discover_streamable_http_oauth_with_http_client(
+        let discovery = discover_streamable_http_oauth(
             "http://example.com/mcp",
             /*http_headers*/ None,
             /*env_http_headers*/ None,
@@ -657,7 +611,7 @@ mod tests {
     async fn routed_oauth_discovery_preserves_requested_timeout() {
         let http_client = Arc::new(RecordingHttpClient::default());
 
-        let discovery = discover_streamable_http_oauth_with_http_client(
+        let discovery = discover_streamable_http_oauth(
             "http://example.com/mcp",
             /*http_headers*/ None,
             /*env_http_headers*/ None,
@@ -673,6 +627,38 @@ mod tests {
                 .lock()
                 .expect("timeout recorder lock should not be poisoned"),
             Some(Some(30_000))
+        );
+    }
+
+    #[tokio::test]
+    async fn routed_oauth_discovery_preserves_configured_headers() {
+        let http_client = Arc::new(RecordingHttpClient::default());
+
+        let discovery = discover_streamable_http_oauth(
+            "http://example.com/mcp",
+            Some(HashMap::from([(
+                "X-Mcp-Discovery".to_string(),
+                "configured-value".to_string(),
+            )])),
+            /*env_http_headers*/ None,
+            http_client.clone(),
+            OAuthDiscoveryTimeout::LOCAL,
+        )
+        .await;
+
+        assert!(matches!(discovery, Ok(None)));
+        let headers = http_client
+            .headers
+            .lock()
+            .expect("header recorder lock should not be poisoned")
+            .clone()
+            .expect("discovery should issue an HTTP request");
+        assert_eq!(
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("x-mcp-discovery"))
+                .map(|(_, value)| value.as_str()),
+            Some("configured-value")
         );
     }
 
@@ -724,6 +710,8 @@ mod tests {
             &resource_server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
         )
         .await
         .expect("discovery should succeed")
@@ -748,6 +736,8 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
         )
         .await
         .expect("discovery should succeed")
@@ -764,9 +754,16 @@ mod tests {
         }))
         .await;
 
-        let supported = supports_oauth_login(&server.url)
-            .await
-            .expect("support check should succeed");
+        let supported = discover_streamable_http_oauth(
+            &server.url,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
+        )
+        .await
+        .expect("support check should succeed")
+        .is_some();
 
         assert!(supported);
     }

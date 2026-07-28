@@ -245,7 +245,6 @@ deny = [
         "codex-otel",
         "codex-protocol",
         "codex-responses-api-proxy",
-        "codex-rmcp-client",
         "codex-tui",
         # Third-party crates that own their reqwest integration. These are not part of the
         # first-party migration count above.

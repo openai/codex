@@ -9,6 +9,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_rmcp_client::McpAuthState;
 use codex_rmcp_client::McpLoginRequirement;
+use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
@@ -294,6 +295,8 @@ async fn auth_status(server_url: &str) -> anyhow::Result<McpAuthState> {
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        Environment::default_for_tests().get_http_client(),
+        OAuthDiscoveryTimeout::LOCAL,
     )
     .await
 }

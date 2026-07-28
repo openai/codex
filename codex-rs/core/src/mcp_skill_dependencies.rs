@@ -25,7 +25,7 @@ use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
-use codex_mcp::oauth_login_support_with_http_client;
+use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
 
@@ -148,7 +148,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         } else {
             OAuthDiscoveryTimeout::Requested
         };
-        let login_support = oauth_login_support_with_http_client(
+        let login_support = oauth_login_support(
             &server_config.transport,
             Arc::clone(&http_client),
             discovery_timeout,

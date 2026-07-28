@@ -1,5 +1,5 @@
 use codex_exec_server::HttpHeader;
-use reqwest::header::WWW_AUTHENTICATE;
+use http::header::WWW_AUTHENTICATE;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct InsufficientScopeChallenge {

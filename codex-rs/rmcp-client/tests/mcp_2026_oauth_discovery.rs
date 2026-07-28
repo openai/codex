@@ -7,7 +7,6 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::StreamableHttpOAuthDiscovery;
 use codex_rmcp_client::discover_streamable_http_oauth;
-use codex_rmcp_client::discover_streamable_http_oauth_with_http_client;
 use pretty_assertions::assert_eq;
 use rmcp::transport::auth::AuthError;
 use serde_json::json;
@@ -105,9 +104,13 @@ async fn discover_legacy_oauth_without_starting_an_mcp_session(
         &resource_url,
         resource_headers(),
         /*env_http_headers*/ None,
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        OAuthDiscoveryTimeout::LOCAL,
     )
     .await;
-    let routed_discovery = discover_streamable_http_oauth_with_http_client(
+    let routed_discovery = discover_streamable_http_oauth(
         &resource_url,
         resource_headers(),
         /*env_http_headers*/ None,
@@ -186,7 +189,7 @@ async fn oauth_discovery_does_not_invent_support_for_an_unauthenticated_legacy_s
     let resource_server = MockServer::start().await;
 
     let server_url = format!("{}/mcp", resource_server.uri());
-    let executor_discovery = discover_streamable_http_oauth_with_http_client(
+    let executor_discovery = discover_streamable_http_oauth(
         &server_url,
         /*http_headers*/ None,
         /*env_http_headers*/ None,
@@ -200,6 +203,10 @@ async fn oauth_discovery_does_not_invent_support_for_an_unauthenticated_legacy_s
         &server_url,
         /*http_headers*/ None,
         /*env_http_headers*/ None,
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        OAuthDiscoveryTimeout::LOCAL,
     )
     .await?;
 
