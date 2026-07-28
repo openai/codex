@@ -469,18 +469,18 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "v8", version = "14.9.207.2")
+bazel_dep(name = "v8", version = "15.0.245.2")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-tflbZE5srqal6leMxJjK/ZQtwpF96OMGJ6avd5lice4=",
+    integrity = "sha256-Fk89PgqLTAKjhtOojRsRM9N+XCC+Ajn+zc3eQUpDQNU=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
     ],
-    strip_prefix = "v8-14.9.207.2",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/14.9.207.2.tar.gz"],
+    strip_prefix = "v8-15.0.245.2",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/15.0.245.2.tar.gz"],
 )
 
 http_archive(
@@ -493,12 +493,12 @@ http_archive(
 )
 
 http_archive(
-    name = "v8_crate_149_2_0",
+    name = "v8_crate_150_4_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "46dccf61a364b61bbaac70a8ba64a1a1006e87123b7d62eaeec999a3ba31ecdb",
-    strip_prefix = "v8-149.2.0",
+    sha256 = "42a978ff11f15b24e5c05a7123cf2b68f41e763546699781a924ef4e2cf43a49",
+    strip_prefix = "v8-150.4.0",
     type = "tar.gz",
-    urls = ["https://static.crates.io/crates/v8/v8-149.2.0.crate"],
+    urls = ["https://static.crates.io/crates/v8/v8-150.4.0.crate"],
 )
 
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
@@ -506,7 +506,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 git_repository(
     name = "rusty_v8_libcxx",
     build_file = "//third_party/v8:libcxx.BUILD.bazel",
-    commit = "99457fa555797f8c5ac3c076ca288d8481d3b23a",
+    commit = "5abc7f839700f0f17338434e1c1c6a8c87c00c11",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git",
 )
 
@@ -520,25 +520,25 @@ git_repository(
 git_repository(
     name = "rusty_v8_llvm_libc",
     build_file = "//third_party/v8:llvm_libc.BUILD.bazel",
-    commit = "cb952785ccee13811f293f3c419958d1e3ddafbf",
+    commit = "9309c117ebae84dd2f9df1ef99de4782162527d5",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git",
 )
 
 http_file(
-    name = "rusty_v8_149_2_0_aarch64_pc_windows_msvc_archive",
+    name = "rusty_v8_150_4_0_aarch64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
-    sha256 = "923f2b6ccdc14526b814e171e34c9aafd7969f12304948857c6696d022f0fb3c",
+    sha256 = "ce9f2e4321e0dd4bc64882b6daefc028863608ed934e387a98ca384f1f7923f8",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        "https://github.com/denoland/rusty_v8/releases/download/v150.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
     ],
 )
 
 http_file(
-    name = "rusty_v8_149_2_0_x86_64_pc_windows_msvc_archive",
+    name = "rusty_v8_150_4_0_x86_64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
-    sha256 = "12b5a791b54e92f748738ad8d0d12dad8d281a2d836638ad1aa6678e3b855d9a",
+    sha256 = "571bf6a028576ac1413c8a942383f637f91e94b0c964bbeefff8a098637aaa40",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+        "https://github.com/denoland/rusty_v8/releases/download/v150.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
     ],
 )
 

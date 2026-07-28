@@ -3,10 +3,10 @@
 # Scope: upstream MODULE.bazel only; affects external repo resolution and Bazel
 # module wiring, not V8 source files.
 
-diff --git a/orig/v8-14.9.207.2/MODULE.bazel b/mod/v8-14.9.207.2/MODULE.bazel
+diff --git a/orig/v8-15.0.245.2/MODULE.bazel b/mod/v8-15.0.245.2/MODULE.bazel
 index b8bf8bd..573f463 100644
---- a/orig/v8-14.9.207.2/MODULE.bazel
-+++ b/mod/v8-14.9.207.2/MODULE.bazel
+--- a/orig/v8-15.0.245.2/MODULE.bazel
++++ b/mod/v8-15.0.245.2/MODULE.bazel
 @@ -8,193 +8,67 @@ bazel_dep(name = "rules_cc", version = "0.2.0")
  bazel_dep(name = "rules_python", version = "1.0.0")
  bazel_dep(name = "platforms", version = "1.0.0")
@@ -252,11 +252,11 @@ index b8bf8bd..573f463 100644
 +    ],
  )
 +use_repo(pip, "v8_python_deps")
-diff --git a/mod/v8-14.9.207.2/bazel/highway.patch b/mod/v8-14.9.207.2/bazel/highway.patch
+diff --git a/mod/v8-15.0.245.2/bazel/highway.patch b/mod/v8-15.0.245.2/bazel/highway.patch
 new file mode 100644
 index 0000000..5a13dd0
 --- /dev/null
-+++ b/mod/v8-14.9.207.2/bazel/highway.patch
++++ b/mod/v8-15.0.245.2/bazel/highway.patch
 @@ -0,0 +1,25 @@
 +diff --git a/BUILD b/BUILD
 +--- a/BUILD

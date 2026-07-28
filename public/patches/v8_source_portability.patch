@@ -2,10 +2,10 @@
 # Scope: minimal source-level portability fixes only, such as libexecinfo guards,
 # weak glibc symbol handling, and warning annotations; no dependency
 # include-path rewrites or intentional V8 feature changes.
-diff --git a/orig/v8-14.9.207.2/src/base/bits.h b/mod/v8-14.9.207.2/src/base/bits.h
+diff --git a/orig/v8-15.0.245.2/src/base/bits.h b/mod/v8-15.0.245.2/src/base/bits.h
 index 179a10f..4791e96 100644
---- a/orig/v8-14.9.207.2/src/base/bits.h
-+++ b/mod/v8-14.9.207.2/src/base/bits.h
+--- a/orig/v8-15.0.245.2/src/base/bits.h
++++ b/mod/v8-15.0.245.2/src/base/bits.h
 @@ -270,11 +270,17 @@ inline constexpr uint32_t RoundDownToPowerOfTwo32(uint32_t value) {
  }
  
@@ -24,10 +24,10 @@ index 179a10f..4791e96 100644
  inline constexpr uint32_t RotateLeft32(uint32_t value, uint32_t shift) {
    return (value << shift) | (value >> ((32 - shift) & 31));
  }
-diff --git a/orig/v8-14.9.207.2/src/base/debug/stack_trace_posix.cc b/mod/v8-14.9.207.2/src/base/debug/stack_trace_posix.cc
+diff --git a/orig/v8-15.0.245.2/src/base/debug/stack_trace_posix.cc b/mod/v8-15.0.245.2/src/base/debug/stack_trace_posix.cc
 index 6176ed4..a02043d 100644
---- a/orig/v8-14.9.207.2/src/base/debug/stack_trace_posix.cc
-+++ b/mod/v8-14.9.207.2/src/base/debug/stack_trace_posix.cc
+--- a/orig/v8-15.0.245.2/src/base/debug/stack_trace_posix.cc
++++ b/mod/v8-15.0.245.2/src/base/debug/stack_trace_posix.cc
 @@ -64,6 +64,7 @@ namespace {
  volatile sig_atomic_t in_signal_handler = 0;
  bool dump_stack_in_signal_handler = true;
@@ -44,10 +44,10 @@ index 6176ed4..a02043d 100644
  // Demangles C++ symbols in the given text. Example:
  //
  // "out/Debug/base_unittests(_ZN10StackTraceC1Ev+0x20) [0x817778c]"
-diff --git a/orig/v8-14.9.207.2/src/base/export-template.h b/mod/v8-14.9.207.2/src/base/export-template.h
+diff --git a/orig/v8-15.0.245.2/src/base/export-template.h b/mod/v8-15.0.245.2/src/base/export-template.h
 index 861cfe4..1e73954 100644
---- a/orig/v8-14.9.207.2/src/base/export-template.h
-+++ b/mod/v8-14.9.207.2/src/base/export-template.h
+--- a/orig/v8-15.0.245.2/src/base/export-template.h
++++ b/mod/v8-15.0.245.2/src/base/export-template.h
 @@ -153,8 +153,10 @@
  
  EXPORT_TEMPLATE_TEST(DEFAULT, );
@@ -59,10 +59,10 @@ index 861cfe4..1e73954 100644
  
  #undef EXPORT_TEMPLATE_TEST
  #undef EXPORT_TEMPLATE_TEST_DEFAULT_DEFAULT
-diff --git a/orig/v8-14.9.207.2/src/base/platform/platform-posix.cc b/mod/v8-14.9.207.2/src/base/platform/platform-posix.cc
+diff --git a/orig/v8-15.0.245.2/src/base/platform/platform-posix.cc b/mod/v8-15.0.245.2/src/base/platform/platform-posix.cc
 index dfb30b6..6ce12a5 100644
---- a/orig/v8-14.9.207.2/src/base/platform/platform-posix.cc
-+++ b/mod/v8-14.9.207.2/src/base/platform/platform-posix.cc
+--- a/orig/v8-15.0.245.2/src/base/platform/platform-posix.cc
++++ b/mod/v8-15.0.245.2/src/base/platform/platform-posix.cc
 @@ -95,7 +95,7 @@ extern int madvise(caddr_t, size_t, int);
  #endif
  
@@ -82,10 +82,10 @@ index dfb30b6..6ce12a5 100644
      DCHECK(MainThreadIsCurrentThread());
      return __libc_stack_end;
    }
-diff --git a/orig/v8-14.9.207.2/src/base/platform/platform-win32.cc b/mod/v8-14.9.207.2/src/base/platform/platform-win32.cc
+diff --git a/orig/v8-15.0.245.2/src/base/platform/platform-win32.cc b/mod/v8-15.0.245.2/src/base/platform/platform-win32.cc
 index 11f9772..854a682 100644
---- a/orig/v8-14.9.207.2/src/base/platform/platform-win32.cc
-+++ b/mod/v8-14.9.207.2/src/base/platform/platform-win32.cc
+--- a/orig/v8-15.0.245.2/src/base/platform/platform-win32.cc
++++ b/mod/v8-15.0.245.2/src/base/platform/platform-win32.cc
 @@ -20,7 +20,11 @@
  #include <windows.h>
  
@@ -144,10 +144,10 @@ index 11f9772..854a682 100644
  }  // namespace base
  }  // namespace v8
 +
-diff --git a/orig/v8-14.9.207.2/src/base/platform/time.cc b/mod/v8-14.9.207.2/src/base/platform/time.cc
+diff --git a/orig/v8-15.0.245.2/src/base/platform/time.cc b/mod/v8-15.0.245.2/src/base/platform/time.cc
 index 8c824e3..f8144d0 100644
---- a/orig/v8-14.9.207.2/src/base/platform/time.cc
-+++ b/mod/v8-14.9.207.2/src/base/platform/time.cc
+--- a/orig/v8-15.0.245.2/src/base/platform/time.cc
++++ b/mod/v8-15.0.245.2/src/base/platform/time.cc
 @@ -782,12 +782,12 @@ bool ThreadTicks::IsSupported() {
  #elif defined(__PASE__)
    // Thread CPU time accounting is unavailable in PASE
@@ -179,10 +179,10 @@ index 8c824e3..f8144d0 100644
  #else
    UNREACHABLE();
  #endif
-diff --git a/orig/v8-14.9.207.2/src/heap/base/asm/x64/push_registers_masm.asm b/mod/v8-14.9.207.2/src/heap/base/asm/x64/push_registers_masm.asm
+diff --git a/orig/v8-15.0.245.2/src/heap/base/asm/x64/push_registers_masm.asm b/mod/v8-15.0.245.2/src/heap/base/asm/x64/push_registers_masm.asm
 index d0d0563..f3f5952 100644
---- a/orig/v8-14.9.207.2/src/heap/base/asm/x64/push_registers_masm.asm
-+++ b/mod/v8-14.9.207.2/src/heap/base/asm/x64/push_registers_masm.asm
+--- a/orig/v8-15.0.245.2/src/heap/base/asm/x64/push_registers_masm.asm
++++ b/mod/v8-15.0.245.2/src/heap/base/asm/x64/push_registers_masm.asm
 @@ -1,70 +1,47 @@
 -;; Copyright 2020 the V8 project authors. All rights reserved.
 -;; Use of this source code is governed by a BSD-style license that can be
@@ -301,10 +301,10 @@ index d0d0563..f3f5952 100644
 +  pop %rbp
 +  ret
 +.seh_endproc
-diff --git a/orig/v8-14.9.207.2/src/libplatform/default-thread-isolated-allocator.cc b/mod/v8-14.9.207.2/src/libplatform/default-thread-isolated-allocator.cc
+diff --git a/orig/v8-15.0.245.2/src/libplatform/default-thread-isolated-allocator.cc b/mod/v8-15.0.245.2/src/libplatform/default-thread-isolated-allocator.cc
 index bda0e43..b44f1d9 100644
---- a/orig/v8-14.9.207.2/src/libplatform/default-thread-isolated-allocator.cc
-+++ b/mod/v8-14.9.207.2/src/libplatform/default-thread-isolated-allocator.cc
+--- a/orig/v8-15.0.245.2/src/libplatform/default-thread-isolated-allocator.cc
++++ b/mod/v8-15.0.245.2/src/libplatform/default-thread-isolated-allocator.cc
 @@ -23,7 +23,7 @@ extern int pkey_free(int pkey) V8_WEAK;
  
  namespace {
@@ -314,26 +314,3 @@ index bda0e43..b44f1d9 100644
    // PKU was broken on Linux kernels before 5.13 (see
    // https://lore.kernel.org/all/20210623121456.399107624@linutronix.de/).
    // A fix is also included in the 5.4.182 and 5.10.103 versions ("x86/fpu:
-diff --git a/orig/v8-14.9.207.2/src/profiler/heap-snapshot-generator.cc b/mod/v8-14.9.207.2/src/profiler/heap-snapshot-generator.cc
-index 8edad48..d4b2721 100644
---- a/orig/v8-14.9.207.2/src/profiler/heap-snapshot-generator.cc
-+++ b/mod/v8-14.9.207.2/src/profiler/heap-snapshot-generator.cc
-@@ -478,11 +478,11 @@ HeapSnapshot::HeapSnapshot(HeapProfiler* profiler,
-   static_assert(kSystemPointerSize != 4 || sizeof(HeapGraphEdge) == 12);
-   static_assert(kSystemPointerSize != 8 || sizeof(HeapGraphEdge) == 24);
-   static_assert(kSystemPointerSize != 4 || sizeof(HeapEntry) == 32);
--#if V8_CC_MSVC
-+#if V8_CC_MSVC || V8_OS_WIN
-   static_assert(kSystemPointerSize != 8 || sizeof(HeapEntry) == 48);
- #else   // !V8_CC_MSVC
-   static_assert(kSystemPointerSize != 8 || sizeof(HeapEntry) == 40);
--#endif  // !V8_CC_MSVC
-+#endif  // !V8_CC_MSVC || V8_OS_WIN
-   memset(&gc_subroot_entries_, 0, sizeof(gc_subroot_entries_));
- }
- 
-@@ -4015,3 +4015,4 @@ void HeapSnapshotJSONSerializer::SerializeLocations() {
- }
- 
- }  // namespace v8::internal
-+

@@ -3,10 +3,10 @@
 # Scope: Bazel BUILD/defs/BUILD.icu integration only, including dependency
 # wiring, generated sources, and visibility; no standalone V8 source patching.
 
-diff --git a/orig/v8-14.9.207.2/bazel/defs.bzl b/mod/v8-14.9.207.2/bazel/defs.bzl
+diff --git a/orig/v8-15.0.245.2/bazel/defs.bzl b/mod/v8-15.0.245.2/bazel/defs.bzl
 index bbe1495..6673518 100644
---- a/orig/v8-14.9.207.2/bazel/defs.bzl
-+++ b/mod/v8-14.9.207.2/bazel/defs.bzl
+--- a/orig/v8-15.0.245.2/bazel/defs.bzl
++++ b/mod/v8-15.0.245.2/bazel/defs.bzl
 @@ -33,9 +33,21 @@ _create_option_int = rule(
  )
  
@@ -154,10 +154,10 @@ index bbe1495..6673518 100644
          suffix = suffix,
          target_os = select({
              "@v8//bazel/config:is_macos": "mac",
-diff --git a/orig/v8-14.9.207.2/BUILD.bazel b/mod/v8-14.9.207.2/BUILD.bazel
+diff --git a/orig/v8-15.0.245.2/BUILD.bazel b/mod/v8-15.0.245.2/BUILD.bazel
 index b432f86..28c567b 100644
---- a/orig/v8-14.9.207.2/BUILD.bazel
-+++ b/mod/v8-14.9.207.2/BUILD.bazel
+--- a/orig/v8-15.0.245.2/BUILD.bazel
++++ b/mod/v8-15.0.245.2/BUILD.bazel
 @@ -148,6 +148,10 @@ v8_flag(name = "v8_enable_trace_maps")
  
  v8_flag(name = "v8_enable_v8_checks")
@@ -302,6 +302,25 @@ index b432f86..28c567b 100644
  filegroup(
      name = "d8_files",
      srcs = [
+@@ -4576,12 +4614,10 @@ cc_library(
+     strip_include_prefix = "noicu",
+ )
+-
++
+-cc_library(
+-    name = "llvm_libc_headers",
+-    hdrs = glob(["third_party/llvm-libc/src/shared/**/*.h"]),
+-    includes = ["third_party/llvm-libc/src"],
+-    defines = ["LIBC_NAMESPACE=__llvm_libc_cr"],
+-)
++alias(
++    name = "llvm_libc_headers",
++    actual = "@@//third_party/v8:rusty_v8_llvm_libc_headers",
++)
+-
++
+ v8_library(
+     name = "v8_libbase",
 @@ -4603,16 +4641,9 @@ cc_library(
      ],
  )
@@ -379,10 +398,10 @@ index b432f86..28c567b 100644
      }),
      noicu_deps = [":v8_libshared_noicu"],
      noicu_srcs = [
-diff --git a/orig/v8-14.9.207.2/bazel/BUILD.icu b/mod/v8-14.9.207.2/bazel/BUILD.icu
+diff --git a/orig/v8-15.0.245.2/bazel/BUILD.icu b/mod/v8-15.0.245.2/bazel/BUILD.icu
 index 5fda2f4..8c3c372 100644
---- a/orig/v8-14.9.207.2/bazel/BUILD.icu
-+++ b/mod/v8-14.9.207.2/bazel/BUILD.icu
+--- a/orig/v8-15.0.245.2/bazel/BUILD.icu
++++ b/mod/v8-15.0.245.2/bazel/BUILD.icu
 @@ -1,3 +1,24 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
 +

@@ -8,3 +8,10 @@ cc_library(
     defines = ["LIBC_NAMESPACE=__llvm_libc_cr"],
     includes = ["."],
 )
+
+cc_library(
+    name = "v8_headers",
+    hdrs = glob(["shared/**/*.h"]),
+    include_prefix = "third_party/llvm-libc/src",
+    deps = [":headers"],
+)
