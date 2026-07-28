@@ -48,9 +48,9 @@ use crate::render::MAX_SKILL_PATH_BYTES;
 use crate::render::SkillCatalogRenderPolicy;
 use crate::render::SkillMetadataBudget;
 use crate::render::SkillRenderReport;
-use crate::render::capped_skill_metadata_budget;
 use crate::render::render_available_skills;
 use crate::render::render_combined_available_skills;
+use crate::render::skill_metadata_budget;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::render_observability::CatalogSurface;
@@ -226,7 +226,7 @@ where
                 &catalog,
                 include_usage,
                 SkillCatalogRenderPolicy::ExtensionCompatible,
-                capped_skill_metadata_budget(/*context_window*/ None),
+                skill_metadata_budget(/*context_window*/ None),
             );
             if let Some(message) = rendered.warning_message {
                 self.emit_warning(thread_store.level_id(), /*turn_id*/ None, message);
@@ -277,7 +277,7 @@ where
             let context_window = model_info
                 .as_deref()
                 .and_then(ModelInfo::resolved_context_window);
-            let metadata_budget = capped_skill_metadata_budget(context_window);
+            let metadata_budget = skill_metadata_budget(context_window);
             let extension_metrics = input.extension_metrics.clone();
             let host_snapshot = input.turn_store.get::<HostSkillsSnapshot>();
             let shared_rendered = if config.include_instructions
@@ -562,7 +562,7 @@ where
                 let context_window = model_info
                     .as_deref()
                     .and_then(ModelInfo::resolved_context_window);
-                let metadata_budget = capped_skill_metadata_budget(context_window);
+                let metadata_budget = skill_metadata_budget(context_window);
                 let rendered = render_catalog(
                     extension_metrics.as_deref(),
                     CatalogSurface::TurnInput,

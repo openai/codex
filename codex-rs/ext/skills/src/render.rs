@@ -16,7 +16,6 @@ use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
 
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
-const MAX_SKILL_METADATA_TOKEN_BUDGET: usize = 4_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 const MAX_CATALOG_SKILL_DESCRIPTION_CHARS: usize = 1_024;
@@ -125,7 +124,7 @@ impl SkillRenderReport {
     }
 }
 
-pub(crate) fn capped_skill_metadata_budget(context_window: Option<i64>) -> SkillMetadataBudget {
+pub(crate) fn skill_metadata_budget(context_window: Option<i64>) -> SkillMetadataBudget {
     context_window
         .and_then(|window| usize::try_from(window).ok())
         .filter(|window| *window > 0)
@@ -134,7 +133,7 @@ pub(crate) fn capped_skill_metadata_budget(context_window: Option<i64>) -> Skill
                 window
                     .saturating_mul(SKILL_METADATA_CONTEXT_WINDOW_PERCENT)
                     .saturating_div(100)
-                    .clamp(1, MAX_SKILL_METADATA_TOKEN_BUDGET),
+                    .max(1),
             )
         })
         .unwrap_or(SkillMetadataBudget::Characters(

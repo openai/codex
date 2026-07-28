@@ -424,9 +424,10 @@ async fn rendered_catalogs_for_turns(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn production_turn_scales_extension_catalog_from_resolved_model_window() -> Result<()> {
+    let skill_count = 800;
     let mut included_counts = Vec::new();
     for (context_window, max_context_window, expected_budget) in
-        [(Some(10_000), None, 200), (None, Some(400_000), 4_000)]
+        [(Some(10_000), None, 200), (None, Some(400_000), 8_000)]
     {
         let server = responses::start_mock_server().await;
         let response = mount_sse_once(
@@ -436,7 +437,7 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
         .await;
         let source_kind = SkillSourceKind::Custom("test".to_string());
         let catalog = SkillCatalog {
-            entries: (0..400)
+            entries: (0..skill_count)
                 .map(|index| {
                     let name = format!("skill-{index:03}");
                     SkillCatalogEntry::new(
@@ -506,7 +507,7 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             .filter(|line| line.starts_with("- skill-"))
             .count();
         let warning = event_rx.try_recv()?.into_warning();
-        let omitted_count = 400 - included_count;
+        let omitted_count = skill_count - included_count;
 
         assert!(catalog_text.contains("additional skills omitted"));
         assert!(!catalog_text.contains(
