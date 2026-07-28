@@ -5,12 +5,12 @@ use anyhow::Context;
 use chrono::DateTime;
 use clap::Parser;
 use clap::ValueEnum;
+use codex_core::config::ConfigBuilder;
 use codex_state::LogQuery;
 use codex_state::LogRow;
 use codex_state::SqliteConfig;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dirs::home_dir;
 use owo_colors::OwoColorize;
 
 #[derive(Debug, Parser)]
@@ -107,17 +107,9 @@ impl LogLevelThreshold {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let db_path = resolve_db_path(&args)?;
+    let sqlite = resolve_sqlite_config(&args).await?;
     let filter = build_filter(&args)?;
-    let codex_home = db_path
-        .parent()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let runtime = StateRuntime::init(
-        SqliteConfig::from_sqlite_home(AbsolutePathBuf::relative_to_current_dir(codex_home)?),
-        "logs-client".to_string(),
-    )
-    .await?;
+    let runtime = StateRuntime::init(sqlite, "logs-client".to_string()).await?;
 
     let mut last_id =
         print_backfill(runtime.as_ref(), &filter, args.backfill, args.compact).await?;
@@ -136,21 +128,23 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-fn resolve_db_path(args: &Args) -> anyhow::Result<PathBuf> {
-    if let Some(db) = args.db.as_ref() {
-        return Ok(db.clone());
+async fn resolve_sqlite_config(args: &Args) -> anyhow::Result<SqliteConfig> {
+    if let Some(db_path) = args.db.as_ref() {
+        let sqlite_home = db_path
+            .parent()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| PathBuf::from("."));
+        return Ok(SqliteConfig::from_sqlite_home(
+            AbsolutePathBuf::relative_to_current_dir(sqlite_home)?,
+        ));
     }
 
-    let codex_home = args.codex_home.clone().unwrap_or_else(default_codex_home);
-    let sqlite_home = AbsolutePathBuf::relative_to_current_dir(codex_home)?;
-    Ok(SqliteConfig::from_sqlite_home(sqlite_home).logs_db_path())
-}
-
-fn default_codex_home() -> PathBuf {
-    if let Some(home) = home_dir() {
-        return home.join(".codex");
+    let mut config_builder = ConfigBuilder::default();
+    if let Some(codex_home) = args.codex_home.as_ref() {
+        config_builder = config_builder.codex_home(codex_home.clone());
     }
-    PathBuf::from(".codex")
+    let config = config_builder.build().await?;
+    Ok(config.sqlite_config().clone())
 }
 
 fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
@@ -387,6 +381,7 @@ mod formatter {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::ffi::OsString;
 
     #[test]
     fn log_level_threshold_includes_more_severe_levels() {
@@ -419,5 +414,54 @@ mod tests {
             .expect("parse uppercase log level");
 
         assert_eq!(args.level, Some(LogLevelThreshold::Warn));
+    }
+
+    /// Explicit database selection must not parse an overridden Codex home.
+    #[tokio::test]
+    async fn direct_db_skips_codex_home_config() {
+        let codex_home = tempfile::tempdir().expect("create Codex home");
+        std::fs::write(codex_home.path().join("config.toml"), "model = [")
+            .expect("write invalid config");
+        let sqlite_home = tempfile::tempdir().expect("create SQLite home");
+        let db_path = sqlite_home.path().join("logs_2.sqlite");
+        let args = Args::try_parse_from([
+            OsString::from("codex-state-logs"),
+            OsString::from("--codex-home"),
+            codex_home.path().as_os_str().to_owned(),
+            OsString::from("--db"),
+            db_path.as_os_str().to_owned(),
+        ])
+        .expect("parse arguments");
+
+        let sqlite = resolve_sqlite_config(&args)
+            .await
+            .expect("resolve SQLite config");
+
+        assert_eq!(sqlite.logs_db_path(), db_path);
+    }
+
+    /// Direct database selection must preserve native path bytes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_db_preserves_non_utf8_path() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut db_path = temp_dir.path().as_os_str().as_bytes().to_vec();
+        db_path.extend_from_slice(b"/non-utf8-\xff/logs_2.sqlite");
+        let db_path = PathBuf::from(OsString::from_vec(db_path));
+        let args = Args::try_parse_from([
+            OsString::from("codex-state-logs"),
+            OsString::from("--db"),
+            db_path.as_os_str().to_owned(),
+        ])
+        .expect("parse arguments");
+
+        let sqlite = resolve_sqlite_config(&args)
+            .await
+            .expect("resolve SQLite config");
+
+        assert_eq!(sqlite.logs_db_path(), db_path);
     }
 }
