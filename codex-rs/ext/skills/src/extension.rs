@@ -63,6 +63,7 @@ use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 use crate::tools::skill_tools;
 use crate::warnings::bounded_warnings;
+use crate::world_state::HostSkillsWarningEmitter;
 use crate::world_state::executor_skills_world_state_section;
 use crate::world_state::host_skills_world_state_section;
 
@@ -270,30 +271,45 @@ where
             } else {
                 RenderedCatalog::default()
             };
-            if let Some(message) = rendered.warning_message
-                && input
-                    .turn_store
-                    .get_or_init(EmittedCatalogBudgetWarnings::default)
-                    .insert(&message)
-            {
-                self.emit_warning(input.thread_store.level_id(), Some(input.turn_id), message);
-            }
+            let warning_message = rendered.warning_message;
             let executor_body = rendered.fragment.map(|fragment| fragment.body());
             let mut sections = vec![executor_skills_world_state_section(
                 executor_body,
                 config.include_instructions,
             )];
+            let emitted_warnings = input
+                .turn_store
+                .get_or_init(EmittedCatalogBudgetWarnings::default);
             if let Some(host_snapshot) = input.turn_store.get::<HostSkillsSnapshot>()
                 && self.providers.has_host_provider()
             {
                 input.turn_store.insert(HostSkillsCatalogInWorldState);
+                let event_sink = Arc::clone(&self.event_sink);
+                let emitted_warnings = Arc::clone(&emitted_warnings);
+                let thread_id = input.thread_store.level_id().to_string();
+                let turn_id = input.turn_id.to_string();
+                let warning_emitter: HostSkillsWarningEmitter = Arc::new(move |message| {
+                    if emitted_warnings.insert(&message) {
+                        event_sink.emit_warning(ExtensionWarning {
+                            thread_id: thread_id.clone(),
+                            turn_id: Some(turn_id.clone()),
+                            message,
+                        });
+                    }
+                });
                 sections.push(host_skills_world_state_section(
                     &host_snapshot,
                     config.include_instructions,
                     include_usage,
                     metadata_budget,
                     extension_metrics,
+                    warning_emitter,
                 ));
+            }
+            if let Some(message) = warning_message
+                && emitted_warnings.insert(&message)
+            {
+                self.emit_warning(input.thread_store.level_id(), Some(input.turn_id), message);
             }
             sections
         })

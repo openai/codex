@@ -305,6 +305,112 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
 }
 
 #[tokio::test]
+async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -> TestResult {
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
+    install(&mut builder, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let config = default_config();
+    let skill_path = AbsolutePathBuf::try_from(test_codex_home().join("skills/demo/SKILL.md"))?;
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills.push(SkillMetadata {
+        name: "demo".to_string(),
+        description: "Demo skill.".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: skill_path,
+        scope: SkillScope::User,
+        plugin_id: None,
+        remote_plugin_id: None,
+    });
+    let host_snapshot = HostSkillsSnapshot::new(Arc::new(outcome));
+
+    let thread_store = ExtensionData::new("thread");
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let mut model_info = model_info_from_slug("test-model");
+    model_info.context_window = Some(50);
+    thread_store.insert(model_info);
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert(host_snapshot.clone());
+    let sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: &[],
+            ready_selected_capability_roots: &[],
+            executor_capability_discovery: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+    let published_snapshot = sections[1].snapshot().clone();
+    assert!(
+        sections[1]
+            .render_diff(PreviousWorldStateSection::Absent)
+            .is_some()
+    );
+    event_rx.try_recv()?.into_warning();
+    assert!(event_rx.try_recv().is_err());
+
+    let resumed_thread_store = ExtensionData::new("thread");
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &resumed_thread_store,
+        })
+        .await;
+    let mut model_info = model_info_from_slug("test-model");
+    model_info.context_window = Some(50);
+    resumed_thread_store.insert(model_info);
+    let resumed_turn_store = ExtensionData::new("turn-2");
+    resumed_turn_store.insert(host_snapshot);
+    let sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-2",
+            environments: &[],
+            ready_selected_capability_roots: &[],
+            executor_capability_discovery: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &resumed_thread_store,
+            turn_store: &resumed_turn_store,
+        })
+        .await;
+    assert!(
+        sections[1]
+            .render_diff(PreviousWorldStateSection::Known(&published_snapshot))
+            .is_none()
+    );
+    assert!(event_rx.try_recv().is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn nonempty_executor_empty_host_records_catalog_metrics() -> TestResult {
     let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {

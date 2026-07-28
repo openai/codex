@@ -26,6 +26,8 @@ const NO_HOST_SKILLS_BODY: &str =
     "\n## Host skills update\nNo host skills are currently available.\n";
 const HIDDEN_HOST_SKILLS_BODY: &str = "\n## Host skills update\nHost skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n";
 
+pub(crate) type HostSkillsWarningEmitter = Arc<dyn Fn(String) + Send + Sync>;
+
 pub(crate) fn executor_skills_world_state_section(
     body: Option<String>,
     include_instructions: bool,
@@ -84,6 +86,7 @@ pub(crate) fn host_skills_world_state_section(
     include_skills_usage_instructions: bool,
     metadata_budget: SkillMetadataBudget,
     extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
+    warning_emitter: HostSkillsWarningEmitter,
 ) -> WorldStateSectionContribution {
     let outcome = host_snapshot.outcome();
     let metadata_budget = match metadata_budget {
@@ -97,6 +100,9 @@ pub(crate) fn host_skills_world_state_section(
     } else {
         None
     };
+    let warning_message = available
+        .as_ref()
+        .and_then(|available| available.warning_message.clone());
     let render_metrics = include_instructions.then(|| {
         available
             .as_ref()
@@ -118,6 +124,24 @@ pub(crate) fn host_skills_world_state_section(
         )
         .body()
     });
+    rendered_host_skills_world_state_section(
+        body,
+        include_instructions,
+        render_metrics,
+        extension_metrics,
+        warning_message,
+        warning_emitter,
+    )
+}
+
+pub(crate) fn rendered_host_skills_world_state_section(
+    body: Option<String>,
+    include_instructions: bool,
+    render_metrics: Option<(usize, usize, usize, usize)>,
+    extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
+    warning_message: Option<String>,
+    warning_emitter: HostSkillsWarningEmitter,
+) -> WorldStateSectionContribution {
     let snapshot = json!({
         "body": body,
         "includeInstructions": include_instructions,
@@ -159,6 +183,9 @@ pub(crate) fn host_skills_world_state_section(
                 None if !include_instructions => HIDDEN_HOST_SKILLS_BODY,
                 None => NO_HOST_SKILLS_BODY,
             };
+            if let Some(message) = warning_message.as_ref() {
+                warning_emitter(message.clone());
+            }
             Some(RenderedWorldStateFragment::new(
                 "developer",
                 (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),

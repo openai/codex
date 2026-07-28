@@ -3376,22 +3376,18 @@ impl Session {
         {
             developer_sections.push(developer_instructions.to_string());
         }
-        if turn_context.config.include_skill_instructions {
-            let host_catalog_in_world_state = turn_context
+        if turn_context.config.include_skill_instructions
+            && turn_context
                 .extension_data
                 .get::<HostSkillsCatalogInWorldState>()
-                .is_some();
-            let side_effects = if host_catalog_in_world_state {
-                SkillRenderSideEffects::None
-            } else {
-                SkillRenderSideEffects::ThreadStart {
-                    session_telemetry: &self.services.session_telemetry,
-                }
-            };
+                .is_none()
+        {
             let available_skills = build_available_skills(
                 turn_context.turn_skills.snapshot.outcome(),
                 default_skill_metadata_budget(turn_context.model_info.context_window),
-                side_effects,
+                SkillRenderSideEffects::ThreadStart {
+                    session_telemetry: &self.services.session_telemetry,
+                },
             );
             if let Some(available_skills) = available_skills {
                 let warning_message = available_skills.warning_message.clone();
@@ -3408,9 +3404,7 @@ impl Session {
                     })
                     .await;
                 }
-                if !host_catalog_in_world_state {
-                    developer_sections.push(skills_instructions.render());
-                }
+                developer_sections.push(skills_instructions.render());
             }
         }
         let loaded_plugins = self
