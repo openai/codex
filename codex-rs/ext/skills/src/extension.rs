@@ -42,6 +42,7 @@ use crate::fragments::SkillInstructions;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
+use crate::render::AvailableSkillsRender;
 use crate::render::MAX_SKILL_NAME_BYTES;
 use crate::render::MAX_SKILL_PATH_BYTES;
 use crate::render::SkillCatalogRenderPolicy;
@@ -49,10 +50,12 @@ use crate::render::SkillMetadataBudget;
 use crate::render::SkillRenderReport;
 use crate::render::capped_skill_metadata_budget;
 use crate::render::render_available_skills;
+use crate::render::render_combined_available_skills;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_render;
+use crate::render_observability::trace_catalog_budget_pressure;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
@@ -66,6 +69,7 @@ use crate::warnings::bounded_warnings;
 use crate::world_state::HostSkillsWarningEmitter;
 use crate::world_state::executor_skills_world_state_section;
 use crate::world_state::host_skills_world_state_section;
+use crate::world_state::rendered_host_skills_world_state_section;
 
 struct SkillsExtension<C> {
     providers: SkillProviders,
@@ -88,7 +92,23 @@ fn render_catalog(
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
 ) -> RenderedCatalog {
-    let Some(rendered) = render_available_skills(catalog, policy, budget) else {
+    render_prepared_catalog(
+        extension_metrics,
+        catalog_surface,
+        include_skills_usage_instructions,
+        budget,
+        render_available_skills(catalog, policy, budget),
+    )
+}
+
+fn render_prepared_catalog(
+    extension_metrics: Option<&dyn ExtensionMetrics>,
+    catalog_surface: CatalogSurface,
+    include_skills_usage_instructions: bool,
+    budget: SkillMetadataBudget,
+    rendered: Option<AvailableSkillsRender>,
+) -> RenderedCatalog {
+    let Some(rendered) = rendered else {
         record_catalog_render(
             extension_metrics,
             catalog_surface,
@@ -259,19 +279,78 @@ where
                 .and_then(ModelInfo::resolved_context_window);
             let metadata_budget = capped_skill_metadata_budget(context_window);
             let extension_metrics = input.extension_metrics.clone();
-            let rendered = if config.include_instructions {
-                render_catalog(
-                    extension_metrics.as_deref(),
-                    CatalogSurface::ExecutorWorldState,
-                    &catalog,
-                    include_usage,
-                    SkillCatalogRenderPolicy::ExtensionCompatible,
-                    metadata_budget,
-                )
+            let host_snapshot = input.turn_store.get::<HostSkillsSnapshot>();
+            let shared_rendered = if config.include_instructions
+                && let Some(host_snapshot) = host_snapshot.as_ref()
+                && self.providers.has_host_provider()
+            {
+                let host_catalog = self
+                    .providers
+                    .list_host_for_turn(SkillListQuery {
+                        turn_id: input.turn_id.to_string(),
+                        executor_roots: Vec::new(),
+                        resolved_executor_roots: Vec::new(),
+                        host_snapshot: Some(Arc::clone(host_snapshot)),
+                        include_host_skills: true,
+                        include_bundled_skills: false,
+                        include_orchestrator_skills: false,
+                        mcp_resources: None,
+                        executor_capability_discovery: None,
+                    })
+                    .await;
+                let (host_rendered, executor_rendered) =
+                    render_combined_available_skills(&host_catalog, &catalog, metadata_budget);
+                if host_catalog
+                    .entries
+                    .iter()
+                    .any(SkillCatalogEntry::is_model_visible)
+                    && catalog
+                        .entries
+                        .iter()
+                        .any(SkillCatalogEntry::is_model_visible)
+                {
+                    Some((host_rendered, executor_rendered))
+                } else {
+                    None
+                }
             } else {
-                RenderedCatalog::default()
+                None
             };
-            let warning_message = rendered.warning_message;
+            let (rendered, rendered_host) =
+                if let Some((host_rendered, executor_rendered)) = shared_rendered {
+                    if let Some(host_rendered) = host_rendered.as_ref() {
+                        trace_catalog_budget_pressure(metadata_budget, &host_rendered.report);
+                    }
+                    (
+                        render_prepared_catalog(
+                            extension_metrics.as_deref(),
+                            CatalogSurface::ExecutorWorldState,
+                            include_usage,
+                            metadata_budget,
+                            executor_rendered,
+                        ),
+                        host_rendered,
+                    )
+                } else {
+                    (
+                        if config.include_instructions {
+                            render_catalog(
+                                extension_metrics.as_deref(),
+                                CatalogSurface::ExecutorWorldState,
+                                &catalog,
+                                include_usage,
+                                SkillCatalogRenderPolicy::ExtensionCompatible,
+                                metadata_budget,
+                            )
+                        } else {
+                            RenderedCatalog::default()
+                        },
+                        None,
+                    )
+                };
+            let host_warning_message = rendered_host
+                .as_ref()
+                .and_then(|rendered_host| rendered_host.report.warning_message());
             let executor_body = rendered.fragment.map(|fragment| fragment.body());
             let mut sections = vec![executor_skills_world_state_section(
                 executor_body,
@@ -280,7 +359,7 @@ where
             let emitted_warnings = input
                 .turn_store
                 .get_or_init(EmittedCatalogBudgetWarnings::default);
-            if let Some(host_snapshot) = input.turn_store.get::<HostSkillsSnapshot>()
+            if let Some(host_snapshot) = host_snapshot
                 && self.providers.has_host_provider()
             {
                 input.turn_store.insert(HostSkillsCatalogInWorldState);
@@ -297,16 +376,37 @@ where
                         });
                     }
                 });
-                sections.push(host_skills_world_state_section(
-                    &host_snapshot,
-                    config.include_instructions,
-                    include_usage,
-                    metadata_budget,
-                    extension_metrics,
-                    warning_emitter,
-                ));
+                if let Some(rendered_host) = rendered_host {
+                    let report = &rendered_host.report;
+                    let render_metrics = Some((
+                        report.total_count,
+                        report.included_count,
+                        report.omitted_count,
+                        report.truncated_description_chars,
+                    ));
+                    let body = rendered_host
+                        .into_fragment(include_usage)
+                        .map(|fragment| fragment.body());
+                    sections.push(rendered_host_skills_world_state_section(
+                        body,
+                        config.include_instructions,
+                        render_metrics,
+                        extension_metrics,
+                        host_warning_message,
+                        warning_emitter,
+                    ));
+                } else {
+                    sections.push(host_skills_world_state_section(
+                        &host_snapshot,
+                        config.include_instructions,
+                        include_usage,
+                        metadata_budget,
+                        extension_metrics,
+                        warning_emitter,
+                    ));
+                }
             }
-            if let Some(message) = warning_message
+            if let Some(message) = rendered.warning_message
                 && emitted_warnings.insert(&message)
             {
                 self.emit_warning(input.thread_store.level_id(), Some(input.turn_id), message);

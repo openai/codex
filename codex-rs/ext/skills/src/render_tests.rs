@@ -324,6 +324,135 @@ fn mixed_catalogs_keep_absolute_authority_aware_rendering_under_budget_pressure(
 }
 
 #[test]
+fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
+    let host_catalog = SkillCatalog {
+        entries: vec![entry_with_path(
+            "h", "", /*short_description*/ None, "/h",
+        )],
+        warnings: Vec::new(),
+    };
+    let executor_entry = |name: &str, resource: &str| {
+        SkillCatalogEntry::new(
+            SkillPackageId(name.to_string()),
+            SkillAuthority::new(SkillSourceKind::Executor, "env-1"),
+            name,
+            "",
+            SkillResourceId::new(resource),
+        )
+        .with_display_path(resource)
+    };
+    let executor_catalog = SkillCatalog {
+        entries: vec![
+            executor_entry("e1", "skill://executor/one"),
+            executor_entry(
+                "e2",
+                "skill://executor/this-resource-is-intentionally-too-long",
+            ),
+        ],
+        warnings: Vec::new(),
+    };
+
+    let (host, executor) = render_combined_available_skills(
+        &host_catalog,
+        &executor_catalog,
+        SkillMetadataBudget::Tokens(28),
+    );
+    let host = host.expect("host catalog should render");
+    let executor = executor.expect("executor catalog should render");
+
+    assert_eq!(
+        host.report,
+        SkillRenderReport {
+            total_count: 1,
+            included_count: 0,
+            omitted_count: 1,
+            truncated_description_chars: 0,
+            truncated_description_count: 0,
+        }
+    );
+    assert_eq!(
+        executor.report,
+        SkillRenderReport {
+            total_count: 2,
+            included_count: 1,
+            omitted_count: 1,
+            truncated_description_chars: 0,
+            truncated_description_count: 0,
+        }
+    );
+    assert_eq!(
+        executor.skill_lines,
+        vec![
+            "- e1: (environment resource: skill://executor/one)".to_string(),
+            "- 1 additional skill omitted from this bounded skills list.".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
+    let root = format!("/{}", "r".repeat(219));
+    let host_catalog = SkillCatalog {
+        entries: ["h1", "h2"]
+            .into_iter()
+            .map(|name| {
+                entry(name, "", /*short_description*/ None)
+                    .with_display_path(format!("{root}/{name}/SKILL.md"))
+                    .with_display_path_root(root.as_str())
+            })
+            .collect(),
+        warnings: Vec::new(),
+    };
+    let executor_entry = |name: &str, resource: &str| {
+        SkillCatalogEntry::new(
+            SkillPackageId(name.to_string()),
+            SkillAuthority::new(SkillSourceKind::Executor, "env-1"),
+            name,
+            "",
+            SkillResourceId::new(resource),
+        )
+        .with_display_path(resource)
+    };
+    let executor_catalog = SkillCatalog {
+        entries: vec![
+            executor_entry("e1", "skill://executor/one"),
+            executor_entry("e2", &format!("skill://{}", "e".repeat(132))),
+        ],
+        warnings: Vec::new(),
+    };
+
+    let (host, executor) = render_combined_available_skills(
+        &host_catalog,
+        &executor_catalog,
+        SkillMetadataBudget::Tokens(74),
+    );
+    let host = host.expect("host catalog should render");
+    let executor = executor.expect("executor catalog should render");
+
+    assert_eq!(
+        executor.report,
+        SkillRenderReport {
+            total_count: 2,
+            included_count: 2,
+            omitted_count: 0,
+            truncated_description_chars: 0,
+            truncated_description_count: 0,
+        }
+    );
+    assert_eq!(
+        host.report,
+        SkillRenderReport {
+            total_count: 2,
+            included_count: 0,
+            omitted_count: 2,
+            truncated_description_chars: 0,
+            truncated_description_count: 0,
+        }
+    );
+    assert_eq!(host.skill_root_lines, Vec::<String>::new());
+}
+
+#[test]
 fn singleton_plugin_versions_share_the_marketplace_alias_root() {
     let github_root = "/Users/test/.codex/plugins/cache/openai-curated/github/hash123/skills";
     let slack_root = "/Users/test/.codex/plugins/cache/openai-curated/slack/hash456/skills";

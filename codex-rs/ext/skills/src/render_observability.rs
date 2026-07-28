@@ -41,6 +41,13 @@ pub(crate) fn record_catalog_render(
         report.truncated_description_chars,
     );
 
+    trace_catalog_budget_pressure(budget, report);
+}
+
+pub(crate) fn trace_catalog_budget_pressure(
+    budget: SkillMetadataBudget,
+    report: &SkillRenderReport,
+) {
     if report.omitted_count > 0 || report.truncated_description_chars > 0 {
         tracing::info!(
             budget_limit = budget.limit(),

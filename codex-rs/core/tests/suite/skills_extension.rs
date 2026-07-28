@@ -127,6 +127,8 @@ const FULL_CATALOG_CONTEXT_WINDOW: i64 = 40_000;
 const SHORTENING_CONTEXT_WINDOW: i64 = 12_000;
 const EXECUTOR_OMITTING_CONTEXT_WINDOW: i64 = 2_000;
 const HOST_OMITTING_CONTEXT_WINDOW: i64 = 2_000;
+const MIXED_EXECUTOR_OMITTING_CONTEXT_WINDOW: i64 = 2_000;
+const MIXED_HOST_OMITTING_CONTEXT_WINDOW: i64 = 6_000;
 const HOST_CATALOG: [(&str, &str); 4] = [
     (
         "host-alpha",
@@ -551,6 +553,25 @@ async fn production_turn_shortens_executor_only_catalog_with_the_full_budget() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_shares_catalog_budget_across_host_and_executor_sections() -> Result<()> {
+    let (developer_texts, _) =
+        rendered_catalogs(&HOST_CATALOG, &EXECUTOR_CATALOG, SHORTENING_CONTEXT_WINDOW).await?;
+    let host_lines = skill_lines(catalog_text(&developer_texts, "host"), "host");
+    let executor_lines = skill_lines(catalog_text(&developer_texts, "exec"), "exec");
+    let combined_lines = host_lines
+        .iter()
+        .chain(executor_lines.iter())
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert_shortened_descriptions(&host_lines, &HOST_CATALOG);
+    assert_shortened_descriptions(&executor_lines, &EXECUTOR_CATALOG);
+    assert!(metadata_cost(&combined_lines) <= 240);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn production_turn_keeps_full_host_only_catalog_when_it_fits() -> Result<()> {
     let (developer_texts, _) =
         rendered_catalogs(&HOST_CATALOG, &[], FULL_CATALOG_CONTEXT_WINDOW).await?;
@@ -643,6 +664,60 @@ async fn production_turn_omits_executor_skills_under_extreme_executor_only_press
 
     assert_eq!(skill_names(&executor_lines), vec!["exec-alpha"]);
     assert!(executor_text.contains("- 5 additional skills omitted from this bounded skills list."));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_omits_executor_skills_after_host_skills_under_extreme_pressure()
+-> Result<()> {
+    let (developer_texts, _) = rendered_catalogs(
+        &HOST_CATALOG,
+        &EXECUTOR_CATALOG,
+        MIXED_EXECUTOR_OMITTING_CONTEXT_WINDOW,
+    )
+    .await?;
+    let host_lines = developer_texts
+        .iter()
+        .flat_map(|text| skill_lines(text, "host"))
+        .collect::<Vec<_>>();
+    let executor_text = executor_omission_text(&developer_texts);
+    let executor_lines = skill_lines(executor_text, "exec");
+
+    assert_eq!(skill_names(&host_lines), Vec::<&str>::new());
+    assert_eq!(skill_names(&executor_lines), vec!["exec-alpha"]);
+    assert!(executor_text.contains("- 5 additional skills omitted from this bounded skills list."));
+    assert!(developer_texts.iter().any(|text| text.contains(
+        "Host skills are available but omitted from the model-visible skills list because the skills context budget was exceeded."
+    )));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_omits_host_skills_before_executor_skills_under_extreme_mixed_pressure()
+-> Result<()> {
+    let (developer_texts, warning_messages) = rendered_catalogs(
+        &HOST_CATALOG,
+        &EXECUTOR_CATALOG,
+        MIXED_HOST_OMITTING_CONTEXT_WINDOW,
+    )
+    .await?;
+    let host_lines = skill_lines(catalog_text(&developer_texts, "host"), "host");
+    let executor_lines = skill_lines(catalog_text(&developer_texts, "exec"), "exec");
+
+    assert_eq!(skill_names(&host_lines), vec!["host-beta"]);
+    assert_eq!(
+        skill_names(&executor_lines),
+        EXECUTOR_CATALOG
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    );
+    assert!(warning_messages.contains(
+        &"Exceeded skills context budget. All skill descriptions were removed and 3 additional skills were not included in the model-visible skills list."
+            .to_string()
+    ));
 
     Ok(())
 }
