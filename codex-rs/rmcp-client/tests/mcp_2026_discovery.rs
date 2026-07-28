@@ -305,6 +305,63 @@ async fn modern_discovery_accepts_metadata_namespaced_server_identity() -> anyho
 }
 
 #[tokio::test]
+async fn modern_discovery_accepts_native_sse_responses() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            assert_eq!(body["method"], "server/discover");
+            let response = modern_discover_result(&body);
+            ResponseTemplate::new(200).set_body_raw(
+                format!(": keepalive\n\nevent: message\ndata: {response}\n\n"),
+                "text/event-stream; charset=utf-8",
+            )
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = create_client(&server, McpProtocolMode::V20260728).await?;
+    initialize_client(&client).await?;
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn modern_discovery_accepts_metadata_namespaced_server_identity_over_sse()
+-> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            assert_eq!(body["method"], "server/discover");
+            let mut response = modern_discover_result(&body);
+            let server_info = response["result"]
+                .as_object_mut()
+                .expect("discovery object")
+                .remove("serverInfo")
+                .expect("top-level identity");
+            response["result"]["_meta"] = json!({
+                "io.modelcontextprotocol/serverInfo": server_info,
+            });
+            ResponseTemplate::new(200).set_body_raw(
+                format!("event: message\ndata: {response}\n\n"),
+                "text/event-stream; charset=utf-8",
+            )
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = create_client(&server, McpProtocolMode::V20260728).await?;
+    initialize_client(&client).await?;
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn modern_http_rejects_oversized_discovery_and_tool_json_responses() -> anyhow::Result<()> {
     for oversized_method in ["server/discover", "tools/list", "tools/list:error"] {
         let server = MockServer::start().await;

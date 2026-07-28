@@ -1,8 +1,10 @@
 use bytes::BytesMut;
+use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
 use codex_exec_server::ProcessId;
+use codex_exec_server::ProcessOutputChunk;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::WriteResponse;
@@ -12,6 +14,7 @@ use rmcp::service::RoleClient;
 use rmcp::service::TxJsonRpcMessage;
 use rmcp::transport::Transport;
 use serde_json::json;
+use std::io;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
@@ -22,6 +25,7 @@ use tokio::sync::watch;
 use super::ExecutorProcessTransport;
 use super::LineBuffer;
 use super::LineTooLong;
+use super::MAX_MCP_STDERR_LINE_BYTES;
 use super::MAX_MCP_STDOUT_LINE_BYTES;
 
 struct BlockingFirstWriteProcess {
@@ -83,6 +87,66 @@ impl ExecProcess for BlockingFirstWriteProcess {
     }
 }
 
+struct RetainedReadProcess {
+    process_id: ProcessId,
+    response: ReadResponse,
+}
+
+impl ExecProcess for RetainedReadProcess {
+    fn process_id(&self) -> &ProcessId {
+        &self.process_id
+    }
+
+    fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        watch::channel(0).1
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        ExecProcessEventReceiver::empty()
+    }
+
+    fn read(
+        &self,
+        _after_seq: Option<u64>,
+        _max_bytes: Option<usize>,
+        _wait_ms: Option<u64>,
+    ) -> ExecProcessFuture<'_, ReadResponse> {
+        Box::pin(async { Ok(self.response.clone()) })
+    }
+
+    fn write(&self, _chunk: Vec<u8>) -> ExecProcessFuture<'_, WriteResponse> {
+        Box::pin(async { unreachable!("recovery tests should not write process input") })
+    }
+
+    fn signal(&self, _signal: ProcessSignal) -> ExecProcessFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn terminate(&self) -> ExecProcessFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn recovered_output(seq: u64, stream: ExecOutputStream, bytes: &[u8]) -> ProcessOutputChunk {
+    ProcessOutputChunk {
+        seq,
+        stream,
+        chunk: bytes.to_vec().into(),
+    }
+}
+
+fn retained_read_response(chunks: Vec<ProcessOutputChunk>, next_seq: u64) -> ReadResponse {
+    ReadResponse {
+        chunks,
+        next_seq,
+        exited: false,
+        exit_code: None,
+        closed: false,
+        failure: None,
+        sandbox_denied: false,
+    }
+}
+
 #[tokio::test]
 async fn serializes_concurrent_stdin_writes() {
     let process = Arc::new(BlockingFirstWriteProcess {
@@ -135,6 +199,177 @@ async fn serializes_concurrent_stdin_writes() {
             b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n".to_vec(),
         ]
     );
+}
+
+#[tokio::test]
+async fn rejects_lagged_recovery_when_retained_output_skips_a_sequence() {
+    let process = Arc::new(RetainedReadProcess {
+        process_id: ProcessId::from("mcp-stdio-lost-output"),
+        response: retained_read_response(
+            vec![recovered_output(
+                /*seq*/ 6,
+                ExecOutputStream::Stdout,
+                br#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            )],
+            /*next_seq*/ 7,
+        ),
+    });
+    let mut transport = ExecutorProcessTransport::new(process, "mcp-stdio-lost-output".to_string());
+    transport.last_seq = 4;
+    transport
+        .stdout
+        .extend_from_slice(br#"{"jsonrpc":"2.0","id":1,"result":""#)
+        .expect("partial stdout should fit");
+    transport
+        .stderr
+        .extend_from_slice(b"partial diagnostic")
+        .expect("partial stderr should fit");
+
+    let error = transport
+        .recover_lagged_events()
+        .await
+        .expect_err("evicted output must close the transport");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        error.to_string(),
+        "remote MCP server output stream lost process events: expected sequence 5, received 6"
+    );
+    assert_eq!(transport.stdout, LineBuffer::default());
+    assert_eq!(transport.stderr, LineBuffer::new(MAX_MCP_STDERR_LINE_BYTES));
+    assert!(transport.closed);
+}
+
+#[tokio::test]
+async fn rejects_lagged_recovery_when_all_missing_output_was_evicted() {
+    let process = Arc::new(RetainedReadProcess {
+        process_id: ProcessId::from("mcp-stdio-evicted-output"),
+        response: retained_read_response(Vec::new(), /*next_seq*/ 7),
+    });
+    let mut transport =
+        ExecutorProcessTransport::new(process, "mcp-stdio-evicted-output".to_string());
+    transport.last_seq = 4;
+
+    let error = transport
+        .recover_lagged_events()
+        .await
+        .expect_err("missing retained output must close the transport");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        error.to_string(),
+        "remote MCP server output stream lost process events: expected sequence 5, received 7"
+    );
+    assert!(transport.closed);
+}
+
+#[tokio::test]
+async fn recovers_contiguous_output_after_a_duplicate_replayed_event() {
+    let process = Arc::new(RetainedReadProcess {
+        process_id: ProcessId::from("mcp-stdio-duplicate-output"),
+        response: retained_read_response(
+            vec![
+                recovered_output(
+                    /*seq*/ 4,
+                    ExecOutputStream::Stdout,
+                    b"duplicate output\n",
+                ),
+                recovered_output(
+                    /*seq*/ 5,
+                    ExecOutputStream::Stdout,
+                    b"recovered stdout\n",
+                ),
+                recovered_output(
+                    /*seq*/ 6,
+                    ExecOutputStream::Stderr,
+                    b"recovered stderr\n",
+                ),
+            ],
+            /*next_seq*/ 7,
+        ),
+    });
+    let mut transport =
+        ExecutorProcessTransport::new(process, "mcp-stdio-duplicate-output".to_string());
+    transport.last_seq = 4;
+
+    transport
+        .recover_lagged_events()
+        .await
+        .expect("duplicate replay must not prevent recovery of contiguous output");
+
+    assert_eq!(
+        transport.stdout.take_line(),
+        Some(BytesMut::from(&b"recovered stdout"[..]))
+    );
+    assert_eq!(transport.stdout.take_line(), None);
+    assert_eq!(transport.stderr, LineBuffer::new(MAX_MCP_STDERR_LINE_BYTES));
+    assert_eq!(transport.last_seq, 6);
+    assert!(!transport.closed);
+}
+
+#[tokio::test]
+async fn recovers_contiguous_output_and_accounts_for_terminal_events() {
+    let mut response = retained_read_response(
+        vec![
+            recovered_output(
+                /*seq*/ 5,
+                ExecOutputStream::Stdout,
+                b"recovered stdout\n",
+            ),
+            recovered_output(
+                /*seq*/ 6,
+                ExecOutputStream::Stderr,
+                b"recovered stderr\n",
+            ),
+        ],
+        /*next_seq*/ 9,
+    );
+    response.exited = true;
+    response.exit_code = Some(0);
+    response.closed = true;
+    let process = Arc::new(RetainedReadProcess {
+        process_id: ProcessId::from("mcp-stdio-recovered-output"),
+        response,
+    });
+    let mut transport =
+        ExecutorProcessTransport::new(process, "mcp-stdio-recovered-output".to_string());
+    transport.last_seq = 4;
+
+    transport
+        .recover_lagged_events()
+        .await
+        .expect("contiguous retained output should remain recoverable");
+
+    assert_eq!(
+        transport.stdout.take_line(),
+        Some(BytesMut::from(&b"recovered stdout"[..]))
+    );
+    assert_eq!(transport.stderr, LineBuffer::new(MAX_MCP_STDERR_LINE_BYTES));
+    assert_eq!(transport.last_seq, 8);
+    assert!(transport.closed);
+}
+
+#[tokio::test]
+async fn closes_on_an_unsequenced_process_failure_without_inventing_missing_output() {
+    let mut response = retained_read_response(Vec::new(), /*next_seq*/ 5);
+    response.exited = true;
+    response.closed = true;
+    response.failure = Some("executor disconnected".to_string());
+    let process = Arc::new(RetainedReadProcess {
+        process_id: ProcessId::from("mcp-stdio-failed-process"),
+        response,
+    });
+    let mut transport =
+        ExecutorProcessTransport::new(process, "mcp-stdio-failed-process".to_string());
+    transport.last_seq = 4;
+
+    transport
+        .recover_lagged_events()
+        .await
+        .expect("an unsequenced executor failure is not an output sequence gap");
+
+    assert_eq!(transport.last_seq, 4);
+    assert!(transport.closed);
 }
 
 #[test]

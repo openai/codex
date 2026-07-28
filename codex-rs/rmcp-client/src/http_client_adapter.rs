@@ -48,6 +48,7 @@ use sse_stream::Sse;
 use sse_stream::SseStream;
 
 use crate::incoming_jsonrpc::deserialize_incoming_jsonrpc_message;
+use crate::incoming_jsonrpc::normalize_sse_jsonrpc_message;
 use crate::local_stdio_transport::MAX_MCP_STDIO_LINE_BYTES;
 
 mod www_authenticate;
@@ -261,7 +262,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         }
         match content_type.as_deref() {
             Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
-                let mut event_stream = sse_stream_from_body(body_stream);
+                let mut event_stream = sse_stream_from_body(body_stream, maximum_response_bytes);
                 if mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE) {
                     while let Some(event) = event_stream.next().await {
                         let event = event.map_err(StreamableHttpError::Sse)?;
@@ -292,7 +293,6 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                         "empty sse stream".into(),
                     ));
                 }
-
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
@@ -460,7 +460,12 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             }
         }
 
-        Ok(sse_stream_from_body(body_stream))
+        let maximum_response_bytes = headers
+            .get(HEADER_MCP_PROTOCOL_VERSION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|version| version == ProtocolVersion::V_2026_07_28.as_str())
+            .then_some(MAX_MCP_STDIO_LINE_BYTES);
+        Ok(sse_stream_from_body(body_stream, maximum_response_bytes))
     }
 }
 
@@ -793,13 +798,124 @@ async fn collect_body(
 
 fn sse_stream_from_body(
     body_stream: HttpResponseBodyStream,
+    maximum_event_bytes: Option<usize>,
 ) -> BoxStream<'static, std::result::Result<Sse, sse_stream::Error>> {
-    SseStream::from_bytes_stream(stream::unfold(body_stream, |mut body_stream| async move {
-        match body_stream.recv().await {
-            Ok(Some(bytes)) => Some((Ok(Bytes::from(bytes)), body_stream)),
-            Ok(None) => None,
-            Err(error) => Some((Err(io::Error::other(error)), body_stream)),
-        }
-    }))
+    let modern_session = maximum_event_bytes.is_some();
+    SseStream::from_bytes_stream(stream::unfold(
+        (body_stream, SseEventSizeLimit::new(maximum_event_bytes)),
+        |(mut body_stream, mut size_limit)| async move {
+            match body_stream.recv().await {
+                Ok(Some(bytes)) => {
+                    if let Err(error) = size_limit.observe(&bytes) {
+                        Some((Err(error), (body_stream, size_limit)))
+                    } else {
+                        Some((Ok(Bytes::from(bytes)), (body_stream, size_limit)))
+                    }
+                }
+                Ok(None) => None,
+                Err(error) => Some((Err(io::Error::other(error)), (body_stream, size_limit))),
+            }
+        },
+    ))
+    .map(move |event| {
+        event.map(|mut event| {
+            if let Some(payload) = event.data.as_deref()
+                && let Some(normalized) = normalize_sse_jsonrpc_message(payload, modern_session)
+            {
+                event.data = Some(normalized);
+            }
+            event
+        })
+    })
     .boxed()
 }
+
+struct SseEventSizeLimit {
+    maximum_bytes: Option<usize>,
+    retained_bytes: usize,
+    line_bytes: usize,
+    line_is_comment: bool,
+    previous_was_carriage_return: bool,
+    failed: bool,
+}
+
+impl SseEventSizeLimit {
+    fn new(maximum_bytes: Option<usize>) -> Self {
+        Self {
+            maximum_bytes,
+            retained_bytes: 0,
+            line_bytes: 0,
+            line_is_comment: false,
+            previous_was_carriage_return: false,
+            failed: false,
+        }
+    }
+
+    fn observe(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.failed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "oversized MCP SSE event was already rejected",
+            ));
+        }
+        let Some(maximum_bytes) = self.maximum_bytes else {
+            return Ok(());
+        };
+
+        for &byte in bytes {
+            if self.previous_was_carriage_return {
+                self.previous_was_carriage_return = false;
+                if byte == b'\n' {
+                    continue;
+                }
+            }
+
+            match byte {
+                b'\r' => {
+                    self.finish_line(maximum_bytes)?;
+                    self.previous_was_carriage_return = true;
+                }
+                b'\n' => self.finish_line(maximum_bytes)?,
+                _ => {
+                    if self.line_bytes == 0 {
+                        self.line_is_comment = byte == b':';
+                    }
+                    self.line_bytes = self.line_bytes.saturating_add(1);
+                    self.check_limit(maximum_bytes)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_line(&mut self, maximum_bytes: usize) -> io::Result<()> {
+        if self.line_bytes == 0 {
+            self.retained_bytes = 0;
+        } else if !self.line_is_comment {
+            // The SSE parser inserts a newline when joining multiple data fields.
+            self.retained_bytes = self
+                .retained_bytes
+                .saturating_add(self.line_bytes)
+                .saturating_add(1);
+        }
+
+        self.line_bytes = 0;
+        self.line_is_comment = false;
+        self.check_limit(maximum_bytes)
+    }
+
+    fn check_limit(&mut self, maximum_bytes: usize) -> io::Result<()> {
+        if self.retained_bytes.saturating_add(self.line_bytes) > maximum_bytes {
+            self.failed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("MCP response body exceeds {maximum_bytes} bytes"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "http_client_adapter_tests.rs"]
+mod tests;

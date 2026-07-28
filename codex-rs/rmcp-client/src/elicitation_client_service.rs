@@ -5,7 +5,10 @@ use rmcp::model::ClientInfo;
 use rmcp::model::ClientResult;
 use rmcp::model::CustomRequest;
 use rmcp::model::CustomResult;
+use rmcp::model::ElicitResult;
 use rmcp::model::ElicitationAction;
+use rmcp::model::MetaObject;
+use rmcp::model::ProtocolVersion;
 use rmcp::model::RequestMetaObject;
 use rmcp::model::RequestParamsMeta;
 use rmcp::model::ServerNotification;
@@ -94,22 +97,42 @@ impl Service<RoleClient> for ElicitationClientService {
     ) -> Result<ClientResult, rmcp::ErrorData> {
         match request {
             ServerRequest::ElicitRequest(request) => {
+                let modern_session = context
+                    .peer
+                    .peer_info()
+                    .is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28);
                 let response = self
                     .create_elicitation(Elicitation::Mcp(request.params), context)
                     .await?;
-                // RMCP's typed ElicitResult does not model result-level `_meta`.
-                let result = elicitation_response_result(response)?;
-                Ok(ClientResult::CustomResult(result))
+                if modern_session {
+                    Ok(ClientResult::ElicitResult(typed_elicitation_result(
+                        response,
+                    )?))
+                } else {
+                    Ok(ClientResult::CustomResult(elicitation_response_result(
+                        response,
+                    )?))
+                }
             }
             ServerRequest::CustomRequest(request)
                 if request.method == MCP_ELICITATION_CREATE_METHOD =>
             {
+                let modern_session = context
+                    .peer
+                    .peer_info()
+                    .is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28);
                 let response = self
                     .create_elicitation(custom_mcp_elicitation(request)?, context)
                     .await?;
-                Ok(ClientResult::CustomResult(elicitation_response_result(
-                    response,
-                )?))
+                if modern_session {
+                    Ok(ClientResult::ElicitResult(typed_elicitation_result(
+                        response,
+                    )?))
+                } else {
+                    Ok(ClientResult::CustomResult(elicitation_response_result(
+                        response,
+                    )?))
+                }
             }
             ServerRequest::CustomRequest(request)
                 if request.method == OPENAI_FORM_METHOD && self.supports_openai_form =>
@@ -227,6 +250,29 @@ fn elicitation_response_result(
         .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))
 }
 
+fn typed_elicitation_result(
+    response: ElicitationResponse,
+) -> Result<ElicitResult, rmcp::ErrorData> {
+    let ElicitationResponse {
+        action,
+        content,
+        meta,
+    } = response;
+    let mut result = ElicitResult::new(action);
+    result.content = content;
+    result.meta = match meta {
+        None => None,
+        Some(Value::Object(meta)) => Some(MetaObject::from(meta)),
+        Some(meta) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("MCP elicitation response _meta must be an object, got {meta}"),
+                None,
+            ));
+        }
+    };
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -286,7 +332,7 @@ mod tests {
         let ServerRequest::ElicitRequest(request) = request else {
             panic!("legacy elicitation/create must dispatch to the typed handler");
         };
-        let rmcp::model::ElicitRequestParams::FormElicitationParams {
+        let ElicitRequestParams::FormElicitationParams {
             requested_schema, ..
         } = request.params
         else {
@@ -416,6 +462,37 @@ mod tests {
                 "_meta": { "persist": "always" },
             })
         );
+    }
+
+    #[test]
+    fn typed_elicitation_result_preserves_response_meta() {
+        let result = typed_elicitation_result(ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: Some(json!({ "confirmed": true })),
+            meta: Some(json!({ "persist": "always" })),
+        })
+        .expect("modern elicitation response should serialize");
+
+        assert_eq!(
+            serde_json::to_value(result).expect("typed elicitation result should serialize"),
+            json!({
+                "action": "accept",
+                "content": { "confirmed": true },
+                "_meta": { "persist": "always" },
+            })
+        );
+    }
+
+    #[test]
+    fn typed_elicitation_result_rejects_non_object_meta() {
+        let error = typed_elicitation_result(ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: None,
+            meta: Some(json!(["invalid"])),
+        })
+        .expect_err("modern elicitation metadata must be an object");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     }
 
     fn form_request(meta: Option<RequestMetaObject>) -> ElicitRequestParams {
