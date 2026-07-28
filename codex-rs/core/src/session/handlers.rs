@@ -324,6 +324,7 @@ pub async fn resolve_elicitation(
         // Preserve the legacy fallback for clients that only send an action.
         ElicitationAction::Accept => Some(content.unwrap_or_else(|| serde_json::json!({}))),
         ElicitationAction::Decline | ElicitationAction::Cancel => None,
+        _ => None,
     };
     let response = ElicitationResponse {
         action,

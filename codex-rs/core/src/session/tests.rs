@@ -8190,12 +8190,14 @@ async fn mcp_elicitation_reviewer_uses_latest_runtime_authority() {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(7),
         elicitation: codex_rmcp_client::Elicitation::Mcp(
-            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
-                meta: Some(rmcp::model::Meta(serde_json::Map::from_iter([
-                    ("codex_approval_kind".to_string(), json!("mcp_tool_call")),
-                    ("codex_request_type".to_string(), json!("approval_request")),
-                    ("tool_name".to_string(), json!("access_browser_origin")),
-                ]))),
+            rmcp::model::ElicitRequestParams::FormElicitationParams {
+                meta: Some(rmcp::model::RequestMetaObject::from(
+                    serde_json::Map::from_iter([
+                        ("codex_approval_kind".to_string(), json!("mcp_tool_call")),
+                        ("codex_request_type".to_string(), json!("approval_request")),
+                        ("tool_name".to_string(), json!("access_browser_origin")),
+                    ]),
+                )),
                 message: "Allow origin?".to_string(),
                 requested_schema: rmcp::model::ElicitationSchema::builder()
                     .build()

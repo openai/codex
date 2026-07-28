@@ -330,15 +330,13 @@ impl ServerHandler for InstalledAppsMcpServer {
                 ));
             }
 
-            Ok(ListToolsResult {
-                meta: None,
-                next_cursor: None,
-                tools: state
+            Ok(ListToolsResult::with_all_items(
+                state
                     .tools
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone(),
-            })
+            ))
         }
     }
 }

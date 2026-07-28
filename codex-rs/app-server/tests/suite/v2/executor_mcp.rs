@@ -419,18 +419,14 @@ impl ServerHandler for ExecutorHttpMcpServer {
         );
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
 
-        Ok(ListToolsResult {
-            tools: vec![tool],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(vec![tool]))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         let message = request
             .arguments
             .as_ref()
@@ -439,7 +435,8 @@ impl ServerHandler for ExecutorHttpMcpServer {
             .unwrap_or_default();
         Ok(CallToolResult::structured(json!({
             "echo": format!("ECHOING: {message}")
-        })))
+        }))
+        .into())
     }
 }
 

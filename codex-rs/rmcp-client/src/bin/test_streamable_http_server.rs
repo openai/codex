@@ -34,8 +34,6 @@ use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
-use rmcp::model::RawResource;
-use rmcp::model::RawResourceTemplate;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
@@ -222,13 +220,7 @@ impl ServerHandler for TestToolServer {
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.tools.clone();
-        async move {
-            Ok(ListToolsResult {
-                tools: (*tools).clone(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListToolsResult::with_all_items((*tools).clone())) }
     }
 
     fn list_resources(
@@ -237,13 +229,7 @@ impl ServerHandler for TestToolServer {
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         let resources = self.resources.clone();
-        async move {
-            Ok(ListResourcesResult {
-                resources: (*resources).clone(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListResourcesResult::with_all_items((*resources).clone())) }
     }
 
     async fn list_resource_templates(
@@ -251,27 +237,26 @@ impl ServerHandler for TestToolServer {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
-        Ok(ListResourceTemplatesResult {
-            resource_templates: (*self.resource_templates).clone(),
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListResourceTemplatesResult::with_all_items(
+            (*self.resource_templates).clone(),
+        ))
     }
 
     async fn read_resource(
         &self,
         ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
         if uri == MEMO_URI {
-            Ok(ReadResourceResult::new(vec![
-                ResourceContents::TextResourceContents {
+            Ok(
+                ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
                     uri,
                     mime_type: Some("text/plain".to_string()),
                     text: Self::memo_text().to_string(),
                     meta: None,
-                },
-            ]))
+                }])
+                .into(),
+            )
         } else {
             Err(McpError::resource_not_found(
                 "resource_not_found",
@@ -284,7 +269,7 @@ impl ServerHandler for TestToolServer {
         &self,
         request: CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
         match request.name.as_ref() {
             "echo" => {
                 let args: EchoArgs = match request.arguments {
@@ -308,7 +293,7 @@ impl ServerHandler for TestToolServer {
 
                 let mut result = CallToolResult::success(Vec::new());
                 result.structured_content = Some(structured_content);
-                Ok(result)
+                Ok(result.into())
             }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),
@@ -370,31 +355,17 @@ impl TestToolServer {
     }
 
     fn memo_resource() -> Resource {
-        let raw = RawResource {
-            uri: MEMO_URI.to_string(),
-            name: "example-note".to_string(),
-            title: Some("Example Note".to_string()),
-            description: Some("A sample MCP resource exposed for integration tests.".to_string()),
-            mime_type: Some("text/plain".to_string()),
-            size: None,
-            icons: None,
-            meta: None,
-        };
-        Resource::new(raw, None)
+        Resource::new(MEMO_URI, "example-note")
+            .with_title("Example Note")
+            .with_description("A sample MCP resource exposed for integration tests.")
+            .with_mime_type("text/plain")
     }
 
     fn memo_template() -> ResourceTemplate {
-        let raw = RawResourceTemplate {
-            uri_template: "memo://codex/{slug}".to_string(),
-            name: "codex-memo".to_string(),
-            title: Some("Codex Memo".to_string()),
-            description: Some(
-                "Template for memo://codex/{slug} resources used in tests.".to_string(),
-            ),
-            mime_type: Some("text/plain".to_string()),
-            icons: None,
-        };
-        ResourceTemplate::new(raw, None)
+        ResourceTemplate::new("memo://codex/{slug}", "codex-memo")
+            .with_title("Codex Memo")
+            .with_description("Template for memo://codex/{slug} resources used in tests.")
+            .with_mime_type("text/plain")
     }
 
     fn memo_text() -> &'static str {

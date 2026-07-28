@@ -7,8 +7,10 @@ use codex_exec_server::HttpClient;
 use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
+use futures::StreamExt;
 use oauth2::HttpRequest;
 use oauth2::HttpResponse;
+use reqwest::Client;
 use reqwest::header::HeaderMap;
 use rmcp::transport::auth::OAuthHttpClient;
 use rmcp::transport::auth::OAuthHttpClientError;
@@ -26,6 +28,7 @@ pub(crate) struct OAuthHttpClientAdapter {
     http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
     timeout: OAuthDiscoveryTimeout,
+    local_http_client: Option<Client>,
 }
 
 impl OAuthHttpClientAdapter {
@@ -34,6 +37,7 @@ impl OAuthHttpClientAdapter {
             http_client,
             default_headers,
             timeout: OAuthDiscoveryTimeout::Requested,
+            local_http_client: None,
         }
     }
 
@@ -46,10 +50,16 @@ impl OAuthHttpClientAdapter {
             http_client,
             default_headers,
             timeout: OAuthDiscoveryTimeout::Capped(max_timeout),
+            local_http_client: None,
         }
     }
 
-    async fn execute_request(
+    pub(crate) fn with_local_http_client(mut self, client: Client) -> Self {
+        self.local_http_client = Some(client);
+        self
+    }
+
+    async fn execute_transport_request(
         &self,
         request: HttpRequest,
         redirect_policy: OAuthHttpRedirectPolicy,
@@ -64,12 +74,44 @@ impl OAuthHttpClientAdapter {
                 ));
             }
         };
-        let (parts, body) = request.into_parts();
+        let (mut parts, body) = request.into_parts();
         let mut headers = self.default_headers.clone();
         for name in parts.headers.keys() {
             headers.remove(name);
         }
         headers.extend(parts.headers);
+
+        if let Some(client) = &self.local_http_client {
+            parts.headers = headers;
+            let request = HttpRequest::from_parts(parts, body);
+            let request = reqwest::Request::try_from(request)
+                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+            let response = client
+                .execute(request)
+                .await
+                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+            let mut builder = oauth2::http::Response::builder()
+                .status(response.status())
+                .version(response.version());
+            for (name, value) in response.headers() {
+                builder = builder.header(name, value);
+            }
+            let mut body = Vec::new();
+            let mut body_stream = response.bytes_stream();
+            while let Some(chunk) = body_stream.next().await {
+                let chunk = chunk.map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                if chunk.len() > MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES - body.len() {
+                    return Err(OAuthHttpClientError::new(format!(
+                        "OAuth HTTP response body exceeds {MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES} bytes"
+                    )));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            return builder
+                .body(body)
+                .map_err(|error| OAuthHttpClientError::new(error.to_string()));
+        }
+
         let headers = headers
             .iter()
             .map(|(name, value)| {
@@ -133,6 +175,10 @@ impl OAuthHttpClientAdapter {
 
 impl OAuthHttpClient for OAuthHttpClientAdapter {
     fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
-        Box::pin(self.execute_request(request.request, request.redirect_policy, request.timeout))
+        Box::pin(self.execute_transport_request(
+            request.request,
+            request.redirect_policy,
+            request.timeout,
+        ))
     }
 }

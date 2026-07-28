@@ -1989,13 +1989,10 @@ fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
 
 #[test]
 fn mcp_server_elicitation_response_round_trips_rmcp_result() {
-    let rmcp_result = rmcp::model::CreateElicitationResult {
-        action: rmcp::model::ElicitationAction::Accept,
-        content: Some(json!({
+    let rmcp_result = rmcp::model::ElicitResult::new(rmcp::model::ElicitationAction::Accept)
+        .with_content(json!({
             "confirmed": true,
-        })),
-        meta: None,
-    };
+        }));
 
     let v2_response = McpServerElicitationRequestResponse::from(rmcp_result.clone());
     assert_eq!(
@@ -2008,10 +2005,7 @@ fn mcp_server_elicitation_response_round_trips_rmcp_result() {
             meta: None,
         }
     );
-    assert_eq!(
-        rmcp::model::CreateElicitationResult::from(v2_response),
-        rmcp_result
-    );
+    assert_eq!(rmcp::model::ElicitResult::from(v2_response), rmcp_result);
 }
 
 #[test]
@@ -2202,6 +2196,45 @@ fn mcp_elicitation_schema_matches_mcp_2025_11_25_primitives() {
             required: Some(vec!["email".to_string(), "confirmed".to_string()]),
         }
     );
+}
+
+#[test]
+fn mcp_elicitation_preserves_integer_and_number_schema_wire_values() {
+    for (number_type, expected_type, expected_minimum, expected_maximum, expected_default) in [
+        (
+            McpElicitationNumberType::Integer,
+            "integer",
+            json!(1),
+            json!(99),
+            json!(30),
+        ),
+        (
+            McpElicitationNumberType::Number,
+            "number",
+            json!(1.0),
+            json!(99.0),
+            json!(30.0),
+        ),
+    ] {
+        let schema = McpElicitationPrimitiveSchema::Number(McpElicitationNumberSchema {
+            type_: number_type,
+            title: None,
+            description: None,
+            minimum: Some(1.0),
+            maximum: Some(99.0),
+            default: Some(30.0),
+        });
+
+        assert_eq!(
+            serde_json::to_value(schema).expect("numeric elicitation schema must serialize"),
+            json!({
+                "type": expected_type,
+                "minimum": expected_minimum,
+                "maximum": expected_maximum,
+                "default": expected_default,
+            })
+        );
+    }
 }
 
 #[test]

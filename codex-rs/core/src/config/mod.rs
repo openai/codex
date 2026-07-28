@@ -1735,10 +1735,9 @@ impl Config {
                 Vec::new()
             },
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability {
-                    form: Some(FormElicitationCapability::default()),
-                    url: Some(UrlElicitationCapability::default()),
-                }
+                ElicitationCapability::new()
+                    .with_form(FormElicitationCapability::new())
+                    .with_url(UrlElicitationCapability::new())
             } else {
                 // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
                 // indicates this should be an empty object.

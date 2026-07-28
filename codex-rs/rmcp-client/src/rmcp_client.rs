@@ -25,10 +25,10 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
-use rmcp::model::CreateElicitationRequestParams;
-use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
+use rmcp::model::ElicitRequestParams;
+use rmcp::model::ElicitResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParams;
@@ -40,12 +40,15 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use rmcp::model::RequestMetaObject;
 use rmcp::model::RequestParamsMeta;
 use rmcp::model::ServerResult;
 use rmcp::model::Tool;
+use rmcp::service::ClientCacheConfig;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::{self};
+use rmcp::transport::AuthorizationManager;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
@@ -258,7 +261,7 @@ fn remaining_operation_timeout(
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Elicitation {
-    Mcp(CreateElicitationRequestParams),
+    Mcp(ElicitRequestParams),
     OpenAiForm {
         meta: Option<serde_json::Value>,
         message: String,
@@ -269,7 +272,7 @@ pub enum Elicitation {
 impl Elicitation {
     pub fn meta(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
         match self {
-            Self::Mcp(request) => request.meta().map(|meta| &meta.0),
+            Self::Mcp(request) => request.meta().map(|meta| &meta.0.0),
             Self::OpenAiForm { meta, .. } => meta.as_ref().and_then(serde_json::Value::as_object),
         }
     }
@@ -284,8 +287,8 @@ pub struct ElicitationResponse {
     pub meta: Option<serde_json::Value>,
 }
 
-impl From<CreateElicitationResult> for ElicitationResponse {
-    fn from(value: CreateElicitationResult) -> Self {
+impl From<ElicitResult> for ElicitationResponse {
+    fn from(value: ElicitResult) -> Self {
         Self {
             action: value.action,
             content: value.content,
@@ -294,13 +297,11 @@ impl From<CreateElicitationResult> for ElicitationResponse {
     }
 }
 
-impl From<ElicitationResponse> for CreateElicitationResult {
+impl From<ElicitationResponse> for ElicitResult {
     fn from(value: ElicitationResponse) -> Self {
-        Self {
-            action: value.action,
-            content: value.content,
-            meta: None,
-        }
+        let mut result = Self::new(value.action);
+        result.content = value.content;
+        result
     }
 }
 
@@ -595,7 +596,7 @@ impl RmcpClient {
         let result = self
             .run_service_operation("resources/read", timeout, move |service| {
                 let params = params.clone();
-                async move { service.read_resource(params).await }.boxed()
+                async move { service.peer().read_resource(params).await }.boxed()
             })
             .await?;
         self.persist_oauth_tokens().await;
@@ -620,7 +621,7 @@ impl RmcpClient {
             None => None,
         };
         let meta = match meta {
-            Some(Value::Object(map)) => Some(rmcp::model::Meta(map)),
+            Some(Value::Object(map)) => Some(RequestMetaObject::from(map)),
             Some(other) => {
                 return Err(anyhow!(
                     "MCP tool request _meta must be a JSON object, got {other}"
@@ -988,6 +989,13 @@ impl RmcpClient {
             }
         };
 
+        // Preserve Codex's existing snapshot and request-freshness behavior. rmcp 3
+        // enables response caching and stale-on-error fallback by default.
+        service
+            .peer()
+            .set_response_cache_config(ClientCacheConfig::disabled())
+            .await;
+
         Ok((Arc::new(service), oauth_persistor))
     }
 
@@ -1223,8 +1231,11 @@ async fn create_oauth_transport_and_runtime(
         http_client.clone(),
         default_headers.clone(),
     ));
-    let mut oauth_state =
-        OAuthState::new_with_oauth_http_client(url.to_string(), oauth_http_client).await?;
+    let mut manager =
+        AuthorizationManager::new_with_oauth_http_client(url.to_string(), oauth_http_client)
+            .await?;
+    manager.set_allow_missing_issuer(true);
+    let mut oauth_state = OAuthState::Unauthorized(manager);
 
     oauth_state
         .set_credentials(

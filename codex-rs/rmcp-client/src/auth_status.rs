@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_exec_server::HttpClient;
+use codex_exec_server::RouteAwareHttpClient;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::protocol::McpAuthStatus;
 use futures::FutureExt;
 use reqwest::Client;
@@ -16,7 +19,6 @@ use tracing::debug;
 use crate::oauth::StoredOAuthTokenStatus;
 use crate::oauth::oauth_token_status;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
-use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -258,10 +260,23 @@ async fn discover_streamable_http_oauth_with_headers(
 ) -> Result<Option<StreamableHttpOAuthDiscovery>> {
     // Use no_proxy to avoid a bug in the system-configuration crate that
     // can result in a panic. See #8912.
-    let builder = Client::builder().timeout(DISCOVERY_TIMEOUT).no_proxy();
-    let client = apply_default_headers(builder, default_headers).build()?;
-    let mut authorization_manager = AuthorizationManager::new(url).await?;
-    authorization_manager.with_client(client)?;
+    let client = Client::builder()
+        .timeout(DISCOVERY_TIMEOUT)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let oauth_http_client = Arc::new(
+        OAuthHttpClientAdapter::new(
+            Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+                OutboundProxyPolicy::ReqwestDefault,
+            ))),
+            default_headers.clone(),
+        )
+        .with_local_http_client(client),
+    );
+    let mut authorization_manager =
+        AuthorizationManager::new_with_oauth_http_client(url, oauth_http_client).await?;
+    authorization_manager.set_allow_missing_issuer(true);
     discover_streamable_http_oauth_with_manager(&authorization_manager).await
 }
 
@@ -279,17 +294,19 @@ async fn discover_streamable_http_oauth_with_headers_and_http_client(
             OAuthHttpClientAdapter::new_with_max_timeout(http_client, default_headers, max_timeout)
         }
     };
-    let authorization_manager =
+    let mut authorization_manager =
         AuthorizationManager::new_with_oauth_http_client(url, Arc::new(oauth_http_client)).await?;
+    authorization_manager.set_allow_missing_issuer(true);
     discover_streamable_http_oauth_with_manager(&authorization_manager).await
 }
 
 async fn discover_streamable_http_oauth_with_manager(
     authorization_manager: &AuthorizationManager,
 ) -> Result<Option<StreamableHttpOAuthDiscovery>> {
-    match authorization_manager.discover_metadata().boxed().await {
-        Ok(metadata) => Ok(Some(StreamableHttpOAuthDiscovery {
-            scopes_supported: normalize_scopes(metadata.scopes_supported),
+    match authorization_manager.resolve_metadata().boxed().await {
+        Ok(resolution) if !resolution.source.is_discovered() => Ok(None),
+        Ok(resolution) => Ok(Some(StreamableHttpOAuthDiscovery {
+            scopes_supported: normalize_scopes(resolution.metadata.scopes_supported),
         })),
         Err(AuthError::NoAuthorizationSupport) => Ok(None),
         Err(err) => Err(err.into()),
@@ -337,6 +354,12 @@ mod tests {
     use std::ffi::OsString;
     use std::sync::Mutex;
     use tokio::task::JoinHandle;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     struct TestServer {
         url: String,
@@ -388,6 +411,12 @@ mod tests {
             .await
             .expect("listener should bind");
         let address = listener.local_addr().expect("listener should have address");
+        let mut metadata = metadata;
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata
+                .entry("issuer")
+                .or_insert_with(|| format!("http://{address}/mcp").into());
+        }
         let app = Router::new().route(
             "/.well-known/oauth-authorization-server/mcp",
             get({
@@ -480,6 +509,98 @@ mod tests {
         .expect("status should compute");
 
         assert_eq!(status, McpAuthState::BearerToken);
+    }
+
+    #[tokio::test]
+    async fn oauth_metadata_preserves_login_without_probing_anonymous_tools() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let metadata = serde_json::json!({
+            "issuer": format!("http://{address}/mcp"),
+            "authorization_endpoint": format!("http://{address}/authorize"),
+            "token_endpoint": format!("http://{address}/token"),
+        });
+        let app = Router::new()
+            .route(
+                "/mcp",
+                get(|| async { StatusCode::METHOD_NOT_ALLOWED }).post(
+                    |Json(request): Json<serde_json::Value>| async move {
+                        let result = match request["method"].as_str() {
+                            Some("initialize") => serde_json::json!({
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {"tools": {}},
+                                "serverInfo": {"name": "oauth", "version": "1"},
+                            }),
+                            Some("tools/list") => serde_json::json!({"tools": []}),
+                            _ => serde_json::json!({}),
+                        };
+                        Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": result,
+                        }))
+                    },
+                ),
+            )
+            .route(
+                "/.well-known/oauth-authorization-server/mcp",
+                get(move || async move { Json(metadata) }),
+            );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("server should run");
+        });
+        let url = format!("http://{address}/mcp");
+        let discovery = discover_streamable_http_oauth(
+            &url, /*http_headers*/ None, /*env_http_headers*/ None,
+        )
+        .await;
+        assert_eq!(
+            determine_auth_status_from_discovery("server", &url, discovery)
+                .expect("auth status should compute"),
+            McpAuthState::LoggedOut(McpLoginRequirement::Login)
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn oauth_discovery_does_not_follow_cross_origin_redirects() {
+        let redirect_target = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redirect-target"))
+            .and(header("x-api-key", "sensitive-key"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&redirect_target)
+            .await;
+
+        let resource_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/mcp"))
+            .and(header("x-api-key", "sensitive-key"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!("{}/redirect-target", redirect_target.uri()),
+            ))
+            .expect(1)
+            .mount(&resource_server)
+            .await;
+
+        let discovery = discover_streamable_http_oauth(
+            &format!("{}/mcp", resource_server.uri()),
+            Some(HashMap::from([(
+                "x-api-key".to_string(),
+                "sensitive-key".to_string(),
+            )])),
+            /*env_http_headers*/ None,
+        )
+        .await
+        .expect("discovery should complete without following the redirect");
+
+        assert_eq!(discovery, None);
+        redirect_target.verify().await;
+        resource_server.verify().await;
     }
 
     #[tokio::test]

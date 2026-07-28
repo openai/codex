@@ -15,6 +15,7 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use reqwest::Url;
 use rmcp::transport::AuthorizationManager;
+use rmcp::transport::AuthorizationRequest;
 use rmcp::transport::AuthorizationSession;
 use rmcp::transport::auth::OAuthClientConfig;
 use rmcp::transport::auth::OAuthHttpClient;
@@ -272,16 +273,22 @@ fn spawn_callback_server(
         while let Ok(request) = server.recv() {
             let path = request.url().to_string();
             match parse_oauth_callback(&path, &expected_callback_path) {
-                CallbackOutcome::Success(OauthCallbackResult { code, state }) => {
+                CallbackOutcome::Success(OauthCallbackResult {
+                    code,
+                    state,
+                    issuer,
+                }) => {
                     let response = Response::from_string(
                         "Authentication complete. You may close this window.",
                     );
                     if let Err(err) = request.respond(response) {
                         eprintln!("Failed to respond to OAuth callback: {err}");
                     }
-                    if let Err(err) =
-                        tx.send(CallbackResult::Success(OauthCallbackResult { code, state }))
-                    {
+                    if let Err(err) = tx.send(CallbackResult::Success(OauthCallbackResult {
+                        code,
+                        state,
+                        issuer,
+                    })) {
                         eprintln!("Failed to send OAuth callback: {err:?}");
                     }
                     break;
@@ -312,6 +319,7 @@ fn spawn_callback_server(
 struct OauthCallbackResult {
     code: String,
     state: String,
+    issuer: Option<String>,
 }
 
 #[derive(Debug)]
@@ -339,6 +347,7 @@ fn parse_oauth_callback(path: &str, expected_callback_path: &str) -> CallbackOut
     let mut state = None;
     let mut error = None;
     let mut error_description = None;
+    let mut issuer = None;
 
     for pair in query.split('&') {
         let Some((key, value)) = pair.split_once('=') else {
@@ -353,12 +362,17 @@ fn parse_oauth_callback(path: &str, expected_callback_path: &str) -> CallbackOut
             "state" => state = Some(decoded),
             "error" => error = Some(decoded),
             "error_description" => error_description = Some(decoded),
+            "iss" => issuer = Some(decoded),
             _ => {}
         }
     }
 
     if let (Some(code), Some(state)) = (code, state) {
-        return CallbackOutcome::Success(OauthCallbackResult { code, state });
+        return CallbackOutcome::Success(OauthCallbackResult {
+            code,
+            state,
+            issuer,
+        });
     }
 
     if error.is_some() || error_description.is_some() {
@@ -603,13 +617,14 @@ impl OauthLoginFlow {
             let OauthCallbackResult {
                 code,
                 state: csrf_state,
+                issuer,
             } = match callback {
                 CallbackResult::Success(callback) => callback,
                 CallbackResult::Error(error) => return Err(anyhow!(error)),
             };
 
             self.oauth_state
-                .handle_callback(&code, &csrf_state)
+                .handle_callback_with_issuer(&code, &csrf_state, issuer.as_deref())
                 .await
                 .context("failed to handle OAuth callback")?;
 
@@ -671,19 +686,24 @@ async fn start_authorization(
     redirect_uri: &str,
     oauth_client_id: Option<&str>,
 ) -> Result<OAuthState> {
+    let mut auth_manager =
+        AuthorizationManager::new_with_oauth_http_client(server_url, http_client).await?;
+    auth_manager.set_allow_missing_issuer(true);
+
     let Some(oauth_client_id) = oauth_client_id.filter(|client_id| !client_id.trim().is_empty())
     else {
-        let mut oauth_state =
-            OAuthState::new_with_oauth_http_client(server_url, http_client).await?;
+        let mut oauth_state = OAuthState::Unauthorized(auth_manager);
         oauth_state
-            .start_authorization(scopes, redirect_uri, Some("Codex"))
+            .start_authorization(
+                AuthorizationRequest::new(redirect_uri)
+                    .with_scopes(scopes.iter().copied())
+                    .with_client_name("Codex"),
+            )
             .await?;
         return Ok(oauth_state);
     };
 
-    let mut auth_manager =
-        AuthorizationManager::new_with_oauth_http_client(server_url, http_client).await?;
-    let metadata = auth_manager.discover_metadata().await?;
+    let metadata = auth_manager.resolve_metadata().await?.metadata;
     auth_manager.set_metadata(metadata);
     auth_manager.configure_client(
         OAuthClientConfig::new(oauth_client_id, redirect_uri)
@@ -716,10 +736,13 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     use axum::Json;
     use axum::Router;
     use axum::routing::get;
+    use axum::routing::post;
     use codex_exec_server::RouteAwareHttpClient;
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
@@ -746,6 +769,7 @@ mod tests {
         let addr = listener.local_addr().expect("read metadata listener addr");
         let base_url = format!("http://{addr}");
         let metadata = json!({
+            "issuer": format!("{base_url}/mcp"),
             "authorization_endpoint": format!("{base_url}/oauth/authorize"),
             "token_endpoint": format!("{base_url}/oauth/token"),
             "scopes_supported": [""],
@@ -807,10 +831,125 @@ mod tests {
         assert_eq!(client_id.as_deref(), Some("eci-prd-pub-codex-123"));
     }
 
+    #[tokio::test]
+    async fn oauth_callback_validates_rfc_9207_issuer_before_token_exchange() {
+        for (supports_issuer, callback_issuer, expected_token_requests) in [
+            (true, Some("matching"), 1),
+            (true, Some("mismatched"), 0),
+            (true, None, 0),
+            (false, Some("mismatched"), 0),
+            (false, None, 1),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind authorization metadata listener");
+            let issuer = format!(
+                "http://{}",
+                listener.local_addr().expect("read listener address")
+            );
+            let token_requests = Arc::new(AtomicUsize::new(0));
+            let captured_token_requests = Arc::clone(&token_requests);
+            let authorization_issuer = format!("{issuer}/mcp");
+            let metadata = json!({
+                "issuer": authorization_issuer,
+                "authorization_endpoint": format!("{issuer}/authorize"),
+                "token_endpoint": format!("{issuer}/token"),
+                "authorization_response_iss_parameter_supported": supports_issuer,
+            });
+            let scoped_metadata = metadata.clone();
+            let app = Router::new()
+                .route(
+                    "/.well-known/oauth-authorization-server/mcp",
+                    get(move || {
+                        let metadata = scoped_metadata.clone();
+                        async move { Json(metadata) }
+                    }),
+                )
+                .route(
+                    "/.well-known/oauth-authorization-server",
+                    get(move || {
+                        let metadata = metadata.clone();
+                        async move { Json(metadata) }
+                    }),
+                )
+                .route(
+                    "/token",
+                    post(move || {
+                        let token_requests = Arc::clone(&captured_token_requests);
+                        async move {
+                            token_requests.fetch_add(1, Ordering::SeqCst);
+                            Json(json!({"access_token":"test-token","token_type":"Bearer"}))
+                        }
+                    }),
+                );
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .await
+                    .expect("serve authorization metadata fixture");
+            });
+            let mut state = start_authorization(
+                &format!("{issuer}/mcp"),
+                Arc::new(OAuthHttpClientAdapter::new(
+                    Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+                        OutboundProxyPolicy::ReqwestDefault,
+                    ))),
+                    HeaderMap::new(),
+                )),
+                &[],
+                "http://127.0.0.1/callback",
+                Some("test-client"),
+            )
+            .await
+            .expect("start issuer-aware authorization");
+            let csrf_state = Url::parse(
+                &state
+                    .get_authorization_url()
+                    .await
+                    .expect("retrieve authorization URL"),
+            )
+            .expect("parse authorization URL")
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned())
+            .expect("authorization URL should contain state");
+            let callback_issuer = match callback_issuer {
+                Some("matching") => Some(authorization_issuer.as_str()),
+                Some(_) => Some("https://unexpected.example"),
+                None => None,
+            };
+            let result = state
+                .handle_callback_with_issuer("test-code", &csrf_state, callback_issuer)
+                .await;
+
+            assert_eq!(
+                token_requests.load(Ordering::SeqCst),
+                expected_token_requests
+            );
+            assert_eq!(result.is_ok(), expected_token_requests == 1);
+            server.abort();
+        }
+    }
+
     #[test]
     fn parse_oauth_callback_accepts_default_path() {
         let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/callback");
         assert!(matches!(parsed, CallbackOutcome::Success(_)));
+    }
+
+    #[test]
+    fn parse_oauth_callback_preserves_rfc_9207_issuer() {
+        let parsed = parse_oauth_callback(
+            "/callback?code=abc&state=xyz&iss=https%3A%2F%2Fissuer.example",
+            "/callback",
+        );
+        assert_eq!(
+            parsed,
+            CallbackOutcome::Success(super::OauthCallbackResult {
+                code: "abc".to_string(),
+                state: "xyz".to_string(),
+                issuer: Some("https://issuer.example".to_string()),
+            })
+        );
     }
 
     #[test]

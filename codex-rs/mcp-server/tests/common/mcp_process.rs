@@ -115,12 +115,8 @@ impl McpProcess {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
         let mut capabilities = ClientCapabilities::default();
-        capabilities.elicitation = Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: None,
-            }),
-            url: None,
-        });
+        capabilities.elicitation =
+            Some(ElicitationCapability::new().with_form(FormElicitationCapability::new()));
         let params = InitializeRequestParams::new(
             capabilities,
             Implementation::new("elicitation test", "0.0.0").with_title("Elicitation Test"),

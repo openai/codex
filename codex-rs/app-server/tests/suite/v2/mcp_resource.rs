@@ -36,16 +36,15 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::BooleanSchema;
-use rmcp::model::CreateElicitationRequestParams;
-use rmcp::model::CreateElicitationResult;
+use rmcp::model::ElicitRequestParams;
+use rmcp::model::ElicitResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::Meta;
 use rmcp::model::PaginatedRequestParams;
-use rmcp::model::PrimitiveSchema;
+use rmcp::model::PrimitiveSchemaDefinition;
 use rmcp::model::ProtocolVersion;
-use rmcp::model::RawResource;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
@@ -791,18 +790,16 @@ impl ServerHandler for ResourceAppsMcpServer {
         self.calls.list_resources.fetch_add(1, Ordering::Relaxed);
         let cursor = request.and_then(|request| request.cursor);
         if cursor.is_none() {
-            return Ok(ListResourcesResult {
-                resources: vec![skill_resource(
-                    "skill://plugin_ignored/ignored",
-                    "plugin_ignored/ignored",
-                    "Not an MCP skill resource.",
-                    "text/plain",
-                    "ignored-plugin",
-                    "ignored",
-                )],
-                next_cursor: Some("skills-page".to_string()),
-                meta: None,
-            });
+            let mut result = ListResourcesResult::with_all_items(vec![skill_resource(
+                "skill://plugin_ignored/ignored",
+                "plugin_ignored/ignored",
+                "Not an MCP skill resource.",
+                "text/plain",
+                "ignored-plugin",
+                "ignored",
+            )]);
+            result.next_cursor = Some("skills-page".to_string());
+            return Ok(result);
         }
         if cursor.as_deref() == Some("failing-page") {
             return Err(rmcp::ErrorData::internal_error(
@@ -817,75 +814,76 @@ impl ServerHandler for ResourceAppsMcpServer {
             ));
         }
 
-        Ok(ListResourcesResult {
-            resources: vec![skill_resource(
-                SKILL_RESOURCE_URI,
-                "plugin_demo/deploy",
-                RAW_SKILL_DESCRIPTION,
-                "mcp/skill",
-                "demo-plugin",
-                "deploy",
-            )],
-            next_cursor: Some("failing-page".to_string()),
-            meta: None,
-        })
+        let mut result = ListResourcesResult::with_all_items(vec![skill_resource(
+            SKILL_RESOURCE_URI,
+            "plugin_demo/deploy",
+            RAW_SKILL_DESCRIPTION,
+            "mcp/skill",
+            "demo-plugin",
+            "deploy",
+        )]);
+        result.next_cursor = Some("failing-page".to_string());
+        Ok(result)
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
         let uri = request.uri;
         if uri == TEST_ELICITATION_RESOURCE_URI {
             let requested_schema = ElicitationSchema::builder()
-                .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+                .required_property(
+                    "confirmed",
+                    PrimitiveSchemaDefinition::Boolean(BooleanSchema::new()),
+                )
                 .build()
                 .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
             let result = context
                 .peer
-                .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                .create_elicitation(ElicitRequestParams::FormElicitationParams {
                     meta: None,
                     message: "Confirm the resource read.".to_string(),
                     requested_schema,
                 })
                 .await
                 .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
-            assert_eq!(
-                result,
-                CreateElicitationResult::new(ElicitationAction::Decline)
-            );
+            assert_eq!(result, ElicitResult::new(ElicitationAction::Decline));
 
-            return Ok(ReadResourceResult::new(vec![
-                ResourceContents::TextResourceContents {
+            return Ok(
+                ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
                     uri: TEST_ELICITATION_RESOURCE_URI.to_string(),
                     mime_type: Some("text/plain".to_string()),
                     text: TEST_ELICITATION_RESOURCE_TEXT.to_string(),
                     meta: None,
-                },
-            ]));
+                }])
+                .into(),
+            );
         }
         if uri == SKILL_MAIN_PROMPT_URI {
             self.calls.main_prompt_reads.fetch_add(1, Ordering::Relaxed);
-            return Ok(ReadResourceResult::new(vec![
-                ResourceContents::TextResourceContents {
+            return Ok(
+                ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
                     uri: SKILL_MAIN_PROMPT_URI.to_string(),
                     mime_type: Some("text/markdown".to_string()),
                     text: SKILL_CONTENTS.to_string(),
                     meta: None,
-                },
-            ]));
+                }])
+                .into(),
+            );
         }
         if uri == SKILL_REFERENCE_URI {
             self.calls.reference_reads.fetch_add(1, Ordering::Relaxed);
-            return Ok(ReadResourceResult::new(vec![
-                ResourceContents::TextResourceContents {
+            return Ok(
+                ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
                     uri: SKILL_REFERENCE_URI.to_string(),
                     mime_type: Some("text/markdown".to_string()),
                     text: SKILL_REFERENCE_CONTENTS.to_string(),
                     meta: None,
-                },
-            ]));
+                }])
+                .into(),
+            );
         }
         if uri != TEST_RESOURCE_URI {
             return Err(rmcp::ErrorData::resource_not_found(
@@ -907,7 +905,8 @@ impl ServerHandler for ResourceAppsMcpServer {
                 blob: TEST_RESOURCE_BLOB.to_string(),
                 meta: None,
             },
-        ]))
+        ])
+        .into())
     }
 }
 
@@ -919,13 +918,10 @@ fn skill_resource(
     plugin_name: &str,
     skill_name: &str,
 ) -> Resource {
-    Resource::new(
-        RawResource::new(uri, name)
-            .with_description(description)
-            .with_mime_type(mime_type)
-            .with_meta(skill_resource_meta(plugin_name, skill_name)),
-        /*annotations*/ None,
-    )
+    Resource::new(uri, name)
+        .with_description(description)
+        .with_mime_type(mime_type)
+        .with_meta(skill_resource_meta(plugin_name, skill_name))
 }
 
 fn skill_resource_meta(plugin_name: &str, skill_name: &str) -> Meta {

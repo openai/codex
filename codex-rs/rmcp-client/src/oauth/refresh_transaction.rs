@@ -175,17 +175,12 @@ impl OAuthPersistor {
                 debug!("received refreshed MCP OAuth credentials from the provider");
                 refreshed_tokens(token_response, &latest, &self.inner)
             }
-            Ok(Err(error @ AuthError::TokenRefreshFailed(_))) => {
-                // RMCP 1.8 collapses definitive OAuth rejection (for example,
-                // `invalid_grant`) and transient token-endpoint failures into this string
-                // variant. Match RMCP's own request path for now so rejected refresh tokens
-                // prompt reauthorization instead of surfacing as generic MCP startup failures.
-                // This can also prompt reauthorization after a transient failure.
-                // TODO: When RMCP exposes a typed distinction for refresh-token rejection,
-                // map only that definitive rejection to `AuthorizationRequired` here.
+            Ok(Err(error @ AuthError::TokenRefreshRejected(_))) => {
+                // RMCP 3 distinguishes definitive refresh-token rejection from transient
+                // provider failures. Only a rejected token requires a fresh authorization.
                 warn!(
                     error = %error,
-                    "MCP OAuth refresh failed; reauthorization required by RMCP compatibility policy"
+                    "MCP OAuth refresh token was rejected; reauthorization required"
                 );
                 return Err(AuthError::AuthorizationRequired).with_context(|| {
                     format!(

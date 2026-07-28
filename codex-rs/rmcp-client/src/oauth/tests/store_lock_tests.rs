@@ -6,6 +6,7 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
+use codex_keyring_store::KeyringStore;
 use codex_keyring_store::tests::MockKeyringStore;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -103,6 +104,47 @@ fn sample_tokens() -> StoredOAuthTokens {
         token_response: WrappedOAuthTokenResponse(response),
         expires_at,
     }
+}
+
+#[test]
+fn legacy_rmcp_oauth_keyring_credentials_remain_readable() -> Result<()> {
+    let _env = TempCodexHome::new();
+    let keyring_store = MockKeyringStore::default();
+    let mut expected = sample_tokens();
+    expected.expires_at = None;
+    expected.token_response.0.set_expires_in(None);
+
+    let serialized = serde_json::json!({
+        "server_name": "test-server",
+        "url": "https://example.test",
+        "client_id": "client-id",
+        "token_response": {
+            "access_token": "access-token",
+            "token_type": "Bearer",
+            "refresh_token": "refresh-token",
+            "scope": "scope-a scope-b",
+        },
+    })
+    .to_string();
+    let key = crate::oauth::compute_store_key(&expected.server_name, &expected.url)?;
+    keyring_store.save(crate::oauth::KEYRING_SERVICE, &key, &serialized)?;
+
+    let resolved = resolve_oauth_tokens_from_store_policy(
+        &keyring_store,
+        &expected.server_name,
+        &expected.url,
+        OAuthCredentialsStoreMode::Auto,
+        AuthKeyringBackendKind::Direct,
+    )?
+    .expect("OAuth credentials written before the rmcp upgrade should remain readable");
+
+    assert_eq!(
+        resolved.store,
+        crate::oauth::ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct)
+    );
+    assert_tokens_match_without_expiry(&resolved.tokens, &expected);
+    assert!(crate::oauth::oauth_tokens_are_usable(&resolved.tokens));
+    Ok(())
 }
 
 const LOCK_HOLDER_CHILD_TEST: &str =

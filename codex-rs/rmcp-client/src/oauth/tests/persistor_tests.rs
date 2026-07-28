@@ -243,6 +243,39 @@ async fn rejected_refresh_token_requires_reauthorization() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn transient_refresh_failure_does_not_require_reauthorization() -> Result<()> {
+    let (_env, server, initial) = test_context().await?;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains("refresh_token=refresh-token"))
+        .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
+            "error": "temporarily_unavailable",
+            "error_description": "provider is temporarily unavailable",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    save_oauth_tokens_to_file(&initial)?;
+    let persistor = persistor_for(&initial).await?;
+
+    let error = persistor
+        .refresh_if_needed()
+        .await
+        .expect_err("a transient provider failure should not erase valid credentials");
+    assert!(!is_authentication_required_error(&error));
+    assert!(error.chain().any(|source| matches!(
+        source.downcast_ref::<AuthError>(),
+        Some(AuthError::TokenRefreshFailed(_))
+    )));
+    let stored = load_oauth_tokens_from_file(&initial.server_name, &initial.url)?
+        .expect("a transient refresh failure must preserve durable credentials");
+    assert_tokens_match_without_expiry(&stored, &initial);
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn caller_cancellation_does_not_cancel_refresh_persistence() -> Result<()> {
     let (_env, server, initial) = test_context().await?;
@@ -382,6 +415,7 @@ async fn mount_oauth_metadata(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "issuer": format!("{}/mcp", server.uri()),
             "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
             "token_endpoint": format!("{}/oauth/token", server.uri()),
             "scopes_supported": ["scope-a", "scope-b"],

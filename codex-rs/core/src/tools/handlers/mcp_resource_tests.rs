@@ -1,33 +1,14 @@
 use super::*;
 use pretty_assertions::assert_eq;
-use rmcp::model::AnnotateAble;
 use rmcp::model::ResourceContents;
 use serde_json::json;
 
 fn resource(uri: &str, name: &str) -> Resource {
-    rmcp::model::RawResource {
-        uri: uri.to_string(),
-        name: name.to_string(),
-        title: None,
-        description: None,
-        mime_type: None,
-        size: None,
-        icons: None,
-        meta: None,
-    }
-    .no_annotation()
+    Resource::new(uri, name)
 }
 
 fn template(uri_template: &str, name: &str) -> ResourceTemplate {
-    rmcp::model::RawResourceTemplate {
-        uri_template: uri_template.to_string(),
-        name: name.to_string(),
-        title: None,
-        description: None,
-        mime_type: None,
-        icons: None,
-    }
-    .no_annotation()
+    ResourceTemplate::new(uri_template, name)
 }
 
 #[test]
@@ -42,11 +23,8 @@ fn resource_with_server_serializes_server_field() {
 
 #[test]
 fn list_resources_payload_from_single_server_copies_next_cursor() {
-    let result = ListResourcesResult {
-        meta: None,
-        next_cursor: Some("cursor-1".to_string()),
-        resources: vec![resource("memo://id", "memo")],
-    };
+    let mut result = ListResourcesResult::with_all_items(vec![resource("memo://id", "memo")]);
+    result.next_cursor = Some("cursor-1".to_string());
     let payload = ListResourcesPayload::from_single_server("srv".to_string(), result);
     let value = serde_json::to_value(&payload).expect("serialize payload");
 

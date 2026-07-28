@@ -50,7 +50,7 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-sse-stream = "0.2.1"
+sse-stream = "0.2.5"
 thiserror = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [

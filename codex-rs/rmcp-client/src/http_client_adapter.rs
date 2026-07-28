@@ -285,7 +285,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
     async fn get_stream(
         &self,
         uri: Arc<str>,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         last_event_id: Option<String>,
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, reqwest::header::HeaderValue>,
@@ -302,12 +302,14 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
             StreamableHttpClientAdapterError::Header,
         )?;
-        insert_header(
-            &mut headers,
-            HeaderName::from_static("mcp-session-id"),
-            session_id.to_string(),
-            StreamableHttpClientAdapterError::Header,
-        )?;
+        if let Some(session_id) = session_id {
+            insert_header(
+                &mut headers,
+                HeaderName::from_static("mcp-session-id"),
+                session_id.to_string(),
+                StreamableHttpClientAdapterError::Header,
+            )?;
+        }
         if let Some(last_event_id) = last_event_id {
             insert_header(
                 &mut headers,
@@ -422,6 +424,7 @@ fn client_jsonrpc_message_fields(
                 ClientNotification::CustomNotification(notification) => {
                     notification.method.as_str()
                 }
+                _ => return (None, None),
             };
             (Some(method.to_string()), None)
         }
@@ -555,7 +558,7 @@ async fn collect_body(
 fn sse_stream_from_body(
     body_stream: HttpResponseBodyStream,
 ) -> BoxStream<'static, std::result::Result<Sse, sse_stream::Error>> {
-    SseStream::from_byte_stream(stream::unfold(body_stream, |mut body_stream| async move {
+    SseStream::from_bytes_stream(stream::unfold(body_stream, |mut body_stream| async move {
         match body_stream.recv().await {
             Ok(Some(bytes)) => Some((Ok(Bytes::from(bytes)), body_stream)),
             Ok(None) => None,

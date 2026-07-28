@@ -44,9 +44,9 @@ use rmcp::handler::server::ServerHandler;
 use rmcp::model::BooleanSchema;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
-use rmcp::model::Content;
-use rmcp::model::CreateElicitationRequestParams;
+use rmcp::model::ContentBlock;
 use rmcp::model::CustomRequest;
+use rmcp::model::ElicitRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::InitializeRequestParams;
@@ -54,7 +54,7 @@ use rmcp::model::InitializeResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::Meta;
-use rmcp::model::PrimitiveSchema;
+use rmcp::model::PrimitiveSchemaDefinition;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::ServerRequest as McpServerRequest;
@@ -96,6 +96,7 @@ const IMAGE_DATA_URL: &str =
 #[derive(Clone, Copy)]
 enum ElicitationScenario {
     StandardForm,
+    LegacySep1034Defaults,
     OpenAiForm,
 }
 
@@ -105,7 +106,10 @@ async fn mcp_server_form_elicitation_round_trip() -> Result<()> {
     let (request_id, params) = fixture.read_elicitation().await?;
     let requested_schema: McpElicitationSchema = serde_json::from_value(serde_json::to_value(
         ElicitationSchema::builder()
-            .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+            .required_property(
+                "confirmed",
+                PrimitiveSchemaDefinition::Boolean(BooleanSchema::new()),
+            )
             .build()
             .map_err(anyhow::Error::msg)?,
     )?)?;
@@ -127,6 +131,28 @@ async fn mcp_server_form_elicitation_round_trip() -> Result<()> {
         .accept(request_id.clone(), json!({ "confirmed": true }))
         .await?;
     fixture.finish(request_id, "accepted").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mcp_server_legacy_sep1034_elicitation_defaults_round_trip() -> Result<()> {
+    let mut fixture =
+        ElicitationRoundTripFixture::start(ElicitationScenario::LegacySep1034Defaults).await?;
+    let (request_id, params) = fixture.read_elicitation().await?;
+    let McpServerElicitationRequest::Form {
+        message,
+        requested_schema,
+        ..
+    } = params.request
+    else {
+        anyhow::bail!("omitted legacy elicitation mode must default to form");
+    };
+
+    assert_eq!(message, ELICITATION_MESSAGE);
+    assert_eq!(serde_json::to_value(requested_schema)?, sep1034_schema());
+    fixture
+        .accept(request_id.clone(), sep1034_defaults())
+        .await?;
+    fixture.finish(request_id, "legacy defaults accepted").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -674,27 +700,26 @@ impl ServerHandler for ElicitationAppsMcpServer {
             .insert("connector_name".to_string(), json!(CONNECTOR_NAME));
         tool.meta = Some(meta);
 
-        Ok(ListToolsResult {
-            tools: vec![tool],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(vec![tool]))
     }
 
     async fn call_tool(
         &self,
         _request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         match self.scenario {
             ElicitationScenario::StandardForm => {
                 let requested_schema = ElicitationSchema::builder()
-                    .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+                    .required_property(
+                        "confirmed",
+                        PrimitiveSchemaDefinition::Boolean(BooleanSchema::new()),
+                    )
                     .build()
                     .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
                 let result = context
                     .peer
-                    .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                    .create_elicitation(ElicitRequestParams::FormElicitationParams {
                         meta: None,
                         message: ELICITATION_MESSAGE.to_string(),
                         requested_schema,
@@ -711,8 +736,49 @@ impl ServerHandler for ElicitationAppsMcpServer {
                     ElicitationAction::Accept => "accepted",
                     ElicitationAction::Decline => "declined",
                     ElicitationAction::Cancel => "cancelled",
+                    _ => {
+                        return Err(rmcp::ErrorData::invalid_params(
+                            "unsupported MCP elicitation action",
+                            None,
+                        ));
+                    }
                 };
-                Ok(CallToolResult::success(vec![Content::text(output)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output)]).into())
+            }
+            ElicitationScenario::LegacySep1034Defaults => {
+                let result = context
+                    .peer
+                    .send_request(McpServerRequest::CustomRequest(CustomRequest::new(
+                        "elicitation/create",
+                        Some(json!({
+                            "message": ELICITATION_MESSAGE,
+                            "requestedSchema": sep1034_schema(),
+                        })),
+                    )))
+                    .await
+                    .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+                let result = match result {
+                    rmcp::model::ClientResult::CustomResult(result) => result.0,
+                    rmcp::model::ClientResult::ElicitResult(result) => serde_json::to_value(result)
+                        .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?,
+                    result => {
+                        return Err(rmcp::ErrorData::internal_error(
+                            format!("unexpected legacy elicitation response: {result:?}"),
+                            None,
+                        ));
+                    }
+                };
+                assert_eq!(
+                    result,
+                    json!({
+                        "action": "accept",
+                        "content": sep1034_defaults(),
+                    })
+                );
+                Ok(
+                    CallToolResult::success(vec![ContentBlock::text("legacy defaults accepted")])
+                        .into(),
+                )
             }
             ElicitationScenario::OpenAiForm => {
                 let result = context
@@ -742,10 +808,8 @@ impl ServerHandler for ElicitationAppsMcpServer {
                     .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
                 let result = match result {
                     rmcp::model::ClientResult::CustomResult(result) => result.0,
-                    rmcp::model::ClientResult::CreateElicitationResult(result) => {
-                        serde_json::to_value(result)
-                            .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?
-                    }
+                    rmcp::model::ClientResult::ElicitResult(result) => serde_json::to_value(result)
+                        .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?,
                     result => {
                         return Err(rmcp::ErrorData::internal_error(
                             format!("unexpected OpenAI form response: {result:?}"),
@@ -762,12 +826,41 @@ impl ServerHandler for ElicitationAppsMcpServer {
                         },
                     })
                 );
-                Ok(CallToolResult::success(vec![Content::text(
-                    "accepted monthly-review",
-                )]))
+                Ok(
+                    CallToolResult::success(vec![ContentBlock::text("accepted monthly-review")])
+                        .into(),
+                )
             }
         }
     }
+}
+
+fn sep1034_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "default": "John Doe"},
+            "age": {"type": "integer", "default": 30},
+            "score": {"type": "number", "default": 95.5},
+            "status": {
+                "type": "string",
+                "enum": ["active", "inactive", "pending"],
+                "default": "active",
+            },
+            "verified": {"type": "boolean", "default": true},
+        },
+        "required": [],
+    })
+}
+
+fn sep1034_defaults() -> Value {
+    json!({
+        "name": "John Doe",
+        "age": 30,
+        "score": 95.5,
+        "status": "active",
+        "verified": true,
+    })
 }
 
 async fn start_apps_server(scenario: ElicitationScenario) -> Result<(String, JoinHandle<()>)> {

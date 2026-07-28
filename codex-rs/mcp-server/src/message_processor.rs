@@ -147,16 +147,8 @@ impl MessageProcessor {
             ClientRequest::CompleteRequest(params) => {
                 self.handle_complete(params.params);
             }
-            ClientRequest::GetTaskInfoRequest(_) => {
-                self.handle_unsupported_request(request_id, "tasks/get_info")
-                    .await;
-            }
-            ClientRequest::ListTasksRequest(_) => {
-                self.handle_unsupported_request(request_id, "tasks/list")
-                    .await;
-            }
-            ClientRequest::GetTaskResultRequest(_) => {
-                self.handle_unsupported_request(request_id, "tasks/get_result")
+            ClientRequest::GetTaskRequest(_) => {
+                self.handle_unsupported_request(request_id, "tasks/get")
                     .await;
             }
             ClientRequest::CancelTaskRequest(_) => {
@@ -174,6 +166,10 @@ impl MessageProcessor {
                             Some(json!({ "method": method })),
                         ),
                     )
+                    .await;
+            }
+            request => {
+                self.handle_unsupported_request(request_id, request.method())
                     .await;
             }
         }
@@ -204,6 +200,9 @@ impl MessageProcessor {
             }
             ClientNotification::CustomNotification(_) => {
                 tracing::warn!("ignoring custom client notification");
+            }
+            _ => {
+                tracing::warn!("ignoring unsupported client notification");
             }
         }
     }
@@ -330,14 +329,10 @@ impl MessageProcessor {
         params: Option<rmcp::model::PaginatedRequestParams>,
     ) {
         tracing::trace!("tools/list -> {params:?}");
-        let result = rmcp::model::ListToolsResult {
-            meta: None,
-            tools: vec![
-                create_tool_for_codex_tool_call_param(),
-                create_tool_for_codex_tool_call_reply_param(),
-            ],
-            next_cursor: None,
-        };
+        let result = rmcp::model::ListToolsResult::with_all_items(vec![
+            create_tool_for_codex_tool_call_param(),
+            create_tool_for_codex_tool_call_reply_param(),
+        ]);
 
         self.outgoing.send_response(id, result).await;
     }
@@ -355,7 +350,7 @@ impl MessageProcessor {
                     .await
             }
             _ => {
-                let result = CallToolResult::error(vec![rmcp::model::Content::text(format!(
+                let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!(
                     "Unknown tool '{name}'"
                 ))]);
                 self.outgoing.send_response(id, result).await;
@@ -374,7 +369,7 @@ impl MessageProcessor {
                 Ok(tool_cfg) => match tool_cfg.into_config(self.arg0_paths.clone()).await {
                     Ok(cfg) => cfg,
                     Err(e) => {
-                        let result = CallToolResult::error(vec![rmcp::model::Content::text(
+                        let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                             format!("Failed to load Codex configuration from overrides: {e}"),
                         )]);
                         self.outgoing.send_response(id, result).await;
@@ -382,15 +377,15 @@ impl MessageProcessor {
                     }
                 },
                 Err(e) => {
-                    let result = CallToolResult::error(vec![rmcp::model::Content::text(format!(
-                        "Failed to parse configuration for Codex tool: {e}"
-                    ))]);
+                    let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                        format!("Failed to parse configuration for Codex tool: {e}"),
+                    )]);
                     self.outgoing.send_response(id, result).await;
                     return;
                 }
             },
             None => {
-                let result = CallToolResult::error(vec![rmcp::model::Content::text(
+                let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                     "Missing arguments for codex tool-call; the `prompt` field is required.",
                 )]);
                 self.outgoing.send_response(id, result).await;
@@ -433,9 +428,9 @@ impl MessageProcessor {
                 Ok(params) => params,
                 Err(e) => {
                     tracing::error!("Failed to parse Codex tool call reply parameters: {e}");
-                    let result = CallToolResult::error(vec![rmcp::model::Content::text(format!(
-                        "Failed to parse configuration for Codex tool: {e}"
-                    ))]);
+                    let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                        format!("Failed to parse configuration for Codex tool: {e}"),
+                    )]);
                     self.outgoing.send_response(request_id, result).await;
                     return;
                 }
@@ -444,7 +439,7 @@ impl MessageProcessor {
                 tracing::error!(
                     "Missing arguments for codex-reply tool-call; the `thread_id` and `prompt` fields are required."
                 );
-                let result = CallToolResult::error(vec![rmcp::model::Content::text(
+                let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                     "Missing arguments for codex-reply tool-call; the `thread_id` and `prompt` fields are required.",
                 )]);
                 self.outgoing.send_response(request_id, result).await;
@@ -456,7 +451,7 @@ impl MessageProcessor {
             Ok(id) => id,
             Err(e) => {
                 tracing::error!("Failed to parse thread_id: {e}");
-                let result = CallToolResult::error(vec![rmcp::model::Content::text(format!(
+                let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!(
                     "Failed to parse thread_id: {e}"
                 ))]);
                 self.outgoing.send_response(request_id, result).await;
@@ -502,6 +497,7 @@ impl MessageProcessor {
         });
     }
 
+    #[allow(deprecated)]
     fn handle_set_level(&self, params: rmcp::model::SetLevelRequestParams) {
         tracing::info!("logging/setLevel -> params: {:?}", params);
     }
@@ -528,7 +524,10 @@ impl MessageProcessor {
     // ---------------------------------------------------------------------
 
     async fn handle_cancelled_notification(&self, params: rmcp::model::CancelledNotificationParam) {
-        let request_id = params.request_id;
+        let Some(request_id) = params.request_id else {
+            tracing::warn!("ignoring cancellation without a request id");
+            return;
+        };
         // Create a stable string form early for logging and submission id.
         let request_id_string = request_id.to_string();
 

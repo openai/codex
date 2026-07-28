@@ -1,7 +1,6 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
-use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
@@ -117,17 +116,6 @@ pub(crate) fn build_default_headers(
     }
 
     Ok(headers)
-}
-
-pub(crate) fn apply_default_headers(
-    builder: ClientBuilder,
-    default_headers: &HeaderMap,
-) -> ClientBuilder {
-    if default_headers.is_empty() {
-        builder
-    } else {
-        builder.default_headers(default_headers.clone())
-    }
 }
 
 #[cfg(unix)]
