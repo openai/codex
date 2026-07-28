@@ -244,7 +244,8 @@ async fn realtime_ws_connect_webrtc_sideband_retries_join_until_server_is_availa
     provider.retry.max_attempts = 1;
     provider.retry.base_delay = Duration::from_millis(100);
 
-    let client = RealtimeWebsocketClient::new(provider);
+    let client = RealtimeWebsocketClient::new(provider)
+        .with_webrtc_sideband_base_url(format!("http://{addr}"));
     let connection = client
         .connect_webrtc_sideband(
             RealtimeSessionConfig {
