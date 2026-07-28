@@ -152,7 +152,7 @@ mod tests {
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: grandchild_thread_id,
                 patch: ThreadMetadataPatch {
-                    is_pinned: Some(true),
+                    section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
                     ..Default::default()
                 },
                 include_archived: false,
@@ -170,7 +170,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
-                is_pinned: None,
+                section: None,
                 archived: false,
                 search_term: None,
                 relation_filter: Some(ThreadRelationFilter::DirectChildrenOf(parent_thread_id)),
@@ -198,7 +198,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
-                is_pinned: None,
+                section: None,
                 archived: false,
                 search_term: None,
                 relation_filter: Some(ThreadRelationFilter::DescendantsOf(parent_thread_id)),
@@ -226,7 +226,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
-                is_pinned: Some(true),
+                section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
                 archived: false,
                 search_term: None,
                 relation_filter: Some(ThreadRelationFilter::DescendantsOf(parent_thread_id)),
@@ -242,6 +242,34 @@ mod tests {
                 .map(|item| item.thread_id)
                 .collect::<Vec<_>>(),
             vec![grandchild_thread_id]
+        );
+
+        let page = ThreadStore::list_threads(
+            &store,
+            ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: None,
+                cwd_filters: None,
+                section: Some(None),
+                archived: false,
+                search_term: None,
+                relation_filter: Some(ThreadRelationFilter::DescendantsOf(parent_thread_id)),
+                use_state_db_only: false,
+            },
+        )
+        .await
+        .expect("list unsectioned descendant threads");
+
+        assert_eq!(
+            page.items
+                .into_iter()
+                .map(|item| item.thread_id)
+                .collect::<Vec<_>>(),
+            vec![child_thread_id]
         );
     }
 
@@ -772,8 +800,10 @@ impl ThreadStore for InMemoryThreadStore {
                 }
                 None => {}
             }
-            if let Some(is_pinned) = params.is_pinned {
-                page.items.retain(|thread| thread.is_pinned == is_pinned);
+            if let Some(section) = params.section.as_ref() {
+                page.items.retain(|thread| {
+                    thread.section.as_ref().map(|section| section.id.as_str()) == section.as_deref()
+                });
             }
             Ok(page)
         })
@@ -858,9 +888,16 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.advance_recency_at.or(metadata.updated_at))
             .unwrap_or_else(Utc::now),
         archived_at: None,
-        is_pinned: metadata
-            .and_then(|metadata| metadata.is_pinned)
-            .unwrap_or(false),
+        section: metadata
+            .and_then(|metadata| metadata.section.clone().flatten())
+            .map(|id| codex_state::ThreadSection {
+                name: if id == codex_state::PINNED_THREAD_SECTION_ID {
+                    codex_state::PINNED_THREAD_SECTION_NAME.to_string()
+                } else {
+                    id.clone()
+                },
+                id,
+            }),
         cwd: metadata
             .and_then(|metadata| metadata.cwd.clone())
             .unwrap_or_default(),

@@ -204,7 +204,7 @@ fn sample_thread_with_metadata(
         parent_thread_id,
         preview: "first prompt".to_string(),
         ephemeral,
-        is_pinned: false,
+        section: None,
         history_mode: Default::default(),
         model_provider: "openai".to_string(),
         created_at: 1,

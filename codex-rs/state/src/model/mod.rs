@@ -26,6 +26,8 @@ pub use thread_metadata::SortKey;
 pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;
 pub use thread_metadata::ThreadRelationFilter;
+pub use thread_metadata::ThreadSection;
+pub use thread_metadata::ThreadSectionsPage;
 pub use thread_metadata::ThreadsPage;
 
 pub(crate) use thread_goal::ThreadGoalRow;

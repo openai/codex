@@ -3,6 +3,9 @@ use super::turn_processor::can_accept_direct_input;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadSection;
+use codex_app_server_protocol::ThreadSectionListParams;
+use codex_app_server_protocol::ThreadSectionListResponse;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
@@ -20,7 +23,7 @@ struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
-    is_pinned: Option<bool>,
+    section_id: Option<Option<String>>,
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
@@ -693,6 +696,39 @@ impl ThreadRequestProcessor {
         self.thread_list_response_inner(params)
             .await
             .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_section_list(
+        &self,
+        params: ThreadSectionListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let limit = params
+            .limit
+            .map(|value| value as usize)
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
+        let state_db = self.state_db.clone().ok_or_else(|| {
+            method_not_found("threadSection/list is unavailable without sqlite state")
+        })?;
+        let page = state_db
+            .list_thread_sections(params.cursor.as_deref(), limit)
+            .await
+            .map_err(|err| internal_error(format!("failed to list thread sections: {err}")))?;
+
+        Ok(Some(
+            ThreadSectionListResponse {
+                data: page
+                    .sections
+                    .into_iter()
+                    .map(|section| ThreadSection {
+                        id: section.id,
+                        name: section.name,
+                    })
+                    .collect(),
+                next_cursor: page.next_cursor,
+            }
+            .into(),
+        ))
     }
 
     pub(crate) async fn thread_search(
@@ -1638,13 +1674,13 @@ impl ThreadRequestProcessor {
         let ThreadMetadataUpdateParams {
             thread_id,
             git_info,
-            is_pinned,
+            section_id,
         } = params;
 
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        if git_info.is_none() && is_pinned.is_none() {
+        if git_info.is_none() && section_id.is_none() {
             return Err(invalid_request(
                 "thread metadata update must include at least one field",
             ));
@@ -1676,14 +1712,13 @@ impl ThreadRequestProcessor {
             )
             .transpose()?;
 
-        let patch = StoreThreadMetadataPatch {
-            git_info,
-            is_pinned,
-            ..Default::default()
-        };
-
         let updated_thread = {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let patch = StoreThreadMetadataPatch {
+                git_info,
+                section: section_id,
+                ..Default::default()
+            };
             self.thread_manager
                 .update_thread_metadata(thread_uuid, patch, /*include_archived*/ true)
                 .await
@@ -1977,7 +2012,7 @@ impl ThreadRequestProcessor {
             model_providers,
             source_kinds,
             archived,
-            is_pinned,
+            section_id,
             cwd,
             use_state_db_only,
             search_term,
@@ -2022,7 +2057,7 @@ impl ThreadRequestProcessor {
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
-                    is_pinned,
+                    section_id,
                     cwd_filters,
                     search_term,
                     use_state_db_only,
@@ -4448,7 +4483,7 @@ impl ThreadRequestProcessor {
             model_providers,
             source_kinds,
             archived,
-            is_pinned,
+            section_id,
             cwd_filters,
             search_term,
             use_state_db_only,
@@ -4496,7 +4531,7 @@ impl ThreadRequestProcessor {
                     model_providers: model_provider_filter.clone(),
                     cwd_filters: cwd_filters.clone(),
                     archived,
-                    is_pinned,
+                    section: section_id.clone(),
                     search_term: search_term.clone(),
                     use_state_db_only,
                     relation_filter,
@@ -5081,7 +5116,10 @@ pub(crate) fn thread_from_stored_thread(
         parent_thread_id: thread.parent_thread_id.map(|id| id.to_string()),
         preview: thread.preview,
         ephemeral: false,
-        is_pinned: thread.is_pinned,
+        section: thread.section.map(|section| ThreadSection {
+            id: section.id,
+            name: section.name,
+        }),
         history_mode: thread.history_mode.into(),
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
@@ -5301,7 +5339,7 @@ fn build_thread_from_snapshot(
         parent_thread_id: config_snapshot.parent_thread_id.map(|id| id.to_string()),
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
-        is_pinned: false,
+        section: None,
         history_mode: config_snapshot.history_mode.into(),
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,

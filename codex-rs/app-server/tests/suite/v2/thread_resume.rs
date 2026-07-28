@@ -2693,7 +2693,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread_id.clone(),
-            is_pinned: None,
+            section_id: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/pr-branch".to_string())),
@@ -2723,7 +2723,6 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
             .and_then(|git| git.branch.as_deref()),
         Some("feature/pr-branch")
     );
-
     Ok(())
 }
 
@@ -3021,7 +3020,6 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
         ..
     } = timeout(DEFAULT_READ_TIMEOUT, secondary.read_response(resume_id)).await??;
     assert_ne!(resumed_thread.status, ThreadStatus::NotLoaded);
-
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/completed"),

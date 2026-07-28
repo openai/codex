@@ -643,6 +643,30 @@
             },
             "method": {
               "enum": [
+                "threadSection/list"
+              ],
+              "title": "ThreadSection/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadSectionListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ThreadSection/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/loaded/list"
               ],
               "title": "Thread/loaded/listRequestMethod",
@@ -18089,11 +18113,6 @@
             "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
             "type": "string"
           },
-          "isPinned": {
-            "default": false,
-            "description": "Whether the thread has been pinned by the user.",
-            "type": "boolean"
-          },
           "modelProvider": {
             "description": "Model provider used for this thread (for example, 'openai').",
             "type": "string"
@@ -18130,6 +18149,18 @@
               "integer",
               "null"
             ]
+          },
+          "section": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadSection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The independently persisted section selected for this thread, if any."
           },
           "sessionId": {
             "description": "Session id shared by threads that belong to the same session tree.",
@@ -19554,13 +19585,6 @@
             ],
             "description": "Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
           },
-          "isPinned": {
-            "description": "Optional pinned filter; when set, only threads matching this value are returned.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
             "format": "uint32",
@@ -19582,6 +19606,13 @@
           },
           "searchTerm": {
             "description": "Optional substring filter for the extracted thread title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sectionId": {
+            "description": "Omit to include every section, set to `null` for unsectioned threads, or provide a section ID to return only threads in that section.",
             "type": [
               "string",
               "null"
@@ -19751,10 +19782,10 @@
             ],
             "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
           },
-          "isPinned": {
-            "description": "Patch whether this thread is pinned. Omit to leave the stored value unchanged.",
+          "sectionId": {
+            "description": "Omit to leave the section unchanged, set to `null` to clear it, or provide a section ID.",
             "type": [
-              "boolean",
+              "string",
               "null"
             ]
           },
@@ -20344,6 +20375,72 @@
           "snippet",
           "thread"
         ],
+        "type": "object"
+      },
+      "ThreadSection": {
+        "description": "An independently persisted, user-visible thread section.",
+        "properties": {
+          "id": {
+            "description": "Opaque UUIDv7 identity that remains stable when the section is renamed.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The current user-visible section name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ThreadSectionListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Parameters for listing independently persisted thread sections.",
+        "properties": {
+          "cursor": {
+            "description": "Opaque pagination cursor returned by a previous call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Maximum number of sections to return.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "ThreadSectionListParams",
+        "type": "object"
+      },
+      "ThreadSectionListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "One page of independently persisted thread sections.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadSection"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "Opaque cursor for the next page, or `null` when no sections remain.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ThreadSectionListResponse",
         "type": "object"
       },
       "ThreadSetNameParams": {

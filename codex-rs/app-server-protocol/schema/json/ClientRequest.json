@@ -4154,13 +4154,6 @@
           ],
           "description": "Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
         },
-        "isPinned": {
-          "description": "Optional pinned filter; when set, only threads matching this value are returned.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "limit": {
           "description": "Optional page size; defaults to a reasonable server-side value.",
           "format": "uint32",
@@ -4182,6 +4175,13 @@
         },
         "searchTerm": {
           "description": "Optional substring filter for the extracted thread title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sectionId": {
+          "description": "Omit to include every section, set to `null` for unsectioned threads, or provide a section ID to return only threads in that section.",
           "type": [
             "string",
             "null"
@@ -4293,10 +4293,10 @@
           ],
           "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
         },
-        "isPinned": {
-          "description": "Patch whether this thread is pinned. Omit to leave the stored value unchanged.",
+        "sectionId": {
+          "description": "Omit to leave the section unchanged, set to `null` to clear it, or provide a section ID.",
           "type": [
-            "boolean",
+            "string",
             "null"
           ]
         },
@@ -4570,6 +4570,28 @@
         "numTurns",
         "threadId"
       ],
+      "type": "object"
+    },
+    "ThreadSectionListParams": {
+      "description": "Parameters for listing independently persisted thread sections.",
+      "properties": {
+        "cursor": {
+          "description": "Opaque pagination cursor returned by a previous call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Maximum number of sections to return.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ThreadSetNameParams": {
@@ -5632,6 +5654,30 @@
         "params"
       ],
       "title": "Thread/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "threadSection/list"
+          ],
+          "title": "ThreadSection/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadSectionListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ThreadSection/listRequest",
       "type": "object"
     },
     {

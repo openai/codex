@@ -1437,7 +1437,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         thread_id: Some(filesystem_thread_id),
         first_user_message: Some("filesystem message".to_string()),
         preview: Some("filesystem preview".to_string()),
-        is_pinned: false,
+        section: None,
         cwd: None,
         git_branch: Some("filesystem-branch".to_string()),
         git_sha: Some("filesystem-sha".to_string()),
@@ -1458,7 +1458,10 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         thread_id: Some(state_thread_id),
         first_user_message: Some("state message".to_string()),
         preview: Some("state preview".to_string()),
-        is_pinned: true,
+        section: Some(codex_state::ThreadSection {
+            id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
+            name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+        }),
         cwd: Some(PathBuf::from("/tmp/state-cwd")),
         git_branch: Some("state-branch".to_string()),
         git_sha: Some("state-sha".to_string()),
@@ -1479,7 +1482,13 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
 
     assert_eq!(item.path, filesystem_path);
     assert_eq!(item.thread_id, Some(filesystem_thread_id));
-    assert!(item.is_pinned);
+    assert_eq!(
+        item.section,
+        Some(codex_state::ThreadSection {
+            id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
+            name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+        })
+    );
     assert_eq!(
         item.first_user_message.as_deref(),
         Some("filesystem message")

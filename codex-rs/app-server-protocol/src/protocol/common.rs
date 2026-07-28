@@ -633,6 +633,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadListResponse,
     },
+    ThreadSectionList => "threadSection/list" {
+        params: v2::ThreadSectionListParams,
+        serialization: None,
+        response: v2::ThreadSectionListResponse,
+    },
     #[experimental("thread/search")]
     ThreadSearch => "thread/search" {
         params: v2::ThreadSearchParams,
@@ -2730,7 +2735,7 @@ mod tests {
                     parent_thread_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
-                    is_pinned: false,
+                    section: None,
                     history_mode: Default::default(),
                     model_provider: "openai".to_string(),
                     created_at: 1,
@@ -2783,7 +2788,7 @@ mod tests {
                         "parentThreadId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
-                        "isPinned": false,
+                        "section": null,
                         "historyMode": "legacy",
                         "modelProvider": "openai",
                         "createdAt": 1,

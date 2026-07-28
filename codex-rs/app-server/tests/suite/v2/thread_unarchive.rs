@@ -15,6 +15,7 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadSection;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -36,6 +37,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_state::PINNED_THREAD_SECTION_ID;
+use codex_state::PINNED_THREAD_SECTION_NAME;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::ThreadMetadataPatch;
@@ -97,17 +100,21 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     )
     .await??;
 
+    let pinned_section = ThreadSection {
+        id: PINNED_THREAD_SECTION_ID.to_string(),
+        name: PINNED_THREAD_SECTION_NAME.to_string(),
+    };
     let pin_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread.id.clone(),
             git_info: None,
-            is_pinned: Some(true),
+            section_id: Some(Some(PINNED_THREAD_SECTION_ID.to_string())),
         })
         .await?;
     let ThreadMetadataUpdateResponse {
         thread: pinned_thread,
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(pin_id)).await??;
-    assert!(pinned_thread.is_pinned);
+    assert_eq!(pinned_thread.section, Some(pinned_section.clone()));
 
     let found_rollout_path =
         find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
@@ -166,7 +173,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     )
     .await??;
     assert_eq!(unarchived_notification.thread_id, thread.id);
-    assert!(unarchived_thread.is_pinned);
+    assert_eq!(unarchived_thread.section, Some(pinned_section.clone()));
     assert!(
         unarchived_thread.updated_at > old_timestamp,
         "expected updated_at to be bumped on unarchive"
@@ -179,7 +186,10 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         .and_then(Value::as_object)
         .expect("thread/unarchive result.thread must be an object");
     assert_eq!(unarchived_thread.name, None);
-    assert_eq!(thread_json.get("isPinned"), Some(&Value::Bool(true)));
+    assert_eq!(
+        thread_json.get("section"),
+        Some(&serde_json::to_value(&pinned_section)?)
+    );
     assert_eq!(
         thread_json.get("name"),
         Some(&Value::Null),

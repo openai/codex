@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Parameters for listing independently persisted thread sections.",
+  "properties": {
+    "cursor": {
+      "description": "Opaque pagination cursor returned by a previous call.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Maximum number of sections to return.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "ThreadSectionListParams",
+  "type": "object"
+}

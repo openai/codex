@@ -44,7 +44,7 @@ impl App {
                                 model_providers: Some(vec![]),
                                 source_kinds: Some(vec![ThreadSourceKind::SubAgentThreadSpawn]),
                                 archived: None,
-                                is_pinned: None,
+                                section_id: None,
                                 cwd: None,
                                 use_state_db_only: true,
                                 search_term: None,

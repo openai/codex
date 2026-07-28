@@ -21,6 +21,7 @@ impl fmt::Display for ConnectionId {
 /// Outgoing message from the server to the client.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum OutgoingMessage {
     Request(ServerRequest),
     /// AppServerNotification is specific to the case where this is run as an

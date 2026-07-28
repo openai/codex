@@ -11,6 +11,6 @@ export type ThreadMetadataUpdateParams = { threadId: string,
  */
 gitInfo?: ThreadMetadataGitInfoUpdateParams | null,
 /**
- * Patch whether this thread is pinned. Omit to leave the stored value unchanged.
+ * Omit to leave the section unchanged, set to `null` to clear it, or provide a section ID.
  */
-isPinned?: boolean | null, };
+sectionId?: string | null, };

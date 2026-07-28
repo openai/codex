@@ -51,6 +51,8 @@ pub use model::ThreadGoalStatus;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadRelationFilter;
+pub use model::ThreadSection;
+pub use model::ThreadSectionsPage;
 pub use model::ThreadsPage;
 pub use runtime::ExternalAgentConfigImportDetailsRecord;
 pub use runtime::ExternalAgentConfigImportFailureRecord;
@@ -77,6 +79,12 @@ pub use telemetry::DbTelemetryHandle;
 pub use telemetry::install_process_db_telemetry;
 pub use telemetry::record_backfill_gate;
 pub use telemetry::record_fallback;
+
+/// Stable UUIDv7 identifying the built-in pinned thread section.
+pub const PINNED_THREAD_SECTION_ID: &str = "01984de2-8f74-7c91-a3b2-5c5e937cf318";
+
+/// User-facing name of the built-in pinned thread section.
+pub const PINNED_THREAD_SECTION_NAME: &str = "Pinned";
 
 /// Environment variable for overriding the SQLite state database home directory.
 pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";

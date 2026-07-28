@@ -185,7 +185,10 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
-            is_pinned: true,
+            section: Some(ThreadSection {
+                id: "01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string(),
+                name: "Pinned".to_string(),
+            }),
             history_mode: Default::default(),
             model_provider: "openai".to_string(),
             created_at: 1,
@@ -226,16 +229,22 @@ fn thread_resume_response_round_trips_initial_turns_page() {
     };
 
     let value = serde_json::to_value(&response).expect("serialize thread resume response");
-    assert_eq!(value["thread"]["isPinned"], json!(true));
+    assert_eq!(
+        value["thread"]["section"],
+        json!({
+            "id": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
+            "name": "Pinned",
+        })
+    );
 
     let mut legacy_thread = value["thread"].clone();
     legacy_thread
         .as_object_mut()
         .expect("serialized thread should be an object")
-        .remove("isPinned");
+        .remove("section");
     let legacy_thread =
         serde_json::from_value::<Thread>(legacy_thread).expect("deserialize legacy thread");
-    assert!(!legacy_thread.is_pinned);
+    assert_eq!(legacy_thread.section, None);
 
     assert_eq!(
         value.get("initialTurnsPage"),
@@ -369,39 +378,122 @@ fn thread_list_params_accepts_state_db_only_flag() {
 }
 
 #[test]
-fn thread_list_params_accepts_pinned_filter() {
-    for is_pinned in [true, false] {
+fn thread_list_params_accepts_section_id_filter() {
+    for section_id in [
+        "01984de2-8f74-7c91-a3b2-5c5e937cf318",
+        "01984de2-8f74-7c91-a3b2-5c5e937cf319",
+    ] {
         let params = serde_json::from_value::<ThreadListParams>(json!({
-            "isPinned": is_pinned,
+            "sectionId": section_id,
         }))
-        .expect("pinned filter should deserialize");
+        .expect("section ID filter should deserialize");
 
-        assert_eq!(params.is_pinned, Some(is_pinned));
+        assert_eq!(
+            params.section_id.as_ref().map(|section| section.as_deref()),
+            Some(Some(section_id))
+        );
+        assert_eq!(
+            serde_json::to_value(&params)
+                .expect("section ID filter should serialize")
+                .get("sectionId"),
+            Some(&json!(section_id))
+        );
     }
 
+    let params = serde_json::from_value::<ThreadListParams>(json!({
+        "sectionId": null,
+    }))
+    .expect("unsectioned thread filter should deserialize");
+    assert_eq!(params.section_id, Some(None));
+    assert_eq!(
+        serde_json::to_value(&params)
+            .expect("unsectioned thread filter should serialize")
+            .get("sectionId"),
+        Some(&json!(null))
+    );
+
     let params = serde_json::from_value::<ThreadListParams>(json!({}))
-        .expect("omitted pinned filter should deserialize");
-    assert_eq!(params.is_pinned, None);
+        .expect("omitted section ID filter should deserialize");
+    assert_eq!(params.section_id, None);
+    assert!(
+        serde_json::to_value(&params)
+            .expect("omitted section ID filter should serialize")
+            .get("sectionId")
+            .is_none()
+    );
 }
 
 #[test]
-fn thread_metadata_update_params_accepts_pinned_patch() {
-    for is_pinned in [true, false] {
+fn thread_metadata_update_params_distinguish_section_id_set_clear_and_omission() {
+    for section_id in [
+        "01984de2-8f74-7c91-a3b2-5c5e937cf318",
+        "01984de2-8f74-7c91-a3b2-5c5e937cf319",
+    ] {
         let params = serde_json::from_value::<ThreadMetadataUpdateParams>(json!({
             "threadId": "thr_123",
-            "isPinned": is_pinned,
+            "sectionId": section_id,
         }))
-        .expect("pinned metadata patch should deserialize");
+        .expect("section ID metadata patch should deserialize");
 
-        assert_eq!(params.is_pinned, Some(is_pinned));
+        assert_eq!(
+            params.section_id.as_ref().map(|section| section.as_deref()),
+            Some(Some(section_id))
+        );
         assert_eq!(params.git_info, None);
     }
 
     let params = serde_json::from_value::<ThreadMetadataUpdateParams>(json!({
         "threadId": "thr_123",
+        "sectionId": null,
     }))
-    .expect("omitted pinned metadata patch should deserialize");
-    assert_eq!(params.is_pinned, None);
+    .expect("cleared section ID metadata patch should deserialize");
+    assert_eq!(params.section_id, Some(None));
+
+    let params = serde_json::from_value::<ThreadMetadataUpdateParams>(json!({
+        "threadId": "thr_123",
+    }))
+    .expect("omitted section ID metadata patch should deserialize");
+    assert_eq!(params.section_id, None);
+}
+
+#[test]
+fn thread_section_list_params_and_response_round_trip() {
+    let params = serde_json::from_value::<ThreadSectionListParams>(json!({
+        "cursor": "section-cursor",
+        "limit": 25,
+    }))
+    .expect("section list parameters should deserialize");
+    assert_eq!(
+        params,
+        ThreadSectionListParams {
+            cursor: Some("section-cursor".to_string()),
+            limit: Some(25),
+        }
+    );
+
+    let response = ThreadSectionListResponse {
+        data: vec![ThreadSection {
+            id: "01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string(),
+            name: "Pinned".to_string(),
+        }],
+        next_cursor: None,
+    };
+    let value = serde_json::to_value(&response).expect("section list should serialize");
+    assert_eq!(
+        value,
+        json!({
+            "data": [{
+                "id": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
+                "name": "Pinned",
+            }],
+            "nextCursor": null,
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ThreadSectionListResponse>(value)
+            .expect("section list should deserialize"),
+        response
+    );
 }
 
 #[test]

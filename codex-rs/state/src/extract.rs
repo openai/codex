@@ -695,7 +695,7 @@ mod tests {
             tokens_used: 1,
             first_user_message: None,
             archived_at: None,
-            is_pinned: false,
+            section: None,
             git_sha: None,
             git_branch: None,
             git_origin_url: None,

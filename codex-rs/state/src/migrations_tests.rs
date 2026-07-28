@@ -1,4 +1,5 @@
 use codex_utils_absolute_path::test_support::PathExt;
+use pretty_assertions::assert_eq;
 use sqlx::Connection;
 use sqlx::Row;
 use sqlx::migrate::Migration;
@@ -8,6 +9,10 @@ use std::borrow::Cow;
 use super::STATE_MIGRATOR;
 use super::THREAD_HISTORY_MIGRATOR;
 use super::repair_legacy_recency_migration_version;
+use crate::PINNED_THREAD_SECTION_ID;
+use crate::PINNED_THREAD_SECTION_NAME;
+
+const CUSTOM_THREAD_SECTION_ID: &str = "01984de2-8f74-7c91-a3b2-5c5e937cf317";
 
 fn migrator_through(version: i64) -> Migrator {
     Migrator {
@@ -28,7 +33,7 @@ fn migrator_through(version: i64) -> Migrator {
 }
 
 #[tokio::test]
-async fn pinned_threads_migration_defaults_existing_and_legacy_rows_to_unpinned() {
+async fn thread_section_migration_preserves_legacy_pin_compatibility() {
     let sqlite_home = crate::runtime::test_support::unique_temp_dir();
     tokio::fs::create_dir_all(&sqlite_home)
         .await
@@ -42,20 +47,25 @@ async fn pinned_threads_migration_defaults_existing_and_legacy_rows_to_unpinned(
         .open_read_write_pool(&state_path)
         .await
         .expect("sqlite database should open");
-    migrator_through(/*version*/ 42)
+    migrator_through(/*version*/ 44)
         .run(&pool)
         .await
-        .expect("pre-pin migrations should apply");
+        .expect("released thread migrations should apply");
 
     for thread_id in [
         "00000000-0000-0000-0000-000000000043",
         "00000000-0000-0000-0000-000000000044",
     ] {
         if thread_id.ends_with("44") {
+            sqlx::query("UPDATE threads SET is_pinned = 1 WHERE id = ?")
+                .bind("00000000-0000-0000-0000-000000000043")
+                .execute(&pool)
+                .await
+                .expect("legacy pin should remain writable before section migration");
             STATE_MIGRATOR
                 .run(&pool)
                 .await
-                .expect("pin migration should apply");
+                .expect("section migration should apply");
         }
         sqlx::query(
             r#"
@@ -92,11 +102,86 @@ INSERT INTO threads (
         .expect("legacy thread insert should succeed");
     }
 
-    let pinned_values = sqlx::query_scalar::<_, bool>("SELECT is_pinned FROM threads ORDER BY id")
-        .fetch_all(&pool)
+    let registered_sections =
+        sqlx::query_as::<_, (String, String)>("SELECT id, name FROM thread_sections ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("independent thread sections should load");
+    assert_eq!(
+        registered_sections,
+        vec![(
+            PINNED_THREAD_SECTION_ID.to_string(),
+            PINNED_THREAD_SECTION_NAME.to_string(),
+        )]
+    );
+
+    let threads = sqlx::query_as::<_, (i64, Option<String>)>(
+        "SELECT is_pinned, thread_section_id FROM threads ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("legacy and section-aware thread metadata should load");
+    assert_eq!(threads, vec![(1, None), (0, None)]);
+
+    sqlx::query("INSERT INTO thread_sections (id, name) VALUES (?, ?)")
+        .bind(CUSTOM_THREAD_SECTION_ID)
+        .bind("Custom section")
+        .execute(&pool)
         .await
-        .expect("pin states should load");
-    assert_eq!(pinned_values, vec![false, false]);
+        .expect("custom sections should have independent persisted identities");
+
+    let thread_id = "00000000-0000-0000-0000-000000000043";
+    sqlx::query("UPDATE threads SET thread_section_id = ? WHERE id = ?")
+        .bind(CUSTOM_THREAD_SECTION_ID)
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("threads should reference independently persisted sections");
+    sqlx::query("UPDATE threads SET is_pinned = 0 WHERE id = ?")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("released binaries should still update the legacy pin column");
+    let thread = sqlx::query_as::<_, (i64, Option<String>)>(
+        "SELECT is_pinned, thread_section_id FROM threads WHERE id = ?",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("legacy pin updates should not overwrite the authoritative section");
+    assert_eq!(thread, (0, Some(CUSTOM_THREAD_SECTION_ID.to_string())));
+
+    sqlx::query("UPDATE threads SET thread_section_id = NULL WHERE id = ?")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("threads should be removable from sections");
+
+    let registered_sections =
+        sqlx::query_as::<_, (String, String)>("SELECT id, name FROM thread_sections ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("empty sections should remain independently discoverable");
+    assert_eq!(
+        registered_sections,
+        vec![
+            (
+                CUSTOM_THREAD_SECTION_ID.to_string(),
+                "Custom section".to_string(),
+            ),
+            (
+                PINNED_THREAD_SECTION_ID.to_string(),
+                PINNED_THREAD_SECTION_NAME.to_string(),
+            ),
+        ]
+    );
+
+    let mut released_pin_migrator = migrator_through(/*version*/ 44);
+    released_pin_migrator.ignore_missing = true;
+    released_pin_migrator
+        .run(&pool)
+        .await
+        .expect("released pin-capable binaries should tolerate newer migrations");
 
     pool.close().await;
 }

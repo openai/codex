@@ -180,7 +180,7 @@ async fn lookup_session_by_exact_name(
                         /*include_non_interactive*/ false,
                     )),
                     archived: Some(archived),
-                    is_pinned: None,
+                    section_id: None,
                     parent_thread_id: None,
                     ancestor_thread_id: None,
                     cwd: None,

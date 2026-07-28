@@ -278,7 +278,7 @@ async fn apply_metadata_update(
                 rollout_path = Some(resolved.path);
             }
             if existing.is_none()
-                && patch.is_pinned.is_some()
+                && patch.section.is_some()
                 && let Some(path) = rollout_path.as_deref()
                 && let Some(existing_rollout_path) =
                     codex_rollout::existing_rollout_path(path).await
@@ -389,8 +389,23 @@ async fn apply_metadata_update(
             if let Some(first_user_message) = patch.first_user_message {
                 metadata.first_user_message = Some(first_user_message);
             }
-            if let Some(is_pinned) = patch.is_pinned {
-                metadata.is_pinned = is_pinned;
+            if let Some(section) = patch.section.clone() {
+                metadata.section = match section {
+                    Some(section_id) => Some(
+                        state_db
+                            .get_thread_section(&section_id)
+                            .await
+                            .map_err(|err| ThreadStoreError::Internal {
+                                message: format!(
+                                    "failed to read section {section_id} for thread {thread_id}: {err}"
+                                ),
+                            })?
+                            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                                message: format!("thread section not found: {section_id}"),
+                            })?,
+                    ),
+                    None => None,
+                };
             }
             if let Some(git_info) = patch.git_info {
                 let existing_git_info = git_info_from_parts(
@@ -409,19 +424,17 @@ async fn apply_metadata_update(
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
                 })?;
-            if let Some(is_pinned) = patch.is_pinned {
+            if let Some(section) = patch.section {
                 let updated = state_db
-                    .update_thread_pin(thread_id, is_pinned)
+                    .update_thread_section(thread_id, section.as_deref())
                     .await
                     .map_err(|err| ThreadStoreError::Internal {
-                        message: format!(
-                            "failed to update pin state for thread {thread_id}: {err}"
-                        ),
+                        message: format!("failed to update section for thread {thread_id}: {err}"),
                     })?;
                 if !updated {
                     return Err(ThreadStoreError::Internal {
                         message: format!(
-                            "thread metadata unavailable before pin update: {thread_id}"
+                            "thread metadata unavailable before section update: {thread_id}"
                         ),
                     });
                 }
@@ -590,9 +603,9 @@ fn sqlite_write_failure_should_block(patch: &ThreadMetadataPatch) -> bool {
     // transcript-derived metadata, thread names, and memory-mode indexing were log-only. Keep that
     // failure isolation so a corrupted optional state DB does not make JSONL transcript durability
     // look broken. Explicit git-only updates still require SQLite because partial git patches need
-    // the existing SQLite value to preserve unspecified fields. User-selected pin state is
+    // the existing SQLite value to preserve unspecified fields. User-selected section state is
     // SQLite-only, so losing its write must also fail the explicit metadata update.
-    patch.is_pinned.is_some() || (patch.git_info.is_some() && !has_observed_metadata_facts(patch))
+    patch.section.is_some() || (patch.git_info.is_some() && !has_observed_metadata_facts(patch))
 }
 
 fn sqlite_write_error_is_best_effort(err: &ThreadStoreError) -> bool {
@@ -892,7 +905,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pin_only_metadata_updates_persist_in_sqlite_without_changing_the_rollout() {
+    async fn section_only_metadata_updates_persist_in_sqlite_without_changing_the_rollout() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let uuid = Uuid::from_u128(320);
@@ -912,7 +925,7 @@ mod tests {
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id,
                 patch: ThreadMetadataPatch {
-                    is_pinned: Some(true),
+                    section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
                     ..Default::default()
                 },
                 include_archived: false,
@@ -920,13 +933,25 @@ mod tests {
             .await
             .expect("pin thread");
 
-        assert!(pinned.is_pinned);
+        assert_eq!(
+            pinned.section,
+            Some(codex_state::ThreadSection {
+                id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
+                name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+            })
+        );
         let pinned_metadata = runtime
             .get_thread(thread_id)
             .await
             .expect("read pinned metadata")
             .expect("pinned metadata");
-        assert!(pinned_metadata.is_pinned);
+        assert_eq!(
+            pinned_metadata.section,
+            Some(codex_state::ThreadSection {
+                id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
+                name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+            })
+        );
         assert_eq!(pinned_metadata.preview.as_deref(), Some("Hello from user"));
         assert_eq!(pinned_metadata.source, "cli");
         let pinned_page = store
@@ -938,7 +963,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 cwd_filters: None,
-                is_pinned: Some(true),
+                section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
                 archived: false,
                 search_term: None,
                 relation_filter: None,
@@ -962,7 +987,13 @@ mod tests {
             )
             .await
             .expect("read pinned thread by rollout path");
-        assert!(read_by_path.is_pinned);
+        assert_eq!(
+            read_by_path.section,
+            Some(codex_state::ThreadSection {
+                id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
+                name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+            })
+        );
         assert_eq!(
             std::fs::read_to_string(&rollout_path).expect("read rollout"),
             original_rollout
@@ -972,22 +1003,23 @@ mod tests {
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id,
                 patch: ThreadMetadataPatch {
-                    is_pinned: Some(false),
+                    section: Some(None),
                     ..Default::default()
                 },
                 include_archived: false,
             })
             .await
-            .expect("unpin thread");
+            .expect("clear thread section");
 
-        assert!(!unpinned.is_pinned);
-        assert!(
-            !runtime
+        assert_eq!(unpinned.section, None);
+        assert_eq!(
+            runtime
                 .get_thread(thread_id)
                 .await
-                .expect("read unpinned metadata")
-                .expect("unpinned metadata")
-                .is_pinned
+                .expect("read cleared metadata")
+                .expect("cleared metadata")
+                .section,
+            None
         );
         assert_eq!(
             std::fs::read_to_string(&rollout_path).expect("read rollout"),
@@ -1798,9 +1830,9 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_failures_block_for_explicit_pin_updates() {
+    fn sqlite_failures_block_for_explicit_section_updates() {
         assert!(sqlite_write_failure_should_block(&ThreadMetadataPatch {
-            is_pinned: Some(false),
+            section: Some(None),
             ..Default::default()
         }));
     }
@@ -2078,7 +2110,7 @@ mod tests {
                 allowed_sources: Vec::new(),
                 model_providers: Some(Vec::new()),
                 cwd_filters: Some(vec![workspace]),
-                is_pinned: None,
+                section: None,
                 archived: false,
                 search_term: None,
                 relation_filter: None,

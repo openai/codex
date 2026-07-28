@@ -144,7 +144,7 @@ pub(super) fn stored_thread_from_rollout_item(
         updated_at,
         recency_at,
         archived_at,
-        is_pinned: item.is_pinned,
+        section: item.section,
         cwd: item.cwd.unwrap_or_default(),
         cli_version: item.cli_version.unwrap_or_default(),
         source,

@@ -33,7 +33,12 @@ SELECT
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
-    threads.is_pinned,
+    threads.thread_section_id AS section,
+    (
+        SELECT thread_sections.name
+        FROM thread_sections
+        WHERE thread_sections.id = threads.thread_section_id
+    ) AS section_name,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -46,6 +51,58 @@ WHERE threads.id = ?
         .await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .transpose()
+    }
+
+    /// Read an independently persisted thread section by its opaque identifier.
+    pub async fn get_thread_section(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<crate::ThreadSection>> {
+        let row = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, name FROM thread_sections WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        Ok(row.map(|(id, name)| crate::ThreadSection { id, name }))
+    }
+
+    /// List independently persisted sections in stable, cursor-paginated identifier order.
+    pub async fn list_thread_sections(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<crate::ThreadSectionsPage> {
+        let page_size = limit.max(1);
+        let fetch_limit = i64::try_from(page_size.saturating_add(1))?;
+        let rows = sqlx::query_as::<_, (String, String)>(
+            r#"
+SELECT id, name
+FROM thread_sections
+WHERE (? IS NULL OR id > ?)
+ORDER BY id
+LIMIT ?
+            "#,
+        )
+        .bind(cursor)
+        .bind(cursor)
+        .bind(fetch_limit)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        let mut sections = rows
+            .into_iter()
+            .map(|(id, name)| crate::ThreadSection { id, name })
+            .collect::<Vec<_>>();
+        let next_cursor = if sections.len() > page_size {
+            sections.pop();
+            sections.last().map(|section| section.id.clone())
+        } else {
+            None
+        };
+        Ok(crate::ThreadSectionsPage {
+            sections,
+            next_cursor,
+        })
     }
 
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
@@ -373,7 +430,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 allowed_sources,
                 model_providers,
                 cwd_filters: None,
-                is_pinned: None,
+                section: None,
                 anchor: None,
                 sort_key: crate::SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
@@ -498,7 +555,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 allowed_sources,
                 model_providers,
                 cwd_filters: None,
-                is_pinned: None,
+                section: None,
                 anchor,
                 sort_key,
                 sort_direction: SortDirection::Desc,
@@ -568,7 +625,7 @@ INSERT INTO threads (
     first_user_message,
     archived,
     archived_at,
-    is_pinned,
+    thread_section_id,
     git_sha,
     git_branch,
     git_origin_url,
@@ -615,7 +672,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
-        .bind(metadata.is_pinned)
+        .bind(metadata.section.as_ref().map(|section| section.id.as_str()))
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
@@ -666,14 +723,14 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
-    /// Update the SQLite-owned pinned state without changing other thread metadata.
-    pub async fn update_thread_pin(
+    /// Update the SQLite-owned section without changing other thread metadata.
+    pub async fn update_thread_section(
         &self,
         thread_id: ThreadId,
-        is_pinned: bool,
+        section: Option<&str>,
     ) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET is_pinned = ? WHERE id = ?")
-            .bind(is_pinned)
+        let result = sqlx::query("UPDATE threads SET thread_section_id = ? WHERE id = ?")
+            .bind(section)
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
             .await?;
@@ -853,7 +910,7 @@ INSERT INTO threads (
     first_user_message,
     archived,
     archived_at,
-    is_pinned,
+    thread_section_id,
     git_sha,
     git_branch,
     git_origin_url,
@@ -929,7 +986,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
-        .bind(metadata.is_pinned)
+        .bind(metadata.section.as_ref().map(|section| section.id.as_str()))
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
@@ -1216,7 +1273,12 @@ SELECT
     threads.tokens_used,
     threads.first_user_message,
     threads.archived_at,
-    threads.is_pinned,
+    threads.thread_section_id AS section,
+    (
+        SELECT thread_sections.name
+        FROM thread_sections
+        WHERE thread_sections.id = threads.thread_section_id
+    ) AS section_name,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -1249,7 +1311,7 @@ pub struct ThreadFilterOptions<'a> {
     pub allowed_sources: &'a [String],
     pub model_providers: Option<&'a [String]>,
     pub cwd_filters: Option<&'a [PathBuf]>,
-    pub is_pinned: Option<bool>,
+    pub section: Option<Option<&'a str>>,
     pub anchor: Option<&'a crate::Anchor>,
     pub sort_key: SortKey,
     pub sort_direction: SortDirection,
@@ -1280,7 +1342,7 @@ fn push_thread_filters_with_preview<'a>(
         allowed_sources,
         model_providers,
         cwd_filters,
-        is_pinned,
+        section,
         anchor,
         sort_key,
         sort_direction,
@@ -1295,9 +1357,15 @@ fn push_thread_filters_with_preview<'a>(
     if !include_empty_preview {
         builder.push(" AND threads.preview <> ''");
     }
-    if let Some(is_pinned) = is_pinned {
-        builder.push(" AND threads.is_pinned = ");
-        builder.push_bind(is_pinned);
+    match section {
+        Some(Some(section)) => {
+            builder.push(" AND threads.thread_section_id = ");
+            builder.push_bind(section);
+        }
+        Some(None) => {
+            builder.push(" AND threads.thread_section_id IS NULL");
+        }
+        None => {}
     }
     if !allowed_sources.is_empty() {
         builder.push(" AND threads.source IN (");
@@ -1512,7 +1580,121 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_pin_updates_round_trip_and_survive_rollout_reconciliation() {
+    async fn thread_sections_paginate_and_require_registered_identities() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("state db should initialize");
+        let before_pinned = crate::ThreadSection {
+            id: "01984de2-8f74-7c91-a3b2-5c5e937cf317".to_string(),
+            name: "Before pinned".to_string(),
+        };
+        let pinned = crate::ThreadSection {
+            id: crate::PINNED_THREAD_SECTION_ID.to_string(),
+            name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+        };
+        let after_pinned = crate::ThreadSection {
+            id: "01984de2-8f74-7c91-a3b2-5c5e937cf319".to_string(),
+            name: "After pinned".to_string(),
+        };
+
+        for section in [&before_pinned, &after_pinned] {
+            sqlx::query("INSERT INTO thread_sections (id, name) VALUES (?, ?)")
+                .bind(&section.id)
+                .bind(&section.name)
+                .execute(runtime.pool.as_ref())
+                .await
+                .expect("custom test sections should be explicitly registered");
+        }
+
+        assert_eq!(
+            runtime
+                .get_thread_section(&pinned.id)
+                .await
+                .expect("built-in section should load"),
+            Some(pinned.clone())
+        );
+        assert_eq!(
+            runtime
+                .get_thread_section("01984de2-8f74-7c91-a3b2-5c5e937cf320")
+                .await
+                .expect("missing section lookup should succeed"),
+            None
+        );
+
+        assert_eq!(
+            runtime
+                .list_thread_sections(/*cursor*/ None, /*limit*/ 1)
+                .await
+                .expect("first section page should load"),
+            crate::ThreadSectionsPage {
+                sections: vec![before_pinned.clone()],
+                next_cursor: Some(before_pinned.id.clone()),
+            }
+        );
+        assert_eq!(
+            runtime
+                .list_thread_sections(Some(&before_pinned.id), /*limit*/ 1)
+                .await
+                .expect("pinned section page should load"),
+            crate::ThreadSectionsPage {
+                sections: vec![pinned.clone()],
+                next_cursor: Some(pinned.id.clone()),
+            }
+        );
+        assert_eq!(
+            runtime
+                .list_thread_sections(Some(&pinned.id), /*limit*/ 1)
+                .await
+                .expect("final section page should load"),
+            crate::ThreadSectionsPage {
+                sections: vec![after_pinned],
+                next_cursor: None,
+            }
+        );
+
+        let thread_id = ThreadId::new();
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.section = Some(before_pinned.clone());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("registered section should be accepted");
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("sectioned thread should load")
+                .expect("sectioned thread should exist")
+                .section,
+            Some(before_pinned.clone())
+        );
+        assert!(
+            runtime
+                .update_thread_section(
+                    thread_id,
+                    /*section*/ Some("01984de2-8f74-7c91-a3b2-5c5e937cf320"),
+                )
+                .await
+                .is_err(),
+            "thread sections must be explicitly registered before assignment"
+        );
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("thread should survive rejected section assignment")
+                .expect("thread should still exist")
+                .section,
+            Some(before_pinned)
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_section_updates_round_trip_and_survive_rollout_reconciliation() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(
             crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
@@ -1526,67 +1708,83 @@ mod tests {
             .upsert_thread(&metadata)
             .await
             .expect("thread insert should succeed");
-        assert!(
-            !runtime
+        assert_eq!(
+            runtime
                 .get_thread(thread_id)
                 .await
                 .unwrap()
                 .unwrap()
-                .is_pinned
+                .section,
+            None
         );
 
         assert!(
             runtime
-                .update_thread_pin(thread_id, /*is_pinned*/ true)
+                .update_thread_section(
+                    thread_id,
+                    /*section*/ Some(crate::PINNED_THREAD_SECTION_ID),
+                )
                 .await
                 .unwrap()
         );
-        assert!(
+        assert_eq!(
             runtime
                 .get_thread(thread_id)
                 .await
                 .unwrap()
                 .unwrap()
-                .is_pinned
+                .section,
+            Some(crate::ThreadSection {
+                id: crate::PINNED_THREAD_SECTION_ID.to_string(),
+                name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+            })
         );
 
         runtime
             .upsert_thread(&metadata)
             .await
             .expect("stale rollout metadata should reconcile");
-        assert!(
+        assert_eq!(
             runtime
                 .get_thread(thread_id)
                 .await
                 .unwrap()
                 .unwrap()
-                .is_pinned
+                .section,
+            Some(crate::ThreadSection {
+                id: crate::PINNED_THREAD_SECTION_ID.to_string(),
+                name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+            })
         );
 
         assert!(
             runtime
-                .update_thread_pin(thread_id, /*is_pinned*/ false)
+                .update_thread_section(thread_id, /*section*/ None)
                 .await
                 .unwrap()
         );
-        assert!(
-            !runtime
+        assert_eq!(
+            runtime
                 .get_thread(thread_id)
                 .await
                 .unwrap()
                 .unwrap()
-                .is_pinned
+                .section,
+            None
         );
         assert!(
             !runtime
-                .update_thread_pin(ThreadId::new(), /*is_pinned*/ true)
+                .update_thread_section(
+                    ThreadId::new(),
+                    /*section*/ Some(crate::PINNED_THREAD_SECTION_ID),
+                )
                 .await
                 .unwrap()
         );
     }
 
     #[tokio::test]
-    async fn list_threads_filters_pins_before_recency_pagination_and_uses_index() {
+    async fn list_threads_filters_sections_before_recency_pagination_and_uses_index() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(
             crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
@@ -1601,40 +1799,63 @@ mod tests {
         let oldest_unpinned =
             ThreadId::from_string("00000000-0000-0000-0000-000000000044").unwrap();
 
-        for (thread_id, recency_at, is_pinned) in [
-            (oldest_pinned, 1_700_000_001, true),
-            (newest_unpinned, 1_700_000_003, false),
-            (newest_pinned, 1_700_000_002, true),
-            (oldest_unpinned, 1_700_000_000, false),
+        for (thread_id, recency_at, section) in [
+            (
+                oldest_pinned,
+                1_700_000_001,
+                Some(crate::PINNED_THREAD_SECTION_ID),
+            ),
+            (newest_unpinned, 1_700_000_003, None),
+            (
+                newest_pinned,
+                1_700_000_002,
+                Some(crate::PINNED_THREAD_SECTION_ID),
+            ),
+            (oldest_unpinned, 1_700_000_000, None),
         ] {
             let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
             metadata.recency_at = DateTime::<Utc>::from_timestamp(recency_at, 0).unwrap();
-            metadata.is_pinned = is_pinned;
+            metadata.section = section.map(|id| crate::ThreadSection {
+                id: id.to_string(),
+                name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+            });
             runtime.upsert_thread(&metadata).await.unwrap();
         }
 
-        let filters = |anchor, is_pinned| ThreadFilterOptions {
+        let filters = |anchor, section| ThreadFilterOptions {
             archived_only: false,
             allowed_sources: &[],
             model_providers: None,
             cwd_filters: None,
-            is_pinned: Some(is_pinned),
+            section,
             anchor,
             sort_key: SortKey::RecencyAt,
             sort_direction: SortDirection::Desc,
             search_term: None,
         };
         let first_page = runtime
-            .list_threads(/*page_size*/ 1, filters(None, true))
+            .list_threads(
+                /*page_size*/ 1,
+                filters(None, Some(Some(crate::PINNED_THREAD_SECTION_ID))),
+            )
             .await
             .unwrap();
         assert_eq!(first_page.items.len(), 1);
         assert_eq!(first_page.items[0].id, newest_pinned);
-        assert!(first_page.items[0].is_pinned);
+        assert_eq!(
+            first_page.items[0].section,
+            Some(crate::ThreadSection {
+                id: crate::PINNED_THREAD_SECTION_ID.to_string(),
+                name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+            })
+        );
         let second_page = runtime
             .list_threads(
                 /*page_size*/ 1,
-                filters(first_page.next_anchor.as_ref(), true),
+                filters(
+                    first_page.next_anchor.as_ref(),
+                    Some(Some(crate::PINNED_THREAD_SECTION_ID)),
+                ),
             )
             .await
             .unwrap();
@@ -1642,12 +1863,12 @@ mod tests {
         assert_eq!(second_page.items[0].id, oldest_pinned);
         assert_eq!(second_page.next_anchor, None);
 
-        let unpinned_page = runtime
-            .list_threads(/*page_size*/ 10, filters(None, false))
+        let unsectioned_page = runtime
+            .list_threads(/*page_size*/ 10, filters(None, Some(None)))
             .await
             .unwrap();
         assert_eq!(
-            unpinned_page
+            unsectioned_page
                 .items
                 .iter()
                 .map(|thread| thread.id)
@@ -1655,10 +1876,28 @@ mod tests {
             vec![newest_unpinned, oldest_unpinned]
         );
 
+        let all_sections_page = runtime
+            .list_threads(/*page_size*/ 10, filters(None, None))
+            .await
+            .unwrap();
+        assert_eq!(
+            all_sections_page
+                .items
+                .iter()
+                .map(|thread| thread.id)
+                .collect::<Vec<_>>(),
+            vec![
+                newest_unpinned,
+                newest_pinned,
+                oldest_pinned,
+                oldest_unpinned,
+            ]
+        );
+
         let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
         push_list_threads_query(
             &mut builder,
-            filters(None, true),
+            filters(None, Some(Some(crate::PINNED_THREAD_SECTION_ID))),
             /*relation_filter*/ None,
             /*limit*/ 2,
         );
@@ -1673,14 +1912,14 @@ mod tests {
         assert!(
             plan_details
                 .iter()
-                .any(|detail| detail.contains("idx_threads_pinned_recency_at_ms")),
-            "pinned listing did not use its selective recency index: {plan_details:?}"
+                .any(|detail| detail.contains("idx_threads_section_recency_at_ms")),
+            "section listing did not use its selective recency index: {plan_details:?}"
         );
         assert!(
             !plan_details
                 .iter()
                 .any(|detail| detail.contains("TEMP B-TREE")),
-            "pinned listing unexpectedly sorted outside its index: {plan_details:?}"
+            "section listing unexpectedly sorted outside its index: {plan_details:?}"
         );
     }
 
@@ -1868,7 +2107,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: Some(&model_providers),
                     cwd_filters: None,
-                    is_pinned: None,
+                    section: None,
                     anchor: Some(&anchor),
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
@@ -1897,7 +2136,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: Some(&model_providers),
                     cwd_filters: None,
-                    is_pinned: None,
+                    section: None,
                     anchor: page.next_anchor.as_ref(),
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
@@ -1954,7 +2193,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: Some(cwd_filters.as_slice()),
-                    is_pinned: None,
+                    section: None,
                     anchor: None,
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,
@@ -1987,7 +2226,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: Some(cwd_filters.as_slice()),
-                    is_pinned: None,
+                    section: None,
                     anchor: first_page.next_anchor.as_ref(),
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,
@@ -2013,7 +2252,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: Some(&[]),
-                    is_pinned: None,
+                    section: None,
                     anchor: None,
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,
@@ -2081,7 +2320,7 @@ mod tests {
                         allowed_sources: &[],
                         model_providers: Some(&model_providers),
                         cwd_filters,
-                        is_pinned: None,
+                        section: None,
                         anchor,
                         sort_key,
                         sort_direction: SortDirection::Desc,
@@ -2182,7 +2421,7 @@ mod tests {
                 allowed_sources: &[],
                 model_providers: None,
                 cwd_filters: None,
-                is_pinned: None,
+                section: None,
                 anchor: None,
                 sort_key: SortKey::CreatedAt,
                 sort_direction: SortDirection::Desc,
@@ -2211,7 +2450,7 @@ mod tests {
             allowed_sources: &[],
             model_providers: None,
             cwd_filters: None,
-            is_pinned: None,
+            section: None,
             anchor,
             sort_key: SortKey::CreatedAt,
             sort_direction: SortDirection::Desc,
@@ -2895,7 +3134,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: None,
-                    is_pinned: None,
+                    section: None,
                     anchor: None,
                     sort_key: SortKey::RecencyAt,
                     sort_direction: SortDirection::Desc,
@@ -2928,7 +3167,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: None,
-                    is_pinned: None,
+                    section: None,
                     anchor: first_page.next_anchor.as_ref(),
                     sort_key: SortKey::RecencyAt,
                     sort_direction: SortDirection::Desc,
@@ -2961,7 +3200,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: None,
-                    is_pinned: None,
+                    section: None,
                     anchor: second_page.next_anchor.as_ref(),
                     sort_key: SortKey::RecencyAt,
                     sort_direction: SortDirection::Desc,

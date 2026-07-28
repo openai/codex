@@ -62,7 +62,7 @@ pub(super) async fn read_thread(
             && !rollout_thread.preview.is_empty()
         {
             rollout_thread.recency_at = thread.recency_at;
-            rollout_thread.is_pinned = thread.is_pinned;
+            rollout_thread.section = thread.section;
             if thread.name.is_some() {
                 rollout_thread.name = thread.name;
             }
@@ -132,7 +132,7 @@ pub(super) async fn read_thread_by_rollout_path(
             thread = stored_thread_from_sqlite_metadata(store, metadata).await?;
         } else {
             thread.recency_at = metadata.recency_at;
-            thread.is_pinned = metadata.is_pinned;
+            thread.section = metadata.section;
             let (fallback_sha, fallback_branch, fallback_origin_url) = match thread.git_info.take()
             {
                 Some(info) => (
@@ -383,7 +383,7 @@ async fn stored_thread_from_sqlite_metadata(
         updated_at: metadata.updated_at,
         recency_at: metadata.recency_at,
         archived_at: metadata.archived_at,
-        is_pinned: metadata.is_pinned,
+        section: metadata.section,
         cwd: metadata.cwd,
         cli_version: metadata.cli_version,
         source: parse_session_source(&metadata.source),
@@ -479,7 +479,7 @@ fn stored_thread_from_meta_line(
         updated_at,
         recency_at: updated_at,
         archived_at: archived.then_some(updated_at),
-        is_pinned: false,
+        section: None,
         cwd: meta_line.meta.cwd,
         cli_version: meta_line.meta.cli_version,
         source: meta_line.meta.source,

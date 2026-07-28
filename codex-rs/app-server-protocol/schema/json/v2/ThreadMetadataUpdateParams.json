@@ -40,10 +40,10 @@
       ],
       "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
     },
-    "isPinned": {
-      "description": "Patch whether this thread is pinned. Omit to leave the stored value unchanged.",
+    "sectionId": {
+      "description": "Omit to leave the section unchanged, set to `null` to clear it, or provide a section ID.",
       "type": [
-        "boolean",
+        "string",
         "null"
       ]
     },
