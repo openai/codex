@@ -783,6 +783,9 @@ async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
         )
         .await
         .expect("reviewer spawn should succeed");
+    let sibling_thread_id = harness
+        .spawn_anonymous_child(parent_thread_id, SpawnAgentOptions::default())
+        .await;
 
     let worker_thread = harness
         .manager
@@ -794,11 +797,21 @@ async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
         .get_thread(reviewer_thread_id)
         .await
         .expect("reviewer thread should exist");
+    let sibling_thread = harness
+        .manager
+        .get_thread(sibling_thread_id)
+        .await
+        .expect("sibling thread should exist");
     persist_thread_for_tree_resume(&parent_thread, "parent persisted").await;
     persist_thread_for_tree_resume(&worker_thread, "worker persisted").await;
     persist_thread_for_tree_resume(&reviewer_thread, "reviewer persisted").await;
-    wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[worker_thread_id])
-        .await;
+    persist_thread_for_tree_resume(&sibling_thread, "sibling persisted").await;
+    wait_for_live_thread_spawn_children(
+        &harness.control,
+        parent_thread_id,
+        &[worker_thread_id, sibling_thread_id],
+    )
+    .await;
     wait_for_live_thread_spawn_children(&harness.control, worker_thread_id, &[reviewer_thread_id])
         .await;
 
@@ -832,6 +845,24 @@ async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
     );
     assert_thread_not_loaded(&resumed_manager, worker_thread_id).await;
     assert_thread_not_loaded(&resumed_manager, reviewer_thread_id).await;
+    assert_thread_not_loaded(&resumed_manager, sibling_thread_id).await;
+    resumed_control
+        .restore_v2_agent_metadata(&harness.config, parent_thread_id)
+        .await;
+    for thread_id in [worker_thread_id, sibling_thread_id] {
+        assert!(resumed_control.ensure_agent_known(thread_id).is_ok());
+    }
+
+    resumed_control
+        .close_agent(worker_thread_id)
+        .await
+        .expect("closing a restored sibling should succeed");
+
+    let closed_worker = resumed_control.ensure_agent_known(worker_thread_id);
+    let surviving_sibling = resumed_control.ensure_agent_known(sibling_thread_id);
+    assert!(closed_worker.is_err());
+    assert!(surviving_sibling.is_ok());
+    assert_thread_not_loaded(&resumed_manager, sibling_thread_id).await;
 }
 
 #[tokio::test]

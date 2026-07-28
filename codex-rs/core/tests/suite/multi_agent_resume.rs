@@ -4,6 +4,7 @@ use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::EventMsg;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -12,6 +13,7 @@ use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -22,10 +24,19 @@ use tokio::time::sleep;
 const COLLABORATION_NAMESPACE: &str = "collaboration";
 const SPAWN_CALL_ID: &str = "spawn-worker";
 const FOLLOWUP_CALL_ID: &str = "followup-worker";
+const SIBLING_SPAWN_CALL_ID: &str = "spawn-survivor";
+const SIBLING_FOLLOWUP_CALL_ID: &str = "followup-survivor";
+const INTERRUPT_CALL_ID: &str = "interrupt-worker";
 const INITIAL_PROMPT: &str = "spawn a durable worker";
 const INITIAL_TASK: &str = "inspect the repository";
 const FOLLOWUP_PROMPT: &str = "continue the durable worker";
 const FOLLOWUP_TASK: &str = "inspect the tests too";
+const SIBLING_PROMPT: &str = "spawn a second durable worker";
+const SIBLING_TASK: &str = "inspect the release lifecycle";
+const SIBLING_FOLLOWUP_PROMPT: &str = "continue the surviving worker";
+const SIBLING_FOLLOWUP_TASK: &str = "verify the surviving worker";
+const INTERRUPT_PROMPT: &str = "release the interrupted worker";
+const SIBLING_NAME: &str = "survivor";
 const ROLE_NAME: &str = "durable_worker";
 const ROLE_MODEL: &str = "gpt-5.4";
 const ROLE_MODEL_PROVIDER_ID: &str = "mock";
@@ -55,6 +66,12 @@ fn body_contains(request: &wiremock::Request, text: &str) -> bool {
         .is_some_and(|body| body.contains(text))
 }
 
+fn request_has_model(request: &wiremock::Request, model: &str) -> bool {
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .is_some_and(|body| body.get("model").and_then(Value::as_str) == Some(model))
+}
+
 fn request_has_input_type(request: &wiremock::Request, input_type: &str) -> bool {
     decoded_body(request)
         .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
@@ -64,6 +81,43 @@ fn request_has_input_type(request: &wiremock::Request, input_type: &str) -> bool
                 .iter()
                 .any(|item| item.get("type").and_then(Value::as_str) == Some(input_type))
         })
+}
+
+async fn mount_root_collaboration_call(
+    server: &wiremock::MockServer,
+    prompt: &'static str,
+    call_id: &'static str,
+    tool_name: &'static str,
+    arguments: &str,
+) {
+    let first_response_id = format!("resp-{call_id}-1");
+    mount_sse_once_match(
+        server,
+        move |request: &wiremock::Request| {
+            body_contains(request, prompt) && !request_has_model(request, ROLE_MODEL)
+        },
+        sse(vec![
+            ev_response_created(&first_response_id),
+            ev_function_call_with_namespace(call_id, COLLABORATION_NAMESPACE, tool_name, arguments),
+            ev_completed(&first_response_id),
+        ]),
+    )
+    .await;
+
+    let second_response_id = format!("resp-{call_id}-2");
+    let message_id = format!("msg-{call_id}-2");
+    mount_sse_once_match(
+        server,
+        move |request: &wiremock::Request| {
+            body_contains(request, call_id) && !request_has_model(request, ROLE_MODEL)
+        },
+        sse(vec![
+            ev_response_created(&second_response_id),
+            ev_assistant_message(&message_id, "collaboration completed"),
+            ev_completed(&second_response_id),
+        ]),
+    )
+    .await;
 }
 
 fn configure_multi_agent_v2_with_role(
@@ -125,7 +179,9 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     let initial_child_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            request_has_input_type(request, "agent_message") && body_contains(request, INITIAL_TASK)
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, "agent_message")
+                && body_contains(request, INITIAL_TASK)
         },
         sse(vec![
             ev_response_created("resp-worker-1"),
@@ -137,8 +193,7 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            body_contains(request, SPAWN_CALL_ID)
-                && !request_has_input_type(request, "agent_message")
+            body_contains(request, SPAWN_CALL_ID) && !request_has_model(request, ROLE_MODEL)
         },
         sse(vec![
             ev_response_created("resp-spawn-2"),
@@ -213,8 +268,53 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
             PermissionProfile::Disabled,
         )
     );
+
+    let sibling_spawn_args = serde_json::to_string(&json!({
+        "message": SIBLING_TASK,
+        "task_name": SIBLING_NAME,
+        "agent_type": ROLE_NAME,
+        "fork_turns": "none",
+    }))?;
+    mount_root_collaboration_call(
+        &server,
+        SIBLING_PROMPT,
+        SIBLING_SPAWN_CALL_ID,
+        "spawn_agent",
+        &sibling_spawn_args,
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, "agent_message")
+                && body_contains(request, SIBLING_TASK)
+        },
+        sse(vec![
+            ev_response_created("resp-survivor-1"),
+            ev_assistant_message("msg-survivor-1", "initial survivor task complete"),
+            ev_completed("resp-survivor-1"),
+        ]),
+    )
+    .await;
+    initial.submit_turn(SIBLING_PROMPT).await?;
+
+    let sibling_thread_id = initial
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != root_thread_id && *thread_id != worker_thread_id)
+        .ok_or_else(|| anyhow::anyhow!("spawned sibling should be registered"))?;
+    let sibling_thread = initial.thread_manager.get_thread(sibling_thread_id).await?;
+    wait_for_event(sibling_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    sibling_thread.flush_rollout().await?;
     worker_thread.flush_rollout().await?;
     initial.codex.flush_rollout().await?;
+    drop(sibling_thread);
     drop(worker_thread);
     drop(initial);
 
@@ -240,7 +340,8 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     let followup_child_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            request_has_input_type(request, "agent_message")
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, "agent_message")
                 && body_contains(request, FOLLOWUP_TASK)
         },
         sse(vec![
@@ -253,8 +354,7 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            body_contains(request, FOLLOWUP_CALL_ID)
-                && !request_has_input_type(request, "agent_message")
+            body_contains(request, FOLLOWUP_CALL_ID) && !request_has_model(request, ROLE_MODEL)
         },
         sse(vec![
             ev_response_created("resp-followup-2"),
@@ -277,6 +377,13 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         resumed
             .thread_manager
             .get_thread(worker_thread_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        resumed
+            .thread_manager
+            .get_thread(sibling_thread_id)
             .await
             .is_err()
     );
@@ -314,6 +421,77 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         reloaded_worker_config.permission_profile,
     );
     assert_eq!(reloaded_worker_role_config, initial_worker_role_config);
+
+    reloaded_worker.shutdown_and_wait().await?;
+    assert!(
+        resumed
+            .thread_manager
+            .get_thread(worker_thread_id)
+            .await
+            .is_ok()
+    );
+
+    let interrupt_args = serde_json::to_string(&json!({
+        "target": "worker",
+    }))?;
+    mount_root_collaboration_call(
+        &server,
+        INTERRUPT_PROMPT,
+        INTERRUPT_CALL_ID,
+        "interrupt_agent",
+        &interrupt_args,
+    )
+    .await;
+    resumed.submit_turn(INTERRUPT_PROMPT).await?;
+    assert!(
+        resumed
+            .thread_manager
+            .get_thread(worker_thread_id)
+            .await
+            .is_err()
+    );
+
+    let sibling_followup_args = serde_json::to_string(&json!({
+        "target": SIBLING_NAME,
+        "message": SIBLING_FOLLOWUP_TASK,
+    }))?;
+    mount_root_collaboration_call(
+        &server,
+        SIBLING_FOLLOWUP_PROMPT,
+        SIBLING_FOLLOWUP_CALL_ID,
+        "followup_task",
+        &sibling_followup_args,
+    )
+    .await;
+    let sibling_followup_request = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, "agent_message")
+                && body_contains(request, SIBLING_FOLLOWUP_TASK)
+        },
+        sse(vec![
+            ev_response_created("resp-survivor-2"),
+            ev_assistant_message("msg-survivor-2", "survivor follow-up complete"),
+            ev_completed("resp-survivor-2"),
+        ]),
+    )
+    .await;
+    resumed.submit_turn(SIBLING_FOLLOWUP_PROMPT).await?;
+
+    let surviving_sibling = resumed
+        .thread_manager
+        .get_thread(sibling_thread_id)
+        .await
+        .expect("follow-up should reload the surviving sibling");
+    wait_for_event(surviving_sibling.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(sibling_followup_request.requests().iter().any(|request| {
+        request.body_contains_text(SIBLING_FOLLOWUP_TASK)
+            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+    }));
 
     Ok(())
 }
