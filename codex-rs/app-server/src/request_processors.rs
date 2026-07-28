@@ -363,7 +363,6 @@ use codex_core_plugins::PluginReadRequest;
 use codex_core_plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::loader::load_plugin_apps;
-use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;

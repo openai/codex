@@ -48,6 +48,7 @@ use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::io::AsyncBufReadExt;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -1331,6 +1332,215 @@ async fn plugin_install_skips_mcp_oauth_for_chatgpt_dual_surface_plugin() -> Res
 }
 
 #[tokio::test]
+async fn plugin_install_skips_mcp_oauth_disabled_by_plugin_requirements() -> Result<()> {
+    let oauth_server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nplugins = true\n",
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"[plugins."sample-plugin@debug".mcp_servers.allowed.identity]
+url = "https://example.com/allowed-mcp"
+"#,
+    )?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    write_plugin_mcp_config(repo_root.path(), "sample-plugin", &oauth_server.uri())?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert!(
+        oauth_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_skips_mcp_oauth_disabled_by_plugin_config() -> Result<()> {
+    let oauth_server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."sample-plugin@debug".mcp_servers.sample-mcp]
+enabled = false
+"#,
+    )?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    write_plugin_mcp_config(repo_root.path(), "sample-plugin", &oauth_server.uri())?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert!(
+        oauth_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    let persisted_config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    let persisted_config = toml::from_str::<toml::Value>(&persisted_config)?;
+    assert_eq!(
+        persisted_config
+            .get("plugins")
+            .and_then(|plugins| plugins.get("sample-plugin@debug"))
+            .and_then(|plugin| plugin.get("mcp_servers"))
+            .and_then(|servers| servers.get("sample-mcp"))
+            .and_then(|server| server.get("enabled"))
+            .and_then(toml::Value::as_bool),
+        Some(false)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_install_skips_mcp_oauth_for_unowned_environment() -> Result<()> {
+    const UNOWNED_ENVIRONMENT_ID: &str = "plugin-unowned-executor";
+
+    let oauth_server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nplugins = true\n",
+    )?;
+    let mut executor =
+        tokio::process::Command::new(codex_utils_cargo_bin::cargo_bin("exec-server")?)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+    let executor_stdout = executor
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("exec-server fixture stdout was not captured"))?;
+    let mut executor_stdout_lines = tokio::io::BufReader::new(executor_stdout).lines();
+    let executor_url = timeout(DEFAULT_TIMEOUT, executor_stdout_lines.next_line())
+        .await??
+        .ok_or_else(|| anyhow::anyhow!("exec-server fixture did not emit its WebSocket URL"))?;
+    let executor_url = toml::Value::String(executor_url);
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        format!(
+            r#"include_local = true
+
+[[environments]]
+id = "{UNOWNED_ENVIRONMENT_ID}"
+url = {executor_url}
+"#
+        ),
+    )?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    std::fs::write(
+        repo_root.path().join("sample-plugin/.mcp.json"),
+        serde_json::to_vec_pretty(&json!({
+            "mcpServers": {
+                "sample-mcp": {
+                    "type": "http",
+                    "url": format!("{}/mcp", oauth_server.uri()),
+                    "environment_id": UNOWNED_ENVIRONMENT_ID,
+                },
+            },
+        }))?,
+    )?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert!(
+        oauth_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_starts_mcp_oauth_with_formerly_disallowed_plugin_app() -> Result<()> {
     let (apps_server_url, apps_server_handle, _apps_server_control) =
         start_apps_server(Vec::new(), Vec::new()).await?;
@@ -1405,41 +1615,42 @@ async fn plugin_install_starts_mcp_oauth_with_formerly_disallowed_plugin_app() -
 }
 
 #[tokio::test]
-async fn plugin_install_starts_mcp_oauth_through_protected_resource_metadata() -> Result<()> {
-    let resource_server = MockServer::start().await;
-    let authorization_server = MockServer::start().await;
-    let resource_metadata_url = format!("{}/oauth-resource", resource_server.uri());
+async fn plugin_install_starts_mcp_oauth_through_configured_http_proxy() -> Result<()> {
+    let proxy = MockServer::start().await;
+    let resource_url = "http://plugin-mcp.invalid";
+    let authorization_url = "http://plugin-oauth.invalid";
+    let resource_metadata_url = format!("{resource_url}/oauth-resource");
     let challenge = format!("Bearer resource_metadata=\"{resource_metadata_url}\"");
     Mock::given(method("GET"))
         .and(path("/mcp"))
         .respond_with(
             ResponseTemplate::new(401).insert_header("WWW-Authenticate", challenge.as_str()),
         )
-        .mount(&resource_server)
+        .mount(&proxy)
         .await;
     Mock::given(method("GET"))
         .and(path("/oauth-resource"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "resource": resource_server.uri(),
-            "authorization_servers": [authorization_server.uri()],
+            "resource": resource_url,
+            "authorization_servers": [authorization_url],
         })))
-        .mount(&resource_server)
+        .mount(&proxy)
         .await;
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "authorization_endpoint": format!("{}/oauth/authorize", authorization_server.uri()),
-            "token_endpoint": format!("{}/oauth/token", authorization_server.uri()),
-            "registration_endpoint": format!("{}/oauth/register", authorization_server.uri()),
+            "authorization_endpoint": format!("{authorization_url}/oauth/authorize"),
+            "token_endpoint": format!("{authorization_url}/oauth/token"),
+            "registration_endpoint": format!("{authorization_url}/oauth/register"),
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],
         })))
-        .mount(&authorization_server)
+        .mount(&proxy)
         .await;
     Mock::given(method("POST"))
         .and(path("/oauth/register"))
         .respond_with(ResponseTemplate::new(400))
-        .mount(&authorization_server)
+        .mount(&proxy)
         .await;
 
     let codex_home = TempDir::new()?;
@@ -1457,13 +1668,24 @@ async fn plugin_install_starts_mcp_oauth_through_protected_resource_metadata() -
         /*auth_policy*/ None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
-    write_plugin_mcp_config(repo_root.path(), "sample-plugin", &resource_server.uri())?;
+    write_plugin_mcp_config(repo_root.path(), "sample-plugin", resource_url)?;
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
 
+    let proxy_uri = proxy.uri();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
+        .with_env_overrides(&[
+            ("HTTP_PROXY", Some(proxy_uri.as_str())),
+            ("http_proxy", Some(proxy_uri.as_str())),
+            ("HTTPS_PROXY", None),
+            ("https_proxy", None),
+            ("ALL_PROXY", None),
+            ("all_proxy", None),
+            ("NO_PROXY", None),
+            ("no_proxy", None),
+        ])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1477,14 +1699,14 @@ async fn plugin_install_starts_mcp_oauth_through_protected_resource_metadata() -
     let _: PluginInstallResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     wait_for_remote_plugin_request_count(
-        &authorization_server,
+        &proxy,
         "POST",
         "/oauth/register",
         /*expected_count*/ 1,
     )
     .await?;
 
-    let resource_metadata_requested = resource_server
+    let resource_metadata_requested = proxy
         .received_requests()
         .await
         .unwrap_or_default()
@@ -1586,6 +1808,92 @@ async fn plugin_install_starts_remote_mcp_oauth_for_install_response_only_app() 
         }
     );
     assert!(oauth_discovery_request_count(&oauth_server).await > 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_skips_remote_mcp_oauth_disabled_by_requirements() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let oauth_server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes_with_mcp_config("linear", &oauth_server.uri())?,
+    )
+    .await;
+    configure_remote_plugin_with_apps_test(codex_home.path(), &server)?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "[mcp_servers]\n",
+    )?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    mount_remote_plugin_install_with_apps_needing_auth(&server, REMOTE_PLUGIN_ID, &["alpha"]).await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert!(
+        oauth_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_skips_remote_mcp_oauth_disabled_by_plugin_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let oauth_server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes_with_mcp_config("linear", &oauth_server.uri())?,
+    )
+    .await;
+    configure_remote_plugin_with_apps_test(codex_home.path(), &server)?;
+    let config_path = codex_home.path().join("config.toml");
+    let existing_config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!(
+            "{existing_config}\n[plugins.\"linear@openai-curated-remote\".mcp_servers.sample-mcp]\nenabled = false\n"
+        ),
+    )?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    mount_remote_plugin_install_with_apps_needing_auth(&server, REMOTE_PLUGIN_ID, &["alpha"]).await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert!(
+        oauth_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
     Ok(())
 }
 

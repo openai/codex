@@ -239,7 +239,9 @@ fn merge_configured_plugins_with_remote_installed(
             Ok(plugin_id) => plugin_id.marketplace_name != crate::OPENAI_CURATED_MARKETPLACE_NAME,
             Err(_) => true,
         });
-        configured_plugins.extend(extra_plugins);
+        for (plugin_key, plugin_config) in extra_plugins {
+            merge_remote_plugin_config(&mut configured_plugins, plugin_key, plugin_config);
+        }
         return configured_plugins;
     }
 
@@ -273,7 +275,7 @@ fn merge_configured_plugins_with_remote_installed(
             continue;
         }
 
-        configured_plugins.insert(plugin_key, plugin_config);
+        merge_remote_plugin_config(&mut configured_plugins, plugin_key, plugin_config);
     }
 
     configured_plugins
@@ -299,6 +301,19 @@ pub(crate) fn plugin_is_eligible_for_target_marketplace(
                 && plugin_id.marketplace_name != REMOTE_GLOBAL_MARKETPLACE_NAME
         }
     }
+}
+
+fn merge_remote_plugin_config(
+    configured_plugins: &mut HashMap<String, PluginConfig>,
+    plugin_key: String,
+    mut remote_plugin_config: PluginConfig,
+) {
+    if let Some(configured_plugin) = configured_plugins.get(&plugin_key) {
+        remote_plugin_config
+            .mcp_servers
+            .clone_from(&configured_plugin.mcp_servers);
+    }
+    configured_plugins.insert(plugin_key, remote_plugin_config);
 }
 
 fn installed_plugin_name_for_marketplace(
@@ -1362,11 +1377,37 @@ pub async fn plugin_capability_summary_from_root(
     })
 }
 
+/// Loads plugin MCP servers without applying user-specific policy overrides.
 pub async fn load_plugin_mcp_servers(
     plugin_root: &Path,
     auth_mode: Option<AuthMode>,
 ) -> HashMap<String, McpServerConfig> {
-    let mut mcp_servers = load_declared_plugin_mcp_servers(plugin_root).await;
+    load_plugin_mcp_servers_with_policy(plugin_root, auth_mode, /*plugin_policy*/ None).await
+}
+
+/// Loads plugin MCP servers with the effective user policy for an installed plugin.
+pub async fn load_configured_plugin_mcp_servers(
+    plugin_root: &Path,
+    auth_mode: Option<AuthMode>,
+    plugin_id: &PluginId,
+    config_layer_stack: &ConfigLayerStack,
+    codex_home: &Path,
+) -> HashMap<String, McpServerConfig> {
+    let configured_plugins = configured_plugins_from_stack(config_layer_stack, codex_home);
+    let plugin_id = plugin_id.as_key();
+    let plugin_policy = configured_plugins
+        .get(&plugin_id)
+        .map(|plugin| &plugin.mcp_servers);
+
+    load_plugin_mcp_servers_with_policy(plugin_root, auth_mode, plugin_policy).await
+}
+
+async fn load_plugin_mcp_servers_with_policy(
+    plugin_root: &Path,
+    auth_mode: Option<AuthMode>,
+    plugin_policy: Option<&HashMap<String, PluginMcpServerConfig>>,
+) -> HashMap<String, McpServerConfig> {
+    let mut mcp_servers = load_declared_plugin_mcp_servers(plugin_root, plugin_policy).await;
     if !apps_route_available(auth_mode) || mcp_servers.is_empty() {
         return mcp_servers;
     }
@@ -1381,13 +1422,15 @@ pub async fn load_plugin_mcp_servers(
     mcp_servers
 }
 
-async fn load_declared_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerConfig> {
+async fn load_declared_plugin_mcp_servers(
+    plugin_root: &Path,
+    plugin_policy: Option<&HashMap<String, PluginMcpServerConfig>>,
+) -> HashMap<String, McpServerConfig> {
     let Some(manifest) = load_plugin_manifest(plugin_root) else {
         return HashMap::new();
     };
 
-    load_plugin_mcp_servers_from_manifest(plugin_root, &manifest.paths, /*plugin_policy*/ None)
-        .await
+    load_plugin_mcp_servers_from_manifest(plugin_root, &manifest.paths, plugin_policy).await
 }
 
 pub(crate) async fn load_plugin_mcp_servers_from_manifest(

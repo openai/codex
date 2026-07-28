@@ -96,6 +96,7 @@ pub async fn perform_oauth_login(
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
+    http_client: Arc<dyn HttpClient>,
 ) -> Result<()> {
     perform_oauth_login_with_browser_output(
         server_name,
@@ -109,6 +110,7 @@ pub async fn perform_oauth_login(
         oauth_resource,
         callback_port,
         callback_url,
+        http_client,
         /*emit_browser_url*/ true,
     )
     .await
@@ -127,6 +129,7 @@ pub async fn perform_oauth_login_silent(
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
+    http_client: Arc<dyn HttpClient>,
 ) -> Result<()> {
     perform_oauth_login_with_browser_output(
         server_name,
@@ -140,6 +143,7 @@ pub async fn perform_oauth_login_silent(
         oauth_resource,
         callback_port,
         callback_url,
+        http_client,
         /*emit_browser_url*/ false,
     )
     .await
@@ -158,14 +162,13 @@ async fn perform_oauth_login_with_browser_output(
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
+    http_client: Arc<dyn HttpClient>,
     emit_browser_url: bool,
 ) -> Result<()> {
     let http_context = OAuthHttpContext {
         http_headers,
         env_http_headers,
-        http_client: Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
-            OutboundProxyPolicy::ReqwestDefault,
-        ))),
+        http_client,
     };
     OauthLoginFlow::new(
         server_name,
@@ -743,9 +746,17 @@ mod tests {
     use axum::Router;
     use axum::routing::get;
     use axum::routing::post;
+    use codex_config::types::AuthKeyringBackendKind;
+    use codex_config::types::OAuthCredentialsStoreMode;
+    use codex_exec_server::ExecServerError;
+    use codex_exec_server::HttpClient;
+    use codex_exec_server::HttpRequestParams;
+    use codex_exec_server::HttpRequestResponse;
+    use codex_exec_server::HttpResponseBodyStream;
     use codex_exec_server::RouteAwareHttpClient;
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
+    use futures::future::BoxFuture;
     use pretty_assertions::assert_eq;
     use reqwest::Url;
     use reqwest::header::HeaderMap;
@@ -760,7 +771,40 @@ mod tests {
     use super::callback_id_from_server_url;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
+    use super::perform_oauth_login;
+    use super::perform_oauth_login_silent;
     use super::start_authorization;
+
+    #[derive(Default)]
+    struct RecordingHttpClient {
+        requests: AtomicUsize,
+    }
+
+    impl HttpClient for RecordingHttpClient {
+        fn http_request(
+            &self,
+            _params: HttpRequestParams,
+        ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
+            Box::pin(async {
+                Err(ExecServerError::HttpRequest(
+                    "unexpected buffered OAuth request".to_string(),
+                ))
+            })
+        }
+
+        fn http_request_stream(
+            &self,
+            _params: HttpRequestParams,
+        ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>>
+        {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Err(ExecServerError::HttpRequest(
+                    "configured OAuth client was used".to_string(),
+                ))
+            })
+        }
+    }
 
     async fn spawn_oauth_metadata_server() -> String {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -928,6 +972,52 @@ mod tests {
             assert_eq!(result.is_ok(), expected_token_requests == 1);
             server.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn interactive_oauth_login_uses_supplied_http_client() {
+        let http_client = Arc::new(RecordingHttpClient::default());
+        perform_oauth_login(
+            "configured-client",
+            "http://127.0.0.1:1/mcp",
+            OAuthCredentialsStoreMode::default(),
+            AuthKeyringBackendKind::default(),
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            &[],
+            /*oauth_client_id*/ None,
+            /*oauth_resource*/ None,
+            /*callback_port*/ None,
+            /*callback_url*/ None,
+            http_client.clone(),
+        )
+        .await
+        .expect_err("OAuth metadata discovery should fail through the supplied client");
+
+        assert!(http_client.requests.load(Ordering::SeqCst) > 0);
+    }
+
+    #[tokio::test]
+    async fn silent_oauth_login_uses_supplied_http_client() {
+        let http_client = Arc::new(RecordingHttpClient::default());
+        perform_oauth_login_silent(
+            "configured-client",
+            "http://127.0.0.1:1/mcp",
+            OAuthCredentialsStoreMode::default(),
+            AuthKeyringBackendKind::default(),
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            &[],
+            /*oauth_client_id*/ None,
+            /*oauth_resource*/ None,
+            /*callback_port*/ None,
+            /*callback_url*/ None,
+            http_client.clone(),
+        )
+        .await
+        .expect_err("OAuth metadata discovery should fail through the supplied client");
+
+        assert!(http_client.requests.load(Ordering::SeqCst) > 0);
     }
 
     #[test]

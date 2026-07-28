@@ -1121,6 +1121,76 @@ approval_mode = "approve"
 }
 
 #[tokio::test]
+async fn remote_installed_plugin_preserves_configured_mcp_server_policy() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache/openai-curated-remote/linear/local");
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "linear": {
+      "type": "http",
+      "url": "https://linear.example/mcp"
+    }
+  }
+}"#,
+    );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."linear@openai-curated-remote"]
+enabled = false
+
+[plugins."linear@openai-curated-remote".mcp_servers.linear]
+enabled = false
+default_tools_approval_mode = "approve"
+enabled_tools = ["search"]
+disabled_tools = ["delete"]
+
+[plugins."linear@openai-curated-remote".mcp_servers.linear.tools.search]
+approval_mode = "approve"
+"#,
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_linear_plugin()]);
+
+    let outcome = manager.plugins_for_config(&config).await;
+    let plugin = outcome
+        .plugins()
+        .iter()
+        .find(|plugin| plugin.config_name == "linear@openai-curated-remote")
+        .expect("remote plugin should be loaded");
+    let expected_server = serde_json::from_value::<McpServerConfig>(serde_json::json!({
+        "url": "https://linear.example/mcp",
+        "enabled": false,
+        "default_tools_approval_mode": "approve",
+        "enabled_tools": ["search"],
+        "disabled_tools": ["delete"],
+        "tools": {
+            "search": { "approval_mode": "approve" }
+        }
+    }))
+    .expect("valid expected MCP server");
+
+    assert!(plugin.enabled);
+    assert_eq!(
+        plugin.mcp_servers,
+        HashMap::from([("linear".to_string(), expected_server)])
+    );
+}
+
+#[tokio::test]
 async fn remote_installed_cache_ignores_plugins_missing_local_cache() {
     let codex_home = TempDir::new().unwrap();
     write_file(

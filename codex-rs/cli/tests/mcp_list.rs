@@ -114,6 +114,7 @@ enabled = true
 async fn list_discovers_local_oauth_server_through_environment_proxy() -> Result<()> {
     let codex_home = TempDir::new()?;
     configure_http_oauth_server(codex_home.path(), "http://mcp-proxy.invalid/mcp").await?;
+    std::fs::write(codex_home.path().join("environments.toml"), "invalid = [")?;
 
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
