@@ -1637,11 +1637,20 @@ jobs:
     if: >-
       ${{
         !cancelled() &&
-        needs.release.result == 'success'
+        needs.release.result == 'success' &&
+        needs.publish-r2.result == 'success' &&
+        (
+          needs.release.outputs.should_publish_npm != 'true' ||
+          needs.publish-npm.result == 'success'
+        )
       }}
     permissions:
       contents: write
-    needs: release
+    # R2 waits for the GitHub release and DotSlash release-asset uploads.
+    needs:
+      - release
+      - publish-r2
+      - publish-npm
     runs-on: ubuntu-latest
 
     steps:
