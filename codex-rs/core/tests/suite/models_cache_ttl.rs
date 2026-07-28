@@ -154,6 +154,121 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn matching_models_etag_does_not_rewrite_recent_cache() -> Result<()> {
+    let server = MockServer::start().await;
+    let models_mock = responses::mount_models_once_with_etag(
+        &server,
+        ModelsResponse {
+            models: vec![test_remote_model(REMOTE_MODEL, /*priority*/ 1)],
+        },
+        ETAG,
+    )
+    .await;
+
+    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    builder = builder.with_config(|config| {
+        config.model = Some("gpt-5.2".to_string());
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(1);
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let models_manager = test.thread_manager.get_models_manager();
+    let _ = models_manager
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
+        .await;
+
+    let cache_path = test.config.codex_home.join(CACHE_FILE);
+    rewrite_cache_timestamp(&cache_path, Utc::now() - chrono::Duration::seconds(60)).await?;
+    let original_contents = tokio::fs::read(&cache_path).await?;
+    let original_modified = tokio::fs::metadata(&cache_path).await?.modified()?;
+
+    let response_body = sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-1"),
+    ]);
+    let _responses_mock = responses::mount_response_once(
+        &server,
+        sse_response(response_body).insert_header("X-Models-Etag", ETAG),
+    )
+    .await;
+
+    test.submit_turn("hi").await?;
+
+    assert_eq!(tokio::fs::read(&cache_path).await?, original_contents);
+    assert_eq!(
+        tokio::fs::metadata(&cache_path).await?.modified()?,
+        original_modified
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "/models should not refetch on matching etag"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn matching_models_etag_renews_cache_after_half_its_lifetime() -> Result<()> {
+    let server = MockServer::start().await;
+    let models_mock = responses::mount_models_once_with_etag(
+        &server,
+        ModelsResponse {
+            models: vec![test_remote_model(REMOTE_MODEL, /*priority*/ 1)],
+        },
+        ETAG,
+    )
+    .await;
+
+    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    builder = builder.with_config(|config| {
+        config.model = Some("gpt-5.2".to_string());
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(1);
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let models_manager = test.thread_manager.get_models_manager();
+    let _ = models_manager
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
+        .await;
+
+    let cache_path = test.config.codex_home.join(CACHE_FILE);
+    let fetched_at = Utc::now() - chrono::Duration::seconds(180);
+    rewrite_cache_timestamp(&cache_path, fetched_at).await?;
+
+    let response_body = sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-1"),
+    ]);
+    let _responses_mock = responses::mount_response_once(
+        &server,
+        sse_response(response_body).insert_header("X-Models-Etag", ETAG),
+    )
+    .await;
+
+    test.submit_turn("hi").await?;
+
+    assert!(read_cache(&cache_path).await?.fetched_at > fetched_at);
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "/models should not refetch on matching etag"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn uses_cache_when_version_matches() -> Result<()> {
     let server = MockServer::start().await;
     let cached_model = test_remote_model(VERSIONED_MODEL, /*priority*/ 1);

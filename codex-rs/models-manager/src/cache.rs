@@ -91,12 +91,15 @@ impl ModelsCacheManager {
         }
     }
 
-    /// Renew the cache TTL by updating the fetched_at timestamp to now.
+    /// Renew the cache TTL once more than half its lifetime has elapsed.
     pub(crate) async fn renew_cache_ttl(&self) -> io::Result<()> {
         let mut cache = match self.load().await? {
             Some(cache) => cache,
             None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
         };
+        if cache.is_fresh(self.cache_ttl / 2) {
+            return Ok(());
+        }
         cache.fetched_at = Utc::now();
         self.save_internal(&cache).await
     }
