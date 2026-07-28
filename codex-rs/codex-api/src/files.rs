@@ -2,13 +2,14 @@ use std::time::Duration;
 
 use crate::AuthProvider;
 use bytes::Bytes;
-use codex_http_client::BuildRouteAwareHttpClientError;
-use codex_http_client::ClientRouteClass;
-use codex_http_client::HttpClientFactory;
-use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::HttpResponse;
+use codex_http_client::RouteAwareClientPool;
+use codex_http_client::RouteAwareRequestBuilder;
+use codex_http_client::RouteAwareRequestError;
 use futures::Stream;
-use reqwest::StatusCode;
-use reqwest::header::CONTENT_LENGTH;
+use http::Method;
+use http::StatusCode;
+use http::header::CONTENT_LENGTH;
 use serde::Deserialize;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -45,7 +46,7 @@ pub enum OpenAiFileError {
     Request {
         url: String,
         #[source]
-        source: reqwest::Error,
+        source: RouteAwareRequestError,
     },
     #[error(
         "OpenAI file blob upload to {host} failed after {elapsed_ms} ms ({error_kind}, azure_client_request_id={azure_client_request_id}): {source}"
@@ -56,7 +57,7 @@ pub enum OpenAiFileError {
         error_kind: &'static str,
         azure_client_request_id: String,
         #[source]
-        source: reqwest::Error,
+        source: RouteAwareRequestError,
     },
     #[error(
         "OpenAI file blob upload to {host} failed with status {status} (azure_client_request_id={azure_client_request_id}, azure_request_id={azure_request_id}, azure_error_code={azure_error_code})"
@@ -79,12 +80,6 @@ pub enum OpenAiFileError {
         url: String,
         #[source]
         source: serde_json::Error,
-    },
-    #[error("failed to build OpenAI file client for {url}: {source}")]
-    ClientBuild {
-        url: String,
-        #[source]
-        source: BuildRouteAwareHttpClientError,
     },
     #[error("OpenAI file upload for `{file_id}` is not ready yet")]
     UploadNotReady { file_id: String },
@@ -115,7 +110,7 @@ pub fn openai_file_uri(file_id: &str) -> String {
 pub async fn upload_openai_file(
     base_url: &str,
     auth: &dyn AuthProvider,
-    http_client_factory: &HttpClientFactory,
+    client_pool: &RouteAwareClientPool,
     file_name: String,
     file_size_bytes: u64,
     contents: impl Stream<Item = std::io::Result<Bytes>> + Send + 'static,
@@ -129,23 +124,18 @@ pub async fn upload_openai_file(
     }
 
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
-    let create_response = authorized_request(
-        http_client_factory,
-        auth,
-        reqwest::Method::POST,
-        &create_url,
-    )?
-    .json(&serde_json::json!({
-        "file_name": file_name.as_str(),
-        "file_size": file_size_bytes,
-        "use_case": OPENAI_FILE_USE_CASE,
-    }))
-    .send()
-    .await
-    .map_err(|source| OpenAiFileError::Request {
-        url: create_url.clone(),
-        source,
-    })?;
+    let create_response = authorized_request(client_pool, auth, Method::POST, &create_url)
+        .json(&serde_json::json!({
+            "file_name": file_name.as_str(),
+            "file_size": file_size_bytes,
+            "use_case": OPENAI_FILE_USE_CASE,
+        }))
+        .send()
+        .await
+        .map_err(|source| OpenAiFileError::Request {
+            url: create_url.clone(),
+            source,
+        })?;
     let create_status = create_response.status();
     let create_body = create_response.text().await.unwrap_or_default();
     if !create_status.is_success() {
@@ -167,13 +157,13 @@ pub async fn upload_openai_file(
         .unwrap_or_else(|| "unknown-host".to_string());
     let azure_client_request_id = Uuid::new_v4().to_string();
     let upload_started_at = Instant::now();
-    let upload_response = build_reqwest_client(http_client_factory, &create_payload.upload_url)?
+    let upload_response = client_pool
         .put(&create_payload.upload_url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
         .header("x-ms-blob-type", "BlockBlob")
         .header("x-ms-client-request-id", &azure_client_request_id)
         .header(CONTENT_LENGTH, file_size_bytes)
-        .body(reqwest::Body::wrap_stream(contents))
+        .body_stream(contents)
         .send()
         .await
         .map_err(|source| {
@@ -245,19 +235,14 @@ pub async fn upload_openai_file(
     );
     let finalize_started_at = Instant::now();
     loop {
-        let finalize_response = authorized_request(
-            http_client_factory,
-            auth,
-            reqwest::Method::POST,
-            &finalize_url,
-        )?
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: finalize_url.clone(),
-            source,
-        })?;
+        let finalize_response = authorized_request(client_pool, auth, Method::POST, &finalize_url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|source| OpenAiFileError::Request {
+                url: finalize_url.clone(),
+                source,
+            })?;
         let finalize_status = finalize_response.status();
         let finalize_body = finalize_response.text().await.unwrap_or_default();
         if !finalize_status.is_success() {
@@ -310,48 +295,21 @@ pub async fn upload_openai_file(
 }
 
 fn authorized_request(
-    http_client_factory: &HttpClientFactory,
+    client_pool: &RouteAwareClientPool,
     auth: &dyn AuthProvider,
-    method: reqwest::Method,
+    method: Method,
     url: &str,
-) -> Result<reqwest::RequestBuilder, OpenAiFileError> {
+) -> RouteAwareRequestBuilder {
     let mut headers = http::HeaderMap::new();
     auth.add_auth_headers(&mut headers);
 
-    let client = build_reqwest_client(http_client_factory, url)?;
-    Ok(client
+    client_pool
         .request(method, url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
-        .headers(headers))
+        .headers(headers)
 }
 
-fn build_reqwest_client(
-    http_client_factory: &HttpClientFactory,
-    url: &str,
-) -> Result<reqwest::Client, OpenAiFileError> {
-    match http_client_factory.build_reqwest_client(
-        reqwest::Client::builder(),
-        url,
-        ClientRouteClass::Api,
-    ) {
-        Ok(client) => Ok(client),
-        Err(error)
-            if matches!(
-                http_client_factory.outbound_proxy_policy(),
-                OutboundProxyPolicy::ReqwestDefault
-            ) =>
-        {
-            tracing::warn!(%error, "failed to build OpenAI file upload client");
-            Ok(reqwest::Client::new())
-        }
-        Err(source) => Err(OpenAiFileError::ClientBuild {
-            url: url.to_string(),
-            source,
-        }),
-    }
-}
-
-fn upload_response_header(response: &reqwest::Response, header: &str) -> String {
+fn upload_response_header(response: &HttpResponse, header: &str) -> String {
     response
         .headers()
         .get(header)
@@ -363,8 +321,11 @@ fn upload_response_header(response: &reqwest::Response, header: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_http_client::ClientRouteClass;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
+    use http::header::HeaderValue;
     use pretty_assertions::assert_eq;
-    use reqwest::header::HeaderValue;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -381,14 +342,18 @@ mod tests {
     #[derive(Clone, Copy)]
     struct ChatGptTestAuth;
 
-    fn default_http_client_factory() -> HttpClientFactory {
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+    fn default_http_client_pool() -> RouteAwareClientPool {
+        RouteAwareClientPool::new_without_request_logging(
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            ClientRouteClass::Api,
+        )
+        .with_legacy_custom_ca_fallback()
     }
 
     impl AuthProvider for ChatGptTestAuth {
-        fn add_auth_headers(&self, headers: &mut reqwest::header::HeaderMap) {
+        fn add_auth_headers(&self, headers: &mut http::HeaderMap) {
             headers.insert(
-                reqwest::header::AUTHORIZATION,
+                http::header::AUTHORIZATION,
                 HeaderValue::from_static("Bearer token"),
             );
             headers.insert("ChatGPT-Account-ID", HeaderValue::from_static("account_id"));
@@ -456,7 +421,7 @@ mod tests {
         let uploaded = upload_openai_file(
             &base_url,
             &chatgpt_auth(),
-            &default_http_client_factory(),
+            &default_http_client_pool(),
             "hello.txt".to_string(),
             /*file_size_bytes*/ 5,
             contents,
@@ -473,6 +438,93 @@ mod tests {
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
         assert_eq!(finalize_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn upload_openai_file_reuses_client_pool_across_uploads() {
+        let server = MockServer::start().await;
+        let files = [
+            ("first.txt", "file_1", &b"first"[..]),
+            ("second.txt", "file_2", &b"second"[..]),
+        ];
+
+        for (file_name, file_id, contents) in files {
+            Mock::given(method("POST"))
+                .and(path("/backend-api/files"))
+                .and(header("chatgpt-account-id", "account_id"))
+                .and(body_json(serde_json::json!({
+                    "file_name": file_name,
+                    "file_size": contents.len(),
+                    "use_case": "codex",
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "file_id": file_id,
+                    "upload_url": format!("{}/upload/{file_id}", server.uri()),
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(path(format!("/upload/{file_id}")))
+                .and(header("content-length", contents.len().to_string()))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(format!("/backend-api/files/{file_id}/uploaded")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": "success",
+                    "download_url": format!("{}/download/{file_id}", server.uri()),
+                    "file_name": file_name,
+                    "mime_type": "text/plain",
+                    "file_size_bytes": contents.len(),
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let client_pool = default_http_client_pool();
+        let mut uploaded_files = Vec::new();
+        for (file_name, _, contents) in files {
+            let contents_stream =
+                futures::stream::iter([Ok::<_, std::io::Error>(Bytes::copy_from_slice(contents))]);
+            let uploaded = upload_openai_file(
+                &base_url_for(&server),
+                &chatgpt_auth(),
+                &client_pool,
+                file_name.to_string(),
+                u64::try_from(contents.len()).expect("file size should fit in a u64"),
+                contents_stream,
+            )
+            .await
+            .expect("upload succeeds with the shared client pool");
+            uploaded_files.push(uploaded);
+        }
+
+        assert_eq!(
+            uploaded_files,
+            vec![
+                UploadedOpenAiFile {
+                    file_id: "file_1".to_string(),
+                    uri: "sediment://file_1".to_string(),
+                    download_url: format!("{}/download/file_1", server.uri()),
+                    file_name: "first.txt".to_string(),
+                    file_size_bytes: 5,
+                    mime_type: Some("text/plain".to_string()),
+                },
+                UploadedOpenAiFile {
+                    file_id: "file_2".to_string(),
+                    uri: "sediment://file_2".to_string(),
+                    download_url: format!("{}/download/file_2", server.uri()),
+                    file_name: "second.txt".to_string(),
+                    file_size_bytes: 6,
+                    mime_type: Some("text/plain".to_string()),
+                },
+            ]
+        );
+        server.verify().await;
     }
 
     #[tokio::test]
@@ -500,7 +552,7 @@ mod tests {
         let error = upload_openai_file(
             &base_url_for(&server),
             &chatgpt_auth(),
-            &default_http_client_factory(),
+            &default_http_client_pool(),
             "hello.txt".to_string(),
             /*file_size_bytes*/ 5,
             futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"hello"))]),
@@ -537,7 +589,7 @@ mod tests {
         let error = upload_openai_file(
             &base_url_for(&server),
             &chatgpt_auth(),
-            &default_http_client_factory(),
+            &default_http_client_pool(),
             "hello.txt".to_string(),
             /*file_size_bytes*/ 5,
             futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"hello"))]),

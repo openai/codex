@@ -15,6 +15,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
+use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
@@ -45,6 +46,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         };
         let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
             turn_context,
+            &sess.services.openai_file_upload_client_pool,
             auth.as_ref(),
             field_name,
             optional_fields,
@@ -66,6 +68,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
 
 async fn rewrite_argument_value_for_openai_files(
     turn_context: &TurnContext,
+    client_pool: &RouteAwareClientPool,
     auth: Option<&CodexAuth>,
     field_name: &str,
     optional_fields: &[String],
@@ -75,6 +78,7 @@ async fn rewrite_argument_value_for_openai_files(
         JsonValue::String(file_path) => {
             let rewritten = build_uploaded_argument_value(
                 turn_context,
+                client_pool,
                 auth,
                 field_name,
                 /*index*/ None,
@@ -92,6 +96,7 @@ async fn rewrite_argument_value_for_openai_files(
                 };
                 let rewritten = build_uploaded_argument_value(
                     turn_context,
+                    client_pool,
                     auth,
                     field_name,
                     Some(index),
@@ -109,6 +114,7 @@ async fn rewrite_argument_value_for_openai_files(
 
 async fn build_uploaded_argument_value(
     turn_context: &TurnContext,
+    client_pool: &RouteAwareClientPool,
     auth: Option<&CodexAuth>,
     field_name: &str,
     index: Option<usize>,
@@ -169,11 +175,10 @@ async fn build_uploaded_argument_value(
         .unwrap_or("file")
         .to_string();
     let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
-    let http_client_factory = turn_context.config.http_client_factory();
     let uploaded = upload_openai_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         upload_auth.as_ref(),
-        &http_client_factory,
+        client_pool,
         file_name,
         metadata.size,
         contents,
@@ -298,7 +303,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (_, mut turn_context) = make_session_and_context().await;
+        let (session, mut turn_context) = make_session_and_context().await;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let local_path = dir.path().join("file_report.csv");
@@ -313,6 +318,7 @@ mod tests {
 
         let rewritten = build_uploaded_argument_value(
             &turn_context,
+            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             "file",
             /*index*/ None,
@@ -335,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_uploaded_argument_value_rejects_oversized_file_before_reading() {
-        let (_, mut turn_context) = make_session_and_context().await;
+        let (session, mut turn_context) = make_session_and_context().await;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let file_path = dir.path().join("oversized.bin");
@@ -346,6 +352,7 @@ mod tests {
 
         let error = build_uploaded_argument_value(
             &turn_context,
+            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             "file",
             /*index*/ None,
@@ -404,7 +411,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (_, mut turn_context) = make_session_and_context().await;
+        let (session, mut turn_context) = make_session_and_context().await;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let local_path = dir.path().join("file_report.csv");
@@ -418,6 +425,7 @@ mod tests {
         turn_context.config = Arc::new(config);
         let rewritten = rewrite_argument_value_for_openai_files(
             &turn_context,
+            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             "file",
             &[],
@@ -513,7 +521,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (_, mut turn_context) = make_session_and_context().await;
+        let (session, mut turn_context) = make_session_and_context().await;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         tokio::fs::write(dir.path().join("one.csv"), b"one")
@@ -529,6 +537,7 @@ mod tests {
         turn_context.config = Arc::new(config);
         let rewritten = rewrite_argument_value_for_openai_files(
             &turn_context,
+            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             "files",
             &[],

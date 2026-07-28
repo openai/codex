@@ -212,6 +212,12 @@ impl HttpClientBuilder {
         match build_with_custom_ca(self.clone().reqwest_builder(proxy_routing)) {
             Ok(inner) => HttpClient::from_parts(inner, request_logging),
             Err(error) => {
+                tracing::event!(
+                    target: "codex_otel.log_only",
+                    tracing::Level::WARN,
+                    event.name = "codex.http_client.custom_ca_fallback",
+                    "HTTP client fell back to system root certificates"
+                );
                 tracing::warn!(error = %error, "failed to build HTTP client with custom CA");
                 self.reqwest_builder(proxy_routing)
                     .build()

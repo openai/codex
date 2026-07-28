@@ -34,6 +34,13 @@ use crate::route_aware_redirect::remove_sensitive_headers;
 
 const MAX_CACHED_ROUTES: usize = 16;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum CustomCaFallback {
+    #[default]
+    Disabled,
+    LegacyTransportDefault,
+}
+
 /// Reuses transport clients by resolved route while selecting a route for every request URL.
 ///
 /// Request creation stays on the pool so the URL used for PAC or system-proxy resolution cannot
@@ -44,6 +51,7 @@ pub struct RouteAwareClientPool {
     http_client_factory: HttpClientFactory,
     route_class: ClientRouteClass,
     client_builder: HttpClientBuilder,
+    custom_ca_fallback: CustomCaFallback,
     clients: Arc<Mutex<HashMap<OutboundProxyRoute, HttpClient>>>,
 }
 
@@ -312,6 +320,7 @@ impl RouteAwareClientPool {
             http_client_factory,
             route_class,
             client_builder,
+            custom_ca_fallback: CustomCaFallback::Disabled,
             clients: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -326,6 +335,15 @@ impl RouteAwareClientPool {
             route_class,
             HttpClientBuilder::new().without_request_logging(),
         )
+    }
+
+    /// Preserves the legacy custom-CA fallback for transport-default proxy routes.
+    ///
+    /// Use this only when migrating a client that already continued with system roots after a
+    /// custom-CA construction failure. System-proxy routes still propagate construction errors.
+    pub fn with_legacy_custom_ca_fallback(mut self) -> Self {
+        self.custom_ca_fallback = CustomCaFallback::LegacyTransportDefault;
+        self
     }
 
     /// Creates a pool that retains the Cloudflare cookies required by ChatGPT endpoints.
@@ -577,11 +595,27 @@ impl RouteAwareClientPool {
                 self.client_builder.clone().without_redirects()
             }
         };
-        let client = client_builder.build_for_resolved_route(
-            &self.http_client_factory,
-            self.route_class,
-            &route,
-        )?;
+        #[expect(
+            deprecated,
+            reason = "explicitly opted-in pools preserve the legacy custom-CA fallback"
+        )]
+        let client = match (
+            self.http_client_factory.outbound_proxy_policy(),
+            self.custom_ca_fallback,
+        ) {
+            (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::LegacyTransportDefault) => {
+                client_builder.build_with_transport_default_proxy_and_custom_ca_fallback()
+            }
+            (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::Disabled)
+            | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::Disabled)
+            | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::LegacyTransportDefault) => {
+                client_builder.build_for_resolved_route(
+                    &self.http_client_factory,
+                    self.route_class,
+                    &route,
+                )?
+            }
+        };
         let mut clients = match self.clients.lock() {
             Ok(clients) => clients,
             Err(error) => panic!("route-aware client cache lock should not be poisoned: {error}"),
