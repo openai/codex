@@ -1,5 +1,24 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
+use std::fmt;
+
+/// Position of a fragment within the cloud-managed configuration contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudManagedLayer {
+    /// Lowest-precedence defaults supplied by the cloud bundle.
+    Baseline,
+    /// Managed overrides applied above system configuration.
+    SystemOverlay,
+}
+
+impl fmt::Display for CloudManagedLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CloudManagedLayer::Baseline => f.write_str("baseline"),
+            CloudManagedLayer::SystemOverlay => f.write_str("system-overlay"),
+        }
+    }
+}
 
 /// Provenance for one layer in the effective Codex configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,6 +29,12 @@ pub enum ConfigLayerSource {
     System { file: AbsolutePathBuf },
     /// Configuration delivered by an enterprise cloud bundle.
     EnterpriseManaged { id: String, name: String },
+    /// Configuration delivered through the generic cloud-managed layer contract.
+    CloudManaged {
+        layer: CloudManagedLayer,
+        id: String,
+        name: String,
+    },
     /// User configuration, optionally augmented by a selected profile.
     User {
         file: AbsolutePathBuf,
@@ -33,6 +58,10 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::EnterpriseManaged { .. } => 15,
+            ConfigLayerSource::CloudManaged { layer, .. } => match layer {
+                CloudManagedLayer::Baseline => -10,
+                CloudManagedLayer::SystemOverlay => 15,
+            },
             ConfigLayerSource::User { profile, .. } => {
                 if profile.is_some() {
                     21
@@ -83,6 +112,9 @@ pub fn format_config_layer_source(source: &ConfigLayerSource, config_toml_file: 
         ConfigLayerSource::EnterpriseManaged { id, name } => {
             format!("enterprise-managed ({name}, {id})")
         }
+        ConfigLayerSource::CloudManaged { layer, id, name } => {
+            format!("cloud-managed {layer} ({name}, {id})")
+        }
         ConfigLayerSource::User { file, .. } => {
             format!("user ({})", file.as_path().display())
         }
@@ -101,3 +133,7 @@ pub fn format_config_layer_source(source: &ConfigLayerSource, config_toml_file: 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "config_layer_source_tests.rs"]
+mod tests;

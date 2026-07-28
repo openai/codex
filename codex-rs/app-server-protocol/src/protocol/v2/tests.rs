@@ -73,6 +73,45 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn cloud_managed_config_layers_round_trip_with_provenance() {
+    for (managed_layer, serialized_layer) in [
+        (CloudManagedLayer::Baseline, "baseline"),
+        (CloudManagedLayer::SystemOverlay, "systemOverlay"),
+    ] {
+        let layer = ConfigLayer {
+            name: ConfigLayerSource::CloudManaged {
+                layer: managed_layer,
+                id: "policy-1".to_string(),
+                name: "Workspace policy".to_string(),
+            },
+            version: "etag-1".to_string(),
+            config: json!({"model": "gpt-5"}),
+            disabled_reason: Some("conflicts with another managed fragment".to_string()),
+        };
+
+        let value = serde_json::to_value(&layer).expect("serialize cloud-managed layer");
+        assert_eq!(
+            value,
+            json!({
+                "name": {
+                    "type": "cloudManaged",
+                    "layer": serialized_layer,
+                    "id": "policy-1",
+                    "name": "Workspace policy",
+                },
+                "version": "etag-1",
+                "config": {"model": "gpt-5"},
+                "disabledReason": "conflicts with another managed fragment",
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ConfigLayer>(value).expect("deserialize cloud-managed layer"),
+            layer
+        );
+    }
+}
+
+#[test]
 fn thread_sources_round_trip_as_scalar_labels() {
     for (source, label) in [
         (ThreadSource::User, "user"),
