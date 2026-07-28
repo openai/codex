@@ -61,6 +61,7 @@ const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
+const LEGACY_HTTP_PREVALIDATION_ERROR_CODE: ErrorCode = ErrorCode(-32000);
 
 #[derive(Clone)]
 pub(crate) struct StreamableHttpClientAdapter {
@@ -217,9 +218,12 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         if !status_is_success(response.status) {
             let body = collect_body(&mut body_stream, maximum_response_bytes).await?;
             if !retryable_post_response_status(mcp_method.as_deref(), response.status)
-                && content_type
+                && (content_type
                     .as_deref()
                     .is_some_and(|content_type| content_type.starts_with(JSON_MIME_TYPE))
+                    || (mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE)
+                        && response.status == StatusCode::BAD_REQUEST.as_u16()
+                        && !has_session_id))
                 && let Some(response_message) = parse_json_rpc_error(&body)
             {
                 return Ok(StreamableHttpPostResponse::Json(
@@ -683,7 +687,7 @@ fn legacy_discovery_fallback_response(
         );
     }
 
-    let only_known_legacy_versions = match &response {
+    let requires_legacy_initialization = match &response {
         JsonRpcMessage::Response(response) if response.id == request.id => match &response.result {
             ServerResult::DiscoverResult(result) => {
                 only_known_legacy_protocol_versions(&result.supported_versions)
@@ -709,20 +713,20 @@ fn legacy_discovery_fallback_response(
                 ) && explicitly_rejects_modern_protocol_version(&error.error.message)
         }
         JsonRpcMessage::Error(error)
-            if error.id.is_none()
-                && allow_uncorrelated_http_rejection
-                && error.error.code.0 == -32000 =>
+            if allow_uncorrelated_http_rejection
+                && error.id.is_none()
+                && error.error.code == LEGACY_HTTP_PREVALIDATION_ERROR_CODE =>
         {
-            rejects_modern_protocol_at_legacy_http_boundary(&error.error.message)
+            has_legacy_fallback_evidence(&error.error.message)
         }
         _ => false,
     };
 
-    if only_known_legacy_versions {
+    if requires_legacy_initialization {
         ServerJsonRpcMessage::error(
             ErrorData::new(
                 ErrorCode::METHOD_NOT_FOUND,
-                "MCP discovery only advertised legacy protocol versions",
+                "MCP discovery requires legacy initialization",
                 None,
             ),
             Some(request.id.clone()),
@@ -746,13 +750,22 @@ fn explicitly_rejects_modern_protocol_version(message: &str) -> bool {
         .eq_ignore_ascii_case("unsupported protocol version: 2026-07-28")
 }
 
-fn rejects_modern_protocol_at_legacy_http_boundary(message: &str) -> bool {
+// Some legacy servers reject `server/discover` before assigning a JSON-RPC ID.
+// A null-ID HTTP 400/-32000 does not, by itself, justify a downgrade.
+// Retry `initialize` only for the exact missing-session error or a list of
+// exclusively legacy versions that includes a version rmcp supports.
+// These are compatibility hints, not proof of server identity; `initialize`
+// negotiates the actual version, and 2025-06-18 is only our initial proposal.
+fn has_legacy_fallback_evidence(message: &str) -> bool {
     if message == "Bad Request: No valid session ID provided" {
         return true;
     }
 
     let Some(supported) = message
         .strip_prefix("Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: ")
+        .or_else(|| {
+            message.strip_prefix("Bad Request: Unsupported protocol version (supported versions: ")
+        })
         .and_then(|supported| supported.strip_suffix(')'))
     else {
         return false;
@@ -760,7 +773,9 @@ fn rejects_modern_protocol_at_legacy_http_boundary(message: &str) -> bool {
 
     let versions = supported.split(',').map(str::trim).collect::<Vec<_>>();
     !versions.is_empty()
-        && versions.contains(&"2025-06-18")
+        && ProtocolVersion::KNOWN_VERSIONS
+            .iter()
+            .any(|known| versions.contains(&known.as_str()))
         && versions.iter().all(|version| {
             let bytes = version.as_bytes();
             bytes.len() == 10
