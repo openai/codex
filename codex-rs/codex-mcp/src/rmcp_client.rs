@@ -26,6 +26,7 @@ use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::openai_docs_source_attribution::maybe_with_openai_docs_source_attribution;
+use crate::pagination::collect_paginated;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -52,6 +53,7 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
+use codex_rmcp_client::McpProtocolMode;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
 use codex_rmcp_client::ToolWithConnectorId;
@@ -280,6 +282,7 @@ struct ManagedClientStartup {
     runtime_auth_provider: Option<SharedAuthProvider>,
     client_elicitation_capability: ElicitationCapability,
     supports_openai_form_elicitation: bool,
+    protocol_mode: McpProtocolMode,
     cancel_token: CancellationToken,
     startup_complete: Arc<AtomicBool>,
 }
@@ -300,6 +303,7 @@ impl ManagedClientStartup {
             runtime_auth_provider,
             client_elicitation_capability,
             supports_openai_form_elicitation,
+            protocol_mode,
             cancel_token,
             startup_complete,
         } = self.clone();
@@ -329,6 +333,7 @@ impl ManagedClientStartup {
                         runtime_context,
                         resolved_environment,
                         runtime_auth_provider,
+                        protocol_mode,
                     ),
                 )
                 .await
@@ -415,6 +420,7 @@ impl AsyncManagedClient {
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
+        protocol_mode: McpProtocolMode,
     ) -> Self {
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
         let reconnect_server_name = server_name.clone();
@@ -441,6 +447,7 @@ impl AsyncManagedClient {
             runtime_auth_provider,
             client_elicitation_capability,
             supports_openai_form_elicitation,
+            protocol_mode,
             cancel_token: cancel_token.clone(),
             startup_complete: Arc::clone(&startup_complete),
         });
@@ -584,21 +591,36 @@ pub(crate) async fn list_tools_for_client_uncached(
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
     let fetch_start = Instant::now();
-    let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
-        .await?;
-    let tools = resp
-        .tools
-        .into_iter()
-        .map(|tool| {
-            tool_info_from_listed_tool(
-                server_name,
-                is_codex_apps_mcp_server,
-                server_instructions,
-                tool,
-            )
-        })
-        .collect();
+    let tools = match client.protocol_mode() {
+        McpProtocolMode::Legacy => {
+            client
+                .list_tools_with_connector_ids(/*params*/ None, timeout)
+                .await?
+                .tools
+        }
+        McpProtocolMode::V20260728 => {
+            collect_paginated("tools/list", timeout, |params| {
+                let client = Arc::clone(client);
+                async move {
+                    let response = client
+                        .list_tools_with_connector_ids(params, timeout)
+                        .await?;
+                    Ok((response.tools, response.next_cursor))
+                }
+            })
+            .await?
+        }
+    }
+    .into_iter()
+    .map(|tool| {
+        tool_info_from_listed_tool(
+            server_name,
+            is_codex_apps_mcp_server,
+            server_instructions,
+            tool,
+        )
+    })
+    .collect();
     if is_codex_apps_mcp_server {
         emit_duration(
             MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
@@ -960,6 +982,7 @@ struct StartServerTaskParams {
     supports_openai_form_elicitation: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
 async fn make_rmcp_client(
     server_name: &str,
@@ -969,6 +992,7 @@ async fn make_rmcp_client(
     runtime_context: McpRuntimeContext,
     resolved_environment: std::result::Result<Option<Arc<Environment>>, String>,
     runtime_auth_provider: Option<SharedAuthProvider>,
+    protocol_mode: McpProtocolMode,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let config = server.config().clone();
     let resolved_environment =
@@ -1010,9 +1034,17 @@ async fn make_rmcp_client(
             };
 
             let cwd = cwd.map(codex_utils_path_uri::LegacyAppPathString::into_string);
-            RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
-                .await
-                .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
+            RmcpClient::new_stdio_client_with_protocol_mode(
+                command_os,
+                args_os,
+                env_os,
+                &env_vars,
+                cwd,
+                launcher,
+                protocol_mode,
+            )
+            .await
+            .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
         }
         McpServerTransportConfig::StreamableHttp {
             url,
@@ -1030,7 +1062,7 @@ async fn make_rmcp_client(
                     Ok(token) => token,
                     Err(error) => return Err(error.into()),
                 };
-            RmcpClient::new_streamable_http_client(
+            RmcpClient::new_streamable_http_client_with_protocol_mode(
                 server_name,
                 &url,
                 resolved_bearer_token,
@@ -1040,6 +1072,7 @@ async fn make_rmcp_client(
                 keyring_backend_kind,
                 http_client,
                 runtime_auth_provider,
+                protocol_mode,
             )
             .await
             .map_err(StartupOutcomeError::from)

@@ -1,5 +1,6 @@
 pub use binding::McpBinding;
 pub use binding::PreparedMcpCall;
+pub use codex_rmcp_client::McpProtocolMode;
 pub use connection_manager::tool_is_model_visible;
 pub use elicitation::ElicitationLifecycle;
 pub use elicitation::ElicitationReviewRequest;
@@ -91,6 +92,7 @@ pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;
 mod openai_docs_source_attribution;
+mod pagination;
 mod plugin_config;
 mod resource_client;
 pub(crate) mod rmcp_client;

@@ -78,6 +78,7 @@ use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
+use codex_mcp::McpProtocolMode;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
 use codex_memories_read::memory_root;
@@ -1734,6 +1735,7 @@ impl Config {
             } else {
                 Vec::new()
             },
+            protocol_mode: self.mcp_protocol_mode(),
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability::new()
                     .with_form(FormElicitationCapability::new())
@@ -1754,6 +1756,14 @@ impl Config {
     pub(crate) fn prefix_mcp_tool_names(&self) -> bool {
         !self.features.enabled(Feature::NonPrefixedMcpToolNames)
             || self.non_prefixed_mcp_tool_servers.is_some()
+    }
+
+    pub fn mcp_protocol_mode(&self) -> McpProtocolMode {
+        if self.features.enabled(Feature::Mcp20260728) {
+            McpProtocolMode::V20260728
+        } else {
+            McpProtocolMode::Legacy
+        }
     }
 
     pub async fn rebuild_preserving_session_layers(

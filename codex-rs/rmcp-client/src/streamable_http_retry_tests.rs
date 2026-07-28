@@ -10,8 +10,9 @@ use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use super::*;
 
 #[test]
-fn retryable_initialize_error_includes_initialized_notification_context() {
+fn retryable_initialize_error_includes_discovery_and_initialized_notification_context() {
     let contexts = [
+        "send discover request",
         "send initialize request",
         "send initialized notification",
         "receive initialize response",
@@ -21,7 +22,7 @@ fn retryable_initialize_error_includes_initialized_notification_context() {
         contexts.map(|context| {
             RmcpClient::is_retryable_client_initialize_error(&retryable_initialize_error(context))
         }),
-        [true, true, false],
+        [true, true, true, false],
     );
 }
 

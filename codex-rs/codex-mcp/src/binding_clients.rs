@@ -14,6 +14,7 @@ use rmcp::model::ResourceTemplate;
 use tokio::task::JoinSet;
 use tracing::warn;
 
+use crate::pagination::collect_paginated;
 use crate::rmcp_client::ManagedClient;
 
 /// The ready clients captured for one model step.
@@ -90,28 +91,16 @@ impl McpBindingClients {
             let client = Arc::clone(&managed.client);
             let timeout = managed.tool_timeout;
             join_set.spawn(async move {
-                let mut collected = Vec::new();
-                let mut cursor: Option<String> = None;
-                loop {
-                    let params = cursor.as_ref().map(|next| {
-                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
-                    });
-                    let response = match client.list_resources(params, timeout).await {
-                        Ok(result) => result,
-                        Err(error) => return (server_name, Err(error)),
-                    };
-                    collected.extend(response.resources);
-                    match response.next_cursor {
-                        Some(next) if cursor.as_ref() == Some(&next) => {
-                            return (
-                                server_name,
-                                Err(anyhow!("resources/list returned duplicate cursor")),
-                            );
+                let resources =
+                    collect_paginated("resources/list", /*overall_timeout*/ None, |params| {
+                        let client = Arc::clone(&client);
+                        async move {
+                            let response = client.list_resources(params, timeout).await?;
+                            Ok((response.resources, response.next_cursor))
                         }
-                        Some(next) => cursor = Some(next),
-                        None => return (server_name, Ok(collected)),
-                    }
-                }
+                    })
+                    .await;
+                (server_name, resources)
             });
         }
         collect_resource_results(&mut join_set, "resources").await
@@ -131,30 +120,19 @@ impl McpBindingClients {
             let client = Arc::clone(&managed.client);
             let timeout = managed.tool_timeout;
             join_set.spawn(async move {
-                let mut collected = Vec::new();
-                let mut cursor: Option<String> = None;
-                loop {
-                    let params = cursor.as_ref().map(|next| {
-                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
-                    });
-                    let response = match client.list_resource_templates(params, timeout).await {
-                        Ok(result) => result,
-                        Err(error) => return (server_name, Err(error)),
-                    };
-                    collected.extend(response.resource_templates);
-                    match response.next_cursor {
-                        Some(next) if cursor.as_ref() == Some(&next) => {
-                            return (
-                                server_name,
-                                Err(anyhow!(
-                                    "resources/templates/list returned duplicate cursor"
-                                )),
-                            );
+                let templates = collect_paginated(
+                    "resources/templates/list",
+                    /*overall_timeout*/ None,
+                    |params| {
+                        let client = Arc::clone(&client);
+                        async move {
+                            let response = client.list_resource_templates(params, timeout).await?;
+                            Ok((response.resource_templates, response.next_cursor))
                         }
-                        Some(next) => cursor = Some(next),
-                        None => return (server_name, Ok(collected)),
-                    }
-                }
+                    },
+                )
+                .await;
+                (server_name, templates)
             });
         }
         collect_resource_results(&mut join_set, "resource templates").await

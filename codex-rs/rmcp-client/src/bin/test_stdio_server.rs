@@ -128,6 +128,11 @@ impl TestToolServer {
         {
             echo.description = Some(Cow::Owned(format!("Echo from {process_label}.")));
         }
+        if std::env::var_os("MCP_TEST_OVERSIZED_TOOL_DESCRIPTION").is_some()
+            && let Some(echo) = tools.iter_mut().find(|tool| tool.name == "echo")
+        {
+            echo.description = Some(Cow::Owned("x".repeat(8 * 1024 * 1024 + 1)));
+        }
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
         Self {

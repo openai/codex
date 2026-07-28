@@ -37,7 +37,6 @@ use rmcp::service::RoleClient;
 use rmcp::service::RxJsonRpcMessage;
 use rmcp::service::TxJsonRpcMessage;
 use rmcp::transport::Transport;
-use serde_json::from_slice;
 use serde_json::to_vec;
 use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
@@ -45,6 +44,8 @@ use tokio::sync::broadcast;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
+
+use crate::incoming_jsonrpc::deserialize_incoming_jsonrpc_message;
 
 static PROCESS_COUNTER: AtomicUsize = AtomicUsize::new(1);
 // Tool results can make valid MCP responses large, so keep the protocol
@@ -426,7 +427,7 @@ impl ExecutorProcessTransport {
                 None => return None,
             };
             let line = Self::trim_trailing_carriage_return(line);
-            match from_slice::<RxJsonRpcMessage<RoleClient>>(&line) {
+            match deserialize_incoming_jsonrpc_message(&line) {
                 Ok(message) => return Some(message),
                 Err(error) => {
                     debug!(
