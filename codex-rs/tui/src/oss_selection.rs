@@ -4,6 +4,8 @@ use std::sync::LazyLock;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use codex_http_client::HttpClient;
+use codex_http_client::HttpClientBuilder;
 use codex_model_provider_info::DEFAULT_LMSTUDIO_PORT;
 use codex_model_provider_info::DEFAULT_OLLAMA_PORT;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -314,9 +316,15 @@ pub(crate) struct OssProviderSelection {
 }
 
 pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
+    // These probes intentionally bypass proxy discovery because both targets are
+    // hardcoded plaintext loopback endpoints. Preserve the legacy custom-CA fallback so an
+    // invalid inherited certificate bundle cannot prevent best-effort provider detection.
+    #[allow(deprecated)]
+    let client = HttpClientBuilder::new().build_direct_with_custom_ca_fallback();
+
     // Check provider statuses first
-    let lmstudio_status = check_lmstudio_status().await;
-    let ollama_status = check_ollama_status().await;
+    let lmstudio_status = check_lmstudio_status(&client).await;
+    let ollama_status = check_ollama_status(&client).await;
 
     // Autoselect if only one is running
     match (&lmstudio_status, &ollama_status) {
@@ -369,31 +377,31 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
     result
 }
 
-async fn check_lmstudio_status() -> ProviderStatus {
-    match check_port_status(DEFAULT_LMSTUDIO_PORT).await {
+async fn check_lmstudio_status(client: &HttpClient) -> ProviderStatus {
+    match check_port_status(client, DEFAULT_LMSTUDIO_PORT).await {
         Ok(true) => ProviderStatus::Running,
         Ok(false) => ProviderStatus::NotRunning,
         Err(_) => ProviderStatus::Unknown,
     }
 }
 
-async fn check_ollama_status() -> ProviderStatus {
-    match check_port_status(DEFAULT_OLLAMA_PORT).await {
+async fn check_ollama_status(client: &HttpClient) -> ProviderStatus {
+    match check_port_status(client, DEFAULT_OLLAMA_PORT).await {
         Ok(true) => ProviderStatus::Running,
         Ok(false) => ProviderStatus::NotRunning,
         Err(_) => ProviderStatus::Unknown,
     }
 }
 
-async fn check_port_status(port: u16) -> io::Result<bool> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(io::Error::other)?;
-
+async fn check_port_status(client: &HttpClient, port: u16) -> io::Result<bool> {
     let url = format!("http://localhost:{port}");
 
-    match client.get(&url).send().await {
+    match client
+        .get(&url)
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+    {
         Ok(response) => Ok(response.status().is_success()),
         Err(_) => Ok(false), // Connection failed = not running
     }
@@ -413,5 +421,55 @@ mod tests {
         assert_eq!(widget.selected_option, 1);
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(widget.selected_option, 0);
+    }
+
+    #[tokio::test]
+    async fn localhost_probe_succeeds_with_invalid_inherited_ca_bundle() {
+        const CHILD_ENV: &str = "CODEX_OSS_SELECTION_INVALID_CA_TEST_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+            let invalid_ca_path = temp_dir.path().join("invalid-ca.pem");
+            std::fs::write(&invalid_ca_path, "not a PEM certificate")
+                .expect("invalid CA fixture should be written");
+
+            for ca_env in ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"] {
+                let output = std::process::Command::new(
+                    std::env::current_exe().expect("test executable should be available"),
+                )
+                .arg("--exact")
+                .arg("oss_selection::tests::localhost_probe_succeeds_with_invalid_inherited_ca_bundle")
+                .arg("--nocapture")
+                .env_remove("CODEX_CA_CERTIFICATE")
+                .env_remove("SSL_CERT_FILE")
+                .env(ca_env, &invalid_ca_path)
+                .env(CHILD_ENV, "1")
+                .output()
+                .expect("isolated CA subprocess should run");
+
+                assert!(
+                    output.status.success(),
+                    "localhost probe failed with invalid {ca_env}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+            return;
+        }
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        #[allow(deprecated)]
+        let client = HttpClientBuilder::new().build_direct_with_custom_ca_fallback();
+        assert!(
+            check_port_status(&client, server.address().port())
+                .await
+                .expect("localhost provider probe should complete")
+        );
     }
 }

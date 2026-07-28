@@ -66,6 +66,81 @@ async fn streams_request_bodies_without_exposing_reqwest_body() {
 }
 
 #[tokio::test]
+async fn legacy_custom_ca_fallback_is_limited_to_reqwest_default() {
+    const CHILD_POLICY_ENV: &str = "CODEX_HTTP_CLIENT_POOL_INVALID_CA_TEST_POLICY";
+
+    let Ok(policy_name) = std::env::var(CHILD_POLICY_ENV) else {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let invalid_ca_path = temp_dir.path().join("invalid-ca.pem");
+        std::fs::write(&invalid_ca_path, "not a PEM certificate")
+            .expect("invalid CA fixture should be written");
+
+        for ca_env in ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"] {
+            for policy_name in ["reqwest-default", "respect-system-proxy"] {
+                let output = std::process::Command::new(
+                    std::env::current_exe().expect("test executable should be available"),
+                )
+                .arg("--exact")
+                .arg("route_aware_client_pool::tests::legacy_custom_ca_fallback_is_limited_to_reqwest_default")
+                .arg("--nocapture")
+                .env_remove("CODEX_CA_CERTIFICATE")
+                .env_remove("SSL_CERT_FILE")
+                .env(ca_env, &invalid_ca_path)
+                .env(CHILD_POLICY_ENV, policy_name)
+                .output()
+                .expect("isolated CA subprocess should run");
+
+                assert!(
+                    output.status.success(),
+                    "{policy_name} failed with invalid {ca_env}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+        }
+        return;
+    };
+
+    let outbound_proxy_policy = match policy_name.as_str() {
+        "reqwest-default" => OutboundProxyPolicy::ReqwestDefault,
+        "respect-system-proxy" => OutboundProxyPolicy::RespectSystemProxy,
+        _ => panic!("unexpected test proxy policy: {policy_name}"),
+    };
+    let pool = RouteAwareClientPool::with_chatgpt_cloudflare_cookies(
+        HttpClientFactory::new(outbound_proxy_policy),
+        ClientRouteClass::Other,
+    )
+    .with_legacy_custom_ca_fallback();
+
+    match outbound_proxy_policy {
+        OutboundProxyPolicy::ReqwestDefault => {
+            let (address, server) = spawn_response_server(vec![
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+            ]);
+            let response = pool
+                .get(format!("http://{address}/update"))
+                .send()
+                .await
+                .expect("default-routed request should fall back to system roots");
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let requests = server.join().expect("response server should finish");
+            assert_eq!(requests.len(), 1);
+        }
+        OutboundProxyPolicy::RespectSystemProxy => {
+            let error = pool
+                .client_for_url_with_resolver("http://127.0.0.1/update", |_| async {
+                    Ok(OutboundProxyRoute::Direct)
+                })
+                .await
+                .expect_err("system-proxy routes should reject invalid custom CAs");
+
+            assert!(matches!(error, RouteAwareClientPoolError::Build(_)));
+        }
+    }
+}
+
+#[tokio::test]
 async fn without_url_redacts_transport_error_urls() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
     let address = listener.local_addr().expect("listener should have address");
