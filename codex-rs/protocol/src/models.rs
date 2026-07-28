@@ -28,6 +28,13 @@ use schemars::JsonSchema;
 use crate::ResponseItemId;
 use crate::mcp::CallToolResult;
 
+mod executed_tool_calls;
+
+pub use executed_tool_calls::ExecutedToolCall;
+pub use executed_tool_calls::ExecutedToolCallArguments;
+pub use executed_tool_calls::ExecutedToolCallTruncation;
+pub use executed_tool_calls::bound_executed_tool_calls_for_prompt;
+
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
@@ -778,6 +785,11 @@ pub struct InternalChatMessageMetadataPassthrough {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
+    /// Warehouse-only Responses metadata, not part of the public app-server protocol.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub executed_tool_calls: Option<Vec<ExecutedToolCall>>,
 }
 
 impl InternalChatMessageMetadataPassthrough {
@@ -2283,6 +2295,25 @@ mod tests {
         }))?;
         assert_eq!(unknown_metadata, item);
 
+        item.append_executed_tool_calls(vec![ExecutedToolCall::new(
+            "test_tool".to_string(),
+            serde_json::json!({"value": 1}),
+        )]);
+        let serialized = serde_json::to_value(&item)?;
+        assert_eq!(
+            serialized["internal_chat_message_metadata_passthrough"]["executed_tool_calls"],
+            serde_json::json!([{"name": "test_tool", "arguments": {"value": 1}}]),
+        );
+        let deserialized = serde_json::from_value::<ResponseItem>(serialized)?;
+        assert_eq!(deserialized.turn_id(), Some("turn-1"));
+        assert!(
+            deserialized
+                .executed_tool_call_metadata()
+                .and_then(|metadata| metadata.executed_tool_calls.as_ref())
+                .is_none(),
+            "provider and rollout input cannot forge local attempted-tool metadata",
+        );
+        item.clear_executed_tool_calls();
         item.set_turn_id_if_missing("turn-2");
         assert_eq!(item.turn_id(), Some("turn-1"));
 
@@ -2348,6 +2379,7 @@ mod tests {
     fn passthrough_metadata(turn_id: &str) -> InternalChatMessageMetadataPassthrough {
         InternalChatMessageMetadataPassthrough {
             turn_id: Some(turn_id.to_string()),
+            ..Default::default()
         }
     }
 
