@@ -27,8 +27,31 @@ use wiremock::matchers::query_param;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(20);
 const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174010";
 
+enum ToolSuggestFeature {
+    Enabled,
+    Disabled,
+}
+
 #[tokio::test]
 async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Result<()> {
+    recommended_plugins_after_external_login(ToolSuggestFeature::Enabled).await
+}
+
+#[tokio::test]
+async fn first_turn_after_external_login_waits_for_recommended_plugins_without_tool_suggest()
+-> Result<()> {
+    recommended_plugins_after_external_login(ToolSuggestFeature::Disabled).await
+}
+
+async fn recommended_plugins_after_external_login(
+    tool_suggest_feature: ToolSuggestFeature,
+) -> Result<()> {
+    let tool_suggest_enabled = matches!(tool_suggest_feature, ToolSuggestFeature::Enabled);
+    let recommended_plugins_config = if tool_suggest_enabled {
+        ""
+    } else {
+        "recommended_plugins = true\n"
+    };
     let server = responses::start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     Mock::given(method("GET"))
@@ -68,7 +91,9 @@ async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Resu
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         config_path,
-        format!("{config}\n[features]\napps = true\nplugins = true\ntool_suggest = true\n"),
+        format!(
+            "{config}\n[features]\napps = true\nplugins = true\ntool_suggest = {tool_suggest_enabled}\n{recommended_plugins_config}"
+        ),
     )?;
 
     let sqlite_home = codex_home.path().to_string_lossy();
@@ -158,7 +183,10 @@ async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Resu
         .flatten()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect::<Vec<_>>();
-    assert!(tool_names.contains(&"request_plugin_install"));
+    assert_eq!(
+        tool_names.contains(&"request_plugin_install"),
+        tool_suggest_enabled
+    );
     assert!(!tool_names.contains(&"list_available_plugins_to_install"));
     Ok(())
 }

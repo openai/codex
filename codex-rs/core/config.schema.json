@@ -633,6 +633,9 @@
             "realtime_conversation": {
               "type": "boolean"
             },
+            "recommended_plugins": {
+              "type": "boolean"
+            },
             "remote_compaction_v2": {
               "type": "boolean"
             },
@@ -5188,6 +5191,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "recommended_plugins": {
           "type": "boolean"
         },
         "remote_compaction_v2": {
