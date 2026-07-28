@@ -2596,6 +2596,52 @@ async fn get_account_with_chatgpt() -> Result<()> {
 }
 
 #[tokio::test]
+async fn get_account_with_business_prolite_returns_plan_type() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt")
+            .email("user@example.com")
+            .plan_type("self_serve_business_prolite"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let received: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: Some("user@example.com".to_string()),
+                plan_type: AccountPlanType::SelfServeBusinessProLite,
+            }),
+            requires_openai_auth: true,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_account_with_chatgpt_without_email() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(

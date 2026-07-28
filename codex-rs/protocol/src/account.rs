@@ -17,6 +17,9 @@ pub enum PlanType {
     Pro,
     ProLite,
     Team,
+    #[serde(rename = "self_serve_business_prolite")]
+    #[ts(rename = "self_serve_business_prolite")]
+    SelfServeBusinessProLite,
     #[serde(rename = "self_serve_business_usage_based")]
     #[ts(rename = "self_serve_business_usage_based")]
     SelfServeBusinessUsageBased,
@@ -46,7 +49,10 @@ pub enum ProviderAccount {
 
 impl PlanType {
     pub fn is_team_like(self) -> bool {
-        matches!(self, Self::Team | Self::SelfServeBusinessUsageBased)
+        matches!(
+            self,
+            Self::Team | Self::SelfServeBusinessProLite | Self::SelfServeBusinessUsageBased
+        )
     }
 
     pub fn is_business_like(self) -> bool {
@@ -60,6 +66,7 @@ impl PlanType {
         matches!(
             self,
             Self::Team
+                | Self::SelfServeBusinessProLite
                 | Self::SelfServeBusinessUsageBased
                 | Self::Business
                 | Self::Ent26
@@ -88,6 +95,7 @@ impl From<KnownPlan> for PlanType {
             KnownPlan::Pro => Self::Pro,
             KnownPlan::ProLite => Self::ProLite,
             KnownPlan::Team => Self::Team,
+            KnownPlan::SelfServeBusinessProLite => Self::SelfServeBusinessProLite,
             KnownPlan::SelfServeBusinessUsageBased => Self::SelfServeBusinessUsageBased,
             KnownPlan::Business => Self::Business,
             KnownPlan::Ent26 => Self::Ent26,
@@ -106,7 +114,12 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn usage_based_plan_types_use_expected_wire_names() {
+    fn business_plan_types_use_expected_wire_names() {
+        assert_eq!(
+            serde_json::to_string(&PlanType::SelfServeBusinessProLite)
+                .expect("self-serve business ProLite should serialize"),
+            "\"self_serve_business_prolite\""
+        );
         assert_eq!(
             serde_json::to_string(&PlanType::SelfServeBusinessUsageBased)
                 .expect("self-serve business usage based should serialize"),
@@ -124,6 +137,11 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&PlanType::ProLite).expect("prolite should serialize"),
             "\"prolite\""
+        );
+        assert_eq!(
+            serde_json::from_str::<PlanType>("\"self_serve_business_prolite\"")
+                .expect("self-serve business ProLite should deserialize"),
+            PlanType::SelfServeBusinessProLite
         );
         assert_eq!(
             serde_json::from_str::<PlanType>("\"self_serve_business_usage_based\"")
@@ -146,8 +164,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_family_helpers_group_usage_based_variants_with_existing_plans() {
+    fn plan_family_helpers_group_business_variants_with_existing_plans() {
         assert_eq!(PlanType::Team.is_team_like(), true);
+        assert_eq!(PlanType::SelfServeBusinessProLite.is_team_like(), true);
         assert_eq!(PlanType::SelfServeBusinessUsageBased.is_team_like(), true);
         assert_eq!(PlanType::Business.is_team_like(), false);
         assert_eq!(PlanType::Ent26.is_team_like(), false);
@@ -159,8 +178,12 @@ mod tests {
     }
 
     #[test]
-    fn workspace_account_helper_includes_usage_based_workspace_plans() {
+    fn workspace_account_helper_includes_business_workspace_plans() {
         assert_eq!(PlanType::Team.is_workspace_account(), true);
+        assert_eq!(
+            PlanType::SelfServeBusinessProLite.is_workspace_account(),
+            true
+        );
         assert_eq!(
             PlanType::SelfServeBusinessUsageBased.is_workspace_account(),
             true
@@ -178,6 +201,10 @@ mod tests {
 
     #[test]
     fn auth_plan_type_converts_to_account_plan_type() {
+        assert_eq!(
+            PlanType::from(AuthPlanType::Known(KnownPlan::SelfServeBusinessProLite)),
+            PlanType::SelfServeBusinessProLite
+        );
         assert_eq!(
             PlanType::from(AuthPlanType::Known(KnownPlan::EnterpriseCbpUsageBased)),
             PlanType::EnterpriseCbpUsageBased

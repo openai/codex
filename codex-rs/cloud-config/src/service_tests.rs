@@ -476,18 +476,23 @@ async fn get_bundle_allows_agent_identity_business_plan() {
 }
 
 #[tokio::test]
-async fn get_bundle_skips_team_like_usage_based_plan() {
-    let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
-    let codex_home = tempdir().expect("tempdir");
-    let service = CloudConfigBundleService::new(
-        auth_manager_with_plan("self_serve_business_usage_based").await,
-        fetcher.clone(),
-        codex_home.path().to_path_buf(),
-        CLOUD_CONFIG_BUNDLE_TIMEOUT,
-    );
+async fn get_bundle_skips_team_like_business_plans() {
+    for plan_type in [
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+    ] {
+        let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
+        let codex_home = tempdir().expect("tempdir");
+        let service = CloudConfigBundleService::new(
+            auth_manager_with_plan(plan_type).await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_CONFIG_BUNDLE_TIMEOUT,
+        );
 
-    assert_eq!(service.load_startup_bundle().await, Ok(None));
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
+        assert_eq!(service.load_startup_bundle().await, Ok(None));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[tokio::test]

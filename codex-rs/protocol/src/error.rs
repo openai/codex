@@ -686,6 +686,7 @@ impl std::fmt::Display for UsageLimitReachedError {
             ),
             Some(PlanType::Known(
                 KnownPlan::Team
+                | KnownPlan::SelfServeBusinessProLite
                 | KnownPlan::SelfServeBusinessUsageBased
                 | KnownPlan::Business
                 | KnownPlan::Ent26

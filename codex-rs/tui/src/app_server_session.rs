@@ -2944,5 +2944,17 @@ mod tests {
                 plan: Some(ref plan),
             }) if plan == "Business"
         ));
+
+        let business_prolite = status_account_display_from_auth_mode(
+            Some(AuthMode::Chatgpt),
+            Some(codex_protocol::account::PlanType::SelfServeBusinessProLite),
+        );
+        assert!(matches!(
+            business_prolite,
+            Some(StatusAccountDisplay::ChatGpt {
+                email: None,
+                plan: Some(ref plan),
+            }) if plan == "Business"
+        ));
     }
 }
