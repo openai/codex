@@ -415,6 +415,7 @@ symphonia = { version = "0.6.0", default-features = false, features = [
     "wav",
 ] }
 socket2 = "0.6.1"
+# When bumping sqlx, audit the SQLite constructor deny list in clippy.toml.
 sqlx = { version = "0.9.0", default-features = false, features = [
     "chrono",
     "json",
@@ -488,6 +489,7 @@ rust = {}
 [workspace.lints.clippy]
 await_holding_invalid_type = "deny"
 await_holding_lock = "deny"
+disallowed_methods = "deny"
 expect_used = "deny"
 identity_op = "deny"
 manual_clamp = "deny"

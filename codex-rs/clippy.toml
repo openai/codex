@@ -11,6 +11,20 @@ disallowed-methods = [
     { path = "ratatui::style::Stylize::white", reason = "Avoid hardcoding white; prefer default fg or dim/bold. Exception: Disable this rule if rendering over a hardcoded ANSI background." },
     { path = "ratatui::style::Stylize::black", reason = "Avoid hardcoding black; prefer default fg or dim/bold. Exception: Disable this rule if rendering over a hardcoded ANSI background." },
     { path = "ratatui::style::Stylize::yellow", reason = "Avoid yellow; prefer other colors in `tui/styles.md`." },
+    # Audited against workspace sqlx 0.9.0. Revisit this SQLite escape-hatch list when bumping sqlx.
+    { path = "sqlx::Pool::connect", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::Pool::connect_with", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::Pool::connect_lazy", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::Pool::connect_lazy_with", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::Pool::set_connect_options", reason = "Do not replace options on SQLite pools created by codex-state's sqlite shim." },
+    { path = "sqlx::pool::PoolOptions::connect", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::pool::PoolOptions::connect_with", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::pool::PoolOptions::connect_lazy", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::pool::PoolOptions::connect_lazy_with", reason = "Create SQLite pools through codex-state's sqlite shim." },
+    { path = "sqlx::Connection::connect", reason = "Create SQLite connections through codex-state's sqlite shim." },
+    { path = "sqlx::Connection::connect_with", reason = "Create SQLite connections through codex-state's sqlite shim." },
+    { path = "sqlx::ConnectOptions::connect", reason = "Create SQLite connections through codex-state's sqlite shim." },
+    { path = "sqlx::migrate::MigrateDatabase::create_database", reason = "Create SQLite databases through codex-state's sqlite shim." },
 ]
 
 # Increase the size threshold for result_large_err to accommodate
