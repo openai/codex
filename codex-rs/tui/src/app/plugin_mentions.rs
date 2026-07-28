@@ -178,6 +178,8 @@ mod tests {
             must_show_installation_interstitial: None,
             auth_policy: PluginAuthPolicy::OnInstall,
             availability: PluginAvailability::Available,
+            disabled_reason: None,
+            eligible_plan_types: None,
             interface: None,
             keywords: Vec::new(),
         }

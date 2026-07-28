@@ -3964,6 +3964,8 @@ fn plugin_share_list_response_serializes_share_items() {
                     must_show_installation_interstitial: None,
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: PluginAvailability::Available,
+                    disabled_reason: None,
+                    eligible_plan_types: None,
                     interface: None,
                     keywords: Vec::new(),
                 },
@@ -3988,6 +3990,8 @@ fn plugin_share_list_response_serializes_share_items() {
                     "mustShowInstallationInterstitial": null,
                     "authPolicy": "ON_USE",
                     "availability": "AVAILABLE",
+                    "disabledReason": null,
+                    "eligiblePlanTypes": null,
                     "interface": null,
                     "keywords": [],
                 },
@@ -4015,6 +4019,43 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     assert_eq!(summary.local_version, None);
     assert_eq!(summary.share_context, None);
     assert_eq!(summary.must_show_installation_interstitial, None);
+    assert_eq!(summary.disabled_reason, None);
+    assert_eq!(summary.eligible_plan_types, None);
+}
+
+#[test]
+fn plugin_summary_round_trips_plan_eligibility_metadata() {
+    let value = json!({
+        "id": "gmail@openai-curated-remote",
+        "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+        "version": null,
+        "localVersion": null,
+        "name": "gmail",
+        "shareContext": null,
+        "source": { "type": "remote" },
+        "installed": false,
+        "enabled": false,
+        "installPolicy": "NOT_AVAILABLE",
+        "installPolicySource": null,
+        "mustShowInstallationInterstitial": null,
+        "authPolicy": "ON_USE",
+        "availability": "DISABLED_BY_ADMIN",
+        "disabledReason": "plan_not_eligible",
+        "eligiblePlanTypes": ["plus", "pro", "enterprise_cbp_automation"],
+        "interface": null,
+        "keywords": [],
+    });
+    let summary: PluginSummary =
+        serde_json::from_value(value.clone()).expect("plan metadata should deserialize");
+
+    assert_eq!(
+        summary.disabled_reason,
+        Some(PluginDisabledReason::PlanNotEligible)
+    );
+    assert_eq!(
+        serde_json::to_value(summary).expect("plan metadata should serialize"),
+        value
+    );
 }
 
 #[test]

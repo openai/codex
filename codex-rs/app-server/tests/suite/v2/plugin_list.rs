@@ -15,6 +15,7 @@ use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginDisabledReason;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginInstalledParams;
@@ -591,6 +592,8 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
                 must_show_installation_interstitial: None,
                 auth_policy: PluginAuthPolicy::OnInstall,
                 availability: codex_app_server_protocol::PluginAvailability::Available,
+                disabled_reason: None,
+                eligible_plan_types: None,
                 interface: None,
                 keywords: vec!["api-key".to_string(), "developer tools".to_string()],
             }],
@@ -878,6 +881,8 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                     must_show_installation_interstitial: None,
                     auth_policy: PluginAuthPolicy::OnInstall,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
+                    disabled_reason: None,
+                    eligible_plan_types: None,
                     interface: Some(codex_app_server_protocol::PluginInterface {
                         display_name: Some("Valid Plugin".to_string()),
                         short_description: None,
@@ -920,6 +925,8 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                     must_show_installation_interstitial: None,
                     auth_policy: PluginAuthPolicy::OnInstall,
                     availability: codex_app_server_protocol::PluginAvailability::Available,
+                    disabled_reason: None,
+                    eligible_plan_types: None,
                     interface: None,
                     keywords: Vec::new(),
                 },
@@ -4378,6 +4385,33 @@ plugin_sharing = true
 
 #[tokio::test]
 async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
+    assert_disabled_remote_plugin_metadata(
+        PluginDisabledReason::DisabledByAdmin,
+        /*eligible_plan_types*/ None,
+        PluginInstallPolicy::Available,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn plugin_list_preserves_plan_ineligible_remote_plugin_metadata() -> Result<()> {
+    assert_disabled_remote_plugin_metadata(
+        PluginDisabledReason::PlanNotEligible,
+        Some(vec![
+            "plus".to_string(),
+            "pro".to_string(),
+            "enterprise_cbp_automation".to_string(),
+        ]),
+        PluginInstallPolicy::NotAvailable,
+    )
+    .await
+}
+
+async fn assert_disabled_remote_plugin_metadata(
+    disabled_reason: PluginDisabledReason,
+    eligible_plan_types: Option<Vec<String>>,
+    installation_policy: PluginInstallPolicy,
+) -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -4393,65 +4427,51 @@ async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let global_directory_body = r#"{
-  "plugins": [
-    {
-      "id": "plugins~Plugin_00000000000000000000000000000000",
-      "name": "linear",
-      "scope": "GLOBAL",
-      "installation_policy": "AVAILABLE",
-      "authentication_policy": "ON_USE",
-      "status": "DISABLED_BY_ADMIN",
-      "release": {
-        "display_name": "Linear",
-        "description": "Track work in Linear",
-        "app_ids": [],
-        "interface": {},
-        "skills": []
-      }
-    }
-  ],
-  "pagination": {
-    "limit": 50,
-    "next_page_token": null
-  }
-}"#;
-    let global_installed_body = r#"{
-  "plugins": [
-    {
-      "id": "plugins~Plugin_00000000000000000000000000000000",
-      "name": "linear",
-      "scope": "GLOBAL",
-      "installation_policy": "AVAILABLE",
-      "authentication_policy": "ON_USE",
-      "status": "DISABLED_BY_ADMIN",
-      "release": {
-        "display_name": "Linear",
-        "description": "Track work in Linear",
-        "app_ids": [],
-        "interface": {},
-        "skills": []
-      },
-      "enabled": true,
-      "disabled_skill_names": []
-    }
-  ],
-  "pagination": {
-    "limit": 50,
-    "next_page_token": null
-  }
-}"#;
-    let empty_page_body = r#"{
-  "plugins": [],
-  "pagination": {
-    "limit": 50,
-    "next_page_token": null
-  }
-}"#;
+    let plugin = serde_json::json!({
+        "id": "plugins~Plugin_00000000000000000000000000000000",
+        "name": "gmail",
+        "scope": "GLOBAL",
+        "installation_policy": installation_policy,
+        "authentication_policy": "ON_USE",
+        "status": "DISABLED_BY_ADMIN",
+        "disabled_reason": disabled_reason,
+        "eligible_plan_types": eligible_plan_types,
+        "release": {
+            "display_name": "Gmail",
+            "description": "Search and manage email",
+            "app_ids": [],
+            "interface": {},
+            "skills": [],
+        },
+    });
+    let global_directory_body = serde_json::json!({
+        "plugins": [plugin.clone()],
+        "pagination": {
+            "limit": 50,
+            "next_page_token": null,
+        },
+    });
+    let mut installed_plugin = plugin;
+    installed_plugin["enabled"] = serde_json::json!(true);
+    installed_plugin["disabled_skill_names"] = serde_json::json!([]);
+    let global_installed_body = serde_json::json!({
+        "plugins": [installed_plugin],
+        "pagination": {
+            "limit": 50,
+            "next_page_token": null,
+        },
+    });
+    let empty_page_body = serde_json::json!({
+        "plugins": [],
+        "pagination": {
+            "limit": 50,
+            "next_page_token": null,
+        },
+    });
 
     for (scope, body) in [
-        ("GLOBAL", global_directory_body),
-        ("WORKSPACE", empty_page_body),
+        ("GLOBAL", &global_directory_body),
+        ("WORKSPACE", &empty_page_body),
     ] {
         Mock::given(method("GET"))
             .and(path("/backend-api/ps/plugins/list"))
@@ -4459,20 +4479,20 @@ async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
             .and(query_param("limit", "200"))
             .and(header("authorization", "Bearer chatgpt-token"))
             .and(header("chatgpt-account-id", "account-123"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
     }
     for (scope, body) in [
-        ("GLOBAL", global_installed_body),
-        ("WORKSPACE", empty_page_body),
+        ("GLOBAL", &global_installed_body),
+        ("WORKSPACE", &empty_page_body),
     ] {
         Mock::given(method("GET"))
             .and(path("/backend-api/ps/plugins/installed"))
             .and(query_param("scope", scope))
             .and(header("authorization", "Bearer chatgpt-token"))
             .and(header("chatgpt-account-id", "account-123"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
     }
@@ -4508,6 +4528,9 @@ async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
         plugin.availability,
         codex_app_server_protocol::PluginAvailability::DisabledByAdmin
     );
+    assert_eq!(plugin.disabled_reason, Some(disabled_reason));
+    assert_eq!(plugin.eligible_plan_types, eligible_plan_types);
+    assert_eq!(plugin.install_policy, installation_policy);
     Ok(())
 }
 
