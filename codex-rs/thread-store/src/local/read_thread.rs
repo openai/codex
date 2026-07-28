@@ -827,6 +827,7 @@ mod tests {
                     text: "Rollout user message".to_string(),
                     text_elements: Vec::new(),
                 }])),
+                started_at_ms: None,
                 completed_at_ms: 0,
             })),
         )
