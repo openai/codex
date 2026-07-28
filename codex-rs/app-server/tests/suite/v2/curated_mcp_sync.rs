@@ -185,7 +185,7 @@ async fn existing_thread_loads_api_curated_mcp_after_auth_switch_sync() -> Resul
         .thread
         .id;
     // Establish the existing thread's MCP runtime while curated Git sync is still blocked.
-    wait_for_mcp_starting(&mut fixture.mcp, REFRESH_PROBE_SERVER_NAME).await?;
+    wait_for_mcp_ready(&mut fixture.mcp, REFRESH_PROBE_SERVER_NAME).await?;
 
     let request_id = fixture
         .mcp
@@ -203,11 +203,11 @@ async fn existing_thread_loads_api_curated_mcp_after_auth_switch_sync() -> Resul
     .await??;
 
     // The account-change refresh has completed without the API-curated bundle on disk.
-    wait_for_mcp_starting(&mut fixture.mcp, REFRESH_PROBE_SERVER_NAME).await?;
+    wait_for_mcp_ready(&mut fixture.mcp, REFRESH_PROBE_SERVER_NAME).await?;
 
     // Let sync materialize the bundle; its completion callback must refresh this same thread.
     std::fs::write(&fixture.sync_barrier, "continue")?;
-    wait_for_mcp_starting(&mut fixture.mcp, TEST_SERVER_NAME).await?;
+    wait_for_mcp_ready(&mut fixture.mcp, TEST_SERVER_NAME).await?;
 
     let response: McpServerToolCallResponse = fixture
         .mcp
@@ -235,11 +235,11 @@ async fn existing_thread_loads_api_curated_mcp_after_auth_switch_sync() -> Resul
     Ok(())
 }
 
-async fn wait_for_mcp_starting(mcp: &mut TestAppServer, server_name: &str) -> Result<()> {
+async fn wait_for_mcp_ready(mcp: &mut TestAppServer, server_name: &str) -> Result<()> {
     timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_matching_notification(
-            "mcpServer/startupStatus/updated starting",
+            "mcpServer/startupStatus/updated ready",
             |notification| {
                 notification.method == "mcpServer/startupStatus/updated"
                     && notification
@@ -253,7 +253,7 @@ async fn wait_for_mcp_starting(mcp: &mut TestAppServer, server_name: &str) -> Re
                         .as_ref()
                         .and_then(|params| params.get("status"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("starting")
+                        == Some("ready")
             },
         ),
     )
