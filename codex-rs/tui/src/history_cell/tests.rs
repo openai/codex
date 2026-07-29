@@ -2497,6 +2497,26 @@ fn reasoning_summary_block_falls_back_when_summary_is_missing() {
 }
 
 #[test]
+fn reasoning_summary_block_displays_title_only_summary() {
+    let cell = new_reasoning_summary_block(
+        vec!["**Confirming backend JSONL source**".to_string()],
+        &test_cwd(),
+    );
+
+    let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+    insta::assert_snapshot!(
+        rendered_display.join("\n"),
+        @"• Confirming backend JSONL source"
+    );
+
+    let rendered_transcript = render_transcript(cell.as_ref());
+    assert_eq!(
+        rendered_transcript,
+        vec!["• Confirming backend JSONL source"]
+    );
+}
+
+#[test]
 fn reasoning_summary_block_splits_header_and_summary_when_present() {
     let cell = new_reasoning_summary_block(
         vec!["**High level plan**\n\nWe should fix the bug next.".to_string()],
