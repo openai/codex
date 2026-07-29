@@ -51,6 +51,11 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Returns the MCP server that owns this runtime, when this is an MCP tool.
+    fn mcp_server_name(&self) -> Option<&str> {
+        None
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             payload,
@@ -283,6 +288,10 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
 }
 
 impl CoreToolRuntime for ExposureOverride {
+    fn mcp_server_name(&self) -> Option<&str> {
+        self.handler.mcp_server_name()
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         self.handler.matches_kind(payload)
     }
@@ -390,6 +399,10 @@ impl ToolRegistry {
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
         self.tools.get(name).map(Arc::clone)
+    }
+
+    pub(crate) fn mcp_server_name(&self, name: &ToolName) -> Option<&str> {
+        self.tools.get(name)?.mcp_server_name()
     }
 
     #[cfg(test)]

@@ -163,6 +163,10 @@ impl McpHandler {
 }
 
 impl CoreToolRuntime for McpHandler {
+    fn mcp_server_name(&self) -> Option<&str> {
+        Some(&self.tool_info.server_name)
+    }
+
     fn telemetry_tags<'a>(
         &'a self,
         _invocation: &'a ToolInvocation,

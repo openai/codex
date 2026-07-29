@@ -149,6 +149,10 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
+    pub(crate) fn mcp_server_name(&self, call: &ToolCall) -> Option<&str> {
+        self.registry.mcp_server_name(&call.tool_name)
+    }
+
     pub fn tool_waits_for_runtime_cancellation(&self, call: &ToolCall) -> bool {
         self.registry
             .waits_for_runtime_cancellation(&call.tool_name)

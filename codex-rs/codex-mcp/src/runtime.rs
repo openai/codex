@@ -248,6 +248,15 @@ impl McpRuntime {
         }
     }
 
+    /// Waits for the selected server without capturing an execution binding.
+    pub async fn wait_for_server_startup(&self, server: &str) {
+        self.current
+            .load_full()
+            .connections
+            .wait_for_server_startup(server)
+            .await;
+    }
+
     /// Captures the current runtime after its selected server has finished startup.
     pub async fn current_binding_for_call(&self, server: &str) -> Option<Arc<McpBinding>> {
         let current = self.current.load_full();

@@ -7,6 +7,8 @@ use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExposure;
+use crate::tools::registry::override_tool_exposure;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
@@ -156,6 +158,17 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         })
         .expect("test session should expose a parallel shell-like tool");
 
+    assert_eq!(
+        router.mcp_server_name(&ToolCall {
+            tool_name: ToolName::plain(parallel_tool_name),
+            call_id: "call-local-tool".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        }),
+        None
+    );
+
     assert!(!router.tool_supports_parallel(&ToolCall {
         tool_name: ToolName::namespaced("mcp__server__", parallel_tool_name),
         call_id: "call-namespaced-tool".to_string(),
@@ -248,12 +261,15 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "mcp__echo__",
                     "query_with_delay",
                 )),
-                mcp_runtime(mcp_tool_info(
-                    "hello_echo",
-                    /*supports_parallel_tool_calls*/ false,
-                    "mcp__hello_echo__",
-                    "query_with_delay",
-                )),
+                override_tool_exposure(
+                    mcp_runtime(mcp_tool_info(
+                        "hello_echo",
+                        /*supports_parallel_tool_calls*/ false,
+                        "mcp__hello_echo__",
+                        "query_with_delay",
+                    )),
+                    ToolExposure::DirectModelOnly,
+                ),
             ],
             extension_tool_executors: Vec::new(),
             wait_for_environment_tool_config: None,
@@ -271,6 +287,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
         encrypted_function_args: None,
     };
     assert!(router.tool_supports_parallel(&call));
+    assert_eq!(router.mcp_server_name(&call), Some("echo"));
 
     let different_server_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
@@ -281,6 +298,10 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
         encrypted_function_args: None,
     };
     assert!(!router.tool_supports_parallel(&different_server_call));
+    assert_eq!(
+        router.mcp_server_name(&different_server_call),
+        Some("hello_echo")
+    );
 
     Ok(())
 }
