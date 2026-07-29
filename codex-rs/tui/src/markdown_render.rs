@@ -64,7 +64,6 @@ use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
 use ratatui::style::Style;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;

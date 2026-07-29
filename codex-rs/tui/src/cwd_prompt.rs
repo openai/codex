@@ -353,6 +353,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
+    use ratatui::widgets::FrameExt;
     use tempfile::TempDir;
 
     fn new_prompt() -> CwdPromptScreen {

@@ -15,8 +15,5 @@ workspace = true
 
 [dependencies]
 ansi-to-tui = { workspace = true }
-ratatui = { workspace = true, features = [
-    "unstable-rendered-line-info",
-    "unstable-widget-ref",
-] }
+ratatui = { workspace = true }
 tracing = { workspace = true, features = ["log"] }

@@ -9,7 +9,6 @@ use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::style::Stylize;
 use std::sync::Arc;
 use tempfile::TempDir;
 

@@ -74,7 +74,7 @@ ignore = [
     # Each exception must identify the dependency path and removal condition.
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark/starlark_syntax v0.14.2 used by execpolicy/cli/core; no fixed starlark release yet" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; pulled in via starlark_map under starlark v0.14.2 used by execpolicy/cli/core and bm25 used by core; remove when upstream dependencies drop fxhash" },
-    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via ratatui/rmcp/starlark used by tui/execpolicy; no fixed release yet" },
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via starlark/v8 used by execpolicy/code-mode; no fixed release yet" },
     { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is unmaintained; pulled in via postcard/heapless/pagable under starlark v0.14.2 used by execpolicy/cli/core; no fixed starlark release yet" },
     # TODO(fcoury): remove this exception when syntect drops yaml-rust and bincode, or updates to versions that have fixed the vulnerabilities.
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
@@ -314,7 +314,6 @@ allow-git = [
     "https://github.com/dzbarsky/rules_rust",
     "https://github.com/helix-editor/nucleo.git",
     "https://github.com/juberti-oai/rust-sdks.git",
-    "https://github.com/nornagon/ratatui",
     "https://github.com/openai-oss-forks/crossterm",
     "https://github.com/openai-oss-forks/tokio-tungstenite",
     "https://github.com/openai-oss-forks/tungstenite-rs",

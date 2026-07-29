@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use ratatui::style::Style;
 use ratatui::style::Styled;
-use ratatui::style::Stylize;
 use ratatui::text::Span;
 
 const TAG_WIDTH: usize = "Plugin".len();

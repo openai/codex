@@ -5,7 +5,6 @@
 
 use ratatui::style::Color;
 use ratatui::style::Style;
-use ratatui::style::Stylize;
 
 use super::TokenActivityView;
 use crate::color::blend;

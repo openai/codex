@@ -248,6 +248,7 @@ mod tests {
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use ratatui::Terminal;
+    use ratatui::widgets::FrameExt;
 
     fn new_prompt() -> UpdatePromptScreen {
         UpdatePromptScreen::new(

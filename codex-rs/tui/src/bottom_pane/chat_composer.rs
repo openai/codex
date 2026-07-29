@@ -192,6 +192,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
+use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use codex_protocol::openai_models::ReasoningEffort;
@@ -4665,7 +4666,7 @@ impl ChatComposer {
                         }
                     } else if self.footer.flash_visible() {
                         if let Some(flash) = self.footer.flash.as_ref() {
-                            flash.line.render(inset_footer_hint_area(hint_rect), buf);
+                            Widget::render(&flash.line, inset_footer_hint_area(hint_rect), buf);
                         }
                     } else if let Some(items) = active_footer_hint_override {
                         render_footer_hint_items(hint_rect, buf, items);
@@ -4703,11 +4704,11 @@ impl ChatComposer {
             }
         }
         let style = user_message_style();
-        Block::default().style(style).render_ref(composer_rect, buf);
+        Block::default().style(style).render(composer_rect, buf);
         if !remote_images_rect.is_empty() {
             Paragraph::new(self.attachments.remote_image_lines())
                 .style(style)
-                .render_ref(remote_images_rect, buf);
+                .render(remote_images_rect, buf);
         }
         if !textarea_rect.is_empty() {
             let prompt = if self.draft.input_enabled {
@@ -4780,8 +4781,7 @@ impl ChatComposer {
             };
             if !textarea_rect.is_empty() {
                 let placeholder = Span::from(text).dim();
-                Line::from(vec![placeholder])
-                    .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+                Line::from(vec![placeholder]).render(textarea_rect.inner(Margin::new(0, 0)), buf);
             }
         }
         if matches!(self.popups.active, ActivePopup::None)

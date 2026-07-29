@@ -1902,11 +1902,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             state.action.title().bold().cyan()
         };
         let header_line: Line = vec![header_title].into();
-        frame.render_widget_ref(header_line, chrome(header));
+        frame.render_widget_ref(&header_line, chrome(header));
 
         // Search line
         let search = chrome(search);
-        frame.render_widget_ref(search_line(state, search.width), search);
+        frame.render_widget_ref(&search_line(state, search.width), search);
 
         let list = Rect::new(
             list.x.saturating_add(2),
@@ -2076,7 +2076,7 @@ fn render_picker_footer(
         if y >= area.bottom() {
             break;
         }
-        frame.render_widget_ref(line, Rect::new(area.x, y, area.width, 1));
+        frame.render_widget_ref(&line, Rect::new(area.x, y, area.width, 1));
     }
 }
 
@@ -2090,7 +2090,7 @@ fn render_picker_footer_separator(
     }
 
     let separator = "─".repeat(area.width as usize);
-    frame.render_widget_ref(Line::from(separator.dim()), area);
+    frame.render_widget_ref(&Line::from(separator.dim()), area);
 
     let progress_width = UnicodeWidthStr::width(progress_label.as_str()) as u16;
     if progress_width < area.width {
@@ -2100,7 +2100,7 @@ fn render_picker_footer_separator(
             progress_width,
             1,
         );
-        frame.render_widget_ref(Line::from(progress_label.dim()), percent_area);
+        frame.render_widget_ref(&Line::from(progress_label.dim()), percent_area);
     }
 }
 
@@ -2339,7 +2339,7 @@ fn render_transcript_loading_overlay(frame: &mut crate::custom_terminal::Frame, 
         message_width.min(overlay.width),
         1,
     );
-    frame.render_widget_ref(Line::from(message.bold()), line);
+    frame.render_widget_ref(&Line::from(message.bold()), line);
 }
 
 fn transcript_loading_overlay_style() -> Style {
@@ -2456,7 +2456,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
     let rows = &state.filtered_rows;
     if rows.is_empty() {
         let message = render_empty_state_line(state);
-        frame.render_widget_ref(message, area);
+        frame.render_widget_ref(&message, area);
         return;
     }
 
@@ -2472,7 +2472,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
     );
     if show_more_above {
         frame.render_widget_ref(
-            more_line("↑ more"),
+            &more_line("↑ more"),
             Rect::new(area.x, area.y, area.width, 1),
         );
     }
@@ -2493,7 +2493,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
             if y >= content_area.y.saturating_add(content_area.height) {
                 break;
             }
-            frame.render_widget_ref(line, Rect::new(area.x, y, area.width, 1));
+            frame.render_widget_ref(&line, Rect::new(area.x, y, area.width, 1));
             y = y.saturating_add(1);
         }
         if state.density == SessionListDensity::Comfortable
@@ -2509,7 +2509,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
     {
         let loading_line: Line = vec!["  ".into(), "Loading older sessions…".italic().dim()].into();
         let rect = Rect::new(area.x, y, area.width, 1);
-        frame.render_widget_ref(loading_line, rect);
+        frame.render_widget_ref(&loading_line, rect);
     }
     if show_more_below {
         let label = if state.pagination.loading.is_pending() {
@@ -2518,7 +2518,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
             "↓ more"
         };
         frame.render_widget_ref(
-            more_line(label),
+            &more_line(label),
             Rect::new(
                 area.x,
                 area.y.saturating_add(area.height.saturating_sub(1)),
@@ -3764,7 +3764,7 @@ mod tests {
         {
             let mut frame = terminal.get_frame();
             let line = search_line(&state, frame.area().width);
-            frame.render_widget_ref(line, frame.area());
+            frame.render_widget_ref(&line, frame.area());
         }
         terminal.flush().expect("flush");
 
@@ -4663,7 +4663,7 @@ session_picker_view = "dense"
         {
             let mut frame = terminal.get_frame();
             let line = search_line(&state, frame.area().width);
-            frame.render_widget_ref(line, frame.area());
+            frame.render_widget_ref(&line, frame.area());
         }
         terminal.flush().expect("flush");
 

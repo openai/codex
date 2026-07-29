@@ -8,7 +8,6 @@ use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 use ratatui::style::Color;
 use ratatui::style::Style;
-use ratatui::style::Stylize;
 
 const LIGHT_BG_ACCENT_RGB: (u8, u8, u8) = (0, 95, 135);
 // Decorative table rules should remain visible without competing with cell content.

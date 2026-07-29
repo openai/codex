@@ -53,6 +53,8 @@ impl fmt::Display for VT100Backend {
 }
 
 impl Backend for VT100Backend {
+    type Error = io::Error;
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,

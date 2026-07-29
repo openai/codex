@@ -37,27 +37,29 @@ use crossterm::terminal::Clear;
 use derive_more::IsVariant;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
+use ratatui::backend::IntoCrossterm;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::CellDiffOption;
+use ratatui::buffer::CellWidth;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
-use unicode_width::UnicodeWidthStr;
 
 /// Returns the display width of a cell symbol, ignoring OSC escape sequences.
 ///
 /// OSC sequences (e.g. OSC 8 hyperlinks: `\x1B]8;;URL\x07`) are terminal
 /// control sequences that don't consume display columns.  The standard
-/// `UnicodeWidthStr::width()` method incorrectly counts the printable
+/// `CellWidth::cell_width()` method incorrectly counts the printable
 /// characters inside OSC payloads (like `]`, `8`, `;`, and URL characters).
 /// This function strips them first so that only visible characters contribute
 /// to the width.
 fn display_width(s: &str) -> usize {
     // Fast path: no escape sequences present.
     if !s.contains('\x1B') {
-        return s.width();
+        return usize::from(s.cell_width());
     }
 
     // Strip OSC sequences: ESC ] ... BEL
@@ -76,7 +78,7 @@ fn display_width(s: &str) -> usize {
         }
         visible.push(ch);
     }
-    visible.width()
+    usize::from(visible.as_str().cell_width())
 }
 
 fn osc8_hyperlink_parts(symbol: &str) -> Option<(&str, &str)> {
@@ -156,7 +158,7 @@ impl Frame<'_> {
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct Terminal<B>
 where
-    B: Backend + Write,
+    B: Backend<Error = io::Error> + Write,
 {
     /// The backend used to interface with the terminal
     backend: B,
@@ -182,7 +184,7 @@ where
 
 impl<B> Drop for Terminal<B>
 where
-    B: Backend,
+    B: Backend<Error = io::Error>,
     B: Write,
 {
     #[allow(clippy::print_stderr)]
@@ -202,7 +204,7 @@ where
 
 impl<B> Terminal<B>
 where
-    B: Backend,
+    B: Backend<Error = io::Error>,
     B: Write,
 {
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
@@ -626,7 +628,10 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     // their place (the skipped cells should be blank anyway), or due to per-cell-skipping:
     let mut to_skip: usize = 0;
     for (i, (current, previous)) in next_buffer.iter().zip(previous_buffer.iter()).enumerate() {
-        if !current.skip && (current != previous || invalidated > 0) && to_skip == 0 {
+        if current.diff_option != CellDiffOption::Skip
+            && (current != previous || invalidated > 0)
+            && to_skip == 0
+        {
             let (x, y) = a.pos_of(i);
             let row = i / a.area.width as usize;
             if x <= last_nonblank_columns[row] {
@@ -690,7 +695,10 @@ where
                 if cell.fg != fg || cell.bg != bg {
                     queue!(
                         writer,
-                        SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                        SetColors(Colors::new(
+                            cell.fg.into_crossterm(),
+                            cell.bg.into_crossterm()
+                        ))
                     )?;
                     fg = cell.fg;
                     bg = cell.bg;
@@ -705,7 +713,7 @@ where
             DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
                 queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
                 modifier = Modifier::empty();
-                queue!(writer, SetBackgroundColor((*clear_bg).into()))?;
+                queue!(writer, SetBackgroundColor((*clear_bg).into_crossterm()))?;
                 bg = *clear_bg;
                 queue!(writer, Clear(crossterm::terminal::ClearType::UntilNewLine))?;
             }
@@ -840,6 +848,8 @@ mod tests {
     }
 
     impl Backend for CaptureBackend {
+        type Error = io::Error;
+
         fn draw<'a, I>(&mut self, _content: I) -> io::Result<()>
         where
             I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -987,6 +997,15 @@ mod tests {
         assert_eq!(output.matches(close).count(), 1);
         let footer = output.find("Press").expect("footer");
         assert!(output.find(close).expect("hyperlink close") < footer);
+    }
+
+    #[test]
+    fn display_width_handles_halfwidth_dakuten() {
+        assert_eq!(display_width("ｶﾞ"), 2);
+        assert_eq!(
+            display_width("\x1b]8;;https://example.com\x07ｶﾞ\x1b]8;;\x07"),
+            2
+        );
     }
 
     #[test]

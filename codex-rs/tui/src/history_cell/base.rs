@@ -25,22 +25,28 @@ impl HistoryCell for PlainHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct WebHyperlinkHistoryCell {
-    lines: Vec<Line<'static>>,
+    lines: Vec<HyperlinkLine>,
 }
 
 impl WebHyperlinkHistoryCell {
     pub(crate) fn new(lines: Vec<Line<'static>>) -> Self {
+        Self {
+            lines: crate::terminal_hyperlinks::annotate_web_urls(lines),
+        }
+    }
+
+    pub(crate) fn new_hyperlink_lines(lines: Vec<HyperlinkLine>) -> Self {
         Self { lines }
     }
 }
 
 impl HistoryCell for WebHyperlinkHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        self.lines.clone()
+        self.lines.iter().map(|line| line.line.clone()).collect()
     }
 
     fn display_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
-        crate::terminal_hyperlinks::annotate_web_urls(self.lines.clone())
+        self.lines.clone()
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
@@ -48,7 +54,7 @@ impl HistoryCell for WebHyperlinkHistoryCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.lines.clone())
+        plain_lines(self.lines.iter().map(|line| line.line.clone()))
     }
 }
 #[derive(Debug)]

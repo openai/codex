@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Alignment;
+use ratatui::layout::HorizontalAlignment;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -128,7 +128,7 @@ impl Renderable for PetPickerPreviewRenderable {
             lines.push(Line::from(body.dim()));
         }
         Paragraph::new(lines)
-            .alignment(Alignment::Center)
+            .alignment(HorizontalAlignment::Center)
             .render(text_area, buf);
     }
 

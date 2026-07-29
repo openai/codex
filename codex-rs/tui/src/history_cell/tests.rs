@@ -353,6 +353,57 @@ fn composite_cell_preserves_child_web_links() {
 }
 
 #[test]
+fn empty_mcp_output_preserves_docs_hyperlink() {
+    let destination = "https://developers.openai.com/codex/mcp";
+    let cell: Box<dyn HistoryCell> = Box::new(empty_mcp_output());
+
+    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 80)).join("\n"), @r"
+    /mcp
+
+    🔌  MCP Tools
+
+      • No MCP servers configured.
+        See the MCP docs to configure them.
+    ");
+
+    let expected_link = vec![crate::terminal_hyperlinks::TerminalHyperlink::web(
+        /*columns*/ 12..20,
+        destination.to_string(),
+    )];
+    assert_eq!(
+        cell.display_hyperlink_lines(/*width*/ 80)[5].hyperlinks,
+        expected_link
+    );
+    assert_eq!(
+        cell.transcript_hyperlink_lines(/*width*/ 80)[5].hyperlinks,
+        expected_link
+    );
+
+    let area = Rect::new(0, 0, 80, 6);
+    let mut buf = Buffer::empty(area);
+    cell.render(area, &mut buf);
+    assert_eq!(
+        (0..39).map(|x| buf[(x, 5)].modifier).collect::<Vec<_>>(),
+        [
+            vec![Modifier::DIM; 12],
+            vec![Modifier::DIM | Modifier::UNDERLINED; 8],
+            vec![Modifier::DIM; 19],
+        ]
+        .concat()
+    );
+    let linked_text = area
+        .positions()
+        .filter_map(|position| {
+            let symbol = buf[position].symbol();
+            symbol
+                .contains(&format!("\x1b]8;;{destination}\x07"))
+                .then(|| crate::terminal_hyperlinks::strip_osc8(symbol))
+        })
+        .collect::<String>();
+    assert_eq!(linked_text, "MCP docs");
+}
+
+#[test]
 fn proposed_plan_cell_unwraps_markdown_fenced_table() {
     let plan = new_proposed_plan(
         "## Plan\n\n```markdown\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n```\n"

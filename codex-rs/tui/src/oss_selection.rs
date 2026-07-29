@@ -24,9 +24,9 @@ use crossterm::terminal::enable_raw_mode;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Alignment;
 use ratatui::layout::Constraint;
 use ratatui::layout::Direction;
+use ratatui::layout::HorizontalAlignment;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
@@ -270,7 +270,10 @@ impl WidgetRef for &OssSelectionWidget<'_> {
                 } else {
                     Style::new().bg(Color::DarkGray)
                 };
-                opt.label.clone().alignment(Alignment::Center).style(style)
+                opt.label
+                    .clone()
+                    .alignment(HorizontalAlignment::Center)
+                    .style(style)
             })
             .collect();
 

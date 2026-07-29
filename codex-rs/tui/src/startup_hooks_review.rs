@@ -258,7 +258,7 @@ fn selection_item(name: &str, is_disabled: bool) -> SelectionItem {
 fn draw_view(tui: &mut Tui, view: &ListSelectionView) -> Result<()> {
     tui.draw(u16::MAX, |frame| {
         let area = frame.area();
-        frame.render_widget_ref(Clear, area);
+        frame.render_widget_ref(&Clear, area);
         let view_area = Rect::new(
             area.x,
             area.y,

@@ -1,5 +1,6 @@
 use std::fmt;
 use std::future::Future;
+use std::io;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
@@ -589,7 +590,7 @@ struct PendingHistoryLines {
 
 fn clear_for_viewport_change<B>(terminal: &mut CustomTerminal<B>, new_area: Rect) -> Result<()>
 where
-    B: Backend + Write,
+    B: Backend<Error = io::Error> + Write,
 {
     let clear_position = if terminal.viewport_area.is_empty() {
         new_area.as_position()

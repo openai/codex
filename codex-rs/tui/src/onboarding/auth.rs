@@ -52,6 +52,9 @@ use crate::motion::shimmer_text;
 use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
+use crate::terminal_hyperlinks::visible_lines;
 use crate::tui::FrameRequester;
 
 /// Marks buffer cells that have cyan+underlined style as an OSC 8 hyperlink.
@@ -544,50 +547,51 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
+        let mut docs_line = HyperlinkLine::new(Line::from("  For more details see the ").dim());
+        docs_line.push_span(
+            "Codex docs".underlined(),
+            Some("https://developers.openai.com/codex/security"),
+        );
+        let mut preferences_line =
+            HyperlinkLine::new(Line::from("  Uses your plan's rate limits and ").dim());
+        preferences_line.push_span(
+            "training data preferences".underlined(),
+            Some("https://chatgpt.com/#settings"),
+        );
+
         let lines = vec![
-            "✓ Signed in with your ChatGPT account"
-                .fg(Color::Green)
-                .into(),
+            HyperlinkLine::new(
+                "✓ Signed in with your ChatGPT account"
+                    .fg(Color::Green)
+                    .into(),
+            ),
             "".into(),
             "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Codex".into(),
-            Line::from(vec![
-                "  For more details see the ".into(),
-                crate::terminal_hyperlinks::osc8_hyperlink(
-                    "https://developers.openai.com/codex/security",
-                    "Codex docs",
-                )
-                .underlined(),
-            ])
-            .dim(),
+            docs_line,
             "".into(),
             "  Codex can make mistakes".into(),
-            "  Review the code it writes and commands it runs"
-                .dim()
-                .into(),
+            HyperlinkLine::new(
+                "  Review the code it writes and commands it runs"
+                    .dim()
+                    .into(),
+            ),
             "".into(),
             "  Powered by your ChatGPT account".into(),
-            Line::from(vec![
-                "  Uses your plan's rate limits and ".into(),
-                crate::terminal_hyperlinks::osc8_hyperlink(
-                    "https://chatgpt.com/#settings",
-                    "training data preferences",
-                )
-                .underlined(),
-            ])
-            .dim(),
+            preferences_line,
             "".into(),
-            Line::from(vec![
+            HyperlinkLine::new(Line::from(vec![
                 "  Press ".fg(Color::Cyan),
                 self.confirm_binding().into(),
                 " to continue".fg(Color::Cyan),
-            ]),
+            ])),
         ];
 
-        Paragraph::new(lines)
+        Paragraph::new(visible_lines(lines.clone()))
             .wrap(Wrap { trim: false })
             .render(area, buf);
+        mark_buffer_hyperlinks(buf, area, &lines, /*scroll_rows*/ 0);
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
@@ -1249,6 +1253,69 @@ mod tests {
         insta::assert_snapshot!("continue_in_browser_narrow_long_url", contents);
         assert!(contents.contains("On a remote or headless machine?"));
         assert!(contents.contains("Press esc to cancel"));
+    }
+
+    #[test]
+    fn chatgpt_success_message_renders_osc8_hyperlinks() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
+        let area = Rect::new(0, 0, 80, 14);
+        let mut buf = Buffer::empty(area);
+
+        widget.render_chatgpt_success_message(area, &mut buf);
+
+        assert_eq!(
+            collect_osc8_chars(&buf, area, "https://developers.openai.com/codex/security"),
+            "Codex docs"
+        );
+        assert_eq!(
+            collect_osc8_chars(&buf, area, "https://chatgpt.com/#settings"),
+            "training data preferences"
+        );
+        assert_eq!(
+            (0..37).map(|x| buf[(x, 5)].modifier).collect::<Vec<_>>(),
+            [
+                vec![Modifier::DIM; 27],
+                vec![Modifier::DIM | Modifier::UNDERLINED; 10],
+            ]
+            .concat()
+        );
+        assert_eq!(
+            (0..60).map(|x| buf[(x, 11)].modifier).collect::<Vec<_>>(),
+            [
+                vec![Modifier::DIM; 35],
+                vec![Modifier::DIM | Modifier::UNDERLINED; 25],
+            ]
+            .concat()
+        );
+
+        let visible = (area.top()..area.bottom())
+            .map(|y| {
+                let row = (area.left()..area.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>();
+                crate::terminal_hyperlinks::strip_osc8(&row)
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(visible, @r###"
+        ✓ Signed in with your ChatGPT account
+
+          Before you start:
+
+          Decide how much autonomy you want to grant Codex
+          For more details see the Codex docs
+
+          Codex can make mistakes
+          Review the code it writes and commands it runs
+
+          Powered by your ChatGPT account
+          Uses your plan's rate limits and training data preferences
+
+          Press enter to continue
+        "###);
     }
 
     #[test]

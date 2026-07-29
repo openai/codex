@@ -2,7 +2,6 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RowRenderable;
 use ratatui::style::Style;
 use ratatui::style::Styled as _;
-use ratatui::style::Stylize as _;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use unicode_width::UnicodeWidthStr;
