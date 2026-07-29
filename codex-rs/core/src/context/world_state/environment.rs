@@ -62,6 +62,7 @@ impl EnvironmentsState {
                 })
                 .collect(),
             legacy_single: is_legacy_single(&self.environments),
+            include_primary: self.environments.len() > 1,
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             network: self.network.clone(),
@@ -87,6 +88,7 @@ impl WorldStateSection for EnvironmentsState {
                             cwd: environment.cwd.inferred_native_path_string(),
                             status: environment.status,
                             shell: environment.shell.clone(),
+                            is_primary: self.environments.len() > 1 && environment.is_primary,
                         },
                     )
                 })
@@ -113,15 +115,17 @@ impl WorldStateSection for EnvironmentsState {
             || current.timezone != previous.timezone
             || current.network != previous.network
             || current.filesystem != previous.filesystem;
+        let multiple_environments = self.environments.len() > 1;
+        let previous_multiple_environments = previous.environments.len() > 1;
         let mut updates = self
             .environments
             .iter()
             .filter(|(id, _)| {
                 let environment = &current.environments[*id];
-                previous
-                    .environments
-                    .get(*id)
-                    .is_none_or(|previous| !environment.has_same_diff_value(previous))
+                previous.environments.get(*id).is_none_or(|previous| {
+                    multiple_environments != previous_multiple_environments
+                        || !environment.has_same_diff_value(previous)
+                })
             })
             .map(|(id, environment)| (id.clone(), EnvironmentUpdate::Current(environment.clone())))
             .collect::<BTreeMap<_, _>>();
@@ -140,6 +144,7 @@ impl WorldStateSection for EnvironmentsState {
             Box::new(RenderedEnvironments {
                 updates,
                 legacy_single,
+                include_primary: multiple_environments || previous_multiple_environments,
                 current_date: self.current_date.clone(),
                 timezone: self.timezone.clone(),
                 network: self.network.clone(),
@@ -171,6 +176,7 @@ impl ContextualUserFragment for EnvironmentsState {
 struct RenderedEnvironments {
     updates: BTreeMap<String, EnvironmentUpdate>,
     legacy_single: bool,
+    include_primary: bool,
     current_date: Option<String>,
     timezone: Option<String>,
     network: Option<NetworkContext>,
@@ -210,6 +216,13 @@ impl ContextualUserFragment for RenderedEnvironments {
                         rendered.push_str("    <environment id=\"");
                         push_xml_escaped_text(&mut rendered, id);
                         rendered.push('"');
+                        if self.include_primary {
+                            rendered.push_str(if environment.is_primary {
+                                " primary=\"true\""
+                            } else {
+                                " primary=\"false\""
+                            });
+                        }
                         rendered.push_str(">\n");
                         push_environment_values(&mut rendered, environment, "      ");
                         rendered.push_str("    </environment>\n");
@@ -283,6 +296,7 @@ struct EnvironmentState {
     cwd: PathUri,
     status: EnvironmentStatus,
     shell: Option<String>,
+    is_primary: bool,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -300,12 +314,15 @@ struct EnvironmentSnapshot {
     cwd: String,
     status: EnvironmentStatus,
     shell: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    is_primary: bool,
 }
 
 impl EnvironmentSnapshot {
     fn has_same_diff_value(&self, other: &Self) -> bool {
         self.cwd == other.cwd
             && self.status == other.status
+            && self.is_primary == other.is_primary
             && self
                 .shell
                 .as_ref()
@@ -324,7 +341,8 @@ enum EnvironmentStatus {
 fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, EnvironmentState> {
     let mut environments = snapshot
         .turn_environments()
-        .map(|environment| {
+        .enumerate()
+        .map(|(index, environment)| {
             (
                 environment.environment_id.clone(),
                 EnvironmentState {
@@ -334,6 +352,7 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
                         .shell
                         .as_ref()
                         .map(|shell| shell.name().to_string()),
+                    is_primary: index == 0,
                 },
             )
         })
@@ -345,6 +364,7 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
                 cwd: environment.selection.cwd.clone(),
                 status: EnvironmentStatus::Starting,
                 shell: None,
+                is_primary: false,
             });
     }
     environments

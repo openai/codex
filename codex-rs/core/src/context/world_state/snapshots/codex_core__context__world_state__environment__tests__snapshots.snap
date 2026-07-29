@@ -5,47 +5,47 @@ expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&full)),\n(
 Absent -> Absent
 None
 
-Absent -> {"environments":{"devbox":{"cwd":"/workspace","shell":"bash","status":"available"},"laptop":{"cwd":"/repo","shell":"zsh","status":"available"}}} (role - user)
+Absent -> {"environments":{"devbox":{"cwd":"/workspace","shell":"bash","status":"available"},"laptop":{"cwd":"/repo","is_primary":true,"shell":"zsh","status":"available"}}} (role - user)
 <environment_context>
   <environments>
-    <environment id="devbox">
+    <environment id="devbox" primary="false">
       <cwd>/workspace</cwd>
       <shell>bash</shell>
     </environment>
-    <environment id="laptop">
+    <environment id="laptop" primary="true">
       <cwd>/repo</cwd>
       <shell>zsh</shell>
     </environment>
   </environments>
 </environment_context>
 
-Unknown -> {"environments":{"devbox":{"cwd":"/workspace","shell":"bash","status":"available"},"laptop":{"cwd":"/repo","shell":"zsh","status":"available"}}} (role - user)
+Unknown -> {"environments":{"devbox":{"cwd":"/workspace","shell":"bash","status":"available"},"laptop":{"cwd":"/repo","is_primary":true,"shell":"zsh","status":"available"}}} (role - user)
 <environment_context>
   <environments>
-    <environment id="devbox">
+    <environment id="devbox" primary="false">
       <cwd>/workspace</cwd>
       <shell>bash</shell>
     </environment>
-    <environment id="laptop">
+    <environment id="laptop" primary="true">
       <cwd>/repo</cwd>
       <shell>zsh</shell>
     </environment>
   </environments>
 </environment_context>
 
-{"environments":{"devbox":{"cwd":"/workspace","status":"starting"},"laptop":{"cwd":"/repo","shell":"bash","status":"available"},"old":{"cwd":"/old","shell":"sh","status":"available"}}} -> {"environments":{"devbox":{"cwd":"/workspace","shell":"powershell","status":"available"},"laptop":{"cwd":"/repo","shell":"zsh","status":"available"},"remote":{"cwd":"/remote","status":"starting"}}} (role - user)
+{"environments":{"devbox":{"cwd":"/workspace","status":"starting"},"laptop":{"cwd":"/repo","is_primary":true,"shell":"bash","status":"available"},"old":{"cwd":"/old","shell":"sh","status":"available"}}} -> {"environments":{"devbox":{"cwd":"/workspace","shell":"powershell","status":"available"},"laptop":{"cwd":"/repo","is_primary":true,"shell":"zsh","status":"available"},"remote":{"cwd":"/remote","status":"starting"}}} (role - user)
 <environment_context>
   <environments>
-    <environment id="devbox">
+    <environment id="devbox" primary="false">
       <cwd>/workspace</cwd>
       <shell>powershell</shell>
     </environment>
-    <environment id="laptop">
+    <environment id="laptop" primary="true">
       <cwd>/repo</cwd>
       <shell>zsh</shell>
     </environment>
     <environment id="old" status="unavailable" />
-    <environment id="remote">
+    <environment id="remote" primary="false">
       <cwd>/remote</cwd>
       <status>starting</status>
     </environment>
