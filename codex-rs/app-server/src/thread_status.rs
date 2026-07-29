@@ -116,14 +116,15 @@ impl ThreadWatchManager {
 
     pub(crate) async fn loaded_statuses_for_threads(
         &self,
-        thread_ids: Vec<String>,
+        thread_ids: impl IntoIterator<Item = String>,
     ) -> HashMap<String, ThreadStatus> {
         let state = self.state.lock().await;
         thread_ids
             .into_iter()
-            .map(|thread_id| {
-                let status = state.loaded_status_for_thread(&thread_id);
-                (thread_id, status)
+            .filter_map(|thread_id| {
+                state
+                    .status_for(&thread_id)
+                    .map(|status| (thread_id, status))
             })
             .collect()
     }
@@ -641,15 +642,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loaded_statuses_default_to_not_loaded_for_untracked_threads() {
+    async fn loaded_statuses_distinguish_shutdown_from_untracked_threads() {
+        const UNTRACKED_THREAD_ID: &str = "00000000-0000-0000-0000-000000000003";
+
         let manager = ThreadWatchManager::new();
         manager.upsert_thread(INTERACTIVE_THREAD_ID).await;
         manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        manager.upsert_thread(NON_INTERACTIVE_THREAD_ID).await;
+        manager
+            .note_thread_shutdown(NON_INTERACTIVE_THREAD_ID)
+            .await;
 
         let statuses = manager
             .loaded_statuses_for_threads(vec![
                 INTERACTIVE_THREAD_ID.to_string(),
                 NON_INTERACTIVE_THREAD_ID.to_string(),
+                UNTRACKED_THREAD_ID.to_string(),
             ])
             .await;
 
@@ -663,6 +671,7 @@ mod tests {
             statuses.get(NON_INTERACTIVE_THREAD_ID),
             Some(&ThreadStatus::NotLoaded),
         );
+        assert_eq!(statuses.get(UNTRACKED_THREAD_ID), None);
     }
 
     #[tokio::test]

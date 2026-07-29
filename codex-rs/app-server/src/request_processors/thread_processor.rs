@@ -1,3 +1,4 @@
+use super::thread_enrichment::enrich_loaded_threads;
 use super::thread_fork_goal::inherit_thread_goal_snapshot;
 use super::turn_processor::can_accept_direct_input;
 use super::*;
@@ -2062,8 +2063,7 @@ impl ThreadRequestProcessor {
         let backwards_cursor = stored_threads.first().and_then(|thread| {
             thread_backwards_cursor_for_sort_key(thread, store_sort_key, sort_direction)
         });
-        let mut threads = Vec::with_capacity(stored_threads.len());
-        let mut status_ids = Vec::with_capacity(stored_threads.len());
+        let mut data = Vec::with_capacity(stored_threads.len());
         let fallback_provider = self.config.model_provider_id.clone();
 
         for stored_thread in stored_threads {
@@ -2072,24 +2072,16 @@ impl ThreadRequestProcessor {
                 fallback_provider.as_str(),
                 &self.config.cwd,
             );
-            status_ids.push(thread.id.clone());
-            threads.push(thread);
+            data.push(thread);
         }
 
-        let statuses = self
-            .thread_watch_manager
-            .loaded_statuses_for_threads(status_ids)
-            .await;
-
-        let data: Vec<_> = threads
-            .into_iter()
-            .map(|mut thread| {
-                if let Some(status) = statuses.get(&thread.id) {
-                    thread.status = status.clone();
-                }
-                thread
-            })
-            .collect();
+        enrich_loaded_threads(
+            &self.thread_manager,
+            &self.thread_watch_manager,
+            data.as_mut_slice(),
+            |thread| thread,
+        )
+        .await;
         Ok(ThreadListResponse {
             data,
             next_cursor,
@@ -2191,30 +2183,26 @@ impl ThreadRequestProcessor {
             )
         });
         let fallback_provider = self.config.model_provider_id.clone();
-        let mut results = Vec::with_capacity(search_results.len());
-        let mut status_ids = Vec::with_capacity(search_results.len());
+        let mut data = Vec::with_capacity(search_results.len());
         for result in search_results {
             let (thread, _) = thread_from_stored_thread(
                 result.thread,
                 fallback_provider.as_str(),
                 &self.config.cwd,
             );
-            status_ids.push(thread.id.clone());
-            results.push((thread, result.snippet));
+            data.push(ThreadSearchResult {
+                thread,
+                snippet: result.snippet,
+            });
         }
-        let statuses = self
-            .thread_watch_manager
-            .loaded_statuses_for_threads(status_ids)
-            .await;
-        let data = results
-            .into_iter()
-            .map(|(mut thread, snippet)| {
-                if let Some(status) = statuses.get(&thread.id) {
-                    thread.status = status.clone();
-                }
-                ThreadSearchResult { thread, snippet }
-            })
-            .collect();
+
+        enrich_loaded_threads(
+            &self.thread_manager,
+            &self.thread_watch_manager,
+            data.as_mut_slice(),
+            |result| &mut result.thread,
+        )
+        .await;
 
         Ok(ThreadSearchResponse {
             data,

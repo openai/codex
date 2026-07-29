@@ -536,6 +536,7 @@ mod plugins;
 mod process_exec_processor;
 mod remote_control_processor;
 mod search;
+mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_processor;
 mod token_usage_replay;

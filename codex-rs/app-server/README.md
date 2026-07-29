@@ -383,7 +383,16 @@ Like `thread/resume`, experimental clients can pass `excludeTurns: true` to `thr
 
 ### Example: List threads (with pagination & filters)
 
-`thread/list` lets you render a history UI. Results default to `createdAt` (newest first) descending. Pass any combination of:
+`thread/list` lets you render a history UI. Results default to `createdAt` (newest first) descending.
+
+For a loaded spawned thread, experimental `canAcceptDirectInput` is `true` when
+a V1 agent accepts direct input and `false` when a V2 agent is owned by its
+parent. It is `null` when the capability is unavailable or inapplicable,
+including unloaded threads and ordinary CLI threads. Both `thread/list` and
+`thread/search` derive the capability from loaded thread state, not persisted
+metadata.
+
+Pass any combination of:
 
 - `cursor` — opaque string from a prior response; omit for the first page.
 - `limit` — server defaults to a reasonable page size if unset.

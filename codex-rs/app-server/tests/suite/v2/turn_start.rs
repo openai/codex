@@ -3415,6 +3415,44 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
     })
     .await??;
 
+    let listed: codex_app_server_protocol::ThreadListResponse = mcp
+        .request(|request_id| ClientRequest::ThreadList {
+            request_id,
+            params: codex_app_server_protocol::ThreadListParams {
+                cursor: None,
+                limit: Some(10),
+                sort_key: None,
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: Some(vec![
+                    codex_app_server_protocol::ThreadSourceKind::SubAgentThreadSpawn,
+                ]),
+                archived: None,
+                section_id: None,
+                cwd: None,
+                use_state_db_only: true,
+                search_term: None,
+                parent_thread_id: None,
+                ancestor_thread_id: None,
+            },
+        })
+        .await?;
+    let listed_child = listed
+        .data
+        .iter()
+        .find(|listed| listed.id == child_thread_id)
+        .context("spawned child is missing from thread/list")?;
+    assert!(matches!(
+        &listed_child.source,
+        codex_app_server_protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+                agent_path: Some(_),
+                ..
+            }
+        )
+    ));
+    assert_eq!(listed_child.can_accept_direct_input, Some(false));
+
     let direct_turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: child_thread_id.clone(),
