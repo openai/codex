@@ -106,6 +106,7 @@ struct MetricsClientInner {
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
     duration_histograms: Mutex<HashMap<InstrumentKey, Histogram<f64>>>,
     runtime_reader: Option<Arc<ManualReader>>,
+    runtime_only_metrics: &'static [&'static str],
     default_tags: BTreeMap<String, String>,
 }
 
@@ -125,6 +126,10 @@ impl MetricsClientInner {
             });
         }
         let attributes = self.attributes(tags)?;
+
+        if self.runtime_only_metrics.contains(&name) {
+            return Ok(());
+        }
 
         let mut counters = self
             .counters
@@ -221,6 +226,10 @@ impl MetricsClientInner {
         validate_metric_name(name)?;
         let attributes = self.attributes(tags)?;
 
+        if self.runtime_only_metrics.contains(&name) {
+            return Ok(());
+        }
+
         let mut histograms = self
             .duration_histograms
             .lock()
@@ -290,6 +299,7 @@ impl MetricsClient {
             exporter,
             export_interval,
             runtime_reader,
+            runtime_only_metrics,
             default_tags,
         } = config;
 
@@ -334,6 +344,7 @@ impl MetricsClient {
             histograms: Mutex::new(HashMap::new()),
             duration_histograms: Mutex::new(HashMap::new()),
             runtime_reader,
+            runtime_only_metrics,
             default_tags,
         })))
     }

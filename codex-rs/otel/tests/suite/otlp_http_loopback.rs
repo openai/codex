@@ -186,6 +186,12 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     ))?;
 
     metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
+    metrics.counter("codex.tool.call", /*inc*/ 1, &[("tool", "test")])?;
+    metrics.record_duration(
+        "codex.tool.call.duration_ms",
+        Duration::from_millis(42),
+        &[("tool", "test")],
+    )?;
     metrics.gauge_with_description(
         "codex.active",
         "Number of active Codex operations.",
@@ -219,6 +225,16 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         body.contains("codex.active"),
         "expected gauge not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("\"codex.tool.call\""),
+        "expected tool-call counter not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("\"codex.tool.call.duration_ms\""),
+        "expected tool-call duration not found; body prefix: {}",
         &body.chars().take(2000).collect::<String>()
     );
     assert!(
