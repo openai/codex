@@ -34,6 +34,7 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
+use crate::transport::ConnectionOrigin;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::RemoteControlPolicy;
@@ -709,7 +710,6 @@ pub async fn run_main_with_transport_options(
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
-    let shutdown_when_no_connections = single_client_mode;
     let graceful_signal_restart_enabled =
         runtime_options.install_shutdown_signal_handler && !single_client_mode;
     let mut app_server_client_name_rx = None;
@@ -991,6 +991,7 @@ pub async fn run_main_with_transport_options(
                                 let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
                                 };
+                                let stdio_closed = connection_state.origin == ConnectionOrigin::Stdio;
                                 connection_state.session.rpc_gate.close().await;
                                 let outbound_closed = outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
@@ -1005,8 +1006,8 @@ pub async fn run_main_with_transport_options(
                                 if !outbound_closed {
                                     break "outbound_router_closed";
                                 }
-                                if shutdown_when_no_connections && connections.is_empty() {
-                                    break "last_connection_closed";
+                                if single_client_mode && stdio_closed {
+                                    break "stdio_connection_closed";
                                 }
                             }
                             TransportEvent::IncomingMessage { connection_id, message } => {

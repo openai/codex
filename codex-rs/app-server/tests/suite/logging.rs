@@ -33,7 +33,7 @@ fn standalone_app_server_emits_json_info_events() -> Result<()> {
             "level": "INFO",
             "fields": {
                 "message": "processor task exited",
-                "exit_reason": "last_connection_closed",
+                "exit_reason": "stdio_connection_closed",
                 "remaining_connection_count": 0,
                 "shutdown_forced": false,
             },

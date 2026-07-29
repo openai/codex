@@ -44,6 +44,8 @@ use codex_protocol::protocol::SessionSource;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use codex_utils_cli::CliConfigOverrides;
+use futures::SinkExt;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 use tempfile::TempDir;
@@ -56,6 +58,8 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -466,6 +470,27 @@ async fn remote_control_enable_returns_connecting_status() -> Result<()> {
 }
 
 #[tokio::test]
+async fn stdio_eof_exits_with_remote_control_connection() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut backend = ConnectedRemoteControlBackend::start(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+
+    let request_id = app_server.send_remote_control_enable_request().await?;
+    let _: RemoteControlEnableResponse =
+        timeout(DEFAULT_TIMEOUT, app_server.read_response(request_id)).await??;
+    timeout(DEFAULT_TIMEOUT, backend.wait_until_initialized()).await??;
+
+    let status = timeout(DEFAULT_TIMEOUT, app_server.shutdown_gracefully()).await??;
+    assert!(status.success());
+    timeout(DEFAULT_TIMEOUT, backend.wait_for_disconnect()).await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn disable_waits_for_in_flight_durable_enable() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut backend = BlockingRemoteControlBackend::start(codex_home.path()).await?;
@@ -806,9 +831,129 @@ struct BlockingRemoteControlBackend {
     server_task: JoinHandle<()>,
 }
 
+struct ConnectedRemoteControlBackend {
+    initialized_rx: Option<oneshot::Receiver<std::result::Result<(), String>>>,
+    server_task: JoinHandle<Result<()>>,
+}
+
 struct ClientManagementRemoteControlBackend {
     requests_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
     server_task: JoinHandle<()>,
+}
+
+impl ConnectedRemoteControlBackend {
+    async fn start(codex_home: &std::path::Path) -> Result<Self> {
+        let listener = configured_remote_control_listener(codex_home).await?;
+        let (initialized_tx, initialized_rx) = oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let mut initialized_tx = Some(initialized_tx);
+            let result: Result<()> = async {
+                let (_request_line, reader) = read_enroll_request(&listener).await?;
+                respond_with_json(
+                    reader.into_inner(),
+                    serde_json::json!({
+                        "server_id": "server-id",
+                        "environment_id": "environment-id",
+                        "remote_control_token": "remote-control-token",
+                        "expires_at": "3026-05-22T12:34:56Z",
+                    }),
+                )
+                .await?;
+
+                let (stream, _) = listener.accept().await?;
+                let mut websocket = accept_async(stream).await?;
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "type": "client_message",
+                            "client_id": "client-id",
+                            "stream_id": "stream-id",
+                            "seq_id": 0,
+                            "message": {
+                                "id": 1,
+                                "method": "initialize",
+                                "params": {
+                                    "clientInfo": {
+                                        "name": "remote-test-client",
+                                        "version": "0.1.0",
+                                    },
+                                },
+                            },
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+
+                loop {
+                    let message = websocket
+                        .next()
+                        .await
+                        .context("remote control disconnected before initialize response")??;
+                    let Message::Text(message) = message else {
+                        continue;
+                    };
+                    let message: serde_json::Value = serde_json::from_str(&message)?;
+                    if message["type"] == "server_message" && message["message"]["id"] == 1 {
+                        break;
+                    }
+                }
+
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "type": "client_message",
+                            "client_id": "client-id",
+                            "stream_id": "stream-id",
+                            "seq_id": 1,
+                            "message": {
+                                "method": "initialized",
+                            },
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+                if let Some(initialized_tx) = initialized_tx.take() {
+                    let _ = initialized_tx.send(Ok(()));
+                }
+
+                while let Some(message) = websocket.next().await {
+                    match message {
+                        Ok(Message::Close(_)) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+                Ok(())
+            }
+            .await;
+
+            if let Err(err) = &result
+                && let Some(initialized_tx) = initialized_tx.take()
+            {
+                let _ = initialized_tx.send(Err(err.to_string()));
+            }
+            result
+        });
+
+        Ok(Self {
+            initialized_rx: Some(initialized_rx),
+            server_task,
+        })
+    }
+
+    async fn wait_until_initialized(&mut self) -> Result<()> {
+        self.initialized_rx
+            .take()
+            .context("remote control initialization should only be awaited once")?
+            .await?
+            .map_err(anyhow::Error::msg)
+    }
+
+    async fn wait_for_disconnect(&mut self) -> Result<()> {
+        (&mut self.server_task).await??;
+        Ok(())
+    }
 }
 
 impl ClientManagementRemoteControlBackend {
@@ -1038,6 +1183,12 @@ impl Drop for PairingRemoteControlBackend {
 }
 
 impl Drop for BlockingRemoteControlBackend {
+    fn drop(&mut self) {
+        self.server_task.abort();
+    }
+}
+
+impl Drop for ConnectedRemoteControlBackend {
     fn drop(&mut self) {
         self.server_task.abort();
     }
