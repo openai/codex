@@ -18,6 +18,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-async-utils = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-extension-items = { workspace = true }
+codex-http-client = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-image = { workspace = true }
@@ -25,11 +26,11 @@ codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }
 encoding_rs = { workspace = true }
 globset = { workspace = true }
+http = { workspace = true }
 icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 icu_provider = { workspace = true, features = ["sync"] }
 quick-xml = { workspace = true, features = ["serialize"] }
-reqwest = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -54,7 +55,6 @@ seccompiler = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-http = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 
