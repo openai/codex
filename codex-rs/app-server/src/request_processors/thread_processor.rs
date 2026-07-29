@@ -3329,7 +3329,10 @@ impl ThreadRequestProcessor {
                     config_snapshot.active_permission_profile,
                 );
                 let token_usage_turn_id = include_turns.then(|| {
-                    restored_token_usage_turn_id(response_history.get_rollout_items(), &thread)
+                    restored_token_usage_turn_id(
+                        response_history.get_rollout_items(),
+                        thread.turns.as_slice(),
+                    )
                 });
                 let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
                     let initial_turns_page_result = if paginated_resume {
@@ -4177,10 +4180,45 @@ impl ThreadRequestProcessor {
         let parent_trace = self.request_trace_context(&request_id).await;
         let thread_source = thread_source.map(Into::into);
 
-        let (history_items, new_thread) = if let Some(prepared_fork) = prepared_fork {
-            let history_items = Arc::clone(&prepared_fork.model_context);
-            let new_thread = self
-                .thread_manager
+        let history_items = if prepared_fork.is_some() {
+            source_history_items
+        } else {
+            let source_history_items = Arc::unwrap_or_clone(source_history_items);
+            let history_items = match (last_turn_id.as_deref(), before_turn_id.as_deref()) {
+                (Some(last_turn_id), None) => {
+                    truncate_rollout_after_turn_id(source_history_items, last_turn_id)
+                        .map_err(|err| core_thread_write_error("truncate thread for fork", err))?
+                }
+                (None, Some(before_turn_id)) => {
+                    truncate_rollout_before_turn_id(source_history_items, before_turn_id)
+                        .map_err(|err| core_thread_write_error("truncate thread for fork", err))?
+                }
+                (None, None) => source_history_items,
+                (Some(_), Some(_)) => unreachable!("fork boundaries are mutually exclusive"),
+            };
+            Arc::new(history_items)
+        };
+
+        let ephemeral_preview = if ephemeral {
+            if paginated_source && last_turn_id.is_none() && before_turn_id.is_none() {
+                source_thread.preview.clone()
+            } else {
+                preview_from_rollout_items(&history_items)
+            }
+        } else {
+            String::new()
+        };
+        let ephemeral_turns = if ephemeral && include_turns {
+            build_legacy_api_turns_from_rollout_items(&history_items)
+        } else {
+            Vec::new()
+        };
+        let ephemeral_token_usage_turn_id = (ephemeral && include_turns)
+            .then(|| restored_token_usage_turn_id(&history_items, ephemeral_turns.as_slice()));
+        let paginated_history_items = paginated_source.then(|| Arc::clone(&history_items));
+
+        let new_thread = if let Some(prepared_fork) = prepared_fork {
+            self.thread_manager
                 .fork_prepared_thread(
                     config,
                     prepared_fork,
@@ -4188,37 +4226,22 @@ impl ThreadRequestProcessor {
                     parent_trace,
                     supports_openai_form_elicitation,
                 )
-                .await;
-            (history_items, new_thread)
+                .await
         } else {
-            let history_items = match (last_turn_id.as_deref(), before_turn_id.as_deref()) {
-                (Some(last_turn_id), None) => Arc::new(
-                    truncate_rollout_after_turn_id(&source_history_items, last_turn_id)
-                        .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
-                ),
-                (None, Some(before_turn_id)) => Arc::new(
-                    truncate_rollout_before_turn_id(&source_history_items, before_turn_id)
-                        .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
-                ),
-                (None, None) => Arc::clone(&source_history_items),
-                (Some(_), Some(_)) => unreachable!("fork boundaries are mutually exclusive"),
-            };
-            let new_thread = self
-                .thread_manager
+            self.thread_manager
                 .fork_thread_from_history(
                     ForkSnapshot::Interrupted,
                     config,
                     InitialHistory::Resumed(ResumedHistory {
                         conversation_id: source_thread_id,
-                        history: Arc::clone(&history_items),
+                        history: history_items,
                         rollout_path: source_thread.rollout_path.clone(),
                     }),
                     thread_source,
                     parent_trace,
                     supports_openai_form_elicitation,
                 )
-                .await;
-            (history_items, new_thread)
+                .await
         };
         let NewThread {
             thread_id,
@@ -4300,16 +4323,32 @@ impl ThreadRequestProcessor {
         let config_snapshot = forked_thread.config_snapshot().await;
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
-        // pathless, so they rebuild their visible history from the copied source history instead.
-        let mut thread = if session_configured.rollout_path.is_some() {
+        // pathless, so their visible history is projected before the source history is consumed.
+        let (mut thread, mut token_usage_turn_id) = if session_configured.rollout_path.is_some() {
             let stored_thread = self
                 .read_stored_thread_for_new_fork(thread_id, include_turns && !paginated_source)
                 .await?;
-            self.stored_thread_to_api_thread(
+            let (mut thread, history) = thread_from_stored_thread(
                 stored_thread,
                 fallback_model_provider.as_str(),
-                include_turns && !paginated_source,
-            )
+                &self.config.cwd,
+            );
+            if include_turns && let Some(history) = history.as_ref() {
+                populate_thread_turns_from_history(
+                    &mut thread,
+                    &history.items,
+                    /*active_turn*/ None,
+                );
+            }
+            let token_usage_turn_id = include_turns.then(|| {
+                restored_token_usage_turn_id(
+                    history
+                        .as_ref()
+                        .map_or(&[], |history| history.items.as_slice()),
+                    thread.turns.as_slice(),
+                )
+            });
+            (thread, token_usage_turn_id)
         } else {
             let mut thread = build_thread_from_snapshot(
                 thread_id,
@@ -4318,24 +4357,19 @@ impl ThreadRequestProcessor {
                 &config_snapshot,
                 /*path*/ None,
             );
-            thread.preview =
-                if paginated_source && last_turn_id.is_none() && before_turn_id.is_none() {
-                    source_thread.preview.clone()
-                } else {
-                    preview_from_rollout_items(&history_items)
-                };
+            thread.preview = ephemeral_preview;
             thread.forked_from_id = Some(source_thread_id.to_string());
-            if include_turns {
-                populate_thread_turns_from_history(
-                    &mut thread,
-                    &history_items,
-                    /*active_turn*/ None,
-                );
-            }
-            thread
+            thread.turns = ephemeral_turns;
+            (thread, ephemeral_token_usage_turn_id)
         };
         if paginated_source && include_turns {
             thread.turns = self.paginated_thread_full_turns(thread_id).await?;
+            token_usage_turn_id = Some(restored_token_usage_turn_id(
+                paginated_history_items
+                    .as_deref()
+                    .map_or(&[], Vec::as_slice),
+                thread.turns.as_slice(),
+            ));
         }
         if let Some(name) = source_thread_name {
             set_thread_name_from_title(&mut thread, name);
@@ -4380,8 +4414,6 @@ impl ThreadRequestProcessor {
 
         let notif = thread_started_notification(thread);
         let connection_id = request_id.connection_id;
-        let token_usage_turn_id =
-            include_turns.then(|| restored_token_usage_turn_id(&history_items, &response.thread));
         self.outgoing
             .send_response_with_thread_originator(request_id, response, thread_originator)
             .await;

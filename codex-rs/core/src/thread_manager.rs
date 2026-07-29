@@ -1987,19 +1987,24 @@ fn truncate_before_nth_user_message(
     n: usize,
     snapshot_state: &SnapshotTurnState,
 ) -> InitialHistory {
-    let items = history.get_rollout_items().to_vec();
+    let mut items = match history {
+        InitialHistory::New | InitialHistory::Cleared => Vec::new(),
+        InitialHistory::Resumed(resumed) => Arc::unwrap_or_clone(resumed.history),
+        InitialHistory::Forked(items) => items,
+    };
     let user_positions = truncation::user_message_positions_in_rollout(&items);
     let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
         if let Some(cut_idx) = snapshot_state
             .active_turn_start_index
             .or_else(|| user_positions.last().copied())
         {
-            items[..cut_idx].to_vec()
+            items.truncate(cut_idx);
+            items
         } else {
             items
         }
     } else {
-        truncation::truncate_rollout_before_nth_user_message_from_start(&items, n)
+        truncation::truncate_rollout_before_nth_user_message_from_start(items, n)
     };
 
     if rolled.is_empty() {

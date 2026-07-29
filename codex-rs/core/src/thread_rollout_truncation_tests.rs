@@ -105,7 +105,7 @@ fn truncates_rollout_after_terminal_canonical_turn_id() {
     ];
 
     let truncated =
-        truncate_rollout_after_turn_id(&rollout, "turn-2").expect("truncate through turn-2");
+        truncate_rollout_after_turn_id(rollout.clone(), "turn-2").expect("truncate through turn-2");
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
@@ -123,13 +123,13 @@ fn truncates_rollout_before_terminal_canonical_turn_id() {
     ];
 
     let truncated =
-        truncate_rollout_before_turn_id(&rollout, "turn-2").expect("truncate before turn-2");
+        truncate_rollout_before_turn_id(rollout.clone(), "turn-2").expect("truncate before turn-2");
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
         serde_json::to_value(&rollout[..2]).unwrap()
     );
     assert!(
-        truncate_rollout_before_turn_id(&rollout, "turn-1")
+        truncate_rollout_before_turn_id(rollout, "turn-1")
             .expect("truncate before turn-1")
             .is_empty()
     );
@@ -143,13 +143,57 @@ fn truncates_rollout_before_in_progress_canonical_turn_id() {
         turn_started("turn-2"),
     ];
 
-    let truncated = truncate_rollout_before_turn_id(&rollout, "turn-2")
+    let truncated = truncate_rollout_before_turn_id(rollout.clone(), "turn-2")
         .expect("truncate before in-progress turn-2");
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
         serde_json::to_value(&rollout[..2]).unwrap()
     );
+}
+
+#[test]
+fn truncate_rollout_before_turn_id_rejects_rolled_back_turn() {
+    let rollout = vec![
+        turn_started("turn-1"),
+        turn_completed("turn-1"),
+        turn_started("turn-2"),
+        turn_completed("turn-2"),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+        turn_started("turn-3"),
+        turn_completed("turn-3"),
+    ];
+
+    let err = truncate_rollout_before_turn_id(rollout, "turn-2")
+        .expect_err("rolled-back turn should not be a fork anchor");
+
+    assert!(matches!(
+        err.details(),
+        CodexErrorDetails::InvalidRequest(message)
+            if message == "beforeTurnId 'turn-2' was not found in the source thread"
+    ));
+}
+
+#[test]
+fn truncate_rollout_before_turn_id_rejects_synthetic_legacy_turn_id() {
+    let rollout = vec![RolloutItem::EventMsg(EventMsg::UserMessage(
+        UserMessageEvent {
+            message: "legacy".to_string(),
+            ..Default::default()
+        },
+    ))];
+
+    let err = truncate_rollout_before_turn_id(rollout, "rollout-0")
+        .expect_err("synthetic turn should not be a fork anchor");
+
+    assert!(matches!(
+        err.details(),
+        CodexErrorDetails::InvalidRequest(message)
+            if message
+                == "beforeTurnId 'rollout-0' is not a persisted canonical turn in the source thread"
+    ));
 }
 
 #[test]
@@ -166,7 +210,7 @@ fn truncate_rollout_after_turn_id_rejects_rolled_back_turn() {
         turn_completed("turn-3"),
     ];
 
-    let err = truncate_rollout_after_turn_id(&rollout, "turn-2")
+    let err = truncate_rollout_after_turn_id(rollout, "turn-2")
         .expect_err("rolled-back turn should not be a fork anchor");
 
     assert!(matches!(
@@ -185,7 +229,7 @@ fn truncate_rollout_after_turn_id_rejects_synthetic_legacy_turn_id() {
         },
     ))];
 
-    let err = truncate_rollout_after_turn_id(&rollout, "rollout-0")
+    let err = truncate_rollout_after_turn_id(rollout, "rollout-0")
         .expect_err("synthetic turn should not be a fork anchor");
 
     assert!(matches!(
@@ -200,7 +244,7 @@ fn truncate_rollout_after_turn_id_rejects_synthetic_legacy_turn_id() {
 fn truncate_rollout_after_turn_id_rejects_in_progress_turn() {
     let rollout = vec![turn_started("turn-1")];
 
-    let err = truncate_rollout_after_turn_id(&rollout, "turn-1")
+    let err = truncate_rollout_after_turn_id(rollout, "turn-1")
         .expect_err("in-progress turn should not be a fork anchor");
 
     assert!(matches!(
@@ -245,8 +289,10 @@ fn truncates_rollout_from_start_before_nth_user_only() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated =
-        truncate_rollout_before_nth_user_message_from_start(&rollout, /*n_from_start*/ 1);
+    let truncated = truncate_rollout_before_nth_user_message_from_start(
+        rollout.clone(),
+        /*n_from_start*/ 1,
+    );
     let expected = vec![
         RolloutItem::ResponseItem(items[0].clone()),
         RolloutItem::ResponseItem(items[1].clone()),
@@ -257,8 +303,10 @@ fn truncates_rollout_from_start_before_nth_user_only() {
         serde_json::to_value(&expected).unwrap()
     );
 
-    let truncated2 =
-        truncate_rollout_before_nth_user_message_from_start(&rollout, /*n_from_start*/ 2);
+    let truncated2 = truncate_rollout_before_nth_user_message_from_start(
+        rollout.clone(),
+        /*n_from_start*/ 2,
+    );
     assert_eq!(
         serde_json::to_value(&truncated2).unwrap(),
         serde_json::to_value(&rollout).unwrap()
@@ -273,7 +321,8 @@ fn truncation_max_keeps_full_rollout() {
         RolloutItem::ResponseItem(user_msg("u2")),
     ];
 
-    let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, usize::MAX);
+    let truncated =
+        truncate_rollout_before_nth_user_message_from_start(rollout.clone(), usize::MAX);
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
@@ -300,7 +349,7 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
     // Effective user history after applying rollback(1) is: u1, u3, u4.
     // So n_from_start=2 should cut before u4 (not u3).
     let truncated = truncate_rollout_before_nth_user_message_from_start(
-        &rollout_items,
+        rollout_items.clone(),
         /*n_from_start*/ 2,
     );
     let expected = rollout_items[..7].to_vec();
@@ -329,10 +378,8 @@ async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated = truncate_rollout_before_nth_user_message_from_start(
-        &rollout_items,
-        /*n_from_start*/ 1,
-    );
+    let truncated =
+        truncate_rollout_before_nth_user_message_from_start(rollout_items, /*n_from_start*/ 1);
     let expected: Vec<RolloutItem> = vec![
         RolloutItem::ResponseItem(items[0].clone()),
         RolloutItem::ResponseItem(items[1].clone()),
@@ -365,7 +412,7 @@ fn truncates_rollout_to_last_n_fork_turns_counts_trigger_turn_messages() {
         RolloutItem::ResponseItem(assistant_msg("a4")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
+    let truncated = truncate_rollout_to_last_n_fork_turns(rollout.clone(), /*n_from_end*/ 2);
     let expected = rollout[4..].to_vec();
 
     assert_eq!(
@@ -436,7 +483,7 @@ fn truncates_rollout_to_last_n_fork_turns_drops_startup_prefix_even_when_under_l
         RolloutItem::ResponseItem(assistant_msg("answer")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
+    let truncated = truncate_rollout_to_last_n_fork_turns(rollout.clone(), /*n_from_end*/ 2);
     let expected = rollout[1..].to_vec();
 
     assert_eq!(
@@ -462,7 +509,7 @@ fn truncates_rollout_to_last_n_fork_turns_applies_thread_rollback_markers() {
         RolloutItem::ResponseItem(assistant_msg("a3")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
+    let truncated = truncate_rollout_to_last_n_fork_turns(rollout.clone(), /*n_from_end*/ 2);
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
@@ -504,7 +551,7 @@ fn truncates_rollout_to_last_n_fork_turns_discards_trigger_boundaries_in_rolled_
         RolloutItem::ResponseItem(assistant_msg("a2")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
+    let truncated = truncate_rollout_to_last_n_fork_turns(rollout.clone(), /*n_from_end*/ 2);
 
     let expected = rollout[1..].to_vec();
 
@@ -534,7 +581,7 @@ fn truncates_rollout_to_last_n_fork_turns_discards_rolled_back_assistant_instruc
         RolloutItem::ResponseItem(assistant_msg("a3")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 1);
+    let truncated = truncate_rollout_to_last_n_fork_turns(rollout.clone(), /*n_from_end*/ 1);
     let expected = rollout[5..].to_vec();
 
     assert_eq!(
@@ -555,7 +602,7 @@ fn truncates_rollout_to_last_n_fork_turns_keeps_full_rollout_when_n_is_large() {
         RolloutItem::ResponseItem(assistant_msg("a2")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 10);
+    let truncated = truncate_rollout_to_last_n_fork_turns(rollout.clone(), /*n_from_end*/ 10);
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),

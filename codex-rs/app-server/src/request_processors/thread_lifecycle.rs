@@ -583,7 +583,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     );
     let token_usage_turn_id = pending
         .include_turns
-        .then(|| restored_token_usage_turn_id(&pending.history_items, &thread));
+        .then(|| restored_token_usage_turn_id(&pending.history_items, thread.turns.as_slice()));
     let mut initial_turns_page = if let Some(mut page) = pending.paginated_initial_turns_page.take()
     {
         if let (Some(active_turn), Some(params)) =

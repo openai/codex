@@ -134,23 +134,24 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
 /// If fewer than or equal to `n_from_start` user messages exist, this returns the full
 /// rollout unchanged.
 pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
-    items: &[RolloutItem],
+    mut items: Vec<RolloutItem>,
     n_from_start: usize,
 ) -> Vec<RolloutItem> {
     if n_from_start == usize::MAX {
-        return items.to_vec();
+        return items;
     }
 
-    let user_positions = user_message_positions_in_rollout(items);
+    let user_positions = user_message_positions_in_rollout(&items);
 
     // If fewer than or equal to n user messages exist, keep the full rollout.
     if user_positions.len() <= n_from_start {
-        return items.to_vec();
+        return items;
     }
 
     // Cut strictly before the nth user message (do not keep the nth itself).
     let cut_idx = user_positions[n_from_start];
-    items[..cut_idx].to_vec()
+    items.truncate(cut_idx);
+    items
 }
 
 /// Return a rollout prefix ending after the requested persisted terminal turn.
@@ -160,10 +161,10 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 /// generated while projecting legacy rollouts are intentionally unsupported
 /// because they do not provide a stable raw rollout boundary for a fork.
 pub fn truncate_rollout_after_turn_id(
-    items: &[RolloutItem],
+    mut items: Vec<RolloutItem>,
     last_turn_id: &str,
 ) -> CodexResult<Vec<RolloutItem>> {
-    let turns = build_turns_from_rollout_items(items);
+    let turns = build_turns_from_rollout_items(&items);
     let turn = turns
         .iter()
         .find(|turn| turn.id == last_turn_id)
@@ -202,36 +203,54 @@ pub fn truncate_rollout_after_turn_id(
             matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))).then_some(index)
         })
         .unwrap_or(items.len());
-    Ok(items[..cut_index].to_vec())
+    items.truncate(cut_index);
+    Ok(items)
 }
 
 /// Return a rollout prefix ending immediately before the requested persisted turn.
 pub fn truncate_rollout_before_turn_id(
-    items: &[RolloutItem],
+    mut items: Vec<RolloutItem>,
     before_turn_id: &str,
 ) -> CodexResult<Vec<RolloutItem>> {
-    let turns = build_turns_from_rollout_items(items);
-    if !turns.iter().any(|turn| turn.id == before_turn_id) {
+    let cut_index = items.iter().position(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnStarted(event))
+                if event.turn_id == before_turn_id
+        )
+    });
+
+    let Some(cut_index) = cut_index else {
+        // Older rollouts can expose generated turn IDs without a TurnStarted item to fork at.
+        if build_turns_from_rollout_items(&items)
+            .iter()
+            .any(|turn| turn.id == before_turn_id)
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "beforeTurnId '{before_turn_id}' is not a persisted canonical turn in the source thread"
+            )));
+        }
+
+        return Err(CodexErr::InvalidRequest(format!(
+            "beforeTurnId '{before_turn_id}' was not found in the source thread"
+        )));
+    };
+
+    // A persisted turn boundary proves the turn exists unless a later rollback removes it.
+    if items[cut_index + 1..]
+        .iter()
+        .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))))
+        && !build_turns_from_rollout_items(&items)
+            .iter()
+            .any(|turn| turn.id == before_turn_id)
+    {
         return Err(CodexErr::InvalidRequest(format!(
             "beforeTurnId '{before_turn_id}' was not found in the source thread"
         )));
     }
 
-    let cut_index = items
-        .iter()
-        .position(|item| {
-            matches!(
-                item,
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event))
-                    if event.turn_id == before_turn_id
-            )
-        })
-        .ok_or_else(|| {
-            CodexErr::InvalidRequest(format!(
-                "beforeTurnId '{before_turn_id}' is not a persisted canonical turn in the source thread"
-            ))
-        })?;
-    Ok(items[..cut_index].to_vec())
+    items.truncate(cut_index);
+    Ok(items)
 }
 
 /// Return a suffix of `items` that keeps the last `n_from_end` fork turns.
@@ -239,14 +258,14 @@ pub fn truncate_rollout_before_turn_id(
 /// If fewer than or equal to `n_from_end` fork turns exist, this keeps from the first fork-turn
 /// boundary and still drops pre-turn startup context.
 pub(crate) fn truncate_rollout_to_last_n_fork_turns(
-    items: &[RolloutItem],
+    mut items: Vec<RolloutItem>,
     n_from_end: usize,
 ) -> Vec<RolloutItem> {
     if n_from_end == 0 {
         return Vec::new();
     }
 
-    let fork_turn_positions = fork_turn_positions_in_rollout(items);
+    let fork_turn_positions = fork_turn_positions_in_rollout(&items);
     let Some(keep_idx) = fork_turn_positions
         .len()
         .checked_sub(n_from_end)
@@ -255,7 +274,7 @@ pub(crate) fn truncate_rollout_to_last_n_fork_turns(
     else {
         return Vec::new();
     };
-    items[keep_idx..].to_vec()
+    items.split_off(keep_idx)
 }
 
 fn is_real_user_message_boundary(item: &ResponseItem) -> bool {
