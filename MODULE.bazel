@@ -484,15 +484,6 @@ archive_override(
 )
 
 http_archive(
-    name = "v8_crate_146_4_0",
-    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "d97bcac5cdc5a195a4813f1855a6bc658f240452aac36caa12fd6c6f16026ab1",
-    strip_prefix = "v8-146.4.0",
-    type = "tar.gz",
-    urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
-)
-
-http_archive(
     name = "v8_crate_150_4_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
     sha256 = "42a978ff11f15b24e5c05a7123cf2b68f41e763546699781a924ef4e2cf43a49",
