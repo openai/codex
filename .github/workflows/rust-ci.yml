@@ -12,6 +12,7 @@ jobs:
       argument_comment_lint: ${{ steps.detect.outputs.argument_comment_lint }}
       argument_comment_lint_package: ${{ steps.detect.outputs.argument_comment_lint_package }}
       codex: ${{ steps.detect.outputs.codex }}
+      exec_server_version_skew: ${{ steps.detect.outputs.exec_server_version_skew }}
       workflows: ${{ steps.detect.outputs.workflows }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -33,24 +34,31 @@ jobs:
             mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")
           else
             # On manual runs, default to the full fast-PR bundle.
-            files=("codex-rs/force" "tools/argument-comment-lint/force" ".github/force")
+            files=("codex-rs/force" "codex-rs/exec-server/force" "tools/argument-comment-lint/force" ".github/force")
           fi
 
           codex=false
           argument_comment_lint=false
           argument_comment_lint_package=false
+          exec_server_version_skew=false
           workflows=false
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
             [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
             [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
+            case "$f" in
+              codex-rs/Cargo.toml | codex-rs/Cargo.lock | codex-rs/app-server/* | codex-rs/app-server-protocol/* | codex-rs/app-server-transport/* | codex-rs/codex-api/* | codex-rs/config/* | codex-rs/core/* | codex-rs/cli/* | codex-rs/exec-server/* | codex-rs/exec-server-protocol/* | codex-rs/features/* | codex-rs/file-system/* | codex-rs/http-client/* | codex-rs/network-proxy/* | codex-rs/protocol/* | codex-rs/sandboxing/* | codex-rs/shell-command/* | codex-rs/tools/* | codex-rs/utils/absolute-path/* | codex-rs/utils/path-uri/* | codex-rs/utils/pty/* | codex-rs/utils/rustls-provider/* | codex-rs/websocket-client/* | .github/workflows/rust-ci.yml)
+                exec_server_version_skew=true
+                ;;
+            esac
             [[ $f == .github/* ]] && workflows=true
           done
 
           echo "argument_comment_lint=$argument_comment_lint" >> "$GITHUB_OUTPUT"
           echo "argument_comment_lint_package=$argument_comment_lint_package" >> "$GITHUB_OUTPUT"
           echo "codex=$codex" >> "$GITHUB_OUTPUT"
+          echo "exec_server_version_skew=$exec_server_version_skew" >> "$GITHUB_OUTPUT"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
       - name: Check for a clean worktree
@@ -79,6 +87,36 @@ jobs:
         run: cargo fmt -- --config imports_granularity=Item --check
       - name: Rust benchmark smoke test
         run: just bench-smoke
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
+  exec_server_version_skew:
+    name: Exec-server release compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs: changed
+    if: ${{ needs.changed.outputs.exec_server_version_skew == 'true' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+          version: 0.9.103
+      - name: Test supported Codex releases in both executor directions
+        run: bash codex-rs/exec-server/testing/run_version_skew.sh
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
@@ -227,6 +265,7 @@ jobs:
       [
         changed,
         general,
+        exec_server_version_skew,
         cargo_shear,
         argument_comment_lint_package,
         argument_comment_lint_prebuilt,
@@ -240,6 +279,7 @@ jobs:
           echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
           echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
+          echo "skew   : ${{ needs.exec_server_version_skew.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
@@ -261,8 +301,13 @@ jobs:
             [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
             [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           fi
+
+          if [[ "${NEEDS_CHANGED_OUTPUTS_EXEC_SERVER_VERSION_SKEW}" == 'true' ]]; then
+            [[ '${{ needs.exec_server_version_skew.result }}' == 'success' ]] || { echo 'exec_server_version_skew failed'; exit 1; }
+          fi
         env:
           NEEDS_CHANGED_OUTPUTS_ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
           NEEDS_CHANGED_OUTPUTS_CODEX: ${{ needs.changed.outputs.codex }}
+          NEEDS_CHANGED_OUTPUTS_EXEC_SERVER_VERSION_SKEW: ${{ needs.changed.outputs.exec_server_version_skew }}
           NEEDS_CHANGED_OUTPUTS_WORKFLOWS: ${{ needs.changed.outputs.workflows }}
           NEEDS_CHANGED_OUTPUTS_ARGUMENT_COMMENT_LINT_PACKAGE: ${{ needs.changed.outputs.argument_comment_lint_package }}

@@ -1,5 +1,9 @@
 mod common;
 
+#[cfg(unix)]
+#[path = "relay/version_skew.rs"]
+mod version_skew;
+
 #[path = "../src/proto/codex.exec_server.relay.v1.rs"]
 mod relay_proto;
 
@@ -70,7 +74,7 @@ const ENVIRONMENT_ID: &str = "env-noise-relay-test";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
 const HARNESS_KEY_AUTHORIZATION: &str = "harness-key-authorization";
 const REGISTRY_TOKEN: &str = "registry-token";
-const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 struct StaticRegistryAuthProvider;
