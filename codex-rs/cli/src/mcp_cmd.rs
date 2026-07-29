@@ -39,6 +39,8 @@ use codex_utils_cli::format_env_display;
 
 use crate::plugin_cmd::load_cli_auth_mode;
 
+mod cloud_config;
+
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
@@ -183,15 +185,19 @@ impl McpCli {
         } = self;
 
         if loader_overrides.user_config_profile.is_some() {
-            validate_profile_v2_migration(&config_overrides, loader_overrides).await?;
+            validate_profile_v2_migration(&config_overrides, loader_overrides.clone()).await?;
         }
 
         match subcommand {
             McpSubcommand::List(args) => {
-                run_list(&config_overrides, args).await?;
+                let config =
+                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                run_list(&config, args).await?;
             }
             McpSubcommand::Get(args) => {
-                run_get(&config_overrides, args).await?;
+                let config =
+                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                run_get(&config, args).await?;
             }
             McpSubcommand::Add(args) => {
                 run_add(&config_overrides, args).await?;
@@ -200,10 +206,14 @@ impl McpCli {
                 run_remove(&config_overrides, args).await?;
             }
             McpSubcommand::Login(args) => {
-                run_login(&config_overrides, args).await?;
+                let config =
+                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                run_login(&config, args).await?;
             }
             McpSubcommand::Logout(args) => {
-                run_logout(&config_overrides, args).await?;
+                let config =
+                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                run_logout(&config, args).await?;
             }
         }
 
@@ -470,15 +480,9 @@ async fn load_mcp_manager(config: &Config) -> McpManager {
     McpManager::new(plugins_manager)
 }
 
-async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs) -> Result<()> {
-    let overrides = config_overrides
-        .parse_overrides()
-        .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
-    let mcp_manager = load_mcp_manager(&config).await;
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
+async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
+    let mcp_manager = load_mcp_manager(config).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let LoginArgs { name, scopes } = login_args;
 
@@ -533,15 +537,9 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
     Ok(())
 }
 
-async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutArgs) -> Result<()> {
-    let overrides = config_overrides
-        .parse_overrides()
-        .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
-    let mcp_manager = load_mcp_manager(&config).await;
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
+async fn run_logout(config: &Config, logout_args: LogoutArgs) -> Result<()> {
+    let mcp_manager = load_mcp_manager(config).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let LogoutArgs { name } = logout_args;
 
@@ -568,19 +566,13 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
     Ok(())
 }
 
-async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
-    let overrides = config_overrides
-        .parse_overrides()
-        .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
-    let mcp_manager = load_mcp_manager(&config).await;
+async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
+    let mcp_manager = load_mcp_manager(config).await;
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
     let auth = auth_manager.auth().await;
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
-    let effective_mcp_servers = mcp_manager.effective_servers(&config, auth.as_ref()).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
+    let effective_mcp_servers = mcp_manager.effective_servers(config, auth.as_ref()).await;
 
     let mut entries: Vec<_> = mcp_servers.iter().collect();
     entries.sort_by_key(|(name, _)| *name);
@@ -835,15 +827,9 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     Ok(())
 }
 
-async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {
-    let overrides = config_overrides
-        .parse_overrides()
-        .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
-    let mcp_manager = load_mcp_manager(&config).await;
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
+async fn run_get(config: &Config, get_args: GetArgs) -> Result<()> {
+    let mcp_manager = load_mcp_manager(config).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let Some(server) = mcp_servers.get(&get_args.name) else {
         bail!("No MCP server named '{name}' found.", name = get_args.name);
