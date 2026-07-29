@@ -26,7 +26,11 @@ localVersion: string | null, name: string,
 /**
  * Remote sharing context associated with this plugin when available.
  */
-shareContext: PluginShareContext | null, source: PluginSource, installed: boolean, enabled: boolean, installPolicy: PluginInstallPolicy, installPolicySource: PluginInstallPolicySource | null, mustShowInstallationInterstitial: boolean | null, authPolicy: PluginAuthPolicy,
+shareContext: PluginShareContext | null, source: PluginSource, installed: boolean,
+/**
+ * Unix timestamp in seconds when the remote plugin was installed, when available.
+ */
+installedAt: number | null, enabled: boolean, installPolicy: PluginInstallPolicy, installPolicySource: PluginInstallPolicySource | null, mustShowInstallationInterstitial: boolean | null, authPolicy: PluginAuthPolicy,
 /**
  * Availability state for installing and using the plugin.
  */

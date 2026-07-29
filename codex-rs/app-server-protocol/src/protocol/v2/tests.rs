@@ -4009,6 +4009,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     share_context: None,
                     source: PluginSource::Remote,
                     installed: false,
+                    installed_at: None,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     install_policy_source: Some(PluginInstallPolicySource::WorkspaceSetting),
@@ -4035,6 +4036,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     "shareContext": null,
                     "source": { "type": "remote" },
                     "installed": false,
+                    "installedAt": null,
                     "enabled": false,
                     "installPolicy": "AVAILABLE",
                     "installPolicySource": "WORKSPACE_SETTING",
@@ -4067,6 +4069,7 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     .unwrap();
 
     assert_eq!(summary.availability, PluginAvailability::Available);
+    assert_eq!(summary.installed_at, None);
     assert_eq!(summary.local_version, None);
     assert_eq!(summary.share_context, None);
     assert_eq!(summary.must_show_installation_interstitial, None);
@@ -4085,6 +4088,7 @@ fn plugin_summary_round_trips_plan_eligibility_metadata() {
         "shareContext": null,
         "source": { "type": "remote" },
         "installed": false,
+        "installedAt": null,
         "enabled": false,
         "installPolicy": "NOT_AVAILABLE",
         "installPolicySource": null,

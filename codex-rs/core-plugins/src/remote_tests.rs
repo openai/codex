@@ -78,6 +78,7 @@ fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only
     ];
     let installed_plugins = vec![RemotePluginInstalledItem {
         plugin: directory_plugin("plugin-a", "alpha"),
+        installed_at: None,
         enabled: true,
         disabled_skill_names: Vec::new(),
     }];
@@ -109,6 +110,7 @@ fn installation_policy_source_is_preserved_across_remote_summary_paths() {
         Some(RemotePluginInstallPolicySource::ImplicitCanonicalApp);
     let installed_plugin = RemotePluginInstalledItem {
         plugin: directory_plugin.clone(),
+        installed_at: None,
         enabled: true,
         disabled_skill_names: Vec::new(),
     };
@@ -163,6 +165,7 @@ fn plan_eligibility_is_preserved_across_remote_summary_paths() {
     ]);
     let installed_plugin = RemotePluginInstalledItem {
         plugin: directory_plugin.clone(),
+        installed_at: None,
         enabled: false,
         disabled_skill_names: Vec::new(),
     };
@@ -255,6 +258,7 @@ fn installation_interstitial_requirement_is_preserved_across_remote_summary_path
     directory_plugin.must_show_installation_interstitial = Some(false);
     let installed_plugin = remote_installed_plugin_to_cache_entry(&RemotePluginInstalledItem {
         plugin: directory_plugin,
+        installed_at: None,
         enabled: true,
         disabled_skill_names: Vec::new(),
     })

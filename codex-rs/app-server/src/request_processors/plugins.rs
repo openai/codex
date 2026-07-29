@@ -177,6 +177,7 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
         version: None,
         local_version: plugin.local_version,
         installed: plugin.installed,
+        installed_at: None,
         enabled: plugin.enabled,
         name: plugin.name,
         share_context,
@@ -1128,6 +1129,7 @@ impl PluginRequestProcessor {
                         share_context,
                         source: marketplace_plugin_source_to_info(outcome.plugin.source),
                         installed: outcome.plugin.installed,
+                        installed_at: None,
                         enabled: outcome.plugin.enabled,
                         install_policy: outcome.plugin.policy.installation.into(),
                         install_policy_source: None,
@@ -2240,6 +2242,9 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
             .map(remote_plugin_share_context_to_info),
         source: PluginSource::Remote,
         installed: summary.installed,
+        installed_at: summary
+            .installed_at
+            .map(|installed_at| installed_at.timestamp()),
         enabled: summary.enabled,
         install_policy: summary.install_policy,
         install_policy_source: summary.install_policy_source,

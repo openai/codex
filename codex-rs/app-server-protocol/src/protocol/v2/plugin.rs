@@ -648,6 +648,10 @@ pub struct PluginSummary {
     pub share_context: Option<PluginShareContext>,
     pub source: PluginSource,
     pub installed: bool,
+    /// Unix timestamp in seconds when the remote plugin was installed, when available.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub installed_at: Option<i64>,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,

@@ -172,6 +172,7 @@ mod tests {
             share_context: None,
             source: PluginSource::Remote,
             installed: true,
+            installed_at: None,
             enabled: true,
             install_policy: PluginInstallPolicy::Available,
             install_policy_source: None,

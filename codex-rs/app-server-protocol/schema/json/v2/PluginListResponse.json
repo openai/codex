@@ -548,6 +548,15 @@
         "installed": {
           "type": "boolean"
         },
+        "installedAt": {
+          "default": null,
+          "description": "Unix timestamp in seconds when the remote plugin was installed, when available.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "interface": {
           "anyOf": [
             {

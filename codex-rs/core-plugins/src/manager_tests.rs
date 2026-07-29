@@ -830,6 +830,7 @@ fn remote_installed_plugin_in_marketplace(
         id: format!("plugins~Plugin_{name}"),
         version: None,
         name: name.to_string(),
+        installed_at: None,
         enabled: true,
         install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
         install_policy_source: None,

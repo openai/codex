@@ -586,6 +586,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
                     path: valid_plugin_path,
                 },
                 installed: false,
+                installed_at: None,
                 enabled: false,
                 install_policy: PluginInstallPolicy::Available,
                 install_policy_source: None,
@@ -875,6 +876,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                         path: valid_plugin_path,
                     },
                     installed: false,
+                    installed_at: None,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     install_policy_source: None,
@@ -919,6 +921,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                         )?,
                     },
                     installed: false,
+                    installed_at: None,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     install_policy_source: None,
@@ -1968,6 +1971,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
       "installation_policy_source": "WORKSPACE_SETTING",
+      "installed_at": "2026-01-02T00:00:00Z",
       "must_show_installation_interstitial": false,
       "authentication_policy": "ON_USE",
       "status": "ENABLED",
@@ -2091,6 +2095,10 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         Some("1.2.3")
     );
     assert_eq!(remote_marketplace.plugins[0].installed, true);
+    assert_eq!(
+        remote_marketplace.plugins[0].installed_at,
+        Some(1_767_312_000)
+    );
     assert_eq!(remote_marketplace.plugins[0].enabled, true);
     assert_eq!(
         remote_marketplace.plugins[0].install_policy_source,

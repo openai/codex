@@ -3,6 +3,8 @@ use crate::http_client_selector::HttpClientSelector;
 use crate::loader::plugin_app_declarations_from_value;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
@@ -208,6 +210,7 @@ pub struct RemoteInstalledPlugin {
     pub id: String,
     pub version: Option<String>,
     pub name: String,
+    pub installed_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
@@ -229,6 +232,7 @@ pub struct RemotePluginSummary {
     pub name: String,
     pub share_context: Option<RemotePluginShareContext>,
     pub installed: bool,
+    pub installed_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
@@ -689,6 +693,8 @@ struct RemotePluginDirectorySharePrincipal {
 struct RemotePluginInstalledItem {
     #[serde(flatten)]
     plugin: RemotePluginDirectoryItem,
+    #[serde(default)]
+    installed_at: Option<DateTime<Utc>>,
     enabled: bool,
     #[serde(default)]
     disabled_skill_names: Vec<String>,
@@ -1204,6 +1210,7 @@ pub fn group_remote_installed_plugins_by_marketplaces(
             name: plugin.name.clone(),
             share_context: None,
             installed: true,
+            installed_at: plugin.installed_at,
             enabled: plugin.enabled,
             install_policy: plugin.install_policy,
             install_policy_source: plugin.install_policy_source,
@@ -1638,6 +1645,7 @@ fn build_remote_plugin_summary(
         name: plugin.name.clone(),
         share_context: remote_plugin_share_context(plugin)?,
         installed: installed_plugin.is_some(),
+        installed_at: installed_plugin.and_then(|installed| installed.installed_at),
         enabled: installed_plugin.is_some_and(|plugin| plugin.enabled),
         install_policy: plugin.installation_policy,
         install_policy_source: plugin
@@ -1724,6 +1732,7 @@ fn remote_installed_plugin_to_cache_entry(
         id: plugin.id.clone(),
         version: plugin.release.version.clone(),
         name: plugin.name.clone(),
+        installed_at: installed_plugin.installed_at,
         enabled: installed_plugin.enabled,
         install_policy: plugin.installation_policy,
         install_policy_source: plugin
