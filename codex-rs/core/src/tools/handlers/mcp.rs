@@ -23,11 +23,13 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_utils_string::take_bytes_at_char_boundary;
 use serde_json::Map;
 use serde_json::Value;
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
+const MAX_MCP_NAMESPACE_DESCRIPTION_BYTES: usize = 1_000;
 
 pub struct McpHandler {
     tool_info: ToolInfo,
@@ -102,6 +104,7 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
                 .as_deref()
                 .map(str::trim)
                 .filter(|description| !description.is_empty())
+                .map(bounded_mcp_namespace_description)
                 .map(str::to_string),
         });
 
@@ -254,9 +257,13 @@ fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error>
 
     Ok(ToolSpec::Namespace(ResponsesApiNamespace {
         name: tool_info.callable_namespace.clone(),
-        description,
+        description: bounded_mcp_namespace_description(&description).to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(tool)],
     }))
+}
+
+fn bounded_mcp_namespace_description(description: &str) -> &str {
+    take_bytes_at_char_boundary(description, MAX_MCP_NAMESPACE_DESCRIPTION_BYTES)
 }
 
 fn mcp_hook_tool_input(raw_arguments: &str) -> Value {

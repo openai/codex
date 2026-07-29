@@ -42,6 +42,32 @@ fn search_info_uses_connector_name_for_output_namespace_description() {
     );
 }
 
+#[test]
+fn mcp_namespace_descriptions_are_bounded_without_mutating_metadata() {
+    let expected_description = "é".repeat(499);
+    let full_description = format!("{expected_description}🦀keep the complete app metadata");
+    let mut info = tool_info();
+    info.namespace_description = Some(full_description.clone());
+    let handler = McpHandler::new(info).expect("MCP tool spec should build");
+    let search_info = handler.search_info().expect("MCP search info");
+
+    assert_eq!(
+        search_info.source_info,
+        Some(ToolSearchSourceInfo {
+            name: "Calendar".to_string(),
+            description: Some(expected_description.clone()),
+        })
+    );
+    let LoadableToolSpec::Namespace(namespace) = search_info.entry.output else {
+        panic!("expected namespace search output");
+    };
+    assert_eq!(namespace.description, expected_description);
+    assert_eq!(
+        handler.tool_info.namespace_description,
+        Some(full_description)
+    );
+}
+
 fn tool_info() -> ToolInfo {
     ToolInfo {
         server_name: "codex-apps".to_string(),

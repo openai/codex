@@ -52,6 +52,7 @@ const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA
 const APP_ONLY_CWD_MARKER_FILE_ENV: &str = "MCP_TEST_APP_ONLY_CWD_MARKER_FILE";
 const DYNAMIC_SERVER_METADATA_ENV: &str = "MCP_TEST_DYNAMIC_SERVER_METADATA";
 const INITIALIZE_BARRIER_FILE_ENV: &str = "MCP_TEST_INITIALIZE_BARRIER_FILE";
+const SERVER_INSTRUCTIONS_ENV: &str = "MCP_TEST_SERVER_INSTRUCTIONS";
 
 fn dynamic_server_process_label() -> Option<String> {
     std::env::var_os(DYNAMIC_SERVER_METADATA_ENV)
@@ -493,7 +494,7 @@ impl ServerHandler for TestToolServer {
         )]));
 
         let server_info = ServerInfo::new(capabilities);
-        match dynamic_server_process_label() {
+        let server_info = match dynamic_server_process_label() {
             Some(process_label) => server_info
                 .with_server_info(
                     Implementation::new("codex-rmcp-test-server", env!("CARGO_PKG_VERSION"))
@@ -503,6 +504,10 @@ impl ServerHandler for TestToolServer {
             None => {
                 server_info.with_instructions("Use these tools to exercise the rmcp test server.")
             }
+        };
+        match std::env::var(SERVER_INSTRUCTIONS_ENV) {
+            Ok(instructions) => server_info.with_instructions(instructions),
+            Err(_) => server_info,
         }
     }
 

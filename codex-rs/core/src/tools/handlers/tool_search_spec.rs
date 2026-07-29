@@ -2,7 +2,10 @@ use codex_tools::JsonSchema;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
+use codex_utils_string::take_bytes_at_char_boundary;
 use std::collections::BTreeMap;
+
+const MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES: usize = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolSearchSourceListing {
@@ -45,14 +48,40 @@ pub(crate) fn create_tool_search_tool(
             let source_descriptions = if source_descriptions.is_empty() {
                 "None currently enabled.".to_string()
             } else {
-                source_descriptions
-                    .into_iter()
-                    .map(|(name, description)| match description {
-                        Some(description) => format!("- {name}: {description}"),
-                        None => format!("- {name}"),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                let reserved_name_bytes = source_descriptions.keys().fold(
+                    source_descriptions.len().saturating_sub(1),
+                    |reserved, name| reserved.saturating_add(2).saturating_add(name.len()),
+                );
+                let mut description_budget =
+                    MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES.saturating_sub(reserved_name_bytes);
+                let mut rendered = String::new();
+                for (name, description) in source_descriptions {
+                    let separator_bytes = usize::from(!rendered.is_empty());
+                    let required = separator_bytes.saturating_add(2).saturating_add(name.len());
+                    if required
+                        > MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES.saturating_sub(rendered.len())
+                    {
+                        continue;
+                    }
+
+                    if !rendered.is_empty() {
+                        rendered.push('\n');
+                    }
+                    rendered.push_str("- ");
+                    rendered.push_str(&name);
+
+                    if let Some(description) = description
+                        && description_budget >= 2
+                    {
+                        rendered.push_str(": ");
+                        description_budget -= 2;
+                        let bounded_description =
+                            take_bytes_at_char_boundary(&description, description_budget);
+                        rendered.push_str(bounded_description);
+                        description_budget -= bounded_description.len();
+                    }
+                }
+                rendered
             };
             format!(
                 "\n\nYou have access to tools from the following sources:\n{source_descriptions}\n"
@@ -143,5 +172,48 @@ mod tests {
         assert!(!description.contains("You have access to tools from the following sources"));
         assert!(!description.contains("Google Drive"));
         assert!(description.contains("use this tool (`tool_search`) to search"));
+    }
+
+    #[test]
+    fn create_tool_search_tool_bounds_aggregate_source_descriptions() {
+        let sources = (0..8)
+            .map(|index| ToolSearchSourceInfo {
+                name: format!("source-{index:02}"),
+                description: Some("🦀".repeat(300)),
+            })
+            .collect::<Vec<_>>();
+        let ToolSpec::ToolSearch { description, .. } = create_tool_search_tool(
+            &sources,
+            /*default_limit*/ 8,
+            ToolSearchSourceListing::Include,
+        ) else {
+            panic!("expected tool search spec");
+        };
+
+        let (_, source_section) = description
+            .split_once("You have access to tools from the following sources:\n")
+            .expect("tool search should retain its source introduction");
+        let (source_descriptions, _) = source_section
+            .split_once("\nSome of the tools may not have been provided to you upfront")
+            .expect("tool search should retain its discovery instructions");
+        assert!(source_descriptions.len() <= MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES);
+        assert!(source_descriptions.starts_with("- source-00: 🦀"));
+        let advertised_names = source_descriptions
+            .lines()
+            .map(|line| {
+                let source = line
+                    .strip_prefix("- ")
+                    .expect("each source should be a complete list item");
+                source
+                    .split_once(": ")
+                    .map_or(source, |(name, _)| name)
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        let expected_names = (0..8)
+            .map(|index| format!("source-{index:02}"))
+            .collect::<Vec<_>>();
+        assert_eq!(advertised_names, expected_names);
+        assert!(description.contains("always use `tool_search`"));
     }
 }
