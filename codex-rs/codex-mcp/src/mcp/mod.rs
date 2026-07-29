@@ -60,6 +60,7 @@ const DEFAULT_CODEX_APPS_MCP_PRODUCT_SKU: &str = "codex";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
+const CODEX_APPS_MCP_PREVIEW_COOKIE_ENV_VAR: &str = "CODEX_APPS_MCP_PREVIEW_COOKIE"; // copybara:strip-for-public
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpSnapshotDetail {
@@ -526,13 +527,23 @@ fn mcp_server_config_for_url(
     if let Some(originator) = originator {
         http_headers.insert("originator".to_string(), originator.to_string());
     }
+    // copybara:replace-for-public begin
+    let env_http_headers = env::var_os(CODEX_APPS_MCP_PREVIEW_COOKIE_ENV_VAR).map(|_| {
+        HashMap::from([(
+            "Cookie".to_string(),
+            CODEX_APPS_MCP_PREVIEW_COOKIE_ENV_VAR.to_string(),
+        )])
+    });
+    // copybara:replace-for-public with
+    // copybara:public let env_http_headers = None;
+    // copybara:replace-for-public end
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
             http_headers: Some(http_headers),
-            env_http_headers: None,
+            env_http_headers,
         },
         auth: auth_mode,
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
