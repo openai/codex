@@ -205,6 +205,7 @@ fn sample_thread_with_metadata(
         preview: "first prompt".to_string(),
         ephemeral,
         section: None,
+        section_entered_at: None,
         history_mode: Default::default(),
         model_provider: "openai".to_string(),
         created_at: 1,

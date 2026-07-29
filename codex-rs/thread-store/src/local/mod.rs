@@ -5,6 +5,7 @@ mod helpers;
 mod list_threads;
 mod live_writer;
 mod model_context;
+mod move_thread_to_section;
 mod paginated_fork;
 mod read_thread;
 // This lands before the reader PRs that consume the shared lineage resolver.
@@ -47,6 +48,7 @@ use crate::ListItemsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
+use crate::MoveThreadToSectionParams;
 use crate::PrepareForkParams;
 use crate::PreparedFork;
 use crate::ReadThreadByRolloutPathParams;
@@ -487,6 +489,13 @@ impl ThreadStore for LocalThreadStore {
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, StoredThread> {
         Box::pin(async move { update_thread_metadata::update_thread_metadata(self, params).await })
+    }
+
+    fn move_thread_to_section(
+        &self,
+        params: MoveThreadToSectionParams,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move { move_thread_to_section::move_thread_to_section(self, params).await })
     }
 
     fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {

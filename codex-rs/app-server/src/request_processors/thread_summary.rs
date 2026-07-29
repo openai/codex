@@ -308,6 +308,7 @@ pub(crate) fn summary_to_thread(
         preview,
         ephemeral: false,
         section: None,
+        section_entered_at: None,
         history_mode: ThreadHistoryMode::Legacy,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),

@@ -264,7 +264,7 @@ async fn apply_metadata_update(
     let sqlite_write_result: ThreadStoreResult<()> = if let Some(state_db) = state_db.as_ref() {
         let patch = patch.clone();
         async {
-            let mut existing =
+            let existing =
                 state_db
                     .get_thread(thread_id)
                     .await
@@ -276,30 +276,6 @@ async fn apply_metadata_update(
                 let resolved = resolve_rollout_path(store, thread_id, include_archived).await?;
                 rollout_path_archived = resolved.archived;
                 rollout_path = Some(resolved.path);
-            }
-            if existing.is_none()
-                && patch.section.is_some()
-                && let Some(path) = rollout_path.as_deref()
-                && let Some(existing_rollout_path) =
-                    codex_rollout::existing_rollout_path(path).await
-            {
-                codex_rollout::state_db::reconcile_rollout(
-                    Some(state_db.as_ref()),
-                    existing_rollout_path.as_path(),
-                    store.config.default_model_provider_id.as_str(),
-                    /*builder*/ None,
-                    &[],
-                    /*archived_only*/ Some(rollout_path_archived),
-                    /*new_thread_memory_mode*/ None,
-                )
-                .await;
-                existing = state_db.get_thread(thread_id).await.map_err(|err| {
-                    ThreadStoreError::Internal {
-                        message: format!(
-                            "failed to read reconciled thread metadata for {thread_id}: {err}"
-                        ),
-                    }
-                })?;
             }
             let mut metadata = match existing.clone() {
                 Some(metadata) => metadata,
@@ -389,24 +365,6 @@ async fn apply_metadata_update(
             if let Some(first_user_message) = patch.first_user_message {
                 metadata.first_user_message = Some(first_user_message);
             }
-            if let Some(section) = patch.section.clone() {
-                metadata.section = match section {
-                    Some(section_id) => Some(
-                        state_db
-                            .get_thread_section(&section_id)
-                            .await
-                            .map_err(|err| ThreadStoreError::Internal {
-                                message: format!(
-                                    "failed to read section {section_id} for thread {thread_id}: {err}"
-                                ),
-                            })?
-                            .ok_or_else(|| ThreadStoreError::InvalidRequest {
-                                message: format!("thread section not found: {section_id}"),
-                            })?,
-                    ),
-                    None => None,
-                };
-            }
             if let Some(git_info) = patch.git_info {
                 let existing_git_info = git_info_from_parts(
                     metadata.git_sha.clone(),
@@ -424,21 +382,6 @@ async fn apply_metadata_update(
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
                 })?;
-            if let Some(section) = patch.section {
-                let updated = state_db
-                    .update_thread_section(thread_id, section.as_deref())
-                    .await
-                    .map_err(|err| ThreadStoreError::Internal {
-                        message: format!("failed to update section for thread {thread_id}: {err}"),
-                    })?;
-                if !updated {
-                    return Err(ThreadStoreError::Internal {
-                        message: format!(
-                            "thread metadata unavailable before section update: {thread_id}"
-                        ),
-                    });
-                }
-            }
             if let Some(name) = patch.name.as_ref() {
                 let history_mode = history_mode.ok_or_else(|| ThreadStoreError::Internal {
                     message: format!(
@@ -603,9 +546,8 @@ fn sqlite_write_failure_should_block(patch: &ThreadMetadataPatch) -> bool {
     // transcript-derived metadata, thread names, and memory-mode indexing were log-only. Keep that
     // failure isolation so a corrupted optional state DB does not make JSONL transcript durability
     // look broken. Explicit git-only updates still require SQLite because partial git patches need
-    // the existing SQLite value to preserve unspecified fields. User-selected section state is
-    // SQLite-only, so losing its write must also fail the explicit metadata update.
-    patch.section.is_some() || (patch.git_info.is_some() && !has_observed_metadata_facts(patch))
+    // the existing SQLite value to preserve unspecified fields.
+    patch.git_info.is_some() && !has_observed_metadata_facts(patch)
 }
 
 fn sqlite_write_error_is_best_effort(err: &ThreadStoreError) -> bool {
@@ -865,6 +807,7 @@ mod tests {
     use super::*;
     use crate::GitInfoPatch;
     use crate::ListThreadsParams;
+    use crate::MoveThreadToSectionParams;
     use crate::ResumeThreadParams;
     use crate::SortDirection;
     use crate::ThreadMetadataPatch;
@@ -905,7 +848,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn section_only_metadata_updates_persist_in_sqlite_without_changing_the_rollout() {
+    async fn section_moves_persist_in_sqlite_without_changing_the_rollout() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let uuid = Uuid::from_u128(320);
@@ -921,17 +864,33 @@ mod tests {
         .expect("state db should initialize");
         let store = LocalThreadStore::new(config, Some(runtime.clone()));
 
-        let pinned = store
-            .update_thread_metadata(UpdateThreadMetadataParams {
+        codex_rollout::state_db::reconcile_rollout(
+            Some(runtime.as_ref()),
+            rollout_path.as_path(),
+            "test-provider",
+            /*builder*/ None,
+            &[],
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
+        store
+            .move_thread_to_section(MoveThreadToSectionParams {
                 thread_id,
-                patch: ThreadMetadataPatch {
-                    section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
-                    ..Default::default()
-                },
-                include_archived: false,
+                section: Some(codex_state::PINNED_THREAD_SECTION_ID.to_string()),
+                before_thread_id: None,
             })
             .await
             .expect("pin thread");
+
+        let pinned = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read pinned thread");
 
         assert_eq!(
             pinned.section,
@@ -999,17 +958,23 @@ mod tests {
             original_rollout
         );
 
-        let unpinned = store
-            .update_thread_metadata(UpdateThreadMetadataParams {
+        store
+            .move_thread_to_section(MoveThreadToSectionParams {
                 thread_id,
-                patch: ThreadMetadataPatch {
-                    section: Some(None),
-                    ..Default::default()
-                },
-                include_archived: false,
+                section: None,
+                before_thread_id: None,
             })
             .await
             .expect("clear thread section");
+
+        let unpinned = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read unpinned thread");
 
         assert_eq!(unpinned.section, None);
         assert_eq!(
@@ -1825,14 +1790,6 @@ mod tests {
                 branch: Some(Some("main".to_string())),
                 ..Default::default()
             }),
-            ..Default::default()
-        }));
-    }
-
-    #[test]
-    fn sqlite_failures_block_for_explicit_section_updates() {
-        assert!(sqlite_write_failure_should_block(&ThreadMetadataPatch {
-            section: Some(None),
             ..Default::default()
         }));
     }

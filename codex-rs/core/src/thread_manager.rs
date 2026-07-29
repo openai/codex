@@ -72,6 +72,7 @@ use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::MoveThreadToSectionParams;
 use codex_thread_store::PreparedFork;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
@@ -728,6 +729,32 @@ impl ThreadManager {
                 }
                 err => thread_store_metadata_update_error(thread_id, err),
             })
+    }
+
+    /// Moves a persisted thread to, within, or out of a server-ordered section.
+    pub async fn move_thread_to_section(
+        &self,
+        thread_id: ThreadId,
+        section: Option<&str>,
+        before_thread_id: Option<ThreadId>,
+    ) -> CodexResult<()> {
+        if let Ok(thread) = self.get_thread(thread_id).await
+            && thread.config_snapshot().await.ephemeral
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "ephemeral thread does not support section moves: {thread_id}"
+            )));
+        }
+
+        self.state
+            .thread_store
+            .move_thread_to_section(MoveThreadToSectionParams {
+                thread_id,
+                section: section.map(ToOwned::to_owned),
+                before_thread_id,
+            })
+            .await
+            .map_err(|err| thread_store_metadata_update_error(thread_id, err))
     }
 
     /// List `thread_id` plus all known descendants in its spawn subtree.

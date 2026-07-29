@@ -39,6 +39,8 @@ SELECT
         FROM thread_sections
         WHERE thread_sections.id = threads.thread_section_id
     ) AS section_name,
+    threads.section_position,
+    threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -51,58 +53,6 @@ WHERE threads.id = ?
         .await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .transpose()
-    }
-
-    /// Read an independently persisted thread section by its opaque identifier.
-    pub async fn get_thread_section(
-        &self,
-        id: &str,
-    ) -> anyhow::Result<Option<crate::ThreadSection>> {
-        let row = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, name FROM thread_sections WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
-        Ok(row.map(|(id, name)| crate::ThreadSection { id, name }))
-    }
-
-    /// List independently persisted sections in stable, cursor-paginated identifier order.
-    pub async fn list_thread_sections(
-        &self,
-        cursor: Option<&str>,
-        limit: usize,
-    ) -> anyhow::Result<crate::ThreadSectionsPage> {
-        let page_size = limit.max(1);
-        let fetch_limit = i64::try_from(page_size.saturating_add(1))?;
-        let rows = sqlx::query_as::<_, (String, String)>(
-            r#"
-SELECT id, name
-FROM thread_sections
-WHERE (? IS NULL OR id > ?)
-ORDER BY id
-LIMIT ?
-            "#,
-        )
-        .bind(cursor)
-        .bind(cursor)
-        .bind(fetch_limit)
-        .fetch_all(self.pool.as_ref())
-        .await?;
-        let mut sections = rows
-            .into_iter()
-            .map(|(id, name)| crate::ThreadSection { id, name })
-            .collect::<Vec<_>>();
-        let next_cursor = if sections.len() > page_size {
-            sections.pop();
-            sections.last().map(|section| section.id.clone())
-        } else {
-            None
-        };
-        Ok(crate::ThreadSectionsPage {
-            sections,
-            next_cursor,
-        })
     }
 
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
@@ -561,14 +511,20 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
-            sort_key == crate::SortKey::RecencyAt,
+            matches!(
+                sort_key,
+                crate::SortKey::RecencyAt | crate::SortKey::SectionPosition
+            ),
         );
         push_thread_order_and_limit(
             &mut builder,
             sort_key,
             SortDirection::Desc,
             OrderByIndex::Enabled,
-            sort_key == crate::SortKey::RecencyAt,
+            matches!(
+                sort_key,
+                crate::SortKey::RecencyAt | crate::SortKey::SectionPosition
+            ),
             limit,
         );
 
@@ -626,11 +582,13 @@ INSERT INTO threads (
     archived,
     archived_at,
     thread_section_id,
+    section_position,
+    section_entered_at_ms,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -673,6 +631,8 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.section.as_ref().map(|section| section.id.as_str()))
+        .bind(metadata.section_position)
+        .bind(metadata.section_entered_at.map(datetime_to_epoch_millis))
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
@@ -717,20 +677,6 @@ ON CONFLICT(id) DO NOTHING
     ) -> anyhow::Result<bool> {
         let result = sqlx::query("UPDATE threads SET name = ? WHERE id = ?")
             .bind(name)
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    /// Update the SQLite-owned section without changing other thread metadata.
-    pub async fn update_thread_section(
-        &self,
-        thread_id: ThreadId,
-        section: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET thread_section_id = ? WHERE id = ?")
-            .bind(section)
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
             .await?;
@@ -911,11 +857,13 @@ INSERT INTO threads (
     archived,
     archived_at,
     thread_section_id,
+    section_position,
+    section_entered_at_ms,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -987,6 +935,8 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.section.as_ref().map(|section| section.id.as_str()))
+        .bind(metadata.section_position)
+        .bind(metadata.section_entered_at.map(datetime_to_epoch_millis))
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
@@ -1206,8 +1156,11 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         ),
         None => builder.push(" FROM threads"),
     };
-    let include_thread_id_tiebreaker =
-        relation_filter.is_some() || filters.sort_key == SortKey::RecencyAt;
+    let include_thread_id_tiebreaker = relation_filter.is_some()
+        || matches!(
+            filters.sort_key,
+            SortKey::RecencyAt | SortKey::SectionPosition
+        );
     push_thread_filters_with_preview(
         builder,
         filters,
@@ -1279,6 +1232,8 @@ SELECT
         FROM thread_sections
         WHERE thread_sections.id = threads.thread_section_id
     ) AS section_name,
+    threads.section_position,
+    threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -1414,6 +1369,7 @@ fn push_thread_filters_with_preview<'a>(
             SortKey::CreatedAt => "threads.created_at_ms",
             SortKey::UpdatedAt => "threads.updated_at_ms",
             SortKey::RecencyAt => "threads.recency_at_ms",
+            SortKey::SectionPosition => "threads.section_position",
         };
         let operator = match sort_direction {
             SortDirection::Asc => ">",
@@ -1462,6 +1418,7 @@ pub(super) fn push_thread_order_and_limit(
         SortKey::CreatedAt => "threads.created_at_ms",
         SortKey::UpdatedAt => "threads.updated_at_ms",
         SortKey::RecencyAt => "threads.recency_at_ms",
+        SortKey::SectionPosition => "threads.section_position",
     };
     let order_direction = match sort_direction {
         SortDirection::Asc => "ASC",
@@ -1511,6 +1468,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
+    const CUSTOM_THREAD_SECTION_ID: &str = "01984de2-8f74-7c91-a3b2-5c5e937cf317";
     #[tokio::test]
     async fn upsert_thread_keeps_creation_memory_mode_for_existing_rows() {
         let codex_home = unique_temp_dir();
@@ -1577,210 +1535,6 @@ mod tests {
             .expect("thread should load")
             .expect("thread should exist");
         assert_eq!(metadata.history_mode, ThreadHistoryMode::Paginated);
-    }
-
-    #[tokio::test]
-    async fn thread_sections_paginate_and_require_registered_identities() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(
-            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
-            "test-provider".to_string(),
-        )
-        .await
-        .expect("state db should initialize");
-        let before_pinned = crate::ThreadSection {
-            id: "01984de2-8f74-7c91-a3b2-5c5e937cf317".to_string(),
-            name: "Before pinned".to_string(),
-        };
-        let pinned = crate::ThreadSection {
-            id: crate::PINNED_THREAD_SECTION_ID.to_string(),
-            name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
-        };
-        let after_pinned = crate::ThreadSection {
-            id: "01984de2-8f74-7c91-a3b2-5c5e937cf319".to_string(),
-            name: "After pinned".to_string(),
-        };
-
-        for section in [&before_pinned, &after_pinned] {
-            sqlx::query("INSERT INTO thread_sections (id, name) VALUES (?, ?)")
-                .bind(&section.id)
-                .bind(&section.name)
-                .execute(runtime.pool.as_ref())
-                .await
-                .expect("custom test sections should be explicitly registered");
-        }
-
-        assert_eq!(
-            runtime
-                .get_thread_section(&pinned.id)
-                .await
-                .expect("built-in section should load"),
-            Some(pinned.clone())
-        );
-        assert_eq!(
-            runtime
-                .get_thread_section("01984de2-8f74-7c91-a3b2-5c5e937cf320")
-                .await
-                .expect("missing section lookup should succeed"),
-            None
-        );
-
-        assert_eq!(
-            runtime
-                .list_thread_sections(/*cursor*/ None, /*limit*/ 1)
-                .await
-                .expect("first section page should load"),
-            crate::ThreadSectionsPage {
-                sections: vec![before_pinned.clone()],
-                next_cursor: Some(before_pinned.id.clone()),
-            }
-        );
-        assert_eq!(
-            runtime
-                .list_thread_sections(Some(&before_pinned.id), /*limit*/ 1)
-                .await
-                .expect("pinned section page should load"),
-            crate::ThreadSectionsPage {
-                sections: vec![pinned.clone()],
-                next_cursor: Some(pinned.id.clone()),
-            }
-        );
-        assert_eq!(
-            runtime
-                .list_thread_sections(Some(&pinned.id), /*limit*/ 1)
-                .await
-                .expect("final section page should load"),
-            crate::ThreadSectionsPage {
-                sections: vec![after_pinned],
-                next_cursor: None,
-            }
-        );
-
-        let thread_id = ThreadId::new();
-        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
-        metadata.section = Some(before_pinned.clone());
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("registered section should be accepted");
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .expect("sectioned thread should load")
-                .expect("sectioned thread should exist")
-                .section,
-            Some(before_pinned.clone())
-        );
-        assert!(
-            runtime
-                .update_thread_section(
-                    thread_id,
-                    /*section*/ Some("01984de2-8f74-7c91-a3b2-5c5e937cf320"),
-                )
-                .await
-                .is_err(),
-            "thread sections must be explicitly registered before assignment"
-        );
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .expect("thread should survive rejected section assignment")
-                .expect("thread should still exist")
-                .section,
-            Some(before_pinned)
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_section_updates_round_trip_and_survive_rollout_reconciliation() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(
-            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
-            "test-provider".to_string(),
-        )
-        .await
-        .expect("state db should initialize");
-        let thread_id = ThreadId::new();
-        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("thread insert should succeed");
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .section,
-            None
-        );
-
-        assert!(
-            runtime
-                .update_thread_section(
-                    thread_id,
-                    /*section*/ Some(crate::PINNED_THREAD_SECTION_ID),
-                )
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .section,
-            Some(crate::ThreadSection {
-                id: crate::PINNED_THREAD_SECTION_ID.to_string(),
-                name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
-            })
-        );
-
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("stale rollout metadata should reconcile");
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .section,
-            Some(crate::ThreadSection {
-                id: crate::PINNED_THREAD_SECTION_ID.to_string(),
-                name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
-            })
-        );
-
-        assert!(
-            runtime
-                .update_thread_section(thread_id, /*section*/ None)
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .section,
-            None
-        );
-        assert!(
-            !runtime
-                .update_thread_section(
-                    ThreadId::new(),
-                    /*section*/ Some(crate::PINNED_THREAD_SECTION_ID),
-                )
-                .await
-                .unwrap()
-        );
     }
 
     #[tokio::test]
@@ -1920,6 +1674,104 @@ mod tests {
                 .iter()
                 .any(|detail| detail.contains("TEMP B-TREE")),
             "section listing unexpectedly sorted outside its index: {plan_details:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn section_position_listing_uses_stable_indexed_keyset_pagination() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("state db should initialize");
+        sqlx::query("INSERT INTO thread_sections (id, name) VALUES (?, ?)")
+            .bind(CUSTOM_THREAD_SECTION_ID)
+            .bind("Custom section")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("custom test section should be explicitly registered");
+        let first = ThreadId::from_string("00000000-0000-0000-0000-000000000061").unwrap();
+        let tied = ThreadId::from_string("00000000-0000-0000-0000-000000000062").unwrap();
+        let last = ThreadId::from_string("00000000-0000-0000-0000-000000000063").unwrap();
+
+        for (thread_id, position) in [(first, 1_000_000), (tied, 1_000_000), (last, 2_000_000)] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            metadata.section = Some(crate::ThreadSection {
+                id: CUSTOM_THREAD_SECTION_ID.to_string(),
+                name: "Custom section".to_string(),
+            });
+            metadata.section_position = Some(position);
+            metadata.section_entered_at = Some(metadata.updated_at);
+            runtime.upsert_thread(&metadata).await.unwrap();
+        }
+
+        let filters = |anchor| ThreadFilterOptions {
+            archived_only: false,
+            allowed_sources: &[],
+            model_providers: None,
+            cwd_filters: None,
+            section: Some(Some(CUSTOM_THREAD_SECTION_ID)),
+            anchor,
+            sort_key: SortKey::SectionPosition,
+            sort_direction: SortDirection::Asc,
+            search_term: None,
+        };
+        let first_page = runtime
+            .list_threads(/*page_size*/ 1, filters(None))
+            .await
+            .unwrap();
+        let second_page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                filters(first_page.next_anchor.as_ref()),
+            )
+            .await
+            .unwrap();
+        let third_page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                filters(second_page.next_anchor.as_ref()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            [
+                first_page.items[0].id,
+                second_page.items[0].id,
+                third_page.items[0].id
+            ],
+            [first, tied, last]
+        );
+        assert_eq!(third_page.next_anchor, None);
+
+        let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
+        push_list_threads_query(
+            &mut builder,
+            filters(/*anchor*/ None),
+            /*relation_filter*/ None,
+            /*limit*/ 2,
+        );
+        let plan_details = builder
+            .build()
+            .fetch_all(runtime.pool.as_ref())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect::<Vec<_>>();
+        assert!(
+            plan_details
+                .iter()
+                .any(|detail| detail.contains("idx_threads_section_position")),
+            "section-position listing did not use its selective index: {plan_details:?}"
+        );
+        assert!(
+            !plan_details
+                .iter()
+                .any(|detail| detail.contains("TEMP B-TREE")),
+            "section-position listing unexpectedly sorted outside its index: {plan_details:?}"
         );
     }
 

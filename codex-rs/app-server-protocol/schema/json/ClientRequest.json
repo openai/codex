@@ -4310,13 +4310,6 @@
           ],
           "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
         },
-        "sectionId": {
-          "description": "Omit to leave the section unchanged, set to `null` to clear it, or provide a section ID.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "threadId": {
           "type": "string"
         }
@@ -4589,6 +4582,14 @@
       ],
       "type": "object"
     },
+    "ThreadSearchSortKey": {
+      "enum": [
+        "created_at",
+        "updated_at",
+        "recency_at"
+      ],
+      "type": "string"
+    },
     "ThreadSectionListParams": {
       "description": "Parameters for listing independently persisted thread sections.",
       "properties": {
@@ -4609,6 +4610,34 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ThreadSectionMoveParams": {
+      "description": "Parameters for moving a thread within a server-owned section ordering.",
+      "properties": {
+        "beforeThreadId": {
+          "description": "Existing thread to insert before; omission or null appends to the section.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sectionId": {
+          "description": "Destination section, or `null` to remove the thread from its section.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "description": "Thread to move into, within, or out of a section.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sectionId",
+        "threadId"
+      ],
       "type": "object"
     },
     "ThreadSetNameParams": {
@@ -4646,7 +4675,8 @@
       "enum": [
         "created_at",
         "updated_at",
-        "recency_at"
+        "recency_at",
+        "section_position"
       ],
       "type": "string"
     },
@@ -5527,6 +5557,30 @@
         "params"
       ],
       "title": "Thread/metadata/updateRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/section/move"
+          ],
+          "title": "Thread/section/moveRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadSectionMoveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/section/moveRequest",
       "type": "object"
     },
     {

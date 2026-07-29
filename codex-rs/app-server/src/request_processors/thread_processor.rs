@@ -7,6 +7,8 @@ use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadSection;
 use codex_app_server_protocol::ThreadSectionListParams;
 use codex_app_server_protocol::ThreadSectionListResponse;
+use codex_app_server_protocol::ThreadSectionMoveParams;
+use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
@@ -587,6 +589,48 @@ impl ThreadRequestProcessor {
         self.thread_metadata_update_response_inner(params)
             .await
             .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_section_move(
+        &self,
+        params: ThreadSectionMoveParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let ThreadSectionMoveParams {
+            thread_id,
+            section_id,
+            before_thread_id,
+        } = params;
+        let thread_uuid = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        if section_id
+            .as_deref()
+            .is_some_and(|section| section.trim().is_empty())
+        {
+            return Err(invalid_request("sectionId must not be empty"));
+        }
+        if section_id.is_none() && before_thread_id.is_some() {
+            return Err(invalid_request(
+                "beforeThreadId requires a non-null sectionId",
+            ));
+        }
+        let before_thread_uuid = before_thread_id
+            .map(|thread_id| {
+                ThreadId::from_string(&thread_id)
+                    .map_err(|err| invalid_request(format!("invalid before thread id: {err}")))
+            })
+            .transpose()?;
+
+        {
+            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            self.thread_manager
+                .move_thread_to_section(thread_uuid, section_id.as_deref(), before_thread_uuid)
+                .await
+                .map_err(|err| core_thread_write_error("move thread in section", err))?;
+        }
+
+        Ok(Some(ClientResponsePayload::ThreadSectionMove(
+            ThreadSectionMoveResponse {},
+        )))
     }
 
     pub(crate) async fn thread_memory_mode_set(
@@ -1675,13 +1719,12 @@ impl ThreadRequestProcessor {
         let ThreadMetadataUpdateParams {
             thread_id,
             git_info,
-            section_id,
         } = params;
 
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        if git_info.is_none() && section_id.is_none() {
+        if git_info.is_none() {
             return Err(invalid_request(
                 "thread metadata update must include at least one field",
             ));
@@ -1717,7 +1760,6 @@ impl ThreadRequestProcessor {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
             let patch = StoreThreadMetadataPatch {
                 git_info,
-                section: section_id,
                 ..Default::default()
             };
             self.thread_manager
@@ -2040,8 +2082,14 @@ impl ThreadRequestProcessor {
             ThreadSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
             ThreadSortKey::RecencyAt => StoreThreadSortKey::RecencyAt,
+            ThreadSortKey::SectionPosition => StoreThreadSortKey::SectionPosition,
         };
-        let sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
+        let sort_direction = sort_direction.unwrap_or(match store_sort_key {
+            StoreThreadSortKey::SectionPosition => SortDirection::Asc,
+            StoreThreadSortKey::CreatedAt
+            | StoreThreadSortKey::UpdatedAt
+            | StoreThreadSortKey::RecencyAt => SortDirection::Desc,
+        });
         let (stored_threads, next_cursor) = self
             .list_threads_common(
                 requested_page_size,
@@ -2110,10 +2158,10 @@ impl ThreadRequestProcessor {
             .map(|value| value as usize)
             .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
             .clamp(1, THREAD_LIST_MAX_LIMIT);
-        let store_sort_key = match sort_key.unwrap_or(ThreadSortKey::CreatedAt) {
-            ThreadSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
-            ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
-            ThreadSortKey::RecencyAt => StoreThreadSortKey::RecencyAt,
+        let store_sort_key = match sort_key.unwrap_or(ThreadSearchSortKey::CreatedAt) {
+            ThreadSearchSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
+            ThreadSearchSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
+            ThreadSearchSortKey::RecencyAt => StoreThreadSortKey::RecencyAt,
         };
         let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
         let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
@@ -4630,10 +4678,19 @@ fn thread_backwards_cursor_for_sort_key(
     sort_key: StoreThreadSortKey,
     sort_direction: SortDirection,
 ) -> Option<String> {
+    if sort_key == StoreThreadSortKey::SectionPosition {
+        let position = match sort_direction {
+            SortDirection::Asc => thread.section_position?.checked_add(1)?,
+            SortDirection::Desc => thread.section_position?.checked_sub(1)?,
+        };
+        return Some(format!("{position}|{}", thread.thread_id));
+    }
+
     let timestamp = match sort_key {
         StoreThreadSortKey::CreatedAt => thread.created_at,
         StoreThreadSortKey::UpdatedAt => thread.updated_at,
         StoreThreadSortKey::RecencyAt => thread.recency_at,
+        StoreThreadSortKey::SectionPosition => unreachable!("section positions use rank cursors"),
     };
     // The state DB stores unique millisecond timestamps. Offset the reverse cursor by one
     // millisecond so the opposite-direction query includes the page anchor.
@@ -5134,6 +5191,9 @@ pub(crate) fn thread_from_stored_thread(
             id: section.id,
             name: section.name,
         }),
+        section_entered_at: thread
+            .section_entered_at
+            .map(|entered_at| entered_at.timestamp()),
         history_mode: thread.history_mode.into(),
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
@@ -5354,6 +5414,7 @@ fn build_thread_from_snapshot(
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
         section: None,
+        section_entered_at: None,
         history_mode: config_snapshot.history_mode.into(),
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,

@@ -19,9 +19,13 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSearchResponse;
+use codex_app_server_protocol::ThreadSectionMoveParams;
+use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -696,6 +700,14 @@ async fn thread_search_returns_content_matches() -> Result<()> {
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
+    let unsectioned_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-30-00",
+        "2025-01-02T11:30:00Z",
+        "unsectioned needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
     let newer_match = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T12-00-00",
@@ -726,8 +738,83 @@ async fn thread_search_returns_content_matches() -> Result<()> {
         .iter()
         .map(|result| result.thread.id.as_str())
         .collect();
-    assert_eq!(ids, vec![newer_match, older_match]);
+    assert_eq!(
+        ids,
+        vec![
+            newer_match.as_str(),
+            unsectioned_match.as_str(),
+            older_match.as_str(),
+        ]
+    );
     assert_eq!(data[0].snippet, "mixed NEEDLE suffix");
+
+    let mut pinned_threads = Vec::new();
+    for thread_id in [&older_match, &newer_match] {
+        let request_id = mcp
+            .send_thread_section_move_request(ThreadSectionMoveParams {
+                thread_id: thread_id.clone(),
+                section_id: Some(codex_state::PINNED_THREAD_SECTION_ID.to_string()),
+                before_thread_id: None,
+            })
+            .await?;
+        let _: ThreadSectionMoveResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+        let request_id = mcp
+            .send_thread_read_request(ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: false,
+            })
+            .await?;
+        let ThreadReadResponse { thread } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+        pinned_threads.push(thread);
+    }
+    let [older_pinned, newer_pinned] = pinned_threads.as_slice() else {
+        unreachable!("two matching threads were pinned");
+    };
+
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: None,
+            archived: None,
+            search_term: "needle".to_string(),
+        })
+        .await?;
+    let ThreadSearchResponse {
+        data, next_cursor, ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    let actual = data
+        .iter()
+        .map(|result| {
+            (
+                result.thread.id.as_str(),
+                result.thread.section.clone(),
+                result.thread.section_entered_at,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                newer_match.as_str(),
+                newer_pinned.section.clone(),
+                newer_pinned.section_entered_at,
+            ),
+            (unsectioned_match.as_str(), None, None),
+            (
+                older_match.as_str(),
+                older_pinned.section.clone(),
+                older_pinned.section_entered_at,
+            ),
+        ]
+    );
+    assert_eq!(next_cursor, None);
 
     Ok(())
 }

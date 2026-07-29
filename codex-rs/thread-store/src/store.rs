@@ -15,6 +15,7 @@ use crate::ListItemsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
+use crate::MoveThreadToSectionParams;
 use crate::PrepareForkParams;
 use crate::PreparedFork;
 use crate::ReadThreadByRolloutPathParams;
@@ -177,6 +178,18 @@ pub trait ThreadStore: Any + Send + Sync {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, StoredThread>;
+
+    /// Moves a thread to, within, or out of a server-ordered section.
+    fn move_thread_to_section(
+        &self,
+        _params: MoveThreadToSectionParams,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "thread/section/move",
+            })
+        })
+    }
 
     /// Archives a thread.
     fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()>;

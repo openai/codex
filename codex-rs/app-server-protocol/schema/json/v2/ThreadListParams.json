@@ -25,7 +25,8 @@
       "enum": [
         "created_at",
         "updated_at",
-        "recency_at"
+        "recency_at",
+        "section_position"
       ],
       "type": "string"
     },

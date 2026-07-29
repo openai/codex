@@ -53,6 +53,8 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
             .expect("valid timestamp"),
         archived_at: None,
         section: None,
+        section_position: None,
+        section_entered_at: None,
         cwd: PathBuf::from(cwd),
         cli_version: "test".to_string(),
         source: SessionSource::Cli,

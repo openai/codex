@@ -25,7 +25,10 @@ pub enum Account {
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt {
-        #[schemars(required, schema_with = "nullable_string_schema")]
+        #[schemars(
+            required,
+            schema_with = "crate::protocol::serde_helpers::nullable_string_schema"
+        )]
         email: Option<String>,
         plan_type: PlanType,
     },
@@ -36,12 +39,6 @@ pub enum Account {
         #[serde(default)]
         uses_codex_managed_credentials: bool,
     },
-}
-
-fn nullable_string_schema(
-    generator: &mut schemars::r#gen::SchemaGenerator,
-) -> schemars::schema::Schema {
-    generator.subschema_for::<Option<String>>()
 }
 
 impl From<ProviderAccount> for Account {

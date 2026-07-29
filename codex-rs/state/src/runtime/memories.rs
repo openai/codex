@@ -201,6 +201,8 @@ SELECT
         FROM thread_sections
         WHERE thread_sections.id = threads.thread_section_id
     ) AS section_name,
+    threads.section_position,
+    threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -582,6 +584,8 @@ SELECT
         FROM thread_sections
         WHERE thread_sections.id = threads.thread_section_id
     ) AS section_name,
+    threads.section_position,
+    threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url

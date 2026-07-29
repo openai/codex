@@ -187,6 +187,124 @@ INSERT INTO threads (
 }
 
 #[tokio::test]
+async fn thread_section_order_migration_backfills_stably() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let pool = sqlite
+        .open_read_write_pool(&sqlite.state_db_path())
+        .await
+        .expect("sqlite database should open");
+    migrator_through(/*version*/ 45)
+        .run(&pool)
+        .await
+        .expect("pre-ordering migrations should apply");
+
+    sqlx::query("INSERT INTO thread_sections (id, name) VALUES (?, ?)")
+        .bind(CUSTOM_THREAD_SECTION_ID)
+        .bind("Custom section")
+        .execute(&pool)
+        .await
+        .expect("custom section should exist before threads reference it");
+
+    let older = "00000000-0000-0000-0000-000000000071";
+    let newer = "00000000-0000-0000-0000-000000000072";
+    let pinned = "00000000-0000-0000-0000-000000000073";
+    let unsectioned = "00000000-0000-0000-0000-000000000074";
+    for (thread_id, recency_at_ms, section) in [
+        (older, 1_700_000_001_000_i64, Some(CUSTOM_THREAD_SECTION_ID)),
+        (newer, 1_700_000_002_000, Some(CUSTOM_THREAD_SECTION_ID)),
+        (pinned, 1_700_000_003_000, Some(PINNED_THREAD_SECTION_ID)),
+        (unsectioned, 1_700_000_004_000, None),
+    ] {
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id, rollout_path, created_at, updated_at, recency_at,
+    created_at_ms, updated_at_ms, recency_at_ms, source,
+    model_provider, cwd, title, preview, sandbox_policy, approval_mode, thread_section_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id)
+        .bind("/tmp/legacy.jsonl")
+        .bind(recency_at_ms / 1000)
+        .bind(recency_at_ms / 1000)
+        .bind(recency_at_ms / 1000)
+        .bind(recency_at_ms)
+        .bind(recency_at_ms)
+        .bind(recency_at_ms)
+        .bind("cli")
+        .bind("openai")
+        .bind("/tmp")
+        .bind("")
+        .bind("preview")
+        .bind("read-only")
+        .bind("on-request")
+        .bind(section)
+        .execute(&pool)
+        .await
+        .expect("legacy section row should insert");
+    }
+
+    STATE_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("section ordering migration should apply");
+    let custom_order = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM threads WHERE thread_section_id = ? ORDER BY section_position, id",
+    )
+    .bind(CUSTOM_THREAD_SECTION_ID)
+    .fetch_all(&pool)
+    .await
+    .expect("backfilled custom order should load");
+    assert_eq!(custom_order, vec![newer.to_string(), older.to_string()]);
+    let positions =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT section_position FROM threads ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("section positions should load");
+    assert_eq!(
+        positions,
+        vec![Some(2_000_000), Some(1_000_000), Some(1_000_000), None]
+    );
+    let entered = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT section_entered_at_ms FROM threads ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("section entry timestamps should load");
+    assert_eq!(
+        entered,
+        vec![
+            Some(1_700_000_001_000),
+            Some(1_700_000_002_000),
+            Some(1_700_000_003_000),
+            None,
+        ]
+    );
+
+    let section_position_index = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+    )
+    .bind("idx_threads_section_position")
+    .fetch_optional(&pool)
+    .await
+    .expect("section position index should remain inspectable");
+    assert_eq!(
+        section_position_index,
+        Some("idx_threads_section_position".to_string())
+    );
+
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn thread_item_update_ordinals_allow_older_writers() {
     let sqlite_home = crate::runtime::test_support::unique_temp_dir();
     tokio::fs::create_dir_all(&sqlite_home)

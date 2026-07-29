@@ -70,6 +70,8 @@ pub(super) fn test_thread_metadata(
         first_user_message: Some("hello".to_string()),
         archived_at: None,
         section: None,
+        section_position: None,
+        section_entered_at: None,
         git_sha: None,
         git_branch: None,
         git_origin_url: None,

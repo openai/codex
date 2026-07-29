@@ -31,6 +31,9 @@ ephemeral: boolean, /**
  * The independently persisted section selected for this thread, if any.
  */
 section: ThreadSection | null, /**
+ * Unix timestamp in seconds when the thread entered its current section.
+ */
+sectionEnteredAt: number | null, /**
  * Model provider used for this thread (for example, 'openai').
  */
 modelProvider: string, /**

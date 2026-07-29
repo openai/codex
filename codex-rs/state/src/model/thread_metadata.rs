@@ -24,6 +24,8 @@ pub enum SortKey {
     UpdatedAt,
     /// Sort by the thread's product recency timestamp.
     RecencyAt,
+    /// Sort by the thread's stable position within its user-selected section.
+    SectionPosition,
 }
 
 /// Sort direction to use when listing threads.
@@ -146,6 +148,10 @@ pub struct ThreadMetadata {
     pub archived_at: Option<DateTime<Utc>>,
     /// The user-selected section for this thread, if any.
     pub section: Option<ThreadSection>,
+    /// The stable sparse ordering rank within the user-selected section.
+    pub section_position: Option<i64>,
+    /// The time when the thread most recently entered its current section.
+    pub section_entered_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
     pub git_sha: Option<String>,
     /// The git branch name, if known.
@@ -277,6 +283,8 @@ impl ThreadMetadataBuilder {
             first_user_message: None,
             archived_at: self.archived_at.map(canonicalize_datetime),
             section: None,
+            section_position: None,
+            section_entered_at: None,
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
@@ -394,6 +402,12 @@ impl ThreadMetadata {
         if self.section != other.section {
             diffs.push("section");
         }
+        if self.section_position != other.section_position {
+            diffs.push("section_position");
+        }
+        if self.section_entered_at != other.section_entered_at {
+            diffs.push("section_entered_at");
+        }
         if self.git_sha != other.git_sha {
             diffs.push("git_sha");
         }
@@ -439,6 +453,8 @@ pub(crate) struct ThreadRow {
     archived_at: Option<i64>,
     section: Option<String>,
     section_name: Option<String>,
+    section_position: Option<i64>,
+    section_entered_at_ms: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
@@ -473,6 +489,8 @@ impl ThreadRow {
             archived_at: row.try_get("archived_at")?,
             section: row.try_get("section")?,
             section_name: row.try_get("section_name")?,
+            section_position: row.try_get("section_position")?,
+            section_entered_at_ms: row.try_get("section_entered_at_ms")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
             git_origin_url: row.try_get("git_origin_url")?,
@@ -511,6 +529,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             archived_at,
             section,
             section_name,
+            section_position,
+            section_entered_at_ms,
             git_sha,
             git_branch,
             git_origin_url,
@@ -561,6 +581,10 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             section,
+            section_position,
+            section_entered_at: section_entered_at_ms
+                .map(epoch_millis_to_datetime)
+                .transpose()?,
             git_sha,
             git_branch,
             git_origin_url,
@@ -577,10 +601,13 @@ pub(crate) fn anchor_from_item(
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
         SortKey::RecencyAt => item.recency_at,
+        SortKey::SectionPosition => DateTime::<Utc>::from_timestamp_millis(item.section_position?)?,
     };
     Some(Anchor {
         ts,
-        id: (include_thread_id_tiebreaker || sort_key == SortKey::RecencyAt).then_some(item.id),
+        id: (include_thread_id_tiebreaker
+            || matches!(sort_key, SortKey::RecencyAt | SortKey::SectionPosition))
+        .then_some(item.id),
     })
 }
 
@@ -661,6 +688,8 @@ mod tests {
             archived_at: None,
             section: None,
             section_name: None,
+            section_position: None,
+            section_entered_at_ms: None,
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
@@ -695,6 +724,8 @@ mod tests {
             first_user_message: None,
             archived_at: None,
             section: None,
+            section_position: None,
+            section_entered_at: None,
             git_sha: None,
             git_branch: None,
             git_origin_url: None,

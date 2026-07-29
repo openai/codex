@@ -8,6 +8,7 @@ use codex_rollout::search_rollout_matches;
 
 use super::LocalThreadStore;
 use super::helpers::resolve_thread_names;
+use super::helpers::resolve_thread_section_metadata;
 use super::helpers::set_thread_name;
 use super::helpers::stored_thread_from_rollout_item;
 use super::list_threads::list_rollout_threads;
@@ -52,6 +53,11 @@ pub(super) async fn search_threads(
         ThreadSortKey::CreatedAt => codex_rollout::ThreadSortKey::CreatedAt,
         ThreadSortKey::UpdatedAt => codex_rollout::ThreadSortKey::UpdatedAt,
         ThreadSortKey::RecencyAt => codex_rollout::ThreadSortKey::RecencyAt,
+        ThreadSortKey::SectionPosition => {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: "section-position sorting requires a section filter".to_owned(),
+            });
+        }
     };
     let sort_direction = match params.sort_direction {
         SortDirection::Asc => codex_rollout::SortDirection::Asc,
@@ -166,6 +172,23 @@ pub(super) async fn search_threads(
             })
         })
         .collect::<Vec<_>>();
+    if let Some(state_db) = state_db {
+        let sectioned_thread_ids = items
+            .iter()
+            .filter(|item| item.thread.section.is_some())
+            .map(|item| item.thread.thread_id)
+            .collect::<Vec<_>>();
+        let mut section_metadata =
+            resolve_thread_section_metadata(state_db.as_ref(), &sectioned_thread_ids).await;
+        for item in &mut items {
+            if let Some((section_position, section_entered_at)) =
+                section_metadata.remove(&item.thread.thread_id)
+            {
+                item.thread.section_position = section_position;
+                item.thread.section_entered_at = section_entered_at;
+            }
+        }
+    }
     set_thread_search_result_names(store, &mut items).await;
 
     Ok(ThreadSearchPage { items, next_cursor })
@@ -188,10 +211,12 @@ fn cursor_from_thread_search_item(
             .as_deref()
             .or(item.item.updated_at.as_deref())
             .or(item.item.created_at.as_deref())?,
+        ThreadSortKey::SectionPosition => return None,
     };
     match sort_key {
         ThreadSortKey::RecencyAt => parse_cursor(&format!("{timestamp}|{}", item.item.thread_id?)),
         ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => parse_cursor(timestamp),
+        ThreadSortKey::SectionPosition => None,
     }
 }
 

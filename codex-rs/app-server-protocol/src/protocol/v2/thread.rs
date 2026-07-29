@@ -866,15 +866,6 @@ pub struct ThreadMetadataUpdateParams {
     /// provide a string to replace the stored value.
     #[ts(optional = nullable)]
     pub git_info: Option<ThreadMetadataGitInfoUpdateParams>,
-    /// Omit to leave the section unchanged, set to `null` to clear it, or provide a section ID.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
-        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
-    )]
-    #[ts(optional = nullable, type = "string | null")]
-    pub section_id: Option<Option<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -919,6 +910,31 @@ pub struct ThreadMetadataGitInfoUpdateParams {
 pub struct ThreadMetadataUpdateResponse {
     pub thread: Thread,
 }
+
+/// Parameters for moving a thread within a server-owned section ordering.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSectionMoveParams {
+    /// Thread to move into, within, or out of a section.
+    pub thread_id: String,
+    /// Destination section, or `null` to remove the thread from its section.
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[schemars(
+        required,
+        schema_with = "crate::protocol::serde_helpers::nullable_string_schema"
+    )]
+    #[ts(type = "string | null")]
+    pub section_id: Option<String>,
+    /// Existing thread to insert before; omission or null appends to the section.
+    #[ts(optional = nullable)]
+    pub before_thread_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSectionMoveResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
@@ -1196,7 +1212,7 @@ pub struct ThreadSearchParams {
     pub limit: Option<u32>,
     /// Optional sort key; defaults to created_at.
     #[ts(optional = nullable)]
-    pub sort_key: Option<ThreadSortKey>,
+    pub sort_key: Option<ThreadSearchSortKey>,
     /// Optional sort direction; defaults to descending (newest first).
     #[ts(optional = nullable)]
     pub sort_direction: Option<SortDirection>,
@@ -1241,6 +1257,16 @@ pub enum ThreadSourceKind {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub enum ThreadSortKey {
+    CreatedAt,
+    UpdatedAt,
+    RecencyAt,
+    SectionPosition,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum ThreadSearchSortKey {
     CreatedAt,
     UpdatedAt,
     RecencyAt,

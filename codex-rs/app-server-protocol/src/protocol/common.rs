@@ -546,6 +546,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMetadataUpdateResponse,
     },
+    ThreadSectionMove => "thread/section/move" {
+        params: v2::ThreadSectionMoveParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSectionMoveResponse,
+    },
     #[experimental("thread/settings/update")]
     ThreadSettingsUpdate => "thread/settings/update" {
         params: v2::ThreadSettingsUpdateParams,
@@ -1874,6 +1879,92 @@ mod tests {
     }
 
     #[test]
+    fn thread_section_move_round_trips_and_serializes_by_thread() -> Result<()> {
+        assert_eq!(
+            serde_json::to_value(v2::ThreadSortKey::SectionPosition)?,
+            json!("section_position")
+        );
+        let request = ClientRequest::ThreadSectionMove {
+            request_id: request_id(),
+            params: v2::ThreadSectionMoveParams {
+                thread_id: "thread-1".to_string(),
+                section_id: Some("01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string()),
+                before_thread_id: Some("thread-2".to_string()),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&request)?,
+            json!({
+                "method": "thread/section/move",
+                "id": 1,
+                "params": {
+                    "threadId": "thread-1",
+                    "sectionId": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
+                    "beforeThreadId": "thread-2"
+                }
+            })
+        );
+        assert_eq!(
+            request.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: "thread-1".to_string()
+            })
+        );
+
+        let append_request = ClientRequest::try_from(JSONRPCRequest {
+            id: request_id(),
+            method: "thread/section/move".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "sectionId": "01984de2-8f74-7c91-a3b2-5c5e937cf318"
+            })),
+            trace: None,
+        })?;
+        assert_eq!(
+            append_request,
+            ClientRequest::ThreadSectionMove {
+                request_id: request_id(),
+                params: v2::ThreadSectionMoveParams {
+                    thread_id: "thread-1".to_string(),
+                    section_id: Some("01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string()),
+                    before_thread_id: None,
+                },
+            }
+        );
+
+        let clear_request = ClientRequest::try_from(JSONRPCRequest {
+            id: request_id(),
+            method: "thread/section/move".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "sectionId": null
+            })),
+            trace: None,
+        })?;
+        assert_eq!(
+            clear_request,
+            ClientRequest::ThreadSectionMove {
+                request_id: request_id(),
+                params: v2::ThreadSectionMoveParams {
+                    thread_id: "thread-1".to_string(),
+                    section_id: None,
+                    before_thread_id: None,
+                },
+            }
+        );
+        assert!(
+            ClientRequest::try_from(JSONRPCRequest {
+                id: request_id(),
+                method: "thread/section/move".to_string(),
+                params: Some(json!({ "threadId": "thread-1" })),
+                trace: None,
+            })
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn client_request_serialization_scope_covers_keyed_families() {
         let thread_id = "thread-1".to_string();
         let thread_resume = ClientRequest::ThreadResume {
@@ -2717,6 +2808,7 @@ mod tests {
                     preview: "first prompt".to_string(),
                     ephemeral: true,
                     section: None,
+                    section_entered_at: None,
                     history_mode: Default::default(),
                     model_provider: "openai".to_string(),
                     created_at: 1,
@@ -2770,6 +2862,7 @@ mod tests {
                         "preview": "first prompt",
                         "ephemeral": true,
                         "section": null,
+                        "sectionEnteredAt": null,
                         "historyMode": "legacy",
                         "modelProvider": "openai",
                         "createdAt": 1,

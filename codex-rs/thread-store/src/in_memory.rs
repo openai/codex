@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
 
+use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -24,6 +25,7 @@ use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
+use crate::MoveThreadToSectionParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
@@ -33,6 +35,7 @@ use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
 use crate::ThreadPage;
 use crate::ThreadRelationFilter;
+use crate::ThreadSortKey;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreFuture;
@@ -149,13 +152,10 @@ mod tests {
         }
 
         store
-            .update_thread_metadata(UpdateThreadMetadataParams {
+            .move_thread_to_section(MoveThreadToSectionParams {
                 thread_id: grandchild_thread_id,
-                patch: ThreadMetadataPatch {
-                    section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
-                    ..Default::default()
-                },
-                include_archived: false,
+                section: Some(codex_state::PINNED_THREAD_SECTION_ID.to_string()),
+                before_thread_id: None,
             })
             .await
             .expect("pin grandchild thread");
@@ -470,6 +470,9 @@ struct InMemoryThreadStoreState {
     created_threads: HashMap<ThreadId, CreateThreadParams>,
     histories: HashMap<ThreadId, Vec<RolloutItem>>,
     metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
+    sections: HashMap<ThreadId, String>,
+    section_positions: HashMap<ThreadId, i64>,
+    section_entered_at: HashMap<ThreadId, DateTime<Utc>>,
     names: HashMap<ThreadId, Option<String>>,
     rollout_paths: HashMap<PathBuf, ThreadId>,
 }
@@ -666,6 +669,11 @@ impl InMemoryThreadStore {
     ) -> ThreadStoreResult<StoredThread> {
         let mut state = self.state.lock().await;
         state.calls.update_thread_metadata += 1;
+        if !state.created_threads.contains_key(&params.thread_id) {
+            return Err(ThreadStoreError::ThreadNotFound {
+                thread_id: params.thread_id,
+            });
+        }
         if let Some(name) = params.patch.name.clone() {
             state.names.insert(params.thread_id, name);
         }
@@ -677,6 +685,97 @@ impl InMemoryThreadStore {
         stored_thread_from_state(&state, params.thread_id, /*include_history*/ false)
     }
 
+    async fn move_thread_to_section(
+        &self,
+        params: MoveThreadToSectionParams,
+    ) -> ThreadStoreResult<()> {
+        if params
+            .section
+            .as_deref()
+            .is_some_and(|section| section.trim().is_empty())
+        {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: "section must not be empty".to_owned(),
+            });
+        }
+        if params.section.is_none() && params.before_thread_id.is_some() {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: "before thread cannot be specified without a section".to_owned(),
+            });
+        }
+
+        let mut state = self.state.lock().await;
+        if !state.created_threads.contains_key(&params.thread_id) {
+            return Err(ThreadStoreError::ThreadNotFound {
+                thread_id: params.thread_id,
+            });
+        }
+        let previous_section = state.sections.get(&params.thread_id).cloned();
+        let Some(section) = params.section.as_deref() else {
+            state.sections.remove(&params.thread_id);
+            state.section_positions.remove(&params.thread_id);
+            state.section_entered_at.remove(&params.thread_id);
+            return Ok(());
+        };
+        if let Some(before_thread_id) = params.before_thread_id {
+            if before_thread_id == params.thread_id {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: format!("thread {} cannot be moved before itself", params.thread_id),
+                });
+            }
+            let before_section = state.sections.get(&before_thread_id).map(String::as_str);
+            if before_section != Some(section) {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: format!(
+                        "before thread {before_thread_id} is not in section {section}"
+                    ),
+                });
+            }
+        }
+
+        let mut ordered_thread_ids = state
+            .sections
+            .iter()
+            .filter(|(thread_id, current_section)| {
+                **thread_id != params.thread_id && current_section.as_str() == section
+            })
+            .map(|(thread_id, _)| *thread_id)
+            .collect::<Vec<_>>();
+        ordered_thread_ids.sort_by_key(|thread_id| {
+            (
+                state
+                    .section_positions
+                    .get(thread_id)
+                    .copied()
+                    .unwrap_or(i64::MAX),
+                thread_id.to_string(),
+            )
+        });
+        let insert_at = params
+            .before_thread_id
+            .and_then(|before_thread_id| {
+                ordered_thread_ids
+                    .iter()
+                    .position(|thread_id| *thread_id == before_thread_id)
+            })
+            .unwrap_or(ordered_thread_ids.len());
+        ordered_thread_ids.insert(insert_at, params.thread_id);
+        for (index, thread_id) in ordered_thread_ids.into_iter().enumerate() {
+            let position = i64::try_from(index)
+                .unwrap_or(i64::MAX)
+                .saturating_add(1)
+                .saturating_mul(1_000_000);
+            state.section_positions.insert(thread_id, position);
+        }
+        if previous_section.as_deref() != Some(section) {
+            state
+                .section_entered_at
+                .insert(params.thread_id, Utc::now());
+            state.sections.insert(params.thread_id, section.to_owned());
+        }
+        Ok(())
+    }
+
     async fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreResult<()> {
         let mut state = self.state.lock().await;
         state.calls.delete_thread += 1;
@@ -684,6 +783,9 @@ impl InMemoryThreadStore {
         state.created_threads.remove(&params.thread_id);
         state.names.remove(&params.thread_id);
         state.metadata_updates.remove(&params.thread_id);
+        state.sections.remove(&params.thread_id);
+        state.section_positions.remove(&params.thread_id);
+        state.section_entered_at.remove(&params.thread_id);
         state
             .rollout_paths
             .retain(|_, thread_id| *thread_id != params.thread_id);
@@ -805,6 +907,17 @@ impl ThreadStore for InMemoryThreadStore {
                     thread.section.as_ref().map(|section| section.id.as_str()) == section.as_deref()
                 });
             }
+            if params.sort_key == ThreadSortKey::SectionPosition {
+                page.items.sort_by_key(|thread| {
+                    (
+                        thread.section_position.unwrap_or(i64::MAX),
+                        thread.thread_id.to_string(),
+                    )
+                });
+                if params.sort_direction == crate::SortDirection::Desc {
+                    page.items.reverse();
+                }
+            }
             Ok(page)
         })
     }
@@ -814,6 +927,13 @@ impl ThreadStore for InMemoryThreadStore {
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, StoredThread> {
         Box::pin(InMemoryThreadStore::update_thread_metadata(self, params))
+    }
+
+    fn move_thread_to_section(
+        &self,
+        params: MoveThreadToSectionParams,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(InMemoryThreadStore::move_thread_to_section(self, params))
     }
 
     fn archive_thread(&self, _params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {
@@ -888,8 +1008,10 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.advance_recency_at.or(metadata.updated_at))
             .unwrap_or_else(Utc::now),
         archived_at: None,
-        section: metadata
-            .and_then(|metadata| metadata.section.clone().flatten())
+        section: state
+            .sections
+            .get(&thread_id)
+            .cloned()
             .map(|id| codex_state::ThreadSection {
                 name: if id == codex_state::PINNED_THREAD_SECTION_ID {
                     codex_state::PINNED_THREAD_SECTION_NAME.to_string()
@@ -898,6 +1020,8 @@ fn stored_thread_from_state(
                 },
                 id,
             }),
+        section_position: state.section_positions.get(&thread_id).copied(),
+        section_entered_at: state.section_entered_at.get(&thread_id).copied(),
         cwd: metadata
             .and_then(|metadata| metadata.cwd.clone())
             .unwrap_or_default(),

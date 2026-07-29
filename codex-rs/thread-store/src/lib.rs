@@ -38,6 +38,7 @@ pub use types::ListItemsParams;
 pub use types::ListThreadsParams;
 pub use types::ListTurnsParams;
 pub use types::LoadThreadHistoryParams;
+pub use types::MoveThreadToSectionParams;
 pub use types::PrepareForkParams;
 pub use types::PreparedFork;
 pub use types::ReadThreadByRolloutPathParams;

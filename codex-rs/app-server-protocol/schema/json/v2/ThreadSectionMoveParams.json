@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Parameters for moving a thread within a server-owned section ordering.",
+  "properties": {
+    "beforeThreadId": {
+      "description": "Existing thread to insert before; omission or null appends to the section.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sectionId": {
+      "description": "Destination section, or `null` to remove the thread from its section.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "description": "Thread to move into, within, or out of a section.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sectionId",
+    "threadId"
+  ],
+  "title": "ThreadSectionMoveParams",
+  "type": "object"
+}

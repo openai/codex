@@ -201,6 +201,10 @@ pub struct Thread {
     /// The independently persisted section selected for this thread, if any.
     #[serde(default)]
     pub section: Option<ThreadSection>,
+    /// Unix timestamp in seconds when the thread entered its current section.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub section_entered_at: Option<i64>,
     /// Persisted thread history contract selected when this thread was created.
     #[experimental("thread.historyMode")]
     #[serde(default)]

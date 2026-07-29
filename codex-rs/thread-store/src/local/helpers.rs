@@ -145,6 +145,8 @@ pub(super) fn stored_thread_from_rollout_item(
         recency_at,
         archived_at,
         section: item.section,
+        section_position: None,
+        section_entered_at: None,
         cwd: item.cwd.unwrap_or_default(),
         cli_version: item.cli_version.unwrap_or_default(),
         source,
@@ -190,6 +192,20 @@ pub(super) fn sqlite_thread_name(metadata: &ThreadMetadata) -> Option<String> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_string)
+}
+
+pub(super) async fn resolve_thread_section_metadata(
+    state_db: &codex_state::StateRuntime,
+    thread_ids: &[ThreadId],
+) -> HashMap<ThreadId, (Option<i64>, Option<DateTime<Utc>>)> {
+    if thread_ids.is_empty() {
+        return HashMap::new();
+    }
+
+    state_db
+        .get_thread_section_ordering(thread_ids)
+        .await
+        .unwrap_or_default()
 }
 
 pub(super) async fn resolve_thread_names(

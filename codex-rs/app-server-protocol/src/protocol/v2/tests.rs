@@ -240,6 +240,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
                 id: "01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string(),
                 name: "Pinned".to_string(),
             }),
+            section_entered_at: Some(1),
             history_mode: Default::default(),
             model_provider: "openai".to_string(),
             created_at: 1,
@@ -287,15 +288,18 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             "name": "Pinned",
         })
     );
+    assert_eq!(value["thread"]["sectionEnteredAt"], json!(1));
 
     let mut legacy_thread = value["thread"].clone();
-    legacy_thread
+    let legacy_thread_fields = legacy_thread
         .as_object_mut()
-        .expect("serialized thread should be an object")
-        .remove("section");
+        .expect("serialized thread should be an object");
+    legacy_thread_fields.remove("section");
+    legacy_thread_fields.remove("sectionEnteredAt");
     let legacy_thread =
         serde_json::from_value::<Thread>(legacy_thread).expect("deserialize legacy thread");
     assert_eq!(legacy_thread.section, None);
+    assert_eq!(legacy_thread.section_entered_at, None);
 
     assert_eq!(
         value.get("initialTurnsPage"),
@@ -472,39 +476,6 @@ fn thread_list_params_accepts_section_id_filter() {
             .get("sectionId")
             .is_none()
     );
-}
-
-#[test]
-fn thread_metadata_update_params_distinguish_section_id_set_clear_and_omission() {
-    for section_id in [
-        "01984de2-8f74-7c91-a3b2-5c5e937cf318",
-        "01984de2-8f74-7c91-a3b2-5c5e937cf319",
-    ] {
-        let params = serde_json::from_value::<ThreadMetadataUpdateParams>(json!({
-            "threadId": "thr_123",
-            "sectionId": section_id,
-        }))
-        .expect("section ID metadata patch should deserialize");
-
-        assert_eq!(
-            params.section_id.as_ref().map(|section| section.as_deref()),
-            Some(Some(section_id))
-        );
-        assert_eq!(params.git_info, None);
-    }
-
-    let params = serde_json::from_value::<ThreadMetadataUpdateParams>(json!({
-        "threadId": "thr_123",
-        "sectionId": null,
-    }))
-    .expect("cleared section ID metadata patch should deserialize");
-    assert_eq!(params.section_id, Some(None));
-
-    let params = serde_json::from_value::<ThreadMetadataUpdateParams>(json!({
-        "threadId": "thr_123",
-    }))
-    .expect("omitted section ID metadata patch should deserialize");
-    assert_eq!(params.section_id, None);
 }
 
 #[test]

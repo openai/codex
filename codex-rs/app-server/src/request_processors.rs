@@ -265,6 +265,7 @@ use codex_app_server_protocol::ThreadSearchOccurrencesResponse;
 use codex_app_server_protocol::ThreadSearchParams;
 use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::ThreadSearchResult;
+use codex_app_server_protocol::ThreadSearchSortKey;
 use codex_app_server_protocol::ThreadSearchTextRange;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
