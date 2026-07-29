@@ -738,6 +738,26 @@ fn join_normalizes_absolute_parent_segments() {
             r"\\server\share\a\..\b",
             "file://server/share/b",
         ),
+        (
+            "file:///C:/workspace",
+            r"\\?\D:\reports\report.pdf",
+            "file:///D:/reports/report.pdf",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\.\D:\reports\report.pdf",
+            "file:///D:/reports/report.pdf",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\?\UNC\server\share\reports\report.pdf",
+            "file://server/share/reports/report.pdf",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\.\UNC\server\share\reports\report.pdf",
+            "file://server/share/reports/report.pdf",
+        ),
         ("file:///workspace", "/tmp//a/../b", "file:///tmp/b"),
         ("file:///workspace", "/tmp/a/..//b", "file:///tmp/b"),
         ("file:///workspace", "/tmp/a///../b", "file:///tmp/b"),
@@ -765,6 +785,47 @@ fn join_normalizes_absolute_parent_segments() {
     ] {
         let base = PathUri::parse(base).expect("valid base URI");
         let expected = PathUri::parse(expected).expect("valid expected URI");
+        if normalize_windows_device_path(path).is_some() {
+            assert_eq!(
+                LegacyAppPathString::from_string(path).to_path_uri(PathConvention::Windows),
+                Ok(expected.clone()),
+                "converting {path}"
+            );
+        }
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn windows_namespace_normalization_preserves_opaque_paths() {
+    let base = PathUri::parse("file:///C:/workspace").expect("valid Windows base URI");
+
+    for path in [
+        r"\\?\UNC\server",
+        r"\\.\UNC\server",
+        r"\\?\UNC\localhost\share\report.pdf",
+        r"\\.\UNC\LOCALHOST\share\report.pdf",
+        r"\\?\UNC\.\share\report.pdf",
+        r"\\.\UNC\..\share\report.pdf",
+        r"\\?\UNC\server\.\report.pdf",
+        r"\\.\UNC\server\..\report.pdf",
+        r"\\?\UNC\?\UNC\?\C:\report.pdf",
+        r"\\.\UNC\?\UNC\?\C:\report.pdf",
+        r"\\.\COM1",
+        r"\\?\Volume{00000000-0000-0000-0000-000000000000}\report.pdf",
+    ] {
+        let expected = windows_opaque_path_uri(path);
+
+        assert_eq!(
+            PathUri::from_absolute_native_path(path, PathConvention::Windows),
+            Some(expected.clone()),
+            "parsing {path}"
+        );
+        assert_eq!(
+            LegacyAppPathString::from_string(path).to_path_uri(PathConvention::Windows),
+            Ok(expected.clone()),
+            "converting {path}"
+        );
         assert_eq!(base.join(path), Ok(expected), "joining {path}");
     }
 }

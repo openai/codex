@@ -4,6 +4,7 @@
 
 use base64::Engine;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::normalize_windows_device_path;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -661,6 +662,30 @@ fn parse_posix_path(path: &str) -> Option<PathUri> {
 }
 
 fn parse_windows_path(path: &str) -> Option<PathUri> {
+    if let Some(normalized_path) = normalize_windows_device_path(path) {
+        if let Some(unc_path) = normalized_path.strip_prefix(r"\\") {
+            let mut components = unc_path.split(is_windows_separator_char);
+            if matches!(components.next(), None | Some("" | "." | ".."))
+                || matches!(components.next(), None | Some("" | "." | ".."))
+            {
+                return Some(windows_opaque_path_uri(path));
+            }
+        }
+        return Some(
+            parse_unnormalized_windows_path(&normalized_path)
+                .filter(|uri| {
+                    uri.infer_path_convention() == Some(PathConvention::Windows)
+                        && uri.opaque_fallback_bytes().is_none()
+                        && (!normalized_path.starts_with(r"\\")
+                            || uri.0.host_str().is_some_and(|host| !host.is_empty()))
+                })
+                .unwrap_or_else(|| windows_opaque_path_uri(path)),
+        );
+    }
+    parse_unnormalized_windows_path(path)
+}
+
+fn parse_unnormalized_windows_path(path: &str) -> Option<PathUri> {
     let bytes = path.as_bytes();
     let uses_namespace = matches!(
         bytes,

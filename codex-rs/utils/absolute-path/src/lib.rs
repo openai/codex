@@ -150,7 +150,8 @@ fn normalize_path_for_platform(path: &Path) -> Cow<'_, Path> {
     Cow::Borrowed(path)
 }
 
-fn normalize_windows_device_path(path: &str) -> Option<String> {
+/// Normalizes Windows drive and UNC namespace aliases on any host.
+pub fn normalize_windows_device_path(path: &str) -> Option<String> {
     if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
         return Some(format!(r"\\{unc}"));
     }
