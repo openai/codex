@@ -51,6 +51,7 @@ struct ToolCatalogCacheEntry {
 #[derive(Default)]
 struct ToolCatalogCacheState {
     snapshot: Option<ToolCatalogSnapshot>,
+    optional_startup_deadline: Option<Instant>,
     last_accepted_generation: u64,
     disabled_by_server: bool,
 }
@@ -108,6 +109,21 @@ impl McpToolCatalogCacheContext {
         self.current_tools().is_some()
     }
 
+    pub(crate) fn optional_startup_deadline(&self, default_deadline: Instant) -> Instant {
+        let mut state = lock_unpoisoned(&self.entry.state);
+        if state.disabled_by_server
+            || state
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.published_at.elapsed() <= TOOL_CATALOG_CACHE_TTL)
+        {
+            return default_deadline;
+        }
+        *state
+            .optional_startup_deadline
+            .get_or_insert(default_deadline)
+    }
+
     pub(crate) fn current_tools(&self) -> Option<Vec<ToolInfo>> {
         lock_unpoisoned(&self.entry.state)
             .snapshot
@@ -147,6 +163,7 @@ impl McpToolCatalogCacheContext {
             tool.tool.annotations = None;
         }
         state.last_accepted_generation = ticket.generation;
+        state.optional_startup_deadline = None;
         state.snapshot = Some(ToolCatalogSnapshot {
             tools,
             published_at: Instant::now(),

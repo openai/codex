@@ -173,12 +173,16 @@ impl McpConnectionSet {
                     return;
                 }
                 if !must_wait_for_startup {
-                    if tokio::time::timeout_at(
-                        optional_startup_deadline,
-                        view.connection.client.client(),
-                    )
-                    .await
-                    .is_err()
+                    let startup_deadline = view
+                        .connection
+                        .client
+                        .tool_catalog_cache_context
+                        .as_ref()
+                        .map(|cache| cache.optional_startup_deadline(optional_startup_deadline))
+                        .unwrap_or(optional_startup_deadline);
+                    if tokio::time::timeout_at(startup_deadline, view.connection.client.client())
+                        .await
+                        .is_err()
                     {
                         trace!(server_name = %server_name, "omitting pending optional MCP server");
                     }
