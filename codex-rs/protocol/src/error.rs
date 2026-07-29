@@ -15,9 +15,10 @@ use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
+use codex_http_client::HttpError;
 use codex_utils_string::truncate_middle_chars;
 use codex_utils_string::truncate_middle_with_token_budget;
-use reqwest::StatusCode;
+use http::StatusCode;
 use serde_json;
 use std::fmt;
 use std::io;
@@ -470,7 +471,7 @@ impl CodexErr {
 
 #[derive(Debug)]
 pub struct ConnectionFailedError {
-    pub source: reqwest::Error,
+    pub source: HttpError,
 }
 
 impl std::fmt::Display for ConnectionFailedError {
@@ -481,7 +482,7 @@ impl std::fmt::Display for ConnectionFailedError {
 
 #[derive(Debug)]
 pub struct ResponseStreamFailed {
-    pub source: reqwest::Error,
+    pub source: HttpError,
     pub request_id: Option<String>,
 }
 

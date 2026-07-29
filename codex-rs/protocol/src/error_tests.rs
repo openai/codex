@@ -5,12 +5,10 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
-use http::Response as HttpResponse;
+use codex_http_client::HttpResponse;
+use http::Response as RawHttpResponse;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
-use reqwest::Response;
-use reqwest::ResponseBuilderExt;
-use reqwest::StatusCode;
-use reqwest::Url;
 use std::time::Duration;
 
 #[test]
@@ -224,12 +222,14 @@ fn sandbox_denied_reports_stdout_when_no_stderr() {
 
 #[test]
 fn to_error_event_handles_response_stream_failed() {
-    let response = HttpResponse::builder()
+    let response = RawHttpResponse::builder()
         .status(StatusCode::TOO_MANY_REQUESTS)
-        .url(Url::parse("http://example.com").unwrap())
         .body("")
         .unwrap();
-    let source = Response::from(response).error_for_status_ref().unwrap_err();
+    let source = HttpResponse::from(response)
+        .error_for_status_ref()
+        .unwrap_err()
+        .without_url();
     let err = CodexErr::ResponseStreamFailed(ResponseStreamFailed {
         source,
         request_id: Some("req-123".to_string()),
@@ -239,7 +239,7 @@ fn to_error_event_handles_response_stream_failed() {
 
     assert_eq!(
         event.message,
-        "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests) for url (http://example.com/), request id: req-123"
+        "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests), request id: req-123"
     );
     assert_eq!(
         event.codex_error_info,
