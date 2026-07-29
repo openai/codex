@@ -954,6 +954,9 @@ impl App {
         thread_id: ThreadId,
         notification: ServerNotification,
     ) -> Result<()> {
+        if self.abandoned_side_threads.contains(&thread_id) {
+            return Ok(());
+        }
         if matches!(notification, ServerNotification::ThreadSettingsUpdated(_))
             && self.primary_thread_id.is_some()
             && self.primary_thread_id != Some(thread_id)

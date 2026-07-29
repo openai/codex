@@ -4376,6 +4376,62 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
 }
 
 #[tokio::test]
+async fn background_side_cleanup_removes_local_state_and_ignores_late_events() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    app.active_thread_id = Some(parent_thread_id);
+    app.side_threads
+        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    app.thread_event_channels
+        .insert(side_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
+    app.agent_navigation.upsert(
+        side_thread_id,
+        Some("Side".to_string()),
+        Some("side".to_string()),
+        /*is_closed*/ false,
+    );
+    app.discard_side_thread_in_background(&mut app_server, side_thread_id)
+        .await;
+
+    assert_eq!(app.active_thread_id, Some(parent_thread_id));
+    assert!(!app.side_threads.contains_key(&side_thread_id));
+    assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+    assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+    assert!(app.abandoned_side_threads.contains(&side_thread_id));
+
+    app.enqueue_thread_notification(
+        side_thread_id,
+        agent_message_delta_notification(side_thread_id, "turn-1", "item-1", "late"),
+    )
+    .await?;
+    assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(exec_approval_request(
+            side_thread_id,
+            "turn-1",
+            "item-1",
+            Some("approval-1"),
+        )),
+    )
+    .await;
+    let resolution = app
+        .pending_app_server_requests
+        .take_resolution(Op::ExecApproval {
+            id: "approval-1".to_string(),
+            turn_id: None,
+            decision: codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
+        })
+        .expect("approval resolution should serialize");
+    assert_eq!(resolution, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
@@ -4698,6 +4754,7 @@ async fn make_test_app() -> App {
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
+        abandoned_side_threads: HashSet::new(),
         active_thread_id: None,
         active_thread_rx: None,
         primary_thread_id: None,
@@ -4765,6 +4822,7 @@ async fn make_test_app_with_channels() -> (
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
+            abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,

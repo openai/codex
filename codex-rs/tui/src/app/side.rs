@@ -9,6 +9,10 @@
 
 use super::*;
 use crate::chatwidget::InterruptedTurnNoticeMode;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
@@ -421,8 +425,68 @@ impl App {
             self.chat_widget.add_error_message(message);
             return false;
         }
+        self.abandoned_side_threads.insert(thread_id);
         self.discard_thread_local_state(thread_id).await;
         true
+    }
+
+    pub(super) async fn discard_side_thread_in_background(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        let turn_id = self
+            .active_turn_id_for_thread(thread_id)
+            .await
+            .unwrap_or_default();
+        let request_handle = app_server.request_handle();
+        let interrupt_request_id = app_server.next_request_id();
+        let retry_interrupt_request_id = app_server.next_request_id();
+        let unsubscribe_request_id = app_server.next_request_id();
+
+        self.abandoned_side_threads.insert(thread_id);
+        self.discard_thread_local_state(thread_id).await;
+
+        tokio::spawn(async move {
+            let interrupt_result = request_handle
+                .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
+                    request_id: interrupt_request_id,
+                    params: TurnInterruptParams {
+                        thread_id: thread_id.to_string(),
+                        turn_id: turn_id.clone(),
+                    },
+                })
+                .await;
+            let interrupt_result = if let Err(error) = &interrupt_result
+                && let Some(actual_turn_id) = active_turn_interrupt_race(error)
+            {
+                request_handle
+                    .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
+                        request_id: retry_interrupt_request_id,
+                        params: TurnInterruptParams {
+                            thread_id: thread_id.to_string(),
+                            turn_id: actual_turn_id,
+                        },
+                    })
+                    .await
+            } else {
+                interrupt_result
+            };
+            if let Err(error) = interrupt_result {
+                tracing::warn!(%error, "failed to interrupt side conversation");
+            }
+            if let Err(error) = request_handle
+                .request_typed::<ThreadUnsubscribeResponse>(ClientRequest::ThreadUnsubscribe {
+                    request_id: unsubscribe_request_id,
+                    params: ThreadUnsubscribeParams {
+                        thread_id: thread_id.to_string(),
+                    },
+                })
+                .await
+            {
+                tracing::warn!(%error, "failed to unsubscribe side conversation");
+            }
+        });
     }
 
     pub(super) async fn discard_closed_side_thread(&mut self, thread_id: ThreadId) {
@@ -578,17 +642,10 @@ impl App {
         if self.active_thread_id == Some(thread_id)
             && let Some(side_thread_id) = side_thread_to_discard
         {
-            if self.discard_side_thread(app_server, side_thread_id).await {
-                self.surface_pending_inactive_thread_interactive_requests()
-                    .await?;
-            } else {
-                self.keep_side_thread_visible_after_cleanup_failure(
-                    tui,
-                    app_server,
-                    side_thread_id,
-                )
+            self.discard_side_thread_in_background(app_server, side_thread_id)
                 .await;
-            }
+            self.surface_pending_inactive_thread_interactive_requests()
+                .await?;
         }
         Ok(())
     }
