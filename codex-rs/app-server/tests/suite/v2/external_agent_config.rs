@@ -1563,7 +1563,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
                 "type": "assistant",
                 "cwd": &project_root,
                 "timestamp": source_updated_at_text,
-                "attributionMcpServer": "gmail-server",
+                "attributionMcpServer": "gmail",
                 "message": { "content": "first answer" },
             })
             .to_string(),

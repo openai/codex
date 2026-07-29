@@ -65,17 +65,23 @@ pub fn detect_imported_cla_session_connectors(
 
             let connector_names = connector_names_by_session.entry(session_id).or_default();
             for server in manifest.remote_mcp_servers_config {
-                let Some(uuid) = server.uuid else {
-                    continue;
-                };
-                if !attributed_server_ids.contains(&uuid) {
-                    continue;
-                }
                 let Some(name) =
                     crate::sessions::normalized_connector_display_name(server.name.as_deref())
                 else {
                     continue;
                 };
+                // Depending on the source client, attributionMcpServer contains either the
+                // manifest UUID or its configured server name.
+                let matches_uuid = server
+                    .uuid
+                    .as_deref()
+                    .is_some_and(|uuid| attributed_server_ids.contains(uuid));
+                let matches_name = attributed_server_ids
+                    .iter()
+                    .any(|server_id| server_id.eq_ignore_ascii_case(&name));
+                if !matches_uuid && !matches_name {
+                    continue;
+                }
                 connector_names.entry(name.to_lowercase()).or_insert(name);
             }
         }
@@ -114,3 +120,7 @@ fn json_files_recursively(root: &Path) -> Vec<PathBuf> {
     }
     files
 }
+
+#[cfg(test)]
+#[path = "connectors_cla_tests.rs"]
+mod tests;
