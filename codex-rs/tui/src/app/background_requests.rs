@@ -1263,6 +1263,7 @@ pub(super) fn mcp_inventory_maps_from_statuses(statuses: Vec<McpServerStatus>) -
         auth_statuses.insert(
             server_name.clone(),
             match status.auth_status {
+                codex_app_server_protocol::McpAuthStatus::Unknown => McpAuthStatus::Unknown,
                 codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
                 codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,
                 codex_app_server_protocol::McpAuthStatus::BearerToken => McpAuthStatus::BearerToken,

@@ -232,6 +232,36 @@ async fn list_discovers_local_oauth_server_through_environment_proxy() -> Result
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_reports_unknown_auth_status_when_oauth_discovery_is_rate_limited() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/mcp"))
+        .respond_with(wiremock::ResponseTemplate::new(429))
+        .expect(1)
+        .mount(&server)
+        .await;
+    configure_http_oauth_server(codex_home.path(), &format!("{}/mcp", server.uri())).await?;
+
+    codex_command(codex_home.path())?
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .args([
+            "-c",
+            "mcp_oauth_credentials_store=\"file\"",
+            "mcp",
+            "list",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(contains(r#""auth_status": "unknown""#));
+    server.verify().await;
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_with_macos_proxy_resolution_does_not_panic() -> Result<()> {

@@ -190,7 +190,7 @@ where
                 Ok(status) => status,
                 Err(error) => {
                     warn!("failed to determine auth status for MCP server `{name}`: {error:?}");
-                    McpAuthState::Unsupported
+                    McpAuthState::Unknown
                 }
             };
             let entry = McpAuthStatusEntry {

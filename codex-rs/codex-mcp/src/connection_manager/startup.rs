@@ -62,6 +62,7 @@ pub(super) fn mcp_startup_failure_reason(
         }
         Some(
             McpAuthState::Unsupported
+            | McpAuthState::Unknown
             | McpAuthState::LoggedOut(McpLoginRequirement::Login)
             | McpAuthState::BearerToken
             | McpAuthState::OAuth,

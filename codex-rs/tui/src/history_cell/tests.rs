@@ -980,7 +980,7 @@ fn mcp_tools_output_from_statuses_renders_status_only_servers() {
         )]),
         resources: Vec::new(),
         resource_templates: Vec::new(),
-        auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+        auth_status: codex_app_server_protocol::McpAuthStatus::Unknown,
     }];
 
     let cell =

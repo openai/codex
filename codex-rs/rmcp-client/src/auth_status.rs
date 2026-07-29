@@ -49,6 +49,7 @@ pub enum McpLoginRequirement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpAuthState {
     Unsupported,
+    Unknown,
     LoggedOut(McpLoginRequirement),
     BearerToken,
     OAuth,
@@ -58,6 +59,7 @@ impl From<McpAuthState> for McpAuthStatus {
     fn from(value: McpAuthState) -> Self {
         match value {
             McpAuthState::Unsupported => Self::Unsupported,
+            McpAuthState::Unknown => Self::Unknown,
             McpAuthState::LoggedOut(_) => Self::NotLoggedIn,
             McpAuthState::BearerToken => Self::BearerToken,
             McpAuthState::OAuth => Self::OAuth,
@@ -180,7 +182,7 @@ fn determine_auth_status_from_discovery(
             debug!(
                 "failed to detect OAuth support for MCP server `{server_name}` at {url}: {error:?}"
             );
-            Ok(McpAuthState::Unsupported)
+            Err(error)
         }
     }
 }
@@ -576,7 +578,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_discovery_preserves_transient_http_errors() {
+    async fn determine_auth_status_preserves_transient_http_errors() {
         for status in [
             StatusCode::REQUEST_TIMEOUT,
             StatusCode::TOO_EARLY,
@@ -590,22 +592,26 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            let error = discover_streamable_http_oauth(
+            let error = determine_streamable_http_auth_status(
+                "transient-http-error",
                 &format!("{}/mcp", server.uri()),
+                /*bearer_token_env_var*/ None,
                 /*http_headers*/ None,
                 /*env_http_headers*/ None,
+                OAuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
                 test_http_client(),
                 OAuthDiscoveryTimeout::LOCAL,
             )
             .await
-            .expect_err("transient OAuth discovery failures must not become anonymous access");
+            .expect_err("transient OAuth discovery failures must not become unsupported access");
 
             assert!(
                 matches!(
                     error.downcast_ref::<AuthError>(),
                     Some(AuthError::MetadataError(reason)) if reason.contains(status.as_str())
                 ),
-                "OAuth discovery must preserve HTTP {status}: {error:#}"
+                "auth-status discovery must preserve HTTP {status}: {error:#}"
             );
             server.verify().await;
         }

@@ -2409,7 +2409,7 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
             tools: HashMap::new(),
             resources: Vec::new(),
             resource_templates: Vec::new(),
-            auth_status: McpAuthStatus::Unsupported,
+            auth_status: McpAuthStatus::Unknown,
         }],
         next_cursor: None,
     };
@@ -2423,7 +2423,7 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
                 "tools": {},
                 "resources": [],
                 "resourceTemplates": [],
-                "authStatus": "unsupported",
+                "authStatus": "unknown",
             }],
             "nextCursor": null,
         })

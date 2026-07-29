@@ -16,6 +16,7 @@ use ts_rs::TS;
 
 v2_enum_from_core!(
     pub enum McpAuthStatus from codex_protocol::protocol::McpAuthStatus {
+        Unknown,
         Unsupported,
         NotLoggedIn,
         BearerToken,
