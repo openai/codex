@@ -26,6 +26,7 @@ pub(super) fn start_configured_pet_load_if_needed(
     ambient_pet_missing: bool,
     frame_requester: FrameRequester,
     app_event_tx: AppEventSender,
+    pet_http_client: codex_http_client::RouteAwareClientPool,
 ) {
     let Some(pet_id) = config.tui_pet.clone() else {
         return;
@@ -36,20 +37,26 @@ pub(super) fn start_configured_pet_load_if_needed(
 
     let codex_home = config.codex_home.clone();
     let animations_enabled = config.animations;
-    spawn_pet_load(move || {
-        let result = crate::pets::ensure_builtin_pack_for_pet(&pet_id, &codex_home)
-            .and_then(|()| {
-                crate::pets::AmbientPet::load(
-                    Some(&pet_id),
-                    &codex_home,
-                    frame_requester,
-                    animations_enabled,
-                )
-            })
+    let event_pet_id = pet_id.clone();
+    spawn_pet_load(
+        async move {
+            crate::pets::load_pet_with_assets(
+                pet_id,
+                codex_home,
+                frame_requester,
+                animations_enabled,
+                &pet_http_client,
+            )
+            .await
             .map(Some)
-            .map_err(|err| err.to_string());
-        app_event_tx.send(AppEvent::ConfiguredPetLoaded { pet_id, result });
-    });
+            .map_err(|err| err.to_string())
+        },
+        app_event_tx,
+        move |result| AppEvent::ConfiguredPetLoaded {
+            pet_id: event_pet_id,
+            result,
+        },
+    );
 }
 
 impl ChatWidget {
@@ -234,19 +241,22 @@ impl ChatWidget {
         let codex_home = self.config.codex_home.clone();
         let frame_requester = self.frame_requester.clone();
         let tx = self.app_event_tx.clone();
-        spawn_pet_load(move || {
-            let result = crate::pets::ensure_builtin_pack_for_pet(&pet_id, &codex_home)
-                .and_then(|()| {
-                    crate::pets::AmbientPet::load(
-                        Some(&pet_id),
-                        &codex_home,
-                        frame_requester,
-                        /*animations_enabled*/ false,
-                    )
-                })
-                .map_err(|err| err.to_string());
-            tx.send(AppEvent::PetPreviewLoaded { request_id, result });
-        });
+        let pet_http_client = self.pet_http_client.clone();
+        spawn_pet_load(
+            async move {
+                crate::pets::load_pet_with_assets(
+                    pet_id,
+                    codex_home,
+                    frame_requester,
+                    /*animations_enabled*/ false,
+                    &pet_http_client,
+                )
+                .await
+                .map_err(|err| err.to_string())
+            },
+            tx,
+            move |result| AppEvent::PetPreviewLoaded { request_id, result },
+        );
     }
 
     pub(crate) fn finish_pet_picker_preview_load(
@@ -326,10 +336,34 @@ impl ChatWidget {
     }
 }
 
-fn spawn_pet_load(f: impl FnOnce() + Send + 'static) {
+fn spawn_pet_load<T>(
+    future: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+    app_event_tx: AppEventSender,
+    completion_event: impl FnOnce(Result<T, String>) -> AppEvent + Send + 'static,
+) where
+    T: Send + 'static,
+{
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        std::mem::drop(handle.spawn_blocking(f));
+        std::mem::drop(handle.spawn(async move {
+            app_event_tx.send(completion_event(future.await));
+        }));
     } else {
-        let _ = std::thread::spawn(f);
+        let _ = std::thread::spawn(move || {
+            let result = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(future),
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to start pet load runtime");
+                    Err(format!("failed to start pet load runtime: {err}"))
+                }
+            };
+            app_event_tx.send(completion_event(result));
+        });
     }
 }
+
+#[cfg(test)]
+#[path = "pets_tests.rs"]
+mod tests;

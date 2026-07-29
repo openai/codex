@@ -85,11 +85,16 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        let pet_http_client = codex_http_client::RouteAwareClientPool::new(
+            config.http_client_factory(),
+            codex_http_client::ClientRouteClass::Other,
+        );
         pets::start_configured_pet_load_if_needed(
             &config,
             /*ambient_pet_missing*/ true,
             frame_requester.clone(),
             app_event_tx.clone(),
+            pet_http_client.clone(),
         );
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -184,6 +189,7 @@ impl ChatWidget {
             status_state: StatusState::default(),
             review: ReviewState::default(),
             active_hook_cell: None,
+            pet_http_client,
             ambient_pet: None,
             pet_picker_preview_state: crate::pets::PetPickerPreviewState::default(),
             pet_picker_preview_pet: None,

@@ -637,6 +637,8 @@ pub(crate) struct ChatWidget {
     review: ReviewState,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
+    // Reused for built-in pet CDN requests so redirects remain route-aware.
+    pub(crate) pet_http_client: codex_http_client::RouteAwareClientPool,
     // Ambient companion rendered over the transcript area, never inside the footer rows.
     ambient_pet: Option<crate::pets::AmbientPet>,
     pet_picker_preview_state: crate::pets::PetPickerPreviewState,
