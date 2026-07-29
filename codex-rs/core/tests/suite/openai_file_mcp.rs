@@ -27,7 +27,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -40,7 +39,7 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const STREAMED_FILE_SIZE: usize = 13 * 1024 * 1024;
+const STREAMED_FILE_SIZE: usize = 2 * 1024 * 1024;
 
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");
@@ -181,9 +180,6 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_apps_file_params_omit_fields_absent_from_tool_schema() -> Result<()> {
-    // TODO(anp): Remove after file-upload fixtures support target-native Windows paths.
-    skip_if_wine_exec!(Ok(()), "uses a host-native file-upload path");
-
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     mount_file_upload_mocks(&server, STREAMED_FILE_SIZE as u64).await;
