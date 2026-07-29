@@ -315,7 +315,8 @@ macro_rules! client_request_definitions {
             }
         }
 
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, Serialize)]
+        #[serde(untagged)]
         #[allow(clippy::large_enum_variant)]
         pub enum ClientResponsePayload {
             $( $variant($response), )*
@@ -323,26 +324,6 @@ macro_rules! client_request_definitions {
         }
 
         impl ClientResponsePayload {
-            pub fn into_jsonrpc_parts_and_payload(
-                self,
-                request_id: RequestId,
-            ) -> std::result::Result<
-                (RequestId, crate::Result, Option<ClientResponsePayload>),
-                serde_json::Error,
-            > {
-                match self {
-                    $(
-                        Self::$variant(response) => {
-                            let result = serde_json::to_value(&response)?;
-                            Ok((request_id, result, Some(Self::$variant(response))))
-                        }
-                    )*
-                    Self::InterruptConversation(response) => {
-                        serde_json::to_value(response).map(|result| (request_id, result, None))
-                    }
-                }
-            }
-
             pub fn into_client_response(self, request_id: RequestId) -> Option<ClientResponse> {
                 match self {
                     $(

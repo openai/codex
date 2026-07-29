@@ -614,7 +614,7 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         (RequestId::Integer(4), sample_turn_start_response()),
         (RequestId::Integer(5), sample_turn_steer_response()),
     ] {
-        client.track_response(/*connection_id*/ 7, request_id, response);
+        client.track_response(/*connection_id*/ 7, request_id, &response);
         assert!(matches!(
             receiver.try_recv(),
             Ok(AnalyticsEventsQueueMessage::Fact(input))
@@ -625,8 +625,29 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
     client.track_response(
         /*connection_id*/ 7,
         RequestId::Integer(6),
-        ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
+        &ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
     );
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[cfg(unix)]
+#[test]
+fn track_response_ignores_unserializable_thread_responses() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let (client, mut receiver) = client_with_receiver();
+    let mut response = sample_thread_start_response();
+    let ClientResponsePayload::ThreadStart(thread_start) = &mut response else {
+        panic!("expected thread/start response");
+    };
+    thread_start.cwd = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+        std::path::PathBuf::from(OsString::from_vec(vec![b'/', b'b', b'a', b'd', 0xff])),
+    )
+    .expect("non-UTF-8 Unix paths are valid absolute paths");
+
+    client.track_response(/*connection_id*/ 7, RequestId::Integer(1), &response);
+
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }
 

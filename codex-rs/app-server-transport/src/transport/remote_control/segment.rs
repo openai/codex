@@ -4,6 +4,8 @@ use super::protocol::ClientId;
 use super::protocol::ServerEnvelope;
 use super::protocol::ServerEvent;
 use super::protocol::StreamId;
+use crate::outgoing_message::OutgoingMessage;
+use crate::transport::response_serialization_error;
 use base64::DecodeSliceError;
 use base64::Engine;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -303,7 +305,25 @@ pub(super) fn split_server_envelope_for_transport(
         return Ok(vec![envelope]);
     }
 
-    let envelope_size_bytes = serialized_len(&envelope)?;
+    let envelope_size_bytes = match serialized_len(&envelope) {
+        Ok(envelope_size_bytes) => envelope_size_bytes,
+        Err(err) => {
+            let ServerEvent::ServerMessage { message } = envelope.event else {
+                unreachable!("server message variant checked above");
+            };
+            let OutgoingMessage::Response(response) = *message else {
+                return Err(err);
+            };
+            return Ok(vec![ServerEnvelope {
+                event: ServerEvent::ServerMessage {
+                    message: Box::new(response_serialization_error(response.id, err)),
+                },
+                client_id: envelope.client_id,
+                stream_id: envelope.stream_id,
+                seq_id: envelope.seq_id,
+            }]);
+        }
+    };
     if envelope_size_bytes <= REMOTE_CONTROL_SEGMENT_MAX_BYTES {
         return Ok(vec![envelope]);
     }

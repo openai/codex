@@ -485,7 +485,7 @@ impl AnalyticsEventsClient {
         &self,
         connection_id: u64,
         request_id: RequestId,
-        response: ClientResponsePayload,
+        response: &ClientResponsePayload,
     ) {
         self.track_response_inner(
             connection_id,
@@ -499,7 +499,7 @@ impl AnalyticsEventsClient {
         &self,
         connection_id: u64,
         request_id: RequestId,
-        response: ClientResponsePayload,
+        response: &ClientResponsePayload,
         thread_originator: String,
     ) {
         self.track_response_inner(connection_id, request_id, response, Some(thread_originator));
@@ -509,7 +509,7 @@ impl AnalyticsEventsClient {
         &self,
         connection_id: u64,
         request_id: RequestId,
-        response: ClientResponsePayload,
+        response: &ClientResponsePayload,
         thread_originator: Option<String>,
     ) {
         if !matches!(
@@ -522,10 +522,13 @@ impl AnalyticsEventsClient {
         ) {
             return;
         }
+        if serde_json::to_writer(std::io::sink(), response).is_err() {
+            return;
+        }
         self.record_fact(AnalyticsFact::ClientResponse {
             connection_id,
             request_id,
-            response: Box::new(response),
+            response: Box::new(response.clone()),
             thread_originator,
         });
     }

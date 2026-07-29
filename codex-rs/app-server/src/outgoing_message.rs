@@ -538,53 +538,37 @@ impl OutgoingMessageSender {
     ) {
         let connection_id = request_id.connection_id;
         let request_id_for_analytics = request_id.request_id.clone();
-        let serialized_response = response
-            .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
-            .map(|(id, result, response)| {
-                if let Some(response) = response {
-                    match thread_originator {
-                        Some(thread_originator) => {
-                            self.analytics_events_client
-                                .track_response_with_thread_originator(
-                                    connection_id.0,
-                                    request_id_for_analytics,
-                                    response,
-                                    thread_originator,
-                                );
-                        }
-                        None => {
-                            self.analytics_events_client.track_response(
-                                connection_id.0,
-                                request_id_for_analytics,
-                                response,
-                            );
-                        }
-                    }
-                }
-                (id, result)
-            });
-        let request_context = self.take_request_context(&request_id).await;
-
-        match serialized_response {
-            Ok((id, result)) => {
-                let outgoing_message = OutgoingMessage::Response(OutgoingResponse { id, result });
-                self.send_outgoing_message_to_connection(
-                    request_context,
-                    connection_id,
-                    outgoing_message,
-                    "response",
-                )
-                .await;
+        match thread_originator {
+            Some(thread_originator) => {
+                self.analytics_events_client
+                    .track_response_with_thread_originator(
+                        connection_id.0,
+                        request_id_for_analytics,
+                        &response,
+                        thread_originator,
+                    );
             }
-            Err(err) => {
-                self.send_error_inner(
-                    request_context,
-                    request_id,
-                    internal_error(format!("failed to serialize response: {err}")),
-                )
-                .await;
+            None => {
+                self.analytics_events_client.track_response(
+                    connection_id.0,
+                    request_id_for_analytics,
+                    &response,
+                );
             }
         }
+        let response = Box::new(response);
+        let request_context = self.take_request_context(&request_id).await;
+        let outgoing_message = OutgoingMessage::Response(OutgoingResponse {
+            id: request_id.request_id,
+            result: response,
+        });
+        self.send_outgoing_message_to_connection(
+            request_context,
+            connection_id,
+            outgoing_message,
+            "response",
+        )
+        .await;
     }
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
@@ -1087,7 +1071,10 @@ mod tests {
                     panic!("expected response message");
                 };
                 assert_eq!(response.id, request_id.request_id);
-                assert_eq!(response.result, json!({}));
+                assert_eq!(
+                    serde_json::to_value(response.result).expect("result should serialize"),
+                    json!({})
+                );
             }
             other => panic!("expected targeted response envelope, got: {other:?}"),
         }

@@ -450,8 +450,10 @@ async fn read_response<T: serde::de::DeserializeOwned>(
         if response.id != RequestId::Integer(request_id) {
             continue;
         }
-        return serde_json::from_value(response.result)
-            .expect("response payload should deserialize");
+        return serde_json::from_value(
+            serde_json::to_value(response.result).expect("response payload should serialize"),
+        )
+        .expect("response payload should deserialize");
     }
 }
 

@@ -1,8 +1,8 @@
 use std::fmt;
 
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotificationEnvelope;
 use codex_app_server_protocol::ServerRequest;
 use serde::Serialize;
@@ -31,10 +31,10 @@ pub enum OutgoingMessage {
     Error(OutgoingError),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OutgoingResponse {
     pub id: RequestId,
-    pub result: Result,
+    pub result: Box<ClientResponsePayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

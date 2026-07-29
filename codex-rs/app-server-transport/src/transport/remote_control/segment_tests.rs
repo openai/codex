@@ -9,13 +9,25 @@ use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
 use super::segment::split_server_envelope_for_transport;
 use crate::outgoing_message::OutgoingMessage;
+#[cfg(unix)]
+use crate::outgoing_message::OutgoingResponse;
 use base64::Engine;
+#[cfg(unix)]
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ConfigWarningNotification;
+#[cfg(unix)]
+use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
+#[cfg(unix)]
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerNotificationEnvelope;
+#[cfg(unix)]
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use serde_json::json;
 
 #[test]
 fn reassembles_client_message_chunks() {
@@ -106,6 +118,54 @@ fn splits_large_server_messages_into_wire_chunks() {
             .len()
             <= REMOTE_CONTROL_SEGMENT_MAX_BYTES
     }));
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_response_becomes_remote_control_jsonrpc_error() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    let codex_home = AbsolutePathBuf::from_absolute_path(PathBuf::from(OsString::from_vec(vec![
+        b'/', b'b', b'a', b'd', 0xff,
+    ])))
+    .expect("non-UTF-8 Unix paths are valid absolute paths");
+    let envelope = ServerEnvelope {
+        event: ServerEvent::ServerMessage {
+            message: Box::new(OutgoingMessage::Response(OutgoingResponse {
+                id: RequestId::Integer(7),
+                result: Box::new(ClientResponsePayload::Initialize(InitializeResponse {
+                    user_agent: "codex-test-agent".to_string(),
+                    codex_home,
+                    platform_family: "unix".to_string(),
+                    platform_os: "linux".to_string(),
+                })),
+            })),
+        },
+        client_id: ClientId("client-1".to_string()),
+        stream_id: StreamId("stream-1".to_string()),
+        seq_id: 9,
+    };
+
+    let envelopes = split_server_envelope_for_transport(envelope)
+        .expect("invalid response should become a remote-control JSON-RPC error");
+    assert_eq!(
+        serde_json::to_value(envelopes).expect("error envelope should serialize"),
+        json!([{
+            "type": "server_message",
+            "client_id": "client-1",
+            "stream_id": "stream-1",
+            "seq_id": 9,
+            "message": {
+                "id": 7,
+                "error": {
+                    "code": -32603,
+                    "message": "failed to serialize response: path contains invalid UTF-8 characters",
+                }
+            }
+        }])
+    );
 }
 
 #[test]
