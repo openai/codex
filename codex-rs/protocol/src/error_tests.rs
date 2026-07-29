@@ -229,7 +229,7 @@ fn to_error_event_handles_response_stream_failed() {
     let source = HttpResponse::from(response)
         .error_for_status_ref()
         .unwrap_err()
-        .without_url();
+        .with_url("http://example.com".parse().unwrap());
     let err = CodexErr::ResponseStreamFailed(ResponseStreamFailed {
         source,
         request_id: Some("req-123".to_string()),
@@ -239,7 +239,7 @@ fn to_error_event_handles_response_stream_failed() {
 
     assert_eq!(
         event.message,
-        "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests), request id: req-123"
+        "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests) for url (http://example.com/), request id: req-123"
     );
     assert_eq!(
         event.codex_error_info,
