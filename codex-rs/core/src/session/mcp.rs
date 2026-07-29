@@ -323,6 +323,7 @@ impl Session {
             .services
             .selected_capability_roots
             .iter()
+            .cloned()
             .chain(
                 environments
                     .turn_environments()
@@ -352,7 +353,7 @@ impl Session {
                 ready_environment_root_count += 1;
             }
             root_locations_by_id.insert(root.id.clone(), root.location.clone());
-            selected_capability_roots.push(root.clone());
+            selected_capability_roots.push(root);
         }
         self.services
             .turn_environments

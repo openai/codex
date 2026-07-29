@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::sync::RwLock;
 
+use arc_swap::ArcSwapOption;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -95,7 +95,7 @@ pub struct EnvironmentReadyInfo {
 pub struct DeferredEnvironmentRegistration {
     completion: oneshot::Sender<Result<(), String>>,
     environment_id: String,
-    ready_info: Arc<OnceLock<EnvironmentReadyInfo>>,
+    ready_info: Arc<ArcSwapOption<EnvironmentReadyInfo>>,
 }
 
 /// Maximum capability roots accepted from deferred environment ready information.
@@ -382,6 +382,47 @@ impl EnvironmentManager {
             .cloned()
     }
 
+    /// Publishes readiness to a registered environment without replacing it.
+    pub fn publish_ready_info(
+        &self,
+        environment_id: &str,
+        ready_info: EnvironmentReadyInfo,
+    ) -> Result<(), ExecServerError> {
+        validate_environment_id(environment_id)?;
+        if ready_info.selected_capability_roots.len() > MAX_SELECTED_CAPABILITY_ROOTS {
+            return Err(ExecServerError::Protocol(format!(
+                "environment ready info contains more than {MAX_SELECTED_CAPABILITY_ROOTS} selected capability roots"
+            )));
+        }
+
+        let mut root_ids = HashSet::with_capacity(ready_info.selected_capability_roots.len());
+        for root in &ready_info.selected_capability_roots {
+            let CapabilityRootLocation::Environment {
+                environment_id: root_environment_id,
+                ..
+            } = &root.location;
+            if root.id.trim().is_empty()
+                || root_environment_id != environment_id
+                || !root_ids.insert(root.id.as_str())
+            {
+                return Err(ExecServerError::Protocol(format!(
+                    "selected capability roots must have unique non-empty IDs and belong to environment `{environment_id}`"
+                )));
+            }
+        }
+
+        let environments = self
+            .environments
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let environment = environments.get(environment_id).ok_or_else(|| {
+            ExecServerError::Protocol(format!("environment `{environment_id}` is not registered"))
+        })?;
+
+        environment.ready_info.store(Some(Arc::new(ready_info)));
+        Ok(())
+    }
+
     /// Returns the outbound HTTP policy carried by this manager.
     pub fn http_client_factory(&self) -> &HttpClientFactory {
         &self.http_client_factory
@@ -428,8 +469,7 @@ impl EnvironmentManager {
         validate_environment_id(&environment_id)?;
         let identity = noise_channel_identity()?;
         let (completion, readiness) = oneshot::channel();
-        let ready_info = Arc::new(OnceLock::new());
-        let mut environment = Environment::remote_with_transport(
+        let environment = Environment::remote_with_transport(
             ExecServerTransportParams::Deferred(Box::new(crate::client_api::Deferred {
                 readiness: readiness.shared(),
                 transport: ExecServerTransportParams::NoiseRendezvous { provider, identity },
@@ -437,7 +477,7 @@ impl EnvironmentManager {
             self.local_runtime_paths.clone(),
             self.http_client_factory.clone(),
         );
-        environment.ready_info = Some(Arc::clone(&ready_info));
+        let ready_info = Arc::clone(&environment.ready_info);
         let environment = Arc::new(environment);
         self.insert_environment(environment_id.clone(), environment);
         Ok(DeferredEnvironmentRegistration {
@@ -508,13 +548,7 @@ impl DeferredEnvironmentRegistration {
                         return Err(error);
                     }
                 }
-                if self.ready_info.set(ready_info).is_err() {
-                    let error = ExecServerError::Protocol(
-                        "deferred environment ready info was already set".to_string(),
-                    );
-                    let _ = self.completion.send(Err(error.to_string()));
-                    return Err(error);
-                }
+                self.ready_info.store(Some(Arc::new(ready_info)));
                 Ok(())
             }
             Err(message) => Err(message),
@@ -613,7 +647,7 @@ fn optional_environment_value(name: &str) -> Option<String> {
 #[derive(Clone)]
 pub struct Environment {
     remote_client: Option<LazyRemoteExecServerClient>,
-    ready_info: Option<Arc<OnceLock<EnvironmentReadyInfo>>>,
+    ready_info: Arc<ArcSwapOption<EnvironmentReadyInfo>>,
     // Dropping the environment stops unfinished background startup work.
     startup_task: Arc<Mutex<Option<AbortOnDropHandle<()>>>>,
     exec_backend: Arc<dyn ExecBackend>,
@@ -627,7 +661,7 @@ impl Environment {
     pub fn default_for_tests() -> Self {
         Self {
             remote_client: None,
-            ready_info: None,
+            ready_info: Arc::new(ArcSwapOption::empty()),
             startup_task: Arc::new(Mutex::new(None)),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
@@ -705,7 +739,7 @@ impl Environment {
     ) -> Self {
         Self {
             remote_client: None,
-            ready_info: None,
+            ready_info: Arc::new(ArcSwapOption::empty()),
             startup_task: Arc::new(Mutex::new(None)),
             exec_backend: Arc::new(LocalProcess::with_local_runtime_paths(
                 local_runtime_paths.clone(),
@@ -730,7 +764,7 @@ impl Environment {
 
         Self {
             remote_client: Some(client.clone()),
-            ready_info: None,
+            ready_info: Arc::new(ArcSwapOption::empty()),
             startup_task: Arc::new(Mutex::new(None)),
             exec_backend,
             filesystem,
@@ -743,13 +777,13 @@ impl Environment {
         self.remote_client.is_some()
     }
 
-    /// Returns capability roots supplied with the deferred environment's ready signal.
-    pub fn selected_capability_roots(&self) -> &[SelectedCapabilityRoot] {
+    /// Returns the capability roots most recently published for this environment.
+    pub fn selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
         self.ready_info
+            .load()
             .as_ref()
-            .and_then(|ready_info| ready_info.get())
-            .map_or(&[], |ready_info| {
-                ready_info.selected_capability_roots.as_slice()
+            .map_or_else(Vec::new, |ready_info| {
+                ready_info.selected_capability_roots.clone()
             })
     }
 
