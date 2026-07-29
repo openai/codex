@@ -591,26 +591,21 @@ pub(crate) async fn list_tools_for_client_uncached(
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
     let fetch_start = Instant::now();
-    let tools = match client.protocol_mode() {
-        McpProtocolMode::Legacy => {
-            client
-                .list_tools_with_connector_ids(/*params*/ None, timeout)
-                .await?
-                .tools
+    let protocol_mode = client.protocol_mode();
+    let tools = collect_paginated("tools/list", timeout, |params| {
+        let client = Arc::clone(client);
+        async move {
+            let response = client
+                .list_tools_with_connector_ids(params, timeout)
+                .await?;
+            let next_cursor = match protocol_mode {
+                McpProtocolMode::Legacy => None,
+                McpProtocolMode::V20260728 => response.next_cursor,
+            };
+            Ok((response.tools, next_cursor))
         }
-        McpProtocolMode::V20260728 => {
-            collect_paginated("tools/list", timeout, |params| {
-                let client = Arc::clone(client);
-                async move {
-                    let response = client
-                        .list_tools_with_connector_ids(params, timeout)
-                        .await?;
-                    Ok((response.tools, response.next_cursor))
-                }
-            })
-            .await?
-        }
-    }
+    })
+    .await?
     .into_iter()
     .map(|tool| {
         tool_info_from_listed_tool(

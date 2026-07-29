@@ -922,6 +922,109 @@ server_names = ["history", "notes"]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn modern_mcp_pagination_preserves_valid_tools_and_rejects_oversized_cursors()
+-> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let command = remote_aware_stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Mcp20260728)
+                .expect("test config should allow modern MCP");
+            for (server_name, pagination) in
+                [("paginated", "two-pages"), ("rejected", "oversized-cursor")]
+            {
+                insert_mcp_server(
+                    config,
+                    server_name,
+                    stdio_transport(
+                        command.clone(),
+                        Some(HashMap::from([
+                            (
+                                "CODEX_MCP_PROTOCOL_VERSION".to_string(),
+                                "2026-07-28".to_string(),
+                            ),
+                            (
+                                "MCP_TEST_TOOL_PAGINATION".to_string(),
+                                pagination.to_string(),
+                            ),
+                        ])),
+                        Vec::new(),
+                    ),
+                    TestMcpServerOptions {
+                        environment_id: remote_aware_environment_id(),
+                        ..Default::default()
+                    },
+                );
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let startup = loop {
+        let event = fixture.codex.next_event().await?;
+        if let EventMsg::McpStartupComplete(startup) = event.msg {
+            break startup;
+        }
+    };
+    assert!(startup.ready.iter().any(|name| name == "paginated"));
+    let failure = startup
+        .failed
+        .iter()
+        .find(|failure| failure.server == "rejected")
+        .expect("oversized cursor should reject only its MCP server");
+    assert!(
+        failure
+            .error
+            .contains("tools/list returned a pagination cursor exceeding 65536 bytes"),
+        "unexpected MCP startup failure: {}",
+        failure.error
+    );
+
+    fixture
+        .codex
+        .submit(read_only_user_turn(
+            &fixture,
+            "show the paginated MCP tools",
+        ))
+        .await?;
+    wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let body = response.single_request().body_json();
+    for tool_name in ["echo", "sync"] {
+        assert!(
+            responses::namespace_child_tool(&body, "mcp__paginated", tool_name).is_some(),
+            "expected paginated MCP tool {tool_name} to reach the model"
+        );
+    }
+    assert!(
+        responses::namespace_child_tool(&body, "mcp__rejected", "echo").is_none(),
+        "a rejected MCP catalog must not reach the model"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apps_enabled_turn_skips_pending_optional_mcp_without_cached_tools() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

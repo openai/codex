@@ -91,15 +91,14 @@ impl McpBindingClients {
             let client = Arc::clone(&managed.client);
             let timeout = managed.tool_timeout;
             join_set.spawn(async move {
-                let resources =
-                    collect_paginated("resources/list", /*overall_timeout*/ None, |params| {
-                        let client = Arc::clone(&client);
-                        async move {
-                            let response = client.list_resources(params, timeout).await?;
-                            Ok((response.resources, response.next_cursor))
-                        }
-                    })
-                    .await;
+                let resources = collect_paginated("resources/list", timeout, |params| {
+                    let client = Arc::clone(&client);
+                    async move {
+                        let response = client.list_resources(params, timeout).await?;
+                        Ok((response.resources, response.next_cursor))
+                    }
+                })
+                .await;
                 (server_name, resources)
             });
         }
@@ -120,17 +119,13 @@ impl McpBindingClients {
             let client = Arc::clone(&managed.client);
             let timeout = managed.tool_timeout;
             join_set.spawn(async move {
-                let templates = collect_paginated(
-                    "resources/templates/list",
-                    /*overall_timeout*/ None,
-                    |params| {
-                        let client = Arc::clone(&client);
-                        async move {
-                            let response = client.list_resource_templates(params, timeout).await?;
-                            Ok((response.resource_templates, response.next_cursor))
-                        }
-                    },
-                )
+                let templates = collect_paginated("resources/templates/list", timeout, |params| {
+                    let client = Arc::clone(&client);
+                    async move {
+                        let response = client.list_resource_templates(params, timeout).await?;
+                        Ok((response.resource_templates, response.next_cursor))
+                    }
+                })
                 .await;
                 (server_name, templates)
             });
