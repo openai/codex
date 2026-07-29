@@ -80,6 +80,7 @@ impl App {
                         self.chat_widget.add_error_message(format!(
                             "Failed to start TUI session picker: {err}"
                         ));
+                        self.chat_widget.maybe_send_next_queued_input();
                         return Ok(AppRunControl::Continue);
                     }
                 };
@@ -112,6 +113,7 @@ impl App {
                     SessionSelection::Fork(_) => {}
                 }
 
+                self.chat_widget.maybe_send_next_queued_input();
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
@@ -229,6 +231,7 @@ impl App {
                     );
                 }
 
+                self.chat_widget.maybe_send_next_queued_input();
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkSessionForPromptEdit {

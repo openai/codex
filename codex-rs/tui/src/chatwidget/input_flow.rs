@@ -31,7 +31,9 @@ impl ChatWidget {
                 }
                 let should_submit_now = self.is_session_configured()
                     && !self.is_plan_streaming_in_tui()
-                    && !self.input_queue.suppress_queue_autosend;
+                    && !self.input_queue.suppress_queue_autosend
+                    && (!self.input_queue.user_turn_pending_start
+                        || self.turn_lifecycle.agent_turn_running);
                 if should_submit_now {
                     if self.only_user_shell_commands_running()
                         && !user_message.text.starts_with('!')
@@ -108,10 +110,10 @@ impl ChatWidget {
         action: QueuedInputAction,
         pending_pastes: Vec<(String, String)>,
     ) {
-        if !self.is_session_configured()
-            || self.is_user_turn_pending_or_running()
-            || self.input_queue.suppress_queue_autosend
-        {
+        let should_run_now = self.is_session_configured()
+            && !self.is_user_turn_pending_or_running()
+            && !self.input_queue.suppress_queue_autosend;
+        if !should_run_now || action != QueuedInputAction::Plain {
             self.input_queue
                 .queued_user_messages
                 .push_back(QueuedUserMessage {
@@ -123,6 +125,9 @@ impl ChatWidget {
                 .queued_user_message_history_records
                 .push_back(UserMessageHistoryRecord::UserMessageText);
             self.refresh_pending_input_preview();
+            if should_run_now {
+                self.maybe_send_next_queued_input();
+            }
         } else {
             self.submit_user_message(user_message);
         }
@@ -174,7 +179,10 @@ impl ChatWidget {
     }
 
     pub(super) fn is_user_turn_pending_or_running(&self) -> bool {
-        self.input_queue.user_turn_pending_start || self.bottom_pane.is_task_running()
+        self.input_queue.user_turn_pending_start
+            || self.turn_lifecycle.agent_turn_running
+            || self.review.is_review_mode
+            || (self.bottom_pane.is_task_running() && self.mcp_startup_status.is_none())
     }
 
     pub(super) fn only_user_shell_commands_running(&self) -> bool {

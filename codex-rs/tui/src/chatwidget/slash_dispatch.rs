@@ -132,7 +132,12 @@ impl ChatWidget {
     }
 
     fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
-        (!cmd.available_during_task() && self.bottom_pane.is_task_running())
+        (!cmd.available_during_task()
+            && (self.turn_lifecycle.agent_turn_running
+                || self.review.is_review_mode
+                || (self.bottom_pane.is_task_running()
+                    && (self.mcp_startup_status.is_none()
+                        || self.input_queue.user_turn_pending_start))))
             || (cmd == SlashCommand::Resume
                 && (self.input_queue.user_turn_pending_start
                     || self.turn_lifecycle.agent_turn_running))
@@ -262,10 +267,14 @@ impl ChatWidget {
                 if !self.bottom_pane.is_task_running() {
                     self.bottom_pane.set_task_running(/*running*/ true);
                 }
+                self.input_queue.user_turn_pending_start = true;
                 self.app_event_tx.compact();
             }
             SlashCommand::Review => {
                 self.open_review_popup();
+                if self.mcp_startup_status.is_some() {
+                    self.defer_input_until_settings_applied();
+                }
             }
             SlashCommand::Rename => {
                 self.session_telemetry
