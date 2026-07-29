@@ -2547,7 +2547,26 @@ async fn slash_fork_requests_current_fork() {
 
     chat.dispatch_command(SlashCommand::Fork);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ForkCurrentSession { name: None })
+    );
+}
+
+#[tokio::test]
+async fn slash_fork_with_name_requests_named_fork() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane
+        .set_composer_text("/fork   Add User  ".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ForkCurrentSession {
+            name: Some(name)
+        }) if name == "Add User"
+    );
 }
 
 #[tokio::test]

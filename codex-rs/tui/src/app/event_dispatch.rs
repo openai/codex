@@ -162,7 +162,7 @@ impl App {
             AppEvent::DeleteCurrentThread => {
                 return Ok(self.delete_current_thread(app_server).await);
             }
-            AppEvent::ForkCurrentSession => {
+            AppEvent::ForkCurrentSession { name } => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
                     /*inc*/ 1,
@@ -184,7 +184,23 @@ impl App {
                     fork_config.model_reasoning_effort =
                         self.chat_widget.current_reasoning_effort();
                     match app_server.fork_thread(fork_config, thread_id).await {
-                        Ok(forked) => {
+                        Ok(mut forked) => {
+                            let name_error = if let Some(name) = name {
+                                match app_server
+                                    .thread_set_name(forked.session.thread_id, name.clone())
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        forked.session.thread_name = Some(name);
+                                        None
+                                    }
+                                    Err(err) => {
+                                        Some(format!("Failed to name the forked session: {err}"))
+                                    }
+                                }
+                            } else {
+                                None
+                            };
                             self.shutdown_current_thread(app_server).await;
                             match self
                                 .replace_chat_widget_with_app_server_thread(
@@ -196,6 +212,9 @@ impl App {
                                 .await
                             {
                                 Ok(()) => {
+                                    if let Some(err) = name_error {
+                                        self.chat_widget.add_error_message(err);
+                                    }
                                     if let Some(summary) = summary {
                                         let mut lines: Vec<Line<'static>> = Vec::new();
                                         if let Some(usage_line) = summary.usage_line {

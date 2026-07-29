@@ -5,6 +5,7 @@ use app_test_support::rollout_path;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::SortDirection;
@@ -40,6 +41,7 @@ fn take_backfill_counts(requests: &Arc<Mutex<Vec<String>>>) -> (usize, usize) {
 async fn start_recording_app_server(
     config: &Config,
     mut blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    failed_thread_name: Option<&'static str>,
 ) -> Result<(
     AppServerSession,
     Arc<Mutex<Vec<String>>>,
@@ -105,15 +107,31 @@ async fn start_recording_app_server(
                         let _ = started.send(());
                         let _ = release.await;
                     }
-                    let response = match embedded.request(request).await? {
-                        Ok(result) => JSONRPCMessage::Response(JSONRPCResponse {
+                    let force_failure = matches!(
+                        &request,
+                        ClientRequest::ThreadSetName { params, .. }
+                            if failed_thread_name == Some(params.name.as_str())
+                    );
+                    let response = if force_failure {
+                        JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,
-                            result,
-                        }),
-                        Err(error) => JSONRPCMessage::Error(JSONRPCError {
-                            id: request_id,
-                            error,
-                        }),
+                            error: JSONRPCErrorError {
+                                code: -32603,
+                                message: "forced thread/name/set failure".to_string(),
+                                data: None,
+                            },
+                        })
+                    } else {
+                        match embedded.request(request).await? {
+                            Ok(result) => JSONRPCMessage::Response(JSONRPCResponse {
+                                id: request_id,
+                                result,
+                            }),
+                            Err(error) => JSONRPCMessage::Error(JSONRPCError {
+                                id: request_id,
+                                error,
+                            }),
+                        }
                     };
                     websocket
                         .send(Message::Text(serde_json::to_string(&response)?.into()))
@@ -166,8 +184,12 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                 let codex_home = tempdir()?;
                 app.config.codex_home = codex_home.path().to_path_buf().abs();
                 app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
-                let (mut app_server, requests, proxy) =
-                    start_recording_app_server(&app.config, /*blocked_thread_list*/ None).await?;
+                let (mut app_server, requests, proxy) = start_recording_app_server(
+                    &app.config,
+                    /*blocked_thread_list*/ None,
+                    /*failed_thread_name*/ None,
+                )
+                .await?;
                 let mut tui = crate::tui::test_support::make_test_tui()?;
 
                 app.start_fresh_session_with_summary_hint(
@@ -267,6 +289,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                 let (mut app_server, requests, proxy) = start_recording_app_server(
                     &app.config,
                     Some((root_thread_id, started_tx, release_rx)),
+                    Some("Failed Fork"),
                 )
                 .await?;
                 let root = app_server
@@ -291,14 +314,58 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                 let control = Box::pin(app.handle_event(
                     &mut tui,
                     &mut app_server,
-                    AppEvent::ForkCurrentSession,
+                    AppEvent::ForkCurrentSession {
+                        name: Some("Add User Fork".to_string()),
+                    },
                 ))
                 .await?;
 
                 assert!(matches!(control, AppRunControl::Continue));
                 assert_ne!(app.chat_widget.thread_id(), Some(root_thread_id));
+                let named_fork_id = app
+                    .chat_widget
+                    .thread_id()
+                    .expect("named fork should have a thread id");
+                assert_eq!(
+                    app.chat_widget.thread_name(),
+                    Some("Add User Fork".to_string())
+                );
                 // Forking may read the source metadata once when the response includes its parent
                 // id. It must not scan or backfill loaded threads for the newly created fork.
+                assert!(matches!(take_backfill_counts(&requests), (0, 0) | (0, 1)));
+                let named_fork = app_server
+                    .thread_read(named_fork_id, /*include_turns*/ false)
+                    .await?;
+                assert_eq!(named_fork.name.as_deref(), Some("Add User Fork"));
+                take_backfill_counts(&requests);
+
+                let control = Box::pin(app.handle_event(
+                    &mut tui,
+                    &mut app_server,
+                    AppEvent::ForkCurrentSession {
+                        name: Some("Failed Fork".to_string()),
+                    },
+                ))
+                .await?;
+
+                assert!(matches!(control, AppRunControl::Continue));
+                assert_ne!(app.chat_widget.thread_id(), Some(named_fork_id));
+                let name_error = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+                    .find_map(|event| match event {
+                        AppEvent::InsertHistoryCell(cell) => {
+                            let rendered =
+                                lines_to_single_string(&cell.display_lines(/*width*/ 80));
+                            rendered
+                                .contains("Failed to name the forked session")
+                                .then_some(rendered)
+                        }
+                        _ => None,
+                    })
+                    .expect("fork naming error history cell");
+                insta::assert_snapshot!(
+                    name_error,
+                    @"■ Failed to name the forked session: thread/name/set failed in TUI"
+                );
                 assert!(matches!(take_backfill_counts(&requests), (0, 0) | (0, 1)));
 
                 app.start_fresh_session_with_summary_hint(

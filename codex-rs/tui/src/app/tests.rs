@@ -6292,9 +6292,12 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
         ));
         assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
 
-        let control =
-            Box::pin(app.handle_event(&mut tui, &mut app_server, AppEvent::ForkCurrentSession))
-                .await?;
+        let control = Box::pin(app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::ForkCurrentSession { name: None },
+        ))
+        .await?;
 
         assert!(matches!(control, AppRunControl::Continue));
         assert!(!crate::session_resume::cwds_differ(

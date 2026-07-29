@@ -242,7 +242,8 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::ForkCurrentSession);
+                self.app_event_tx
+                    .send(AppEvent::ForkCurrentSession { name: None });
             }
             SlashCommand::App => {
                 let Some(thread_id) = self.thread_id else {
@@ -741,6 +742,11 @@ impl ChatWidget {
             }
             SlashCommand::Clear if !trimmed.is_empty() => {
                 self.app_event_tx.send(AppEvent::ClearUi {
+                    name: Some(trimmed.to_string()),
+                });
+            }
+            SlashCommand::Fork if !trimmed.is_empty() => {
+                self.app_event_tx.send(AppEvent::ForkCurrentSession {
                     name: Some(trimmed.to_string()),
                 });
             }

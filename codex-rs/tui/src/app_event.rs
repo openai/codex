@@ -287,8 +287,10 @@ pub(crate) enum AppEvent {
     /// Permanently delete the current active main thread and exit after it succeeds.
     DeleteCurrentThread,
 
-    /// Fork the current session into a new thread.
-    ForkCurrentSession,
+    /// Fork the current session into a new thread, optionally assigning it a name.
+    ForkCurrentSession {
+        name: Option<String>,
+    },
 
     /// Branch before a selected prompt and reopen it in the new thread's composer.
     ForkSessionForPromptEdit {
