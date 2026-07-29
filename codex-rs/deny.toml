@@ -238,12 +238,14 @@ deny = [
     { crate = "reqwest", wrappers = [
         # Intended owner.
         "codex-http-client",
+        # Intentional exception: this standalone, privileged Responses API proxy owns its blocking
+        # upstream HTTP transport independently of Codex.
+        "codex-responses-api-proxy",
         # Temporary migration exceptions.
         "codex-app-server",
         "codex-core",
         "codex-ollama",
         "codex-otel",
-        "codex-responses-api-proxy",
         # Third-party crates that own their reqwest integration. These are not part of the
         # first-party migration count above.
         "oauth2",
