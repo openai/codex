@@ -4411,12 +4411,12 @@ async fn background_side_cleanup_removes_local_state_and_ignores_late_events() -
 
     app.handle_app_server_event(
         &app_server,
-        codex_app_server_client::AppServerEvent::ServerRequest(exec_approval_request(
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(exec_approval_request(
             side_thread_id,
             "turn-1",
             "item-1",
             Some("approval-1"),
-        )),
+        ))),
     )
     .await;
     let resolution = app

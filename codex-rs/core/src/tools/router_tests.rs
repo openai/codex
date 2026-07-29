@@ -165,6 +165,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             payload: ToolPayload::Function {
                 arguments: "{}".to_string(),
             },
+            encrypted_function_args: None,
         }),
         None
     );
