@@ -1,0 +1,41 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: "format!(\"grid (23 cells):\\n{}\\n\\nrecords (17 cells):\\n{}\", plain_lines(&grid).join(\"\\n\"), plain_lines(&records).join(\"\\n\"))"
+---
+grid (23 cells):
+ Key         Notes
+━━━━━━━━━━  ━━━━━━━━━━━
+ ｶﾞﾊﾟtail    First ｶﾞ
+             row with
+             an
+             escaped |
+             pipe.
+──────────  ───────────
+ ﾊﾟｶﾞtail    Second ﾊﾟ
+             row with
+             an
+             escaped |
+             pipe.
+──────────  ───────────
+ short       Final ｶﾞ
+             ﾊﾟ row.
+
+records (17 cells):
+ Key
+  ｶﾞﾊﾟtail
+ Notes
+  First ｶﾞ row
+  with an escaped
+  | pipe.
+─────────────────
+ Key
+  ﾊﾟｶﾞtail
+ Notes
+  Second ﾊﾟ row
+  with an escaped
+  | pipe.
+─────────────────
+ Key
+  short
+ Notes
+  Final ｶﾞﾊﾟ row.

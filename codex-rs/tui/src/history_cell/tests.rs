@@ -784,6 +784,16 @@ fn ps_output_long_command_snapshot() {
 }
 
 #[test]
+fn ps_output_halfwidth_sound_marks_snapshot() {
+    let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+        command_display: "echo ｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟ".to_string(),
+        recent_chunks: vec!["output ｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟ".to_string()],
+    }]);
+    let rendered = render_lines(&cell.display_lines(/*width*/ 24)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn ps_output_many_sessions_snapshot() {
     let cell = new_unified_exec_processes_output(
         (0..20)
@@ -1651,6 +1661,44 @@ fn session_header_indicates_yolo_mode() {
 
     let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
     insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn session_header_aligns_halfwidth_sound_marks() {
+    let cell: Box<dyn HistoryCell> = Box::new(SessionHeaderHistoryCell::new(
+        "gpt-5-ｶﾞ-ﾊﾟ".to_string(),
+        /*reasoning_effort*/ None,
+        /*show_fast_status*/ false,
+        PathBuf::from("project"),
+        "test",
+    ));
+
+    let width = 80;
+    let height = cell.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    cell.render(area, &mut buf);
+
+    insta::assert_snapshot!("session_header_halfwidth_sound_marks", format!("{buf:?}"));
+}
+
+#[test]
+fn session_header_truncates_halfwidth_directory() {
+    let cell: Box<dyn HistoryCell> = Box::new(SessionHeaderHistoryCell::new(
+        "gpt-5".to_string(),
+        /*reasoning_effort*/ None,
+        /*show_fast_status*/ false,
+        PathBuf::from("ｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟ-project"),
+        "test",
+    ));
+
+    let width = 42;
+    let height = cell.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    cell.render(area, &mut buf);
+
+    insta::assert_snapshot!("session_header_halfwidth_directory", format!("{buf:?}"));
 }
 
 #[test]

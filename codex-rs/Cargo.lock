@@ -2485,6 +2485,7 @@ dependencies = [
  "codex-utils-cli",
  "crossterm",
  "http 1.4.0",
+ "insta",
  "owo-colors",
  "pretty_assertions",
  "ratatui",
@@ -2495,6 +2496,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "unicode-segmentation",
  "unicode-width 0.2.1",
 ]
 

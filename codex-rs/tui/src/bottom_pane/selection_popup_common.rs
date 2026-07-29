@@ -7,14 +7,15 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
-use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
+use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::accent_style;
 use crate::style::user_message_style;
+use crate::width::display_width;
 
 use super::scroll_state::ScrollState;
 use super::selection_row_layout::SelectionDescriptionLayout;
@@ -170,7 +171,7 @@ fn compute_desc_col(
                         if row.disabled_reason.is_some() {
                             spans.push(" (disabled)".dim());
                         }
-                        Line::from(spans).width()
+                        line_width(&Line::from(spans))
                     })
                     .max()
                     .unwrap_or(0),
@@ -182,7 +183,7 @@ fn compute_desc_col(
                         if row.disabled_reason.is_some() {
                             spans.push(" (disabled)".dim());
                         }
-                        Line::from(spans).width()
+                        line_width(&Line::from(spans))
                     })
                     .max()
                     .unwrap_or(0),
@@ -225,6 +226,9 @@ fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
 }
 
 fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
+    use crate::wrapping::RtOptions;
+    use crate::wrapping::word_wrap_lines;
+
     let Some(description) = row.description.as_deref() else {
         return Vec::new();
     };
@@ -245,14 +249,13 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
         .unwrap_or(0)
         .min(left_width.saturating_sub(1));
 
-    let name_subsequent_indent = " ".repeat(name_wrap_indent);
-    let name_options = textwrap::Options::new(left_width)
-        .initial_indent("")
-        .subsequent_indent(name_subsequent_indent.as_str());
-    let name_lines = textwrap::wrap(row.name.as_str(), name_options);
+    let name_options = RtOptions::new(left_width)
+        .initial_indent(Line::from(""))
+        .subsequent_indent(Line::from(" ".repeat(name_wrap_indent)));
+    let name_lines = word_wrap_lines(row.name.lines(), name_options);
 
-    let desc_options = textwrap::Options::new(right_width).initial_indent("");
-    let desc_lines = textwrap::wrap(description, desc_options);
+    let desc_options = RtOptions::new(right_width).initial_indent(Line::from(""));
+    let desc_lines = word_wrap_lines(description.lines(), desc_options);
 
     let rows = name_lines.len().max(desc_lines.len()).max(1);
     let mut out = Vec::with_capacity(rows);
@@ -265,7 +268,7 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
         if let Some(desc) = desc_lines.get(idx) {
             let left_used = spans
                 .iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .map(|span| display_width(span.content.as_ref()))
                 .sum::<usize>();
             let gap = if left_used == 0 {
                 desc_col
@@ -795,6 +798,123 @@ mod tests {
 
         let two_col = wrap_two_column_row(&row, /*desc_col*/ 0, /*width*/ 1);
         assert_eq!(two_col.len(), 0);
+    }
+
+    #[test]
+    fn popup_name_truncation_counts_halfwidth_sound_marks() {
+        for (name, desc_col, match_index, expected) in
+            [("abｶﾞc", 6, None, "abｶﾞ…"), ("aｶﾞc", 4, Some(1), "a…")]
+        {
+            let row = GenericDisplayRow {
+                name: name.to_string(),
+                description: Some("description".to_string()),
+                match_indices: match_index.map(|index| vec![index]),
+                ..Default::default()
+            };
+            let text =
+                build_full_line(&row, desc_col, SelectionDescriptionLayout::Columns).to_string();
+
+            assert!(text.starts_with(expected), "unexpected row: {text:?}");
+        }
+    }
+
+    #[test]
+    fn fuzzy_matched_emoji_graphemes_keep_description_alignment() {
+        let rows = [
+            GenericDisplayRow {
+                name: "👍🏻".to_string(),
+                match_indices: Some(vec![1]),
+                description: Some("description".to_string()),
+                ..Default::default()
+            },
+            GenericDisplayRow {
+                name: "👨‍👩‍👧‍👦".to_string(),
+                match_indices: Some(vec![2]),
+                description: Some("description".to_string()),
+                ..Default::default()
+            },
+        ];
+        let area = Rect::new(0, 0, /*width*/ 20, /*height*/ 2);
+        let mut buf = Buffer::empty(area);
+
+        for (row_index, row) in rows.iter().enumerate() {
+            let line = build_full_line(
+                row,
+                /*desc_col*/ 4,
+                SelectionDescriptionLayout::Columns,
+            );
+            let name = line.spans.first().expect("fuzzy-matched name span");
+            assert_eq!(name.content.as_ref(), row.name);
+            assert!(name.style.add_modifier.contains(Modifier::BOLD));
+
+            let row_area = Rect::new(area.x, area.y + row_index as u16, area.width, 1);
+            ratatui::widgets::Widget::render(
+                ratatui::widgets::Paragraph::new(line),
+                row_area,
+                &mut buf,
+            );
+            assert_eq!(buf[(4, row_index as u16)].symbol(), "d");
+        }
+
+        insta::assert_snapshot!("popup_fuzzy_matched_emoji_graphemes", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn wrapped_two_column_rows_count_halfwidth_sound_marks() {
+        let rows = vec![GenericDisplayRow {
+            name: "abｶﾞc".to_string(),
+            description: Some("abﾊﾟc".to_string()),
+            wrap_indent: Some(0),
+            ..Default::default()
+        }];
+        let area = Rect::new(0, 0, 9, 2);
+        let mut buf = Buffer::empty(area);
+
+        let rendered_lines = render_rows(
+            area,
+            &mut buf,
+            &rows,
+            &ScrollState::default(),
+            /*max_results*/ 1,
+            "no rows",
+        );
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(rendered_lines, 2);
+        insta::assert_snapshot!(rendered, @r"
+        abｶﾞ  ab
+        c     ﾊﾟ c
+        ");
+    }
+
+    #[test]
+    fn wrapped_two_column_rows_preserve_hard_line_breaks() {
+        let row = GenericDisplayRow {
+            name: "first\nsecond".to_string(),
+            description: Some("alpha\nbeta".to_string()),
+            wrap_indent: Some(0),
+            ..Default::default()
+        };
+
+        let rendered = wrap_two_column_row(&row, /*desc_col*/ 8, /*width*/ 24)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        insta::assert_snapshot!(rendered, @r"
+        first   alpha
+        second  beta
+        ");
     }
 
     #[test]

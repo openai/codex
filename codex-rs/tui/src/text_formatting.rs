@@ -1,6 +1,6 @@
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthChar;
-use unicode_width::UnicodeWidthStr;
+
+use crate::width::display_width;
 
 pub(crate) fn capitalize_first(input: &str) -> String {
     let mut chars = input.chars();
@@ -33,14 +33,12 @@ pub(crate) fn format_and_truncate_tool_result(
     }
 }
 
-/// Format JSON text in a compact single-line format with spaces for better Ratatui wrapping.
-/// Ex: `{"a":"b",c:["d","e"]}` -> `{"a": "b", "c": ["d", "e"]}`
-/// Returns the formatted JSON string if the input is valid JSON, otherwise returns None.
-/// This is a little complicated, but it's necessary because Ratatui's wrapping is *very* limited
-/// and can only do line breaks at whitespace. If we use the default serde_json format, we get lines
-/// without spaces that Ratatui can't wrap nicely. If we use the serde_json pretty format as-is,
-/// it's much too sparse and uses too many terminal rows.
-/// Relevant issue: https://github.com/ratatui/ratatui/issues/293
+/// Formats JSON on one line with spaces after separators for readability and natural wrap points.
+///
+/// Compact JSON is hard to scan, while pretty-printed JSON consumes unnecessary terminal rows.
+/// Returns the formatted JSON string for valid input, or `None` otherwise.
+///
+/// Example: `{"a":"b","c":["d","e"]}` becomes `{"a": "b", "c": ["d", "e"]}`.
 pub(crate) fn format_json_compact(text: &str) -> Option<String> {
     let json = serde_json::from_str::<serde_json::Value>(text).ok()?;
     let json_pretty = serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string());
@@ -121,7 +119,7 @@ pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
-    if UnicodeWidthStr::width(path) <= max_width {
+    if display_width(path) <= max_width {
         return path.to_string();
     }
 
@@ -142,7 +140,7 @@ pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
     if raw_segments.is_empty() {
         if has_leading_sep {
             let root = sep.to_string();
-            if UnicodeWidthStr::width(root.as_str()) <= max_width {
+            if display_width(root.as_str()) <= max_width {
                 return root;
             }
         }
@@ -174,27 +172,27 @@ pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
         if allowed_width == 0 {
             return String::new();
         }
-        if UnicodeWidthStr::width(original) <= allowed_width {
+        if display_width(original) <= allowed_width {
             return original.to_string();
         }
         if allowed_width == 1 {
             return "…".to_string();
         }
 
-        let mut kept: Vec<char> = Vec::new();
+        let mut kept = Vec::new();
         let mut used_width = 1; // reserve space for leading ellipsis
-        for ch in original.chars().rev() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used_width + ch_width > allowed_width {
+        for grapheme in original.graphemes(/*is_extended*/ true).rev() {
+            let grapheme_width = display_width(grapheme);
+            if used_width + grapheme_width > allowed_width {
                 break;
             }
-            used_width += ch_width;
-            kept.push(ch);
+            used_width += grapheme_width;
+            kept.push(grapheme);
         }
         kept.reverse();
         let mut truncated = String::from("…");
-        for ch in kept {
-            truncated.push(ch);
+        for grapheme in kept {
+            truncated.push_str(grapheme);
         }
         truncated
     };
@@ -236,7 +234,7 @@ pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
         |segments: &mut Vec<Segment<'_>>, allow_front_truncate: bool| -> Option<String> {
             loop {
                 let candidate = assemble(has_leading_sep, segments);
-                let width = UnicodeWidthStr::width(candidate.as_str());
+                let width = display_width(candidate.as_str());
                 if width <= max_width {
                     return Some(candidate);
                 }
@@ -263,11 +261,11 @@ pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
 
                 let mut changed = false;
                 for idx in indices {
-                    let original_width = UnicodeWidthStr::width(segments[idx].original);
+                    let original_width = display_width(segments[idx].original);
                     if original_width <= max_width && segment_count > 2 {
                         continue;
                     }
-                    let seg_width = UnicodeWidthStr::width(segments[idx].text.as_str());
+                    let seg_width = display_width(segments[idx].text.as_str());
                     let other_width = width.saturating_sub(seg_width);
                     let allowed_width = max_width.saturating_sub(other_width).max(1);
                     let new_text = front_truncate(segments[idx].original, allowed_width);

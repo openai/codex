@@ -8,12 +8,12 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::push_owned_lines;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::remap_wrapped_line;
+use crate::width::display_width;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use unicode_width::UnicodeWidthStr;
 
 const FIELD_LEADING_PADDING: usize = 1;
 const FIELD_GAP: usize = 2;
@@ -48,7 +48,7 @@ pub(super) fn should_render_records(
                         let has_fragmented_token = cell
                             .plain_text()
                             .split_whitespace()
-                            .any(|token| token.width() > *width);
+                            .any(|token| display_width(token) > *width);
                         match metrics.kind {
                             TableColumnKind::Compact => has_fragmented_token,
                             TableColumnKind::TokenHeavy => {
@@ -105,7 +105,7 @@ pub(super) fn render_records(
 ) -> Vec<HyperlinkLine> {
     let label_width = headers
         .iter()
-        .map(|header| header.plain_text().width())
+        .map(|header| display_width(&header.plain_text()))
         .max()
         .unwrap_or(0);
     let minimum_value_width = if metrics
@@ -167,9 +167,9 @@ fn render_aligned_field(
             let label = header.plain_text();
             spans.push(Span::raw(" ".repeat(FIELD_LEADING_PADDING)));
             spans.push(Span::styled(label.clone(), label_style));
-            spans.push(Span::raw(
-                " ".repeat(label_width.saturating_sub(label.width()) + FIELD_GAP),
-            ));
+            spans.push(Span::raw(" ".repeat(
+                label_width.saturating_sub(display_width(&label)) + FIELD_GAP,
+            )));
         } else {
             spans.push(Span::raw(" ".repeat(value_indent)));
         }
@@ -186,7 +186,7 @@ fn render_stacked_field(
 ) {
     let label_width = available_width
         .map(|width| width.saturating_sub(FIELD_LEADING_PADDING).max(1))
-        .unwrap_or_else(|| header.plain_text().width().max(1));
+        .unwrap_or_else(|| display_width(&header.plain_text()).max(1));
     let label = Line::from(Span::styled(header.plain_text(), label_style));
     let mut wrapped_labels = Vec::new();
     push_owned_lines(
@@ -218,7 +218,7 @@ fn push_prefixed_value_line(
 ) {
     let shift = prefix
         .iter()
-        .map(|span| span.content.width())
+        .map(|span| display_width(span.content.as_ref()))
         .sum::<usize>();
     prefix.append(&mut value_line.line.spans);
     let mut output_line = HyperlinkLine::new(Line::from(prefix));
@@ -257,27 +257,11 @@ fn wrap_cell(cell: &TableCell, width: usize) -> Vec<HyperlinkLine> {
 fn cell_width(cell: &TableCell) -> usize {
     cell.lines
         .iter()
-        .map(|line| {
-            line.line
-                .spans
-                .iter()
-                .map(|span| span.content.width())
-                .sum::<usize>()
-        })
+        .map(HyperlinkLine::width)
         .max()
         .unwrap_or(0)
 }
 
 fn widest_line_width(lines: &[HyperlinkLine]) -> usize {
-    lines
-        .iter()
-        .map(|line| {
-            line.line
-                .spans
-                .iter()
-                .map(|span| span.content.width())
-                .sum::<usize>()
-        })
-        .max()
-        .unwrap_or(0)
+    lines.iter().map(HyperlinkLine::width).max().unwrap_or(0)
 }

@@ -1,4 +1,4 @@
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// Scroll position and geometry for a vertical scroll view.
@@ -131,38 +131,57 @@ impl ScrollableDiff {
             let mut line = String::new();
             let mut line_cols = 0usize;
             let mut last_soft_idx: Option<usize> = None; // last whitespace or punctuation break
-            for (_i, ch) in raw.char_indices() {
-                if ch == '\n' {
+            for grapheme in raw
+                .graphemes(/*is_extended*/ true)
+                .flat_map(|grapheme| grapheme.split_inclusive(char::is_whitespace))
+            {
+                if grapheme == "\n" {
                     out.push(std::mem::take(&mut line));
                     out_idx.push(raw_idx);
                     line_cols = 0;
                     last_soft_idx = None;
                     continue;
                 }
-                let w = UnicodeWidthChar::width(ch).unwrap_or(0);
-                if line_cols.saturating_add(w) > max_cols {
+                let grapheme_width = display_width(grapheme);
+                if line_cols.saturating_add(grapheme_width) > max_cols {
                     if let Some(split) = last_soft_idx {
                         let (prefix, rest) = line.split_at(split);
-                        out.push(prefix.trim_end().to_string());
-                        out_idx.push(raw_idx);
+                        let prefix = prefix.trim_end();
+                        if !prefix.is_empty() {
+                            out.push(prefix.to_string());
+                            out_idx.push(raw_idx);
+                        }
                         line = rest.trim_start().to_string();
                         last_soft_idx = None;
-                        // retry add current ch now that line may be shorter
+                        // Retry adding the current grapheme now that the line may be shorter.
                     } else if !line.is_empty() {
                         out.push(std::mem::take(&mut line));
                         out_idx.push(raw_idx);
                     }
                 }
-                if ch.is_whitespace()
-                    || matches!(
-                        ch,
-                        ',' | ';' | '.' | ':' | ')' | ']' | '}' | '|' | '/' | '?' | '!' | '-' | '_'
-                    )
+                if grapheme.chars().all(char::is_whitespace)
+                    || grapheme.chars().any(|ch| {
+                        matches!(
+                            ch,
+                            ',' | ';'
+                                | '.'
+                                | ':'
+                                | ')'
+                                | ']'
+                                | '}'
+                                | '|'
+                                | '/'
+                                | '?'
+                                | '!'
+                                | '-'
+                                | '_'
+                        )
+                    })
                 {
                     last_soft_idx = Some(line.len());
                 }
-                line.push(ch);
-                line_cols = UnicodeWidthStr::width(line.as_str());
+                line.push_str(grapheme);
+                line_cols = display_width(&line);
             }
             if !line.is_empty() {
                 out.push(line);
@@ -174,3 +193,16 @@ impl ScrollableDiff {
         self.state.content_h = self.wrapped.len() as u16;
     }
 }
+
+/// Counts terminal cells, including the halfwidth sound marks omitted by `unicode-width`.
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+        + text
+            .chars()
+            .filter(|ch| matches!(ch, '\u{FF9E}' | '\u{FF9F}'))
+            .count()
+}
+
+#[cfg(test)]
+#[path = "scrollable_diff_tests.rs"]
+mod tests;

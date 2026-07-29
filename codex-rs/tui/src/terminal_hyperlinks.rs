@@ -20,8 +20,11 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use url::Url;
 
+use crate::line_truncation::line_width;
 use crate::render::line_utils::line_to_borrowed;
 use crate::render::line_utils::line_to_static;
+use crate::width::char_width;
+use crate::width::display_width;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 
@@ -86,16 +89,12 @@ impl HyperlinkLine {
     }
 
     pub(crate) fn width(&self) -> usize {
-        self.line
-            .spans
-            .iter()
-            .map(|span| usize::from(span.content.as_ref().cell_width()))
-            .sum()
+        line_width(&self.line)
     }
 
     pub(crate) fn push_span(&mut self, span: Span<'static>, destination: Option<&str>) {
         let start = self.width();
-        let end = start + usize::from(span.content.as_ref().cell_width());
+        let end = start + display_width(span.content.as_ref());
         self.line.push_span(span);
         if end > start
             && let Some(destination) = destination.and_then(web_destination)
@@ -158,7 +157,7 @@ pub(crate) fn prefix_hyperlink_lines(
             } else {
                 subsequent_prefix.clone()
             };
-            let shift = usize::from(prefix.content.as_ref().cell_width());
+            let shift = display_width(prefix.content.as_ref());
             let mut spans = Vec::with_capacity(line.line.spans.len() + 1);
             spans.push(prefix);
             spans.extend(line.line.spans);
@@ -245,7 +244,7 @@ pub(crate) fn remap_wrapped_line(
             continue;
         };
         let mapped = &rendered[rendered_start..];
-        let mut output_column = usize::from(rendered[..rendered_start].cell_width());
+        let mut output_column = display_width(&rendered[..rendered_start]);
         for ch in mapped.chars() {
             let width = char_cell_width(ch);
             while source
@@ -320,8 +319,8 @@ pub(crate) fn web_links_in_text(text: &str) -> Vec<TerminalHyperlink> {
         let Some(destination) = web_destination(candidate) else {
             continue;
         };
-        let start = usize::from(text[..raw_start + trimmed_start].cell_width());
-        let end = start + usize::from(candidate.cell_width());
+        let start = display_width(&text[..raw_start + trimmed_start]);
+        let end = start + display_width(candidate);
         links.push(TerminalHyperlink::web(start..end, destination));
     }
     links
@@ -492,8 +491,7 @@ fn char_cell_width(ch: char) -> usize {
     if ch.is_control() {
         return 0;
     }
-    let mut encoded = [0; 4];
-    usize::from(ch.encode_utf8(&mut encoded).cell_width())
+    char_width(ch)
 }
 
 pub(crate) fn mark_buffer_hyperlinks(
@@ -640,6 +638,25 @@ mod tests {
             vec![TerminalHyperlink::web(
                 /*columns*/ 5..26,
                 "https://example.com/a".to_string(),
+            )]
+        );
+    }
+
+    #[test]
+    fn hyperlink_columns_follow_a_long_prefix_without_wrapping() {
+        let prefix = "a".repeat(65_536);
+        let destination = "https://example.com/long-prefix";
+        let text = format!("{prefix} {destination}");
+
+        assert_eq!(
+            HyperlinkLine::new(Line::from(text.clone())).width(),
+            text.len()
+        );
+        assert_eq!(
+            web_links_in_text(&text),
+            vec![TerminalHyperlink::web(
+                /*columns*/ 65_537..65_537 + destination.len(),
+                destination.to_string(),
             )]
         );
     }

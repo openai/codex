@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/selection_popup_common.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 20, height: 2 },
+    content: [
+        "👍🏻  description     ", // hidden by multi-width symbols: [(1, " ")]
+        "👨‍👩‍👧‍👦  description     ", // hidden by multi-width symbols: [(1, " ")]
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 1, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 15, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 1, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 15, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

@@ -2570,6 +2570,41 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_narrow_width_counts_halfwidth_sound_marks() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "abｶﾞc".to_string(),
+                description: Some("dakuten description".to_string()),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "aﾊﾟc".to_string(),
+                description: Some("handakuten description".to_string()),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let view = new_view(
+            SelectionViewParams {
+                title: Some("Halfwidth sound marks".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let rendered = format!(
+            "width 20:\n{}\n\nwidth 24:\n{}",
+            render_lines_with_width(&view, /*width*/ 20),
+            render_lines_with_width(&view, /*width*/ 24)
+        );
+        assert_snapshot!("list_selection_halfwidth_sound_marks_narrow", rendered);
+    }
+
+    #[test]
     fn snapshot_auto_visible_col_width_mode_scroll_behavior() {
         assert_snapshot!(
             "list_selection_col_width_mode_auto_visible_scroll",

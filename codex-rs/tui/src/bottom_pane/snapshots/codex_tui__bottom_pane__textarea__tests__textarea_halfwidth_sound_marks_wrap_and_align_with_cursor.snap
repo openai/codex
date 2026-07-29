@@ -1,0 +1,20 @@
+---
+source: tui/src/bottom_pane/textarea.rs
+expression: "format!(\"dakuten\\n{dakuten}\\n\\nhandakuten\\n{handakuten}\\n\\nstandalone\\n{standalone}\")"
+---
+dakuten
+cursor: Some((1, 1))
+"12ｶﾞ" Hidden by multi-width symbols: [(3, " ")]
+"x   "
+
+
+handakuten
+cursor: Some((3, 1))
+"ab "
+"ﾊﾟc" Hidden by multi-width symbols: [(1, " ")]
+
+
+standalone
+cursor: Some((2, 1))
+"a "
+"ﾞb"

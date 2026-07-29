@@ -3,9 +3,11 @@ use std::borrow::Cow;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::selection_popup_common::GenericDisplayRow;
+use crate::line_truncation::line_width;
+use crate::width::display_width;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 
@@ -82,35 +84,28 @@ fn build_name_spans(row: &GenericDisplayRow, name_limit: usize) -> Vec<Span<'sta
     let mut used_width = 0usize;
     let mut truncated = false;
 
-    if let Some(idxs) = row.match_indices.as_ref() {
-        let mut idx_iter = idxs.iter().peekable();
-        for (char_idx, ch) in row.name.chars().enumerate() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            let next_width = used_width.saturating_add(ch_width);
-            if next_width > name_limit {
-                truncated = true;
-                break;
-            }
-            used_width = next_width;
+    let mut match_indices = row.match_indices.iter().flatten().peekable();
+    let mut char_idx = 0usize;
+    for grapheme in row.name.graphemes(/*is_extended*/ true) {
+        let next_width = used_width.saturating_add(display_width(grapheme));
+        if next_width > name_limit {
+            truncated = true;
+            break;
+        }
+        used_width = next_width;
 
-            if idx_iter.peek().is_some_and(|next| **next == char_idx) {
-                idx_iter.next();
-                name_spans.push(ch.to_string().bold());
-            } else {
-                name_spans.push(ch.to_string().into());
-            }
+        let mut matched = false;
+        for _ in grapheme.chars() {
+            matched |= match_indices.next_if(|next| **next == char_idx).is_some();
+            char_idx += 1;
         }
-    } else {
-        for ch in row.name.chars() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            let next_width = used_width.saturating_add(ch_width);
-            if next_width > name_limit {
-                truncated = true;
-                break;
-            }
-            used_width = next_width;
-            name_spans.push(ch.to_string().into());
-        }
+
+        let grapheme = grapheme.to_string();
+        name_spans.push(if matched {
+            grapheme.bold()
+        } else {
+            grapheme.into()
+        });
     }
 
     if truncated {
@@ -145,13 +140,13 @@ pub(super) fn build_full_line(
     description_layout: SelectionDescriptionLayout,
 ) -> Line<'static> {
     let description = combined_description(row, description_layout);
-    let name_prefix_width = Line::from(row.name_prefix_spans.clone()).width();
+    let name_prefix_width = line_width(&Line::from(row.name_prefix_spans.clone()));
     let name_limit = description
         .as_ref()
         .map(|_| desc_col.saturating_sub(2).saturating_sub(name_prefix_width))
         .unwrap_or(usize::MAX);
     let name_spans = build_name_spans(row, name_limit);
-    let name_width = name_prefix_width + Line::from(name_spans.clone()).width();
+    let name_width = name_prefix_width + line_width(&Line::from(name_spans.clone()));
 
     let mut spans = row.name_prefix_spans.clone();
     spans.extend(name_spans);
@@ -170,8 +165,7 @@ pub(super) fn build_full_line(
 /// Render a row as a full-width label followed by an indented description.
 pub(super) fn wrap_stacked_row(row: &GenericDisplayRow, width: u16) -> Vec<Line<'static>> {
     let width = width.max(1);
-    let prefix_width = Line::from(row.name_prefix_spans.clone())
-        .width()
+    let prefix_width = line_width(&Line::from(row.name_prefix_spans.clone()))
         .min(width.saturating_sub(1) as usize);
     let indent = " ".repeat(prefix_width);
 

@@ -4,9 +4,11 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::plain_lines;
 use crate::history_cell::with_border_with_inner_width;
 use crate::legacy_core::config::Config;
+use crate::line_truncation::line_width;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use crate::version::CODEX_CLI_VERSION;
+use crate::width::display_width;
 use chrono::DateTime;
 use chrono::Local;
 use codex_app_server_protocol::AskForApproval;
@@ -26,12 +28,10 @@ use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use unicode_width::UnicodeWidthStr;
 use url::Url;
 
 use super::account::StatusAccountDisplay;
 use super::format::FieldFormatter;
-use super::format::line_display_width;
 use super::format::push_label;
 use super::format::truncate_line_to_width;
 use super::helpers::compose_account_display;
@@ -482,7 +482,7 @@ impl StatusHistoryCell {
                     ];
                     // On narrow terminals, keep the percentage visible rather than
                     // letting the fixed-width progress bar crowd out the reset time.
-                    let value_spans = if line_display_width(&Line::from(full_value_spans.clone()))
+                    let value_spans = if line_width(&Line::from(full_value_spans.clone()))
                         <= formatter.value_width(available_inner_width)
                     {
                         full_value_spans
@@ -498,9 +498,7 @@ impl StatusHistoryCell {
                         inline_spans.push(Span::from(" ").dim());
                         inline_spans.push(resets_span.clone());
 
-                        if line_display_width(&Line::from(inline_spans.clone()))
-                            <= available_inner_width
-                        {
+                        if line_width(&Line::from(inline_spans.clone())) <= available_inner_width {
                             lines.push(Line::from(inline_spans));
                         } else {
                             lines.push(base_line);
@@ -863,7 +861,7 @@ impl HistoryCell for StatusHistoryCell {
 
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_inner_width, &formatter));
 
-        let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
+        let content_width = lines.iter().map(line_width).max().unwrap_or(0);
         let inner_width = content_width.min(available_inner_width);
         let truncated_lines: Vec<Line<'static>> = lines
             .into_iter()
@@ -891,10 +889,10 @@ impl HistoryCell for StatusHistoryCell {
                 .map(|span| span.content.as_ref())
                 .collect::<String>();
             if let Some(start_byte) = visible.find(CHATGPT_USAGE_URL) {
-                let start = visible[..start_byte].width();
+                let start = display_width(&visible[..start_byte]);
                 line.hyperlinks
                     .push(crate::terminal_hyperlinks::TerminalHyperlink::web(
-                        start..start + CHATGPT_USAGE_URL.width(),
+                        start..start + display_width(CHATGPT_USAGE_URL),
                         CHATGPT_USAGE_URL.to_string(),
                     ));
             }

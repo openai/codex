@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+/ps
+
+Background terminals
+
+  • echo ｶﾞﾊﾟｶﾞﾊﾟ [...]
+    ↳ output ｶﾞﾊﾟ [...]

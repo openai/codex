@@ -1,0 +1,26 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 42, height: 6 },
+    content: [
+        "╭────────────────────────────────────────╮",
+        "│ >_ OpenAI Codex (vtest)                │",
+        "│                                        │",
+        "│ model:     gpt-5   /model to change    │",
+        "│ directory: …ﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟ-project │", // hidden by multi-width symbols: [(15, " "), (17, " "), (19, " "), (21, " "), (23, " "), (25, " "), (27, " "), (29, " "), (31, " ")]
+        "╰────────────────────────────────────────╯",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 5, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 17, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 13, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 18, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 21, y: 3, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 27, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 13, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 40, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}

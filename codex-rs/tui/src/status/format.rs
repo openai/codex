@@ -1,8 +1,9 @@
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
-use unicode_width::UnicodeWidthChar;
-use unicode_width::UnicodeWidthStr;
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::width::display_width;
 
 #[derive(Debug, Clone)]
 pub(crate) struct FieldFormatter {
@@ -21,10 +22,10 @@ impl FieldFormatter {
     {
         let label_width = labels
             .into_iter()
-            .map(|label| UnicodeWidthStr::width(label.as_ref()))
+            .map(|label| display_width(label.as_ref()))
             .max()
             .unwrap_or(0);
-        let indent_width = UnicodeWidthStr::width(Self::INDENT);
+        let indent_width = display_width(Self::INDENT);
         let value_offset = indent_width + label_width + 1 + 3;
 
         Self {
@@ -72,7 +73,7 @@ impl FieldFormatter {
         buf.push_str(label);
         buf.push(':');
 
-        let label_width = UnicodeWidthStr::width(label);
+        let label_width = display_width(label);
         let padding = 3 + self.label_width.saturating_sub(label_width);
         for _ in 0..padding {
             buf.push(' ');
@@ -92,12 +93,6 @@ pub(crate) fn push_label(labels: &mut Vec<String>, seen: &mut BTreeSet<String>, 
     labels.push(owned);
 }
 
-pub(crate) fn line_display_width(line: &Line<'static>) -> usize {
-    line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum()
-}
-
 pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
@@ -109,7 +104,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
     for span in line.spans {
         let text = span.content.into_owned();
         let style = span.style;
-        let span_width = UnicodeWidthStr::width(text.as_str());
+        let span_width = display_width(text.as_str());
 
         if span_width == 0 {
             spans_out.push(Span::styled(text, style));
@@ -127,13 +122,13 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
         }
 
         let mut truncated = String::new();
-        for ch in text.chars() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used + ch_width > max_width {
+        for grapheme in text.graphemes(/*is_extended*/ true) {
+            let grapheme_width = display_width(grapheme);
+            if used + grapheme_width > max_width {
                 break;
             }
-            truncated.push(ch);
-            used += ch_width;
+            truncated.push_str(grapheme);
+            used += grapheme_width;
         }
 
         if !truncated.is_empty() {

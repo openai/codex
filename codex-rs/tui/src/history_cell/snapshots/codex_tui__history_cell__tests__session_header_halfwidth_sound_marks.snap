@@ -1,0 +1,37 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 6 },
+    content: [
+        "╭───────────────────────────────────────────╮                                   ",
+        "│ >_ OpenAI Codex (vtest)                   │                                   ",
+        "│                                           │                                   ",
+        "│ model:     gpt-5-ｶﾞ-ﾊﾟ   /model to change │                                   ", // hidden by multi-width symbols: [(20, " "), (23, " ")]
+        "│ directory: project                        │                                   ",
+        "╰───────────────────────────────────────────╯                                   ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 5, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 17, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 13, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 24, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 27, y: 3, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 33, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 13, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 20, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

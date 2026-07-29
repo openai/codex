@@ -1,6 +1,7 @@
 //! Background terminal interaction and process-summary history cells.
 
 use super::*;
+use crate::width::display_width;
 
 #[derive(Debug)]
 pub(crate) struct UnifiedExecInteractionCell {
@@ -137,9 +138,9 @@ impl HistoryCell for UnifiedExecProcessesCell {
         }
 
         let prefix = "  • ";
-        let prefix_width = UnicodeWidthStr::width(prefix);
+        let prefix_width = display_width(prefix);
         let truncation_suffix = " [...]";
-        let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
+        let truncation_suffix_width = display_width(truncation_suffix);
         let mut shown = 0usize;
         for process in &self.processes {
             if shown >= max_processes {
@@ -189,7 +190,7 @@ impl HistoryCell for UnifiedExecProcessesCell {
                 } else {
                     chunk_prefix_next
                 };
-                let chunk_prefix_width = UnicodeWidthStr::width(chunk_prefix);
+                let chunk_prefix_width = display_width(chunk_prefix);
                 if wrap_width <= chunk_prefix_width {
                     out.push(Line::from(chunk_prefix.dim()));
                     continue;

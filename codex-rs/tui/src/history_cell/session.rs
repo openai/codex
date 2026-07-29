@@ -1,7 +1,9 @@
 //! Session headers, onboarding guidance, and transcript cards.
 
 use super::*;
+use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::width::display_width;
 
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
@@ -34,15 +36,7 @@ fn with_border_internal(
     lines: Vec<Line<'static>>,
     forced_inner_width: Option<usize>,
 ) -> Vec<Line<'static>> {
-    let max_line_width = lines
-        .iter()
-        .map(|line| {
-            line.iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum::<usize>()
-        })
-        .max()
-        .unwrap_or(0);
+    let max_line_width = lines.iter().map(line_width).max().unwrap_or(0);
     let content_width = forced_inner_width
         .unwrap_or(max_line_width)
         .max(max_line_width);
@@ -52,10 +46,7 @@ fn with_border_internal(
     out.push(vec![format!("╭{}╮", "─".repeat(border_inner_width)).dim()].into());
 
     for line in lines.into_iter() {
-        let used_width: usize = line
-            .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-            .sum();
+        let used_width = line_width(&line);
         let span_count = line.spans.len();
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
         spans.push(Span::from("│ ").dim());
@@ -90,7 +81,7 @@ impl TooltipHistoryCell {
 impl HistoryCell for TooltipHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let indent = "  ";
-        let indent_width = UnicodeWidthStr::width(indent);
+        let indent_width = display_width(indent);
         let wrap_width = usize::from(width.max(1))
             .saturating_sub(indent_width)
             .max(1);
@@ -303,7 +294,7 @@ impl SessionHeaderHistoryCell {
             if max_width == 0 {
                 return String::new();
             }
-            if UnicodeWidthStr::width(formatted.as_str()) > max_width {
+            if display_width(formatted.as_str()) > max_width {
                 return crate::text_formatting::center_truncate_path(&formatted, max_width);
             }
         }
@@ -371,7 +362,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
-        let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
+        let dir_prefix_width = display_width(dir_prefix.as_str());
         let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];

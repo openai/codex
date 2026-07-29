@@ -1,0 +1,33 @@
+---
+source: tui/src/bottom_pane/request_user_input/render_tests.rs
+expression: "format!(\"{buf:?}\\n{lines:#?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 5, height: 2 },
+    content: [
+        "abｶﾞ…", // hidden by multi-width symbols: [(3, " ")]
+        "xyﾊﾟ…", // hidden by multi-width symbols: [(3, " ")]
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 1, fg: Magenta, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 1, fg: Magenta, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+[
+    Line::from_iter([
+        Span::from("ab").bold(),
+        Span::from("ｶ\u{ff9e}").cyan(),
+        Span::from("…").cyan(),
+    ]),
+    Line::from_iter([
+        Span::from("xy").bold(),
+        Span::from("ﾊ\u{ff9f}").magenta(),
+        Span::from("…").magenta(),
+    ]),
+]

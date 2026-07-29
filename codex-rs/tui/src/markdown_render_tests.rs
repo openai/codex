@@ -1725,6 +1725,24 @@ fn table_renders_key_value_records_when_compact_fragmentation_is_systemic_snapsh
 }
 
 #[test]
+fn table_renders_halfwidth_sound_marks_at_constrained_width_snapshot() {
+    let md = r#"| Key | Notes |
+| --- | --- |
+| ｶﾞﾊﾟtail | First ｶﾞ row with an escaped \| pipe. |
+| ﾊﾟｶﾞtail | Second ﾊﾟ row with an escaped \| pipe. |
+| short | Final ｶﾞﾊﾟ row. |
+"#;
+    let grid = render_markdown_text_with_width(md, Some(/*width*/ 23));
+    let records = render_markdown_text_with_width(md, Some(/*width*/ 17));
+
+    assert_snapshot!(format!(
+        "grid (23 cells):\n{}\n\nrecords (17 cells):\n{}",
+        plain_lines(&grid).join("\n"),
+        plain_lines(&records).join("\n")
+    ));
+}
+
+#[test]
 fn table_inside_blockquote_has_quote_prefix() {
     let md = "> | A | B |\n> |---|---|\n> | 1 | 2 |\n";
     let text = render_markdown_text(md);
