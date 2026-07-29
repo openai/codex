@@ -42,8 +42,10 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -53,6 +55,7 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
@@ -62,6 +65,7 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_login::AuthManager;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 #[cfg(debug_assertions)]
 use std::fs;
@@ -680,6 +684,41 @@ async fn flush_waits_for_preceding_fact_delivery() {
 #[tokio::test]
 async fn flush_is_noop_when_analytics_is_disabled() {
     AnalyticsEventsClient::disabled().flush().await;
+}
+
+#[test]
+fn track_notification_only_enqueues_analytics_relevant_notifications() {
+    let (client, mut receiver) = client_with_receiver();
+    let tracked_payload = TurnDiffUpdatedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        diff: "diff".to_string(),
+    };
+    let tracked_notification = ServerNotification::TurnDiffUpdated(tracked_payload.clone());
+
+    client.track_notification(&tracked_notification);
+
+    let Ok(AnalyticsEventsQueueMessage::Fact(input)) = receiver.try_recv() else {
+        panic!("expected analytics notification");
+    };
+    let AnalyticsFact::Notification(notification) = *input else {
+        panic!("expected analytics notification fact");
+    };
+    let ServerNotification::TurnDiffUpdated(notification) = *notification else {
+        panic!("expected turn diff notification");
+    };
+    assert_eq!(notification, tracked_payload);
+
+    let ignored_notification =
+        ServerNotification::CommandExecutionOutputDelta(CommandExecutionOutputDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            delta: "output".to_string(),
+        });
+
+    client.track_notification(&ignored_notification);
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }
 
 #[test]

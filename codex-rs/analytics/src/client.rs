@@ -582,7 +582,8 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_notification(&self, notification: ServerNotification) {
+    /// Records analytics-relevant notifications without cloning ignored variants.
+    pub fn track_notification(&self, notification: &ServerNotification) {
         if !matches!(
             notification,
             ServerNotification::TurnStarted(_)
@@ -595,7 +596,7 @@ impl AnalyticsEventsClient {
         ) {
             return;
         }
-        self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
+        self.record_fact(AnalyticsFact::Notification(Box::new(notification.clone())));
     }
 }
 

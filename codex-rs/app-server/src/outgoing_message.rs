@@ -161,7 +161,7 @@ impl ThreadScopedOutgoingMessageSender {
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
         self.outgoing
             .analytics_events_client
-            .track_notification(notification.clone());
+            .track_notification(&notification);
         if self.connection_ids.is_empty() {
             return;
         }
