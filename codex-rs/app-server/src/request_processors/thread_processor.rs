@@ -1909,22 +1909,16 @@ impl ThreadRequestProcessor {
             .list_background_terminals()
             .await
             .into_iter()
-            .map(|terminal| {
-                // TODO(anp): Migrate ThreadBackgroundTerminal to PathUri.
-                let cwd = terminal.cwd.to_abs_path().map_err(|err| {
-                    internal_error(format!("background terminal has invalid cwd: {err}"))
-                })?;
-                Ok(ThreadBackgroundTerminal {
-                    item_id: terminal.item_id,
-                    process_id: terminal.process_id,
-                    command: terminal.command,
-                    cwd,
-                    os_pid: None,
-                    cpu_percent: None,
-                    rss_kb: None,
-                })
+            .map(|terminal| ThreadBackgroundTerminal {
+                item_id: terminal.item_id,
+                process_id: terminal.process_id,
+                command: terminal.command,
+                cwd: terminal.cwd.into(),
+                os_pid: None,
+                cpu_percent: None,
+                rss_kb: None,
             })
-            .collect::<Result<Vec<_>, JSONRPCErrorError>>()?;
+            .collect::<Vec<_>>();
 
         let (data, next_cursor) = paginate_background_terminals(&terminals, cursor, limit)?;
 

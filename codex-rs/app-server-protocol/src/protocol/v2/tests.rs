@@ -73,6 +73,57 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn thread_background_terminals_list_response_round_trips_foreign_paths() {
+    for (uri, expected_cwd) in [
+        ("file:///home/alice/repo", "/home/alice/repo"),
+        (
+            "file:///C:/Users/Alice%20Smith/repo",
+            r"C:\Users\Alice Smith\repo",
+        ),
+        ("file://server/share/repo", r"\\server\share\repo"),
+    ] {
+        let response = ThreadBackgroundTerminalsListResponse {
+            data: vec![ThreadBackgroundTerminal {
+                item_id: "item_123".to_string(),
+                process_id: "42".to_string(),
+                command: "run server".to_string(),
+                cwd: PathUri::parse(uri)
+                    .expect("cross-platform path URI should parse")
+                    .into(),
+                os_pid: None,
+                cpu_percent: None,
+                rss_kb: None,
+            }],
+            next_cursor: None,
+        };
+        let expected = json!({
+            "data": [{
+                "itemId": "item_123",
+                "processId": "42",
+                "command": "run server",
+                "cwd": expected_cwd,
+                "osPid": null,
+                "cpuPercent": null,
+                "rssKb": null,
+            }],
+            "nextCursor": null,
+        });
+
+        assert_eq!(
+            serde_json::to_value(&response).expect("response should serialize"),
+            expected,
+            "serializing {uri}",
+        );
+        assert_eq!(
+            serde_json::from_value::<ThreadBackgroundTerminalsListResponse>(expected)
+                .expect("response should deserialize"),
+            response,
+            "deserializing {uri}",
+        );
+    }
+}
+
+#[test]
 fn thread_sources_round_trip_as_scalar_labels() {
     for (source, label) in [
         (ThreadSource::User, "user"),
