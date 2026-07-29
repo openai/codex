@@ -348,6 +348,18 @@ mod tests {
         }
     }
 
+    fn assert_recorded_discovery_failure(discovery: Result<Option<StreamableHttpOAuthDiscovery>>) {
+        let error = discovery.expect_err("the recording HTTP client rejects OAuth discovery");
+        assert!(
+            matches!(
+                error.downcast_ref::<AuthError>(),
+                Some(AuthError::MetadataError(reason))
+                    if reason.contains("expected discovery request failure")
+            ),
+            "OAuth discovery must preserve the executor transport failure: {error:#}"
+        );
+    }
+
     async fn spawn_oauth_discovery_server(metadata: serde_json::Value) -> TestServer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -517,6 +529,7 @@ mod tests {
     #[tokio::test]
     async fn oauth_discovery_does_not_follow_cross_origin_redirects() {
         let redirect_target = MockServer::start().await;
+        let redirect_url = format!("{}/redirect-target", redirect_target.uri());
         Mock::given(method("GET"))
             .and(path("/redirect-target"))
             .and(header("x-api-key", "sensitive-key"))
@@ -529,15 +542,14 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/mcp"))
             .and(header("x-api-key", "sensitive-key"))
-            .respond_with(ResponseTemplate::new(302).insert_header(
-                "location",
-                format!("{}/redirect-target", redirect_target.uri()),
-            ))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", redirect_url.clone()),
+            )
             .expect(1)
             .mount(&resource_server)
             .await;
 
-        let discovery = discover_streamable_http_oauth(
+        let error = discover_streamable_http_oauth(
             &format!("{}/mcp", resource_server.uri()),
             Some(HashMap::from([(
                 "x-api-key".to_string(),
@@ -548,11 +560,55 @@ mod tests {
             OAuthDiscoveryTimeout::LOCAL,
         )
         .await
-        .expect("discovery should complete without following the redirect");
+        .expect_err("cross-origin OAuth discovery redirects must be rejected");
 
-        assert_eq!(discovery, None);
+        assert!(
+            matches!(
+                error.downcast_ref::<AuthError>(),
+                Some(AuthError::MetadataError(reason))
+                    if reason.contains("OAuth discovery redirect to non-same-origin URL rejected")
+                        && reason.contains(&redirect_url)
+            ),
+            "OAuth discovery must preserve the cross-origin redirect rejection: {error:#}"
+        );
         redirect_target.verify().await;
         resource_server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn oauth_discovery_preserves_transient_http_errors() {
+        for status in [
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_EARLY,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/mcp"))
+                .respond_with(ResponseTemplate::new(status.as_u16()))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let error = discover_streamable_http_oauth(
+                &format!("{}/mcp", server.uri()),
+                /*http_headers*/ None,
+                /*env_http_headers*/ None,
+                test_http_client(),
+                OAuthDiscoveryTimeout::LOCAL,
+            )
+            .await
+            .expect_err("transient OAuth discovery failures must not become anonymous access");
+
+            assert!(
+                matches!(
+                    error.downcast_ref::<AuthError>(),
+                    Some(AuthError::MetadataError(reason)) if reason.contains(status.as_str())
+                ),
+                "OAuth discovery must preserve HTTP {status}: {error:#}"
+            );
+            server.verify().await;
+        }
     }
 
     #[tokio::test]
@@ -594,7 +650,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(discovery, Ok(None)));
+        assert_recorded_discovery_failure(discovery);
         assert_eq!(
             *http_client
                 .timeout_ms
@@ -620,7 +676,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(discovery, Ok(None)));
+        assert_recorded_discovery_failure(discovery);
         assert_eq!(
             *http_client
                 .timeout_ms
@@ -646,7 +702,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(discovery, Ok(None)));
+        assert_recorded_discovery_failure(discovery);
         let headers = http_client
             .headers
             .lock()

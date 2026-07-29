@@ -41,7 +41,12 @@ fn discover_response(body: &Value) -> ResponseTemplate {
             "resultType": "complete",
             "supportedVersions": [MODERN_VERSION],
             "capabilities": {"tools": {}, "resources": {}},
-            "serverInfo": {"name": "mrtr-test", "version": "1.0.0"},
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "mrtr-test",
+                    "version": "1.0.0",
+                },
+            },
             "ttlMs": 0,
             "cacheScope": "private",
         },

@@ -35,7 +35,10 @@ fn discovery_accepts_metadata_namespaced_server_identity() {
     let ServerResult::DiscoverResult(result) = response.result else {
         panic!("metadata-only identity must not become a completed tool result");
     };
-    assert_eq!(result.server_info.name, "modern-server");
+    assert_eq!(
+        result.server_info().map(|server_info| server_info.name),
+        Some("modern-server".to_owned())
+    );
     assert_eq!(
         result.meta.and_then(|meta| meta.get("retained").cloned()),
         Some(json!("metadata"))
@@ -93,7 +96,7 @@ fn input_required_discriminator_wins_over_tool_result_metadata() {
 }
 
 #[test]
-fn sse_discovery_promotes_metadata_namespaced_identity() {
+fn sse_discovery_preserves_metadata_namespaced_identity_without_normalization() {
     let message = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -111,11 +114,23 @@ fn sse_discovery_promotes_metadata_namespaced_identity() {
             },
         },
     });
-    let normalized =
-        normalize_sse_jsonrpc_message(&message.to_string(), /*modern_session*/ true)
-            .expect("metadata-only SSE discovery must be normalized");
-    let normalized: serde_json::Value = serde_json::from_str(&normalized).unwrap();
-    assert_eq!(normalized["result"]["serverInfo"]["name"], "sse-server");
+    assert_eq!(
+        normalize_sse_jsonrpc_message(&message.to_string(), /*modern_session*/ true),
+        None
+    );
+
+    let decoded = deserialize_incoming_jsonrpc_message(&serde_json::to_vec(&message).unwrap())
+        .expect("rmcp must natively decode metadata-only SSE discovery");
+    let JsonRpcMessage::Response(response) = decoded else {
+        panic!("expected a discovery response");
+    };
+    let ServerResult::DiscoverResult(result) = response.result else {
+        panic!("metadata-only identity must decode as discovery without normalization");
+    };
+    assert_eq!(
+        result.server_info().map(|server_info| server_info.name),
+        Some("sse-server".to_owned())
+    );
 }
 
 #[test]

@@ -47,7 +47,7 @@ use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
-use rmcp::model::Meta;
+use rmcp::model::MetaObject;
 use rmcp::model::PrimitiveSchemaDefinition;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
@@ -633,7 +633,7 @@ impl ServerHandler for ToolAppsMcpServer {
             .and_then(|value| value.as_str())
             .unwrap_or_default();
 
-        let mut meta = Meta::new();
+        let mut meta = MetaObject::new();
         meta.0.insert("calledBy".to_string(), json!("mcp-app"));
 
         if message == LARGE_RESPONSE_MESSAGE {

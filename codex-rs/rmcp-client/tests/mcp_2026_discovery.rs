@@ -17,8 +17,9 @@ use pretty_assertions::assert_eq;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
-use rmcp::model::InitializeResult;
 use rmcp::model::ProtocolVersion;
+use rmcp::model::ServerCapabilities;
+use rmcp::model::ServerPeerInfo;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::Mock;
@@ -57,7 +58,7 @@ async fn create_client(server: &MockServer, mode: McpProtocolMode) -> anyhow::Re
     .await
 }
 
-async fn initialize_client(client: &RmcpClient) -> anyhow::Result<InitializeResult> {
+async fn initialize_client(client: &RmcpClient) -> anyhow::Result<ServerPeerInfo> {
     client
         .initialize(
             initialize_params(),
@@ -88,7 +89,12 @@ fn modern_discover_result(request: &Value) -> Value {
             "resultType": "complete",
             "supportedVersions": [MODERN_VERSION],
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "modern-test", "version": "1.0.0"},
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "modern-test",
+                    "version": "1.0.0",
+                },
+            },
             "ttlMs": 0,
             "cacheScope": "private",
         },
@@ -283,15 +289,35 @@ async fn modern_discovery_accepts_metadata_namespaced_server_identity() -> anyho
         .respond_with(|request: &Request| {
             let body: Value = request.body_json().expect("valid JSON-RPC request");
             assert_eq!(body["method"], "server/discover");
+            modern_discover_response(&body)
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = create_client(&server, McpProtocolMode::V20260728).await?;
+    let server_info = initialize_client(&client).await?;
+    assert_eq!(
+        server_info.server_info,
+        Some(Implementation::new("modern-test", "1.0.0"))
+    );
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn modern_discovery_accepts_missing_server_identity() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            assert_eq!(body["method"], "server/discover");
             let mut response = modern_discover_result(&body);
-            let server_info = response["result"]
+            response["result"]
                 .as_object_mut()
                 .expect("discovery object")
-                .remove("serverInfo")
-                .expect("top-level identity");
-            response["result"]["_meta"] = json!({
-                "io.modelcontextprotocol/serverInfo": server_info,
-            });
+                .remove("_meta");
             ResponseTemplate::new(200).set_body_json(response)
         })
         .expect(1)
@@ -299,7 +325,14 @@ async fn modern_discovery_accepts_metadata_namespaced_server_identity() -> anyho
         .await;
 
     let client = create_client(&server, McpProtocolMode::V20260728).await?;
-    initialize_client(&client).await?;
+    let server_info = initialize_client(&client).await?;
+    assert_eq!(
+        server_info,
+        ServerPeerInfo::new(
+            ProtocolVersion::V_2026_07_28,
+            ServerCapabilities::builder().enable_tools().build(),
+        )
+    );
     client.shutdown().await;
     Ok(())
 }
@@ -337,15 +370,7 @@ async fn modern_discovery_accepts_metadata_namespaced_server_identity_over_sse()
         .respond_with(|request: &Request| {
             let body: Value = request.body_json().expect("valid JSON-RPC request");
             assert_eq!(body["method"], "server/discover");
-            let mut response = modern_discover_result(&body);
-            let server_info = response["result"]
-                .as_object_mut()
-                .expect("discovery object")
-                .remove("serverInfo")
-                .expect("top-level identity");
-            response["result"]["_meta"] = json!({
-                "io.modelcontextprotocol/serverInfo": server_info,
-            });
+            let response = modern_discover_result(&body);
             ResponseTemplate::new(200).set_body_raw(
                 format!("event: message\ndata: {response}\n\n"),
                 "text/event-stream; charset=utf-8",

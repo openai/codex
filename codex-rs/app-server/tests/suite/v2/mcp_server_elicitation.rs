@@ -53,7 +53,7 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
-use rmcp::model::Meta;
+use rmcp::model::MetaObject;
 use rmcp::model::PrimitiveSchemaDefinition;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
@@ -693,7 +693,7 @@ impl ServerHandler for ElicitationAppsMcpServer {
         );
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
 
-        let mut meta = Meta::new();
+        let mut meta = MetaObject::new();
         meta.0
             .insert("connector_id".to_string(), json!(CONNECTOR_ID));
         meta.0

@@ -165,6 +165,7 @@ async fn list_discovers_local_oauth_server_through_environment_proxy() -> Result
                     Err(error) => return Err(error.into()),
                 }
             };
+            stream.set_nonblocking(false)?;
             stream.set_read_timeout(Some(Duration::from_secs(5)))?;
             let mut request = Vec::new();
             let mut buffer = [0_u8; 1024];

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
-use rmcp::model::Meta;
+use rmcp::model::MetaObject;
 use rmcp::model::Tool;
 
 use super::*;
@@ -71,7 +71,7 @@ fn prepare_openai_file_params_for_model_masks_file_params() {
         .expect("object")
         .clone(),
     );
-    tool.meta = Some(Meta(
+    tool.meta = Some(MetaObject(
         serde_json::json!({
             "openai/fileParams": ["file", "files"]
         })
@@ -219,7 +219,7 @@ fn prepare_openai_file_params_for_model_derives_supported_optional_fields() {
             .clone(),
         ),
     );
-    tool.meta = Some(Meta(
+    tool.meta = Some(MetaObject(
         serde_json::json!({
             "openai/fileParams": [
                 "photoshop_image",

@@ -1253,6 +1253,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+
+[[package]]
 name = "base64-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11611,12 +11617,12 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.0.0-beta.3"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13a8472324b3d6c74f092cc5d07b2707b128196b020ed7c3c2d52bede542680"
+checksum = "fcd2b6dd3b18129368955f32661a7718969e8c152c7d8866434c09cf15a512e0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.0",
  "bytes",
  "chrono",
  "futures",
@@ -11646,9 +11652,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.0.0-beta.3"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faa1de06ecdc489a8a03ca84f8491111c1e37acd8c69a815e253123039619d72"
+checksum = "e1aa4b9345795260a43fc23d6d05e096407c8b953903f673af7c4404b49fb2d6"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

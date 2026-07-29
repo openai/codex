@@ -41,7 +41,7 @@ use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
-use rmcp::model::Meta;
+use rmcp::model::MetaObject;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
@@ -1761,7 +1761,7 @@ pub(super) fn connector_tool(connector_id: &str, connector_name: &str) -> Result
     );
     tool.annotations = Some(ToolAnnotations::new().read_only(true));
 
-    let mut meta = Meta::new();
+    let mut meta = MetaObject::new();
     meta.0
         .insert("connector_id".to_string(), json!(connector_id));
     meta.0

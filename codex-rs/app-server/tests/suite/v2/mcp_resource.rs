@@ -41,7 +41,7 @@ use rmcp::model::ElicitResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
 use rmcp::model::ListResourcesResult;
-use rmcp::model::Meta;
+use rmcp::model::MetaObject;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::PrimitiveSchemaDefinition;
 use rmcp::model::ProtocolVersion;
@@ -924,8 +924,8 @@ fn skill_resource(
         .with_meta(skill_resource_meta(plugin_name, skill_name))
 }
 
-fn skill_resource_meta(plugin_name: &str, skill_name: &str) -> Meta {
-    Meta(serde_json::Map::from_iter([
+fn skill_resource_meta(plugin_name: &str, skill_name: &str) -> MetaObject {
+    MetaObject(serde_json::Map::from_iter([
         ("plugin_name".to_string(), json!(plugin_name)),
         ("skill_name".to_string(), json!(skill_name)),
     ]))

@@ -7,7 +7,7 @@ use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
-use rmcp::model::Meta;
+use rmcp::model::MetaObject;
 use rmcp::model::Tool;
 
 use super::*;
@@ -98,7 +98,7 @@ fn runtimes_by_name(runtimes: &[Arc<dyn CoreToolRuntime>]) -> HashMap<ToolName, 
 }
 
 fn with_visibility(mut tool: ToolInfo, visibility: &[&str]) -> ToolInfo {
-    tool.tool.meta = Some(Meta(
+    tool.tool.meta = Some(MetaObject(
         serde_json::json!({ "ui": { "visibility": visibility } })
             .as_object()
             .expect("metadata object")

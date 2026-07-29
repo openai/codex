@@ -128,12 +128,15 @@ async fn exercise_stdio_server(
     };
     assert_eq!(initialized.protocol_version, expected_version);
     assert_eq!(
-        initialized.server_info.name,
-        if legacy_session {
+        initialized
+            .server_info
+            .as_ref()
+            .map(|server_info| server_info.name.as_str()),
+        Some(if legacy_session {
             "legacy-stdio-test"
         } else {
             "strict-stdio-test"
-        }
+        })
     );
     let tools = client
         .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
