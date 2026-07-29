@@ -654,6 +654,7 @@ async fn external_agent_config_records_externally_completed_import_history() -> 
             "cwd": "/repo",
             "source": "/source/session.jsonl",
             "target": "thread-1",
+            "title": null,
         }])
     );
     assert_eq!(entry.failures, Vec::new());
@@ -1655,6 +1656,13 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
             source: ExternalAgentImportedConnectorSource::RemoteMcpServersConfig,
         }]
     );
+    let imported_session = response
+        .data
+        .iter()
+        .flat_map(|history| history.successes.iter())
+        .find(|success| success.item_type == ExternalAgentConfigMigrationItemType::Sessions)
+        .expect("imported session history should be available");
+    assert_eq!(imported_session.title.as_deref(), Some("Fix auth flow"));
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {

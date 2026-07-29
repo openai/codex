@@ -173,7 +173,7 @@ impl ExternalAgentConfigService {
                     if let Some((source, target)) =
                         self.import_config(migration_item.cwd.as_deref())?
                     {
-                        item_result.record_success(Some(source), Some(target));
+                        item_result.record_success(Some(source), Some(target), /*title*/ None);
                     }
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
@@ -190,7 +190,11 @@ impl ExternalAgentConfigService {
                         Some(imported_skills.len()),
                     );
                     for skill_name in imported_skills {
-                        item_result.record_success(Some(skill_name.clone()), Some(skill_name));
+                        item_result.record_success(
+                            Some(skill_name.clone()),
+                            Some(skill_name),
+                            /*title*/ None,
+                        );
                     }
                     Ok(())
                 })(),
@@ -198,7 +202,7 @@ impl ExternalAgentConfigService {
                     if let Some((source, target)) =
                         self.import_agents_md(migration_item.cwd.as_deref())?
                     {
-                        item_result.record_success(Some(source), Some(target));
+                        item_result.record_success(Some(source), Some(target), /*title*/ None);
                     }
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
@@ -260,8 +264,11 @@ impl ExternalAgentConfigService {
                                 }
                             };
                             for plugin_id in plugin_outcome.succeeded_plugin_ids {
-                                item_result
-                                    .record_success(Some(plugin_id.clone()), Some(plugin_id));
+                                item_result.record_success(
+                                    Some(plugin_id.clone()),
+                                    Some(plugin_id),
+                                    /*title*/ None,
+                                );
                             }
                             for raw_error in plugin_outcome.raw_errors {
                                 item_result.record_error(raw_error);
@@ -292,7 +299,11 @@ impl ExternalAgentConfigService {
                         /*skills_count*/ None,
                     );
                     for server_name in migrated_server_names {
-                        item_result.record_success(Some(server_name.clone()), Some(server_name));
+                        item_result.record_success(
+                            Some(server_name.clone()),
+                            Some(server_name),
+                            /*title*/ None,
+                        );
                     }
                     Ok(())
                 })(),
@@ -305,8 +316,11 @@ impl ExternalAgentConfigService {
                         Some(imported_subagents.len()),
                     );
                     for subagent_name in imported_subagents {
-                        item_result
-                            .record_success(Some(subagent_name.clone()), Some(subagent_name));
+                        item_result.record_success(
+                            Some(subagent_name.clone()),
+                            Some(subagent_name),
+                            /*title*/ None,
+                        );
                     }
                     Ok(())
                 })(),
@@ -318,7 +332,11 @@ impl ExternalAgentConfigService {
                         /*skills_count*/ None,
                     );
                     for hook_name in migrated_hook_names {
-                        item_result.record_success(Some(hook_name.clone()), Some(hook_name));
+                        item_result.record_success(
+                            Some(hook_name.clone()),
+                            Some(hook_name),
+                            /*title*/ None,
+                        );
                     }
                     Ok(())
                 })(),
@@ -330,7 +348,11 @@ impl ExternalAgentConfigService {
                         Some(imported_commands.len()),
                     );
                     for command_name in imported_commands {
-                        item_result.record_success(Some(command_name.clone()), Some(command_name));
+                        item_result.record_success(
+                            Some(command_name.clone()),
+                            Some(command_name),
+                            /*title*/ None,
+                        );
                     }
                     Ok(())
                 })(),
@@ -358,6 +380,7 @@ impl ExternalAgentConfigService {
                             item_result.record_success(
                                 Some(project_key),
                                 Some(target_path.display().to_string()),
+                                /*title*/ None,
                             );
                         }
                         for failure in memory_outcome.failures {

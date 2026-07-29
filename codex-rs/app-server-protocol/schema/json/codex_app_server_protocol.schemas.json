@@ -9837,7 +9837,7 @@
           "itemTypeResults": {
             "description": "Completed results grouped by imported item type.",
             "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigImportTypeResult"
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportHistoryRecordTypeResultParams"
             },
             "type": "array"
           },
@@ -9864,6 +9864,68 @@
           "importId"
         ],
         "title": "ExternalAgentConfigImportHistoryRecordResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportHistoryRecordSuccessParams": {
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "default": null,
+            "description": "Original title for an imported session, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "itemType"
+        ],
+        "type": "object"
+      },
+      "ExternalAgentConfigImportHistoryRecordTypeResultParams": {
+        "properties": {
+          "failures": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportItemTypeFailure"
+            },
+            "type": "array"
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          },
+          "successes": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportHistoryRecordSuccessParams"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "failures",
+          "itemType",
+          "successes"
+        ],
         "type": "object"
       },
       "ExternalAgentConfigImportItemTypeFailure": {
@@ -9927,6 +9989,14 @@
             ]
           },
           "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "default": null,
+            "description": "Original title for an imported session; null for other item types.",
             "type": [
               "string",
               "null"

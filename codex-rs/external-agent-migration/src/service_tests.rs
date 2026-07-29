@@ -66,6 +66,7 @@ fn import_success(
         cwd,
         source: Some(source.into()),
         target: Some(target.into()),
+        title: None,
     }
 }
 

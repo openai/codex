@@ -122,6 +122,8 @@ export type { ExternalAgentConfigImportHistoriesReadResponse } from "./ExternalA
 export type { ExternalAgentConfigImportHistory } from "./ExternalAgentConfigImportHistory";
 export type { ExternalAgentConfigImportHistoryRecordParams } from "./ExternalAgentConfigImportHistoryRecordParams";
 export type { ExternalAgentConfigImportHistoryRecordResponse } from "./ExternalAgentConfigImportHistoryRecordResponse";
+export type { ExternalAgentConfigImportHistoryRecordSuccessParams } from "./ExternalAgentConfigImportHistoryRecordSuccessParams";
+export type { ExternalAgentConfigImportHistoryRecordTypeResultParams } from "./ExternalAgentConfigImportHistoryRecordTypeResultParams";
 export type { ExternalAgentConfigImportItemTypeFailure } from "./ExternalAgentConfigImportItemTypeFailure";
 export type { ExternalAgentConfigImportItemTypeSuccess } from "./ExternalAgentConfigImportItemTypeSuccess";
 export type { ExternalAgentConfigImportParams } from "./ExternalAgentConfigImportParams";

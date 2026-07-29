@@ -38,6 +38,7 @@ fn completed_imports_do_not_read_source_files() {
             source_content_sha256: format!("{:x}", Sha256::digest(contents)),
             imported_thread_id,
             connector_names: Vec::new(),
+            title: Some("Imported session".to_string()),
         }],
     )
     .expect("record completed imports");
@@ -47,6 +48,7 @@ fn completed_imports_do_not_read_source_files() {
     assert_eq!(ledger.records[0].source_path, source_path);
     assert_eq!(ledger.records[0].imported_thread_id, imported_thread_id);
     assert_eq!(ledger.records[0].source_modified_at, None);
+    assert_eq!(ledger.records[0].title.as_deref(), Some("Imported session"));
 }
 
 #[test]
@@ -68,6 +70,7 @@ fn completed_import_refreshes_existing_record_metadata() {
             source_content_sha256: content_sha256.clone(),
             imported_thread_id: first_thread_id,
             connector_names: vec!["Gmail".to_string()],
+            title: Some("First title".to_string()),
         }],
     )
     .expect("record first import");
@@ -78,6 +81,7 @@ fn completed_import_refreshes_existing_record_metadata() {
             source_content_sha256: content_sha256,
             imported_thread_id: second_thread_id,
             connector_names: vec!["Slack".to_string()],
+            title: Some("Second title".to_string()),
         }],
     )
     .expect("record replacement import");
@@ -88,6 +92,7 @@ fn completed_import_refreshes_existing_record_metadata() {
     assert_eq!(ledger.records[0].imported_thread_id, second_thread_id);
     assert!(ledger.records[0].source_modified_at.is_some());
     assert_eq!(ledger.records[0].connector_names, vec!["Slack"]);
+    assert_eq!(ledger.records[0].title.as_deref(), Some("Second title"));
 }
 
 #[test]
@@ -105,18 +110,21 @@ fn connector_candidates_use_latest_import_for_each_source() {
                 source_content_sha256: "first-version".to_string(),
                 imported_thread_id: ThreadId::new(),
                 connector_names: vec!["Gmail".to_string()],
+                title: None,
             },
             CompletedExternalAgentSessionImport {
                 source_path: first_source,
                 source_content_sha256: "second-version".to_string(),
                 imported_thread_id: ThreadId::new(),
                 connector_names: vec!["Slack".to_string()],
+                title: None,
             },
             CompletedExternalAgentSessionImport {
                 source_path: second_source,
                 source_content_sha256: "only-version".to_string(),
                 imported_thread_id: ThreadId::new(),
                 connector_names: vec!["Gmail".to_string(), "Slack".to_string()],
+                title: None,
             },
         ],
     )

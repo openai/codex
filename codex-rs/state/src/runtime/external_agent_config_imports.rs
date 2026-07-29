@@ -12,6 +12,8 @@ pub struct ExternalAgentConfigImportSuccessRecord {
     pub cwd: Option<PathBuf>,
     pub source: Option<String>,
     pub target: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

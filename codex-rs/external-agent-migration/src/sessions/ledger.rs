@@ -31,6 +31,8 @@ struct ImportedExternalAgentSessionRecord {
     source_modified_at: Option<i64>,
     #[serde(default)]
     connector_names: Vec<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -39,6 +41,7 @@ pub struct CompletedExternalAgentSessionImport {
     pub source_content_sha256: String,
     pub imported_thread_id: ThreadId,
     pub connector_names: Vec<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +77,7 @@ pub(crate) fn record_imported_session(
             source_path,
             imported_thread_id,
             connector_names: Vec::new(),
+            title: None,
         }],
     )
 }
@@ -98,6 +102,7 @@ pub fn record_completed_session_imports(
             record.imported_at = imported_at;
             record.source_modified_at = source_modified_at.or(record.source_modified_at);
             record.connector_names = import.connector_names;
+            record.title = import.title;
             ledger.records.push(record);
             continue;
         }
@@ -108,6 +113,7 @@ pub fn record_completed_session_imports(
             imported_at,
             source_modified_at,
             connector_names: import.connector_names,
+            title: import.title,
         });
     }
     save_import_ledger(codex_home, &ledger)

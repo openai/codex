@@ -113,6 +113,7 @@ impl ExternalAgentSessionImporter {
                     item_result.record_success(
                         Some(completed_import.import.source_path.display().to_string()),
                         Some(completed_import.import.imported_thread_id.to_string()),
+                        completed_import.import.title.clone(),
                     );
                     completed_imports.push(completed_import);
                 }
@@ -211,6 +212,7 @@ impl ExternalAgentSessionImporter {
                 session_id: session_id.to_string(),
                 server_ids: pending_import.attributed_mcp_server_ids,
             });
+        let title = pending_import.session.title.clone();
         let imported_thread_id =
             self.persist_session(pending_import.session)
                 .await
@@ -226,6 +228,7 @@ impl ExternalAgentSessionImporter {
                 source_content_sha256: pending_import.source_content_sha256,
                 imported_thread_id,
                 connector_names: Vec::new(),
+                title,
             },
             connector_attribution,
         }))

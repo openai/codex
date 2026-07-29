@@ -390,6 +390,7 @@ async fn import_local_plugins_returns_completed_status() {
                 cwd: None,
                 source: Some("cloudflare@my-plugins".to_string()),
                 target: Some("cloudflare@my-plugins".to_string()),
+                title: None,
             }],
             raw_errors: Vec::new(),
         }]

@@ -787,6 +787,9 @@ pub struct ExternalAgentConfigImportItemTypeSuccess {
     pub cwd: Option<PathBuf>,
     pub source: Option<String>,
     pub target: Option<String>,
+    /// Original title for an imported session; null for other item types.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -801,11 +804,34 @@ pub struct ExternalAgentConfigImportTypeResult {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistoryRecordSuccessParams {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub cwd: Option<PathBuf>,
+    pub source: Option<String>,
+    pub target: Option<String>,
+    /// Original title for an imported session, when available.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub title: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistoryRecordTypeResultParams {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub successes: Vec<ExternalAgentConfigImportHistoryRecordSuccessParams>,
+    pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportHistoryRecordParams {
     /// Opaque provider identifier for the externally completed import.
     pub provider_id: String,
     /// Completed results grouped by imported item type.
-    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
+    pub item_type_results: Vec<ExternalAgentConfigImportHistoryRecordTypeResultParams>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

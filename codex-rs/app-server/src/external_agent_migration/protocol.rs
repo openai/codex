@@ -225,6 +225,7 @@ fn protocol_import_success_record(
         cwd: record.cwd,
         source: record.source,
         target: record.target,
+        title: record.title,
     })
 }
 
@@ -326,6 +327,7 @@ fn protocol_import_success(success: &ExternalAgentConfigImportSuccess) -> Protoc
         cwd: success.cwd.clone(),
         source: success.source.clone(),
         target: success.target.clone(),
+        title: success.title.clone(),
     }
 }
 
