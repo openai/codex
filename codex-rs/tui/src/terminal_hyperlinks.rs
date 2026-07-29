@@ -3,6 +3,7 @@
 //! Layout code measures and wraps ordinary ratatui lines. Hyperlink annotations are applied only
 //! when text reaches a terminal buffer or scrollback writer so OSC 8 bytes never affect geometry.
 
+use std::num::NonZeroU16;
 use std::ops::Range;
 
 use ratatui::buffer::Buffer;
@@ -567,7 +568,9 @@ pub(crate) fn mark_buffer_hyperlinks(
                             format!("\x1b]8;;{destination}\x07{}\x1b]8;;\x07", cell.symbol())
                         },
                     );
-                    cell.set_symbol(&symbol);
+                    let width = NonZeroU16::new(cell.cell_width()).unwrap_or(NonZeroU16::MIN);
+                    cell.set_symbol(&symbol)
+                        .set_diff_option(CellDiffOption::ForcedWidth(width));
                 }
             }
         }
@@ -602,8 +605,10 @@ fn mark_matching_cells(
             && !cell.symbol().trim().is_empty()
             && matches(cell)
         {
+            let width = NonZeroU16::new(cell.cell_width()).unwrap_or(NonZeroU16::MIN);
             let symbol = osc8_hyperlink(destination, cell.symbol());
-            cell.set_symbol(&symbol);
+            cell.set_symbol(&symbol)
+                .set_diff_option(CellDiffOption::ForcedWidth(width));
         }
     }
 }
@@ -612,6 +617,7 @@ fn mark_matching_cells(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Style;
 
     #[test]
     fn only_web_destinations_receive_osc8() {
@@ -820,6 +826,116 @@ mod tests {
             })
             .collect::<String>();
         assert_eq!(linked_text, "ﾊﾟlink");
+    }
+
+    #[test]
+    fn forced_width_hyperlinks_render_wide_and_halfwidth_cells_snapshot() {
+        let destination = "https://example.com/rendered";
+        let mut line = HyperlinkLine::new(Line::from("prefix "));
+        line.push_span("漢字 ｶﾞ".into(), Some(destination));
+        line.push_span(" tail".into(), /*destination*/ None);
+
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 14, /*height*/ 3,
+        );
+        let backend = crate::test_backend::VT100Backend::new(area.width, area.height);
+        let mut terminal =
+            crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(area);
+
+        terminal
+            .draw(|frame| {
+                Paragraph::new(Text::from(line.line.clone()))
+                    .wrap(Wrap { trim: false })
+                    .render(area, frame.buffer_mut());
+                mark_buffer_hyperlinks(
+                    frame.buffer_mut(),
+                    area,
+                    &[line.clone()],
+                    /*scroll_rows*/ 0,
+                );
+            })
+            .expect("render hyperlinks");
+
+        insta::assert_snapshot!(
+            "forced_width_hyperlinks_render_wide_and_halfwidth_cells",
+            terminal.backend()
+        );
+    }
+
+    #[test]
+    fn buffer_hyperlinks_preserve_visible_cell_width_for_ratatui_diff() {
+        let destination = "https://example.com/dakuten";
+        let mut line = HyperlinkLine::new(Line::from("ｶﾞ tail"));
+        line.hyperlinks.push(TerminalHyperlink::web(
+            /*columns*/ 0..2,
+            destination.to_string(),
+        ));
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 7, /*height*/ 1,
+        );
+        let previous = Buffer::with_lines(["       "]);
+        let mut next = Buffer::empty(area);
+
+        Paragraph::new(Text::from(line.line.clone())).render(area, &mut next);
+        mark_buffer_hyperlinks(&mut next, area, &[line], /*scroll_rows*/ 0);
+
+        assert_eq!(next[(0, 0)].cell_width(), 2);
+        assert!(matches!(
+            next[(0, 0)].diff_option,
+            CellDiffOption::ForcedWidth(width) if width.get() == 2
+        ));
+        assert_eq!(
+            previous
+                .diff_iter(&next)
+                .map(|(x, _, cell)| (x, strip_osc8(cell.symbol())))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, "ｶﾞ".to_string()),
+                (3, "t".to_string()),
+                (4, "a".to_string()),
+                (5, "i".to_string()),
+                (6, "l".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn matching_hyperlinks_preserve_visible_cell_width_for_ratatui_diff() {
+        let destination = "https://example.com/dakuten";
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 7, /*height*/ 1,
+        );
+        let previous = Buffer::with_lines(["       "]);
+        let mut next = Buffer::empty(area);
+        next.set_string(
+            /*x*/ 0,
+            /*y*/ 0,
+            "ｶﾞ tail",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        );
+
+        mark_underlined_hyperlink(&mut next, area, destination);
+
+        assert_eq!(next[(0, 0)].cell_width(), 2);
+        assert!(matches!(
+            next[(0, 0)].diff_option,
+            CellDiffOption::ForcedWidth(width) if width.get() == 2
+        ));
+        assert_eq!(
+            previous
+                .diff_iter(&next)
+                .map(|(x, _, cell)| (x, strip_osc8(cell.symbol())))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, "ｶﾞ".to_string()),
+                (2, " ".to_string()),
+                (3, "t".to_string()),
+                (4, "a".to_string()),
+                (5, "i".to_string()),
+                (6, "l".to_string()),
+            ]
+        );
     }
 
     #[test]

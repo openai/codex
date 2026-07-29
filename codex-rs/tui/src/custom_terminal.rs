@@ -48,39 +48,6 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
 
-/// Returns the display width of a cell symbol, ignoring OSC escape sequences.
-///
-/// OSC sequences (e.g. OSC 8 hyperlinks: `\x1B]8;;URL\x07`) are terminal
-/// control sequences that don't consume display columns.  The standard
-/// `CellWidth::cell_width()` method incorrectly counts the printable
-/// characters inside OSC payloads (like `]`, `8`, `;`, and URL characters).
-/// This function strips them first so that only visible characters contribute
-/// to the width.
-fn display_width(s: &str) -> usize {
-    // Fast path: no escape sequences present.
-    if !s.contains('\x1B') {
-        return usize::from(s.cell_width());
-    }
-
-    // Strip OSC sequences: ESC ] ... BEL
-    let mut visible = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1B' && chars.clone().next() == Some(']') {
-            // Consume the ']' and everything up to and including BEL.
-            chars.next(); // skip ']'
-            for c in chars.by_ref() {
-                if c == '\x07' {
-                    break;
-                }
-            }
-            continue;
-        }
-        visible.push(ch);
-    }
-    usize::from(visible.as_str().cell_width())
-}
-
 fn osc8_hyperlink_parts(symbol: &str) -> Option<(&str, &str)> {
     let content = symbol.strip_prefix("\x1b]8;;")?;
     let destination_end = content.find('\x07')?;
@@ -587,7 +554,6 @@ enum DrawCommand {
 }
 
 fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
-    let previous_buffer = &a.content;
     let next_buffer = &b.content;
 
     let mut updates = vec![];
@@ -607,7 +573,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         let mut column = 0usize;
         while column < row.len() {
             let cell = &row[column];
-            let width = display_width(cell.symbol());
+            let width = usize::from(cell.cell_width());
             if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
                 last_nonblank_column = column + (width.saturating_sub(1));
             }
@@ -622,34 +588,52 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         last_nonblank_columns[y as usize] = last_nonblank_column as u16;
     }
 
-    // Cells invalidated by drawing/replacing preceding multi-width characters:
-    let mut invalidated: usize = 0;
-    // Cells from the current buffer to skip due to preceding multi-width characters taking
-    // their place (the skipped cells should be blank anyway), or due to per-cell-skipping:
-    let mut to_skip: usize = 0;
-    for (i, (current, previous)) in next_buffer.iter().zip(previous_buffer.iter()).enumerate() {
-        if current.diff_option != CellDiffOption::Skip
-            && (current != previous || invalidated > 0)
-            && to_skip == 0
+    let mut cell_updates = a.diff_iter(b).collect::<Vec<_>>();
+    // Ratatui's ForcedWidth path skips trailing-cell invalidation when a styled wide cell shrinks.
+    let visible_on_blank = Modifier::REVERSED
+        .union(Modifier::UNDERLINED)
+        .union(Modifier::SLOW_BLINK)
+        .union(Modifier::RAPID_BLINK)
+        .union(Modifier::CROSSED_OUT);
+    for (i, (current, previous)) in next_buffer.iter().zip(a.content.iter()).enumerate() {
+        let CellDiffOption::ForcedWidth(current_width) = current.diff_option else {
+            continue;
+        };
+        let current_width = usize::from(current_width.get());
+        let previous_width = usize::from(previous.cell_width());
+        if previous_width <= current_width
+            || (previous.bg == Color::Reset && !previous.modifier.intersects(visible_on_blank))
         {
-            let (x, y) = a.pos_of(i);
-            let row = i / a.area.width as usize;
-            if x <= last_nonblank_columns[row] {
-                updates.push(DrawCommand::Put {
-                    x,
-                    y,
-                    cell: next_buffer[i].clone(),
-                });
-            }
+            continue;
         }
 
-        to_skip = display_width(current.symbol()).saturating_sub(1);
+        for (index, cell) in next_buffer
+            .iter()
+            .enumerate()
+            .skip(i + current_width)
+            .take(previous_width - current_width)
+        {
+            #[allow(deprecated)]
+            let is_skip = cell.diff_option == CellDiffOption::Skip
+                || (cell.skip && cell.diff_option == CellDiffOption::None);
+            if !is_skip {
+                let (x, y) = a.pos_of(index);
+                cell_updates.push((x, y, cell));
+            }
+        }
+    }
+    cell_updates.sort_unstable_by_key(|(x, y, _)| (*y, *x));
+    cell_updates.dedup_by_key(|(x, y, _)| (*y, *x));
 
-        let affected_width = std::cmp::max(
-            display_width(current.symbol()),
-            display_width(previous.symbol()),
-        );
-        invalidated = std::cmp::max(affected_width, invalidated).saturating_sub(1);
+    for (x, y, cell) in cell_updates {
+        let row = usize::from(y - a.area.y);
+        if x <= last_nonblank_columns[row] {
+            updates.push(DrawCommand::Put {
+                x,
+                y,
+                cell: cell.clone(),
+            });
+        }
     }
     updates
 }
@@ -806,6 +790,8 @@ impl ModifierDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::num::NonZeroU16;
+
     use pretty_assertions::assert_eq;
     use ratatui::backend::WindowSize;
     use ratatui::layout::Rect;
@@ -1000,11 +986,50 @@ mod tests {
     }
 
     #[test]
-    fn display_width_handles_halfwidth_dakuten() {
-        assert_eq!(display_width("ｶﾞ"), 2);
-        assert_eq!(
-            display_width("\x1b]8;;https://example.com\x07ｶﾞ\x1b]8;;\x07"),
-            2
+    fn diff_buffers_emits_always_update_cells() {
+        use ratatui::buffer::CellDiffOption;
+
+        let mut previous = Buffer::with_lines(["abc"]);
+        let mut next = Buffer::with_lines(["abc"]);
+        previous[(1, 0)].set_diff_option(CellDiffOption::AlwaysUpdate);
+        next[(1, 0)].set_diff_option(CellDiffOption::AlwaysUpdate);
+
+        let commands = diff_buffers(&previous, &next);
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Put { x: 1, y: 0, .. })),
+            "expected the always-update cell to be emitted; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_clears_styled_trailing_cell_replaced_by_forced_width_cell() {
+        use ratatui::buffer::CellDiffOption;
+
+        let area = Rect::new(0, 0, 7, 1);
+        let mut previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+        previous.set_string(
+            0,
+            0,
+            "漢 tail",
+            Style::default()
+                .bg(Color::Blue)
+                .add_modifier(Modifier::UNDERLINED),
+        );
+        next.set_string(0, 0, "a tail", Style::default());
+        next[(0, 0)]
+            .set_symbol("\x1b]8;;https://example.com\x07a\x1b]8;;\x07")
+            .set_diff_option(CellDiffOption::ForcedWidth(NonZeroU16::MIN));
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Put { x: 1, y: 0, .. })),
+            "expected the styled trailing cell to be cleared; commands: {commands:?}"
         );
     }
 
