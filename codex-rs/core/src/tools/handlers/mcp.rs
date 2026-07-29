@@ -141,7 +141,6 @@ impl McpHandler {
         };
 
         let started = Instant::now();
-        // TODO(sayan): Use StepContext for MCP file arguments when MCP follows dynamic environments.
         let result = handle_mcp_tool_call(
             Arc::clone(&session),
             &step_context,

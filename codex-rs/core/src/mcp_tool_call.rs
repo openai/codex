@@ -428,7 +428,7 @@ async fn handle_approved_mcp_tool_call(
                         .await;
                     let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
                         sess,
-                        turn_context,
+                        step_context,
                         arguments_value,
                         metadata.openai_file_input_optional_fields.as_ref(),
                     )
