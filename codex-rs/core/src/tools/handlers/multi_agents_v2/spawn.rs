@@ -41,12 +41,13 @@ async fn handle_spawn_agent(
 ) -> Result<SpawnAgentResult, FunctionCallError> {
     let ToolInvocation {
         session,
-        turn,
+        step_context,
         payload,
         call_id,
         source,
         ..
     } = invocation;
+    let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
@@ -126,7 +127,7 @@ async fn handle_spawn_agent(
                     fork_mode,
                     parent_thread_id: Some(session.thread_id),
                     parent_turn_id: Some(turn.sub_id.clone()),
-                    environments: Some(turn.environments.to_selections()),
+                    environments: Some(step_context.environments.to_selections()),
                 },
             ),
     )
@@ -144,7 +145,7 @@ async fn handle_spawn_agent(
         .or(spawned_agent.metadata.agent_nickname);
     emit_sub_agent_activity(
         &session,
-        &turn,
+        turn,
         SubAgentActivityItem {
             id: call_id,
             agent_thread_id: new_thread_id,
