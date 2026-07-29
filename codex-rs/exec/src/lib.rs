@@ -997,9 +997,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
         match server_event {
             InProcessServerEvent::ServerRequest(request) => {
-                handle_server_request(&client, request, &mut error_seen).await;
+                handle_server_request(&client, *request, &mut error_seen).await;
             }
-            InProcessServerEvent::ServerNotification(mut notification) => {
+            InProcessServerEvent::ServerNotification(notification) => {
+                let mut notification = *notification;
                 if let ServerNotification::Error(payload) = &notification {
                     if payload.thread_id == primary_thread_id_for_requests
                         && payload.turn_id == task_id

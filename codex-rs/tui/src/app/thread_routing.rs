@@ -632,7 +632,9 @@ impl App {
                                 };
                                 if should_send
                                     && let Err(error) = thread_event_tx
-                                        .send(ThreadBufferedEvent::Notification(notification))
+                                        .send(ThreadBufferedEvent::Notification(Box::new(
+                                            notification,
+                                        )))
                                         .await
                                 {
                                     tracing::warn!(error = %error, "thread event channel closed");
@@ -1006,7 +1008,7 @@ impl App {
         }
 
         if let Some(notification) = notification {
-            match sender.try_send(ThreadBufferedEvent::Notification(notification)) {
+            match sender.try_send(ThreadBufferedEvent::Notification(Box::new(notification))) {
                 Ok(()) => {}
                 Err(TrySendError::Full(event)) => {
                     tokio::spawn(async move {
@@ -1132,7 +1134,7 @@ impl App {
         let request_status = SideParentStatus::for_request(&request);
 
         if should_send {
-            match sender.try_send(ThreadBufferedEvent::Request(request)) {
+            match sender.try_send(ThreadBufferedEvent::Request(Box::new(request))) {
                 Ok(()) => {}
                 Err(TrySendError::Full(event)) => {
                     tokio::spawn(async move {
@@ -1183,7 +1185,7 @@ impl App {
                 {
                     guard
                         .pending_interactive_replay
-                        .note_evicted_server_request(request);
+                        .note_evicted_server_request(request.as_ref());
                 }
             }
             should_send
@@ -1267,11 +1269,11 @@ impl App {
         for pending_event in pending {
             match pending_event {
                 ThreadBufferedEvent::Notification(notification) => {
-                    self.enqueue_thread_notification(thread_id, notification)
+                    self.enqueue_thread_notification(thread_id, *notification)
                         .await?;
                 }
                 ThreadBufferedEvent::Request(request) => {
-                    self.enqueue_thread_request(thread_id, request).await?;
+                    self.enqueue_thread_request(thread_id, *request).await?;
                 }
                 ThreadBufferedEvent::HistoryEntryResponse(event) => {
                     self.enqueue_thread_history_entry_response(thread_id, event)
@@ -1298,7 +1300,7 @@ impl App {
                 .await;
         }
         self.pending_primary_events
-            .push_back(ThreadBufferedEvent::Notification(notification));
+            .push_back(ThreadBufferedEvent::Notification(Box::new(notification)));
         Ok(())
     }
 
@@ -1310,7 +1312,7 @@ impl App {
             return self.enqueue_thread_request(thread_id, request).await;
         }
         self.pending_primary_events
-            .push_back(ThreadBufferedEvent::Request(request));
+            .push_back(ThreadBufferedEvent::Request(Box::new(request)));
         Ok(())
     }
 
@@ -1541,22 +1543,26 @@ impl App {
     pub(super) fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {
         let needs_refresh = matches!(
             &event,
-            ThreadBufferedEvent::Notification(ServerNotification::TurnStarted(_))
-                | ThreadBufferedEvent::Notification(ServerNotification::ThreadTokenUsageUpdated(_))
+            ThreadBufferedEvent::Notification(notification)
+                if matches!(
+                    notification.as_ref(),
+                    ServerNotification::TurnStarted(_)
+                        | ServerNotification::ThreadTokenUsageUpdated(_)
+                )
         );
         match event {
             ThreadBufferedEvent::Notification(notification) => {
-                self.cache_collab_receiver_threads_for_notification(&notification);
+                self.cache_collab_receiver_threads_for_notification(notification.as_ref());
                 self.chat_widget
-                    .handle_server_notification(notification, /*replay_kind*/ None);
+                    .handle_server_notification(*notification, /*replay_kind*/ None);
             }
             ThreadBufferedEvent::Request(request) => {
                 if self
                     .pending_app_server_requests
-                    .contains_server_request(&request)
+                    .contains_server_request(request.as_ref())
                 {
                     self.chat_widget
-                        .handle_server_request(request, /*replay_kind*/ None);
+                        .handle_server_request(*request, /*replay_kind*/ None);
                 }
             }
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
@@ -1575,10 +1581,10 @@ impl App {
         match event {
             ThreadBufferedEvent::Notification(notification) => self
                 .chat_widget
-                .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot)),
+                .handle_server_notification(*notification, Some(ReplayKind::ThreadSnapshot)),
             ThreadBufferedEvent::Request(request) => self
                 .chat_widget
-                .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
+                .handle_server_request(*request, Some(ReplayKind::ThreadSnapshot)),
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
             }
@@ -1603,7 +1609,8 @@ impl App {
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(
             &event,
-            ThreadBufferedEvent::Notification(ServerNotification::ThreadClosed(_))
+            ThreadBufferedEvent::Notification(notification)
+                if matches!(notification.as_ref(), ServerNotification::ThreadClosed(_))
         ) && self.pending_shutdown_exit_thread_id
             == self.active_thread_id;
 
@@ -1617,7 +1624,7 @@ impl App {
         // failover, while true sub-agent deaths still do.
         if let ThreadBufferedEvent::Notification(notification) = &event
             && let Some((closed_thread_id, primary_thread_id)) =
-                self.active_non_primary_shutdown_target(notification)
+                self.active_non_primary_shutdown_target(notification.as_ref())
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
             if self.side_threads.contains_key(&closed_thread_id) {

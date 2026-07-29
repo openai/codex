@@ -160,9 +160,9 @@ pub struct InProcessStartArgs {
 #[derive(Debug, Clone)]
 pub enum InProcessServerEvent {
     /// Server request that requires client response/rejection.
-    ServerRequest(ServerRequest),
+    ServerRequest(Box<ServerRequest>),
     /// App-server notification directed to the embedded client.
-    ServerNotification(ServerNotification),
+    ServerNotification(Box<ServerNotification>),
     /// Indicates one or more events were dropped due to backpressure.
     Lagged { skipped: usize },
 }
@@ -663,7 +663,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             // Send directly to avoid cloning; on failure the
                             // original value is returned inside the error.
                             if let Err(send_error) = event_tx
-                                .try_send(InProcessServerEvent::ServerRequest(request))
+                                .try_send(InProcessServerEvent::ServerRequest(Box::new(request)))
                             {
                                 let (error, inner) = match send_error {
                                     mpsc::error::TrySendError::Full(inner) => (
@@ -695,14 +695,18 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             let notification = envelope.notification;
                             if server_notification_requires_delivery(&notification) {
                                 if event_tx
-                                    .send(InProcessServerEvent::ServerNotification(notification))
+                                    .send(InProcessServerEvent::ServerNotification(Box::new(
+                                        notification,
+                                    )))
                                     .await
                                     .is_err()
                                 {
                                     break;
                                 }
                             } else if let Err(send_error) =
-                                event_tx.try_send(InProcessServerEvent::ServerNotification(notification))
+                                event_tx.try_send(InProcessServerEvent::ServerNotification(
+                                    Box::new(notification),
+                                ))
                             {
                                 match send_error {
                                     mpsc::error::TrySendError::Full(_) => {

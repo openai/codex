@@ -44,11 +44,11 @@ impl App {
                 self.chat_widget.finish_mcp_startup_after_lag();
             }
             AppServerEvent::ServerNotification(notification) => {
-                self.handle_server_notification_event(app_server_client, notification)
+                self.handle_server_notification_event(app_server_client, *notification)
                     .await;
             }
             AppServerEvent::ServerRequest(request) => {
-                self.handle_server_request_event(app_server_client, request)
+                self.handle_server_request_event(app_server_client, *request)
                     .await;
             }
             AppServerEvent::Disconnected { message } => {

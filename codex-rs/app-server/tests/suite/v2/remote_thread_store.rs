@@ -191,9 +191,8 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             let Some(event) = client.next_event().await else {
                 anyhow::bail!("in-process app-server stopped before turn/completed");
             };
-            if let InProcessServerEvent::ServerNotification(ServerNotification::TurnCompleted(
-                completed,
-            )) = event
+            if let InProcessServerEvent::ServerNotification(notification) = event
+                && let ServerNotification::TurnCompleted(completed) = notification.as_ref()
                 && completed.thread_id == thread.id
             {
                 return Ok::<(), anyhow::Error>(());
@@ -332,9 +331,8 @@ async fn cold_thread_resume_reuses_non_local_history_probe() -> Result<()> {
             let Some(event) = client.next_event().await else {
                 anyhow::bail!("in-process app-server stopped before turn/completed");
             };
-            if let InProcessServerEvent::ServerNotification(ServerNotification::TurnCompleted(
-                completed,
-            )) = event
+            if let InProcessServerEvent::ServerNotification(notification) = event
+                && let ServerNotification::TurnCompleted(completed) = notification.as_ref()
                 && completed.thread_id == thread.id
             {
                 return Ok::<(), anyhow::Error>(());

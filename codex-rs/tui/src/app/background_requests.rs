@@ -626,7 +626,7 @@ impl App {
             {
                 guard
                     .pending_interactive_replay
-                    .note_evicted_server_request(request);
+                    .note_evicted_server_request(request.as_ref());
             }
             guard.active
         };

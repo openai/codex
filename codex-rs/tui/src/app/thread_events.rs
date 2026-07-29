@@ -18,8 +18,8 @@ pub(super) struct ThreadEventSnapshot {
 
 #[derive(Debug, Clone)]
 pub(super) enum ThreadBufferedEvent {
-    Notification(ServerNotification),
-    Request(ServerRequest),
+    Notification(Box<ServerNotification>),
+    Request(Box<ServerRequest>),
     HistoryEntryResponse(HistoryLookupResponse),
     FeedbackSubmission(FeedbackThreadEvent),
 }
@@ -53,14 +53,16 @@ pub(super) struct ThreadEventStore {
 
 impl ThreadEventStore {
     pub(super) fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
-        matches!(
-            event,
-            ThreadBufferedEvent::Request(_)
-                | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
-                | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
-                | ThreadBufferedEvent::Notification(ServerNotification::McpServerStatusUpdated(_))
-                | ThreadBufferedEvent::FeedbackSubmission(_)
-        )
+        match event {
+            ThreadBufferedEvent::Request(_) | ThreadBufferedEvent::FeedbackSubmission(_) => true,
+            ThreadBufferedEvent::Notification(notification) => matches!(
+                notification.as_ref(),
+                ServerNotification::HookStarted(_)
+                    | ServerNotification::HookCompleted(_)
+                    | ServerNotification::McpServerStatusUpdated(_)
+            ),
+            ThreadBufferedEvent::HistoryEntryResponse(_) => false,
+        }
     }
 
     pub(super) fn new(capacity: usize) -> Self {
@@ -159,26 +161,29 @@ impl ThreadEventStore {
         }
 
         self.buffer
-            .push_back(ThreadBufferedEvent::Notification(notification.into_owned()));
+            .push_back(ThreadBufferedEvent::Notification(Box::new(
+                notification.into_owned(),
+            )));
         if self.buffer.len() > self.capacity
             && let Some(removed) = self.buffer.pop_front()
             && let ThreadBufferedEvent::Request(request) = &removed
         {
             self.pending_interactive_replay
-                .note_evicted_server_request(request);
+                .note_evicted_server_request(request.as_ref());
         }
     }
 
     pub(super) fn push_request(&mut self, request: ServerRequest) {
         self.pending_interactive_replay
             .note_server_request(&request);
-        self.buffer.push_back(ThreadBufferedEvent::Request(request));
+        self.buffer
+            .push_back(ThreadBufferedEvent::Request(Box::new(request)));
         if self.buffer.len() > self.capacity
             && let Some(removed) = self.buffer.pop_front()
             && let ThreadBufferedEvent::Request(request) = &removed
         {
             self.pending_interactive_replay
-                .note_evicted_server_request(request);
+                .note_evicted_server_request(request.as_ref());
         }
     }
 
@@ -189,9 +194,9 @@ impl ThreadEventStore {
                 ThreadBufferedEvent::Request(request)
                     if self
                         .pending_interactive_replay
-                        .should_replay_snapshot_request(request) =>
+                        .should_replay_snapshot_request(request.as_ref()) =>
                 {
-                    Some(request.clone())
+                    Some(request.as_ref().clone())
                 }
                 ThreadBufferedEvent::Request(_)
                 | ThreadBufferedEvent::Notification(_)
@@ -210,18 +215,20 @@ impl ThreadEventStore {
             .iter()
             .rev()
             .find_map(|event| match event {
-                ThreadBufferedEvent::Notification(ServerNotification::ItemStarted(
-                    notification,
-                )) if turn_id_matches(turn_id, &notification.turn_id) => {
-                    file_change_item_changes(&notification.item, item_id)
-                }
-                ThreadBufferedEvent::Notification(ServerNotification::ItemCompleted(
-                    notification,
-                )) if turn_id_matches(turn_id, &notification.turn_id) => {
-                    file_change_item_changes(&notification.item, item_id)
-                }
+                ThreadBufferedEvent::Notification(notification) => match notification.as_ref() {
+                    ServerNotification::ItemStarted(notification)
+                        if turn_id_matches(turn_id, &notification.turn_id) =>
+                    {
+                        file_change_item_changes(&notification.item, item_id)
+                    }
+                    ServerNotification::ItemCompleted(notification)
+                        if turn_id_matches(turn_id, &notification.turn_id) =>
+                    {
+                        file_change_item_changes(&notification.item, item_id)
+                    }
+                    _ => None,
+                },
                 ThreadBufferedEvent::Request(_)
-                | ThreadBufferedEvent::Notification(_)
                 | ThreadBufferedEvent::HistoryEntryResponse(_)
                 | ThreadBufferedEvent::FeedbackSubmission(_) => None,
             })
@@ -247,7 +254,7 @@ impl ThreadEventStore {
                 .filter(|event| match event {
                     ThreadBufferedEvent::Request(request) => self
                         .pending_interactive_replay
-                        .should_replay_snapshot_request(request),
+                        .should_replay_snapshot_request(request.as_ref()),
                     ThreadBufferedEvent::Notification(_)
                     | ThreadBufferedEvent::HistoryEntryResponse(_)
                     | ThreadBufferedEvent::FeedbackSubmission(_) => true,

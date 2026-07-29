@@ -556,7 +556,7 @@ pub(crate) async fn run_onboarding_app(
                 if let Some(event) = event {
                     match event {
                         AppServerEvent::ServerNotification(notification) => {
-                            onboarding_screen.handle_app_server_notification(notification);
+                            onboarding_screen.handle_app_server_notification(*notification);
                         }
                         AppServerEvent::Disconnected { message } => {
                             return Err(color_eyre::eyre::eyre!(message));

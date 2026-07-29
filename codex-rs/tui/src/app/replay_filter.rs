@@ -10,13 +10,15 @@ pub(super) fn snapshot_has_pending_interactive_request(snapshot: &ThreadEventSna
     snapshot.events.iter().any(|event| {
         matches!(
             event,
-            ThreadBufferedEvent::Request(
-                ServerRequest::CommandExecutionRequestApproval { .. }
-                    | ServerRequest::FileChangeRequestApproval { .. }
-                    | ServerRequest::McpServerElicitationRequest { .. }
-                    | ServerRequest::PermissionsRequestApproval { .. }
-                    | ServerRequest::ToolRequestUserInput { .. }
-            )
+            ThreadBufferedEvent::Request(request)
+                if matches!(
+                    request.as_ref(),
+                    ServerRequest::CommandExecutionRequestApproval { .. }
+                        | ServerRequest::FileChangeRequestApproval { .. }
+                        | ServerRequest::McpServerElicitationRequest { .. }
+                        | ServerRequest::PermissionsRequestApproval { .. }
+                        | ServerRequest::ToolRequestUserInput { .. }
+                )
         )
     })
 }
@@ -24,10 +26,12 @@ pub(super) fn snapshot_has_pending_interactive_request(snapshot: &ThreadEventSna
 pub(super) fn event_is_notice(event: &ThreadBufferedEvent) -> bool {
     matches!(
         event,
-        ThreadBufferedEvent::Notification(
-            ServerNotification::Warning(_)
-                | ServerNotification::GuardianWarning(_)
-                | ServerNotification::ConfigWarning(_)
-        )
+        ThreadBufferedEvent::Notification(notification)
+            if matches!(
+                notification.as_ref(),
+                ServerNotification::Warning(_)
+                    | ServerNotification::GuardianWarning(_)
+                    | ServerNotification::ConfigWarning(_)
+            )
     )
 }
