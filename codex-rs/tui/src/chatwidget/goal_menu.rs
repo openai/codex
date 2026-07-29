@@ -123,7 +123,7 @@ fn goal_status_label(status: AppThreadGoalStatus) -> &'static str {
     match status {
         AppThreadGoalStatus::Active => "active",
         AppThreadGoalStatus::Paused => "paused",
-        AppThreadGoalStatus::Blocked => "blocked",
+        AppThreadGoalStatus::Blocked => "stalled",
         AppThreadGoalStatus::UsageLimited => "usage limited",
         AppThreadGoalStatus::BudgetLimited => "limited by budget",
         AppThreadGoalStatus::Complete => "complete",
