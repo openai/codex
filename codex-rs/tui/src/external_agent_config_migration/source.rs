@@ -196,5 +196,5 @@ impl WidgetRef for &ExternalAgentConfigSourceScreen {
 }
 
 #[cfg(test)]
-#[path = "external_agent_config_migration_source_tests.rs"]
+#[path = "source_tests.rs"]
 mod tests;

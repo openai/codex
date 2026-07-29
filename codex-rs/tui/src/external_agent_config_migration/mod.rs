@@ -1,9 +1,4 @@
 use crate::diff_render::display_path_for;
-use crate::external_agent_config_migration_model::ExternalAgentConfigMigrationGroupModel;
-use crate::external_agent_config_migration_model::external_agent_config_migration_count_summary;
-use crate::external_agent_config_migration_model::external_agent_config_migration_groups;
-use crate::external_agent_config_migration_model::external_agent_config_migration_item_detail;
-use crate::external_agent_config_migration_model::external_agent_config_migration_item_label;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -17,7 +12,16 @@ use ratatui::prelude::Stylize as _;
 use ratatui::text::Line;
 use tokio_stream::StreamExt;
 
+pub(crate) mod flow;
+mod model;
 mod render;
+mod source;
+
+use self::model::ExternalAgentConfigMigrationGroupModel;
+use self::model::external_agent_config_migration_count_summary;
+use self::model::external_agent_config_migration_groups;
+use self::model::external_agent_config_migration_item_detail;
+use self::model::external_agent_config_migration_item_label;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExternalAgentConfigMigrationOutcome {

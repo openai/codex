@@ -1,5 +1,5 @@
 ---
-source: tui/src/external_agent_config_migration_source_tests.rs
+source: tui/src/external_agent_config_migration/source_tests.rs
 expression: terminal.backend()
 ---
 

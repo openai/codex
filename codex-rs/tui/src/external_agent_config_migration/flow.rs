@@ -1,11 +1,5 @@
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE;
-use crate::external_agent_config_migration::ExternalAgentConfigMigrationOutcome;
-use crate::external_agent_config_migration::run_external_agent_config_migration_prompt;
-use crate::external_agent_config_migration_model::external_agent_config_migration_item_count;
-use crate::external_agent_config_migration_model::external_agent_config_migration_type_label;
-use crate::external_agent_config_migration_source::ExternalAgentConfigMigrationSource;
-use crate::external_agent_config_migration_source::run_external_agent_config_source_prompt;
 use crate::legacy_core::config::Config;
 use crate::tui;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
@@ -14,6 +8,13 @@ use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use ratatui::prelude::Stylize as _;
 use ratatui::text::Line;
+
+use super::ExternalAgentConfigMigrationOutcome;
+use super::model::external_agent_config_migration_item_count;
+use super::model::external_agent_config_migration_type_label;
+use super::run_external_agent_config_migration_prompt;
+use super::source::ExternalAgentConfigMigrationSource;
+use super::source::run_external_agent_config_source_prompt;
 
 pub(crate) const EXTERNAL_AGENT_CONFIG_MIGRATION_NO_ITEMS_MESSAGE: &str =
     "No compatible setup was found to import.";
@@ -374,5 +375,5 @@ pub(crate) async fn handle_external_agent_config_migration_prompt(
 }
 
 #[cfg(test)]
-#[path = "external_agent_config_migration_flow_tests.rs"]
+#[path = "flow_tests.rs"]
 mod tests;

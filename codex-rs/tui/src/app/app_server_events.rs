@@ -132,7 +132,7 @@ impl App {
                 self.fetch_plugins_list(app_server_client, cwd);
                 if should_report_completion {
                     self.chat_widget.add_plain_history_lines(
-                        crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification),
+                        crate::external_agent_config_migration::flow::external_agent_config_migration_finished_lines(notification),
                     );
                 }
                 return;

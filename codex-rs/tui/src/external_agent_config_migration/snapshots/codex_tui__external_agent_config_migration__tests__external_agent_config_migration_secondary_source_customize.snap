@@ -1,5 +1,5 @@
 ---
-source: tui/src/external_agent_config_migration.rs
+source: tui/src/external_agent_config_migration/mod.rs
 expression: rendered
 ---
 

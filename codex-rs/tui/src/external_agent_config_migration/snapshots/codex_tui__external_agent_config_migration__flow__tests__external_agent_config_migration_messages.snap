@@ -1,5 +1,5 @@
 ---
-source: tui/src/external_agent_config_migration_flow_tests.rs
+source: tui/src/external_agent_config_migration/flow_tests.rs
 expression: messages
 ---
 • Import started. You can keep working while it finishes.

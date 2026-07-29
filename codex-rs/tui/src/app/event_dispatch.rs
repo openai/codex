@@ -8,7 +8,7 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_server_session::ForkGoalContinuation;
 use crate::config_update::format_config_error;
-use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
+use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
@@ -118,7 +118,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenExternalAgentConfigMigration => {
-                match crate::external_agent_config_migration_flow::handle_external_agent_config_migration_prompt(
+                match crate::external_agent_config_migration::flow::handle_external_agent_config_migration_prompt(
                     tui,
                     app_server,
                     &self.config,
@@ -130,7 +130,7 @@ impl App {
                     }
                     Ok(ExternalAgentConfigMigrationFlowOutcome::NoItems) => {
                         self.chat_widget.add_info_message(
-                            crate::external_agent_config_migration_flow::EXTERNAL_AGENT_CONFIG_MIGRATION_NO_ITEMS_MESSAGE
+                            crate::external_agent_config_migration::flow::EXTERNAL_AGENT_CONFIG_MIGRATION_NO_ITEMS_MESSAGE
                                 .to_string(),
                             /*hint*/ None,
                         );
