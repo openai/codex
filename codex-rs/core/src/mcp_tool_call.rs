@@ -340,6 +340,7 @@ struct McpToolCallItemMetadata {
     app_name: Option<String>,
     action_name: Option<String>,
     plugin_id: Option<String>,
+    read_only_hint: Option<bool>,
 }
 
 impl McpToolCallItemMetadata {
@@ -364,6 +365,9 @@ impl McpToolCallItemMetadata {
                 .filter(|action_name| !action_name.is_empty())
                 .map(str::to_string),
             plugin_id: metadata.and_then(|metadata| metadata.plugin_id.clone()),
+            read_only_hint: metadata
+                .and_then(|metadata| metadata.annotations.as_ref())
+                .and_then(|annotations| annotations.read_only_hint),
         }
     }
 }
@@ -918,6 +922,7 @@ async fn notify_mcp_tool_call_started(
         app_name: item_metadata.app_name,
         action_name: item_metadata.action_name,
         plugin_id: item_metadata.plugin_id,
+        read_only_hint: item_metadata.read_only_hint,
         status: McpToolCallStatus::InProgress,
         result: None,
         error: None,
@@ -962,6 +967,7 @@ async fn notify_mcp_tool_call_completed(
         app_name: item_metadata.app_name,
         action_name: item_metadata.action_name,
         plugin_id: item_metadata.plugin_id,
+        read_only_hint: item_metadata.read_only_hint,
         status,
         result,
         error,

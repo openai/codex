@@ -1357,6 +1357,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
             let ThreadItem::McpToolCall {
                 arguments,
                 app_context,
+                read_only_hint,
                 result,
                 error,
                 ..
@@ -1375,6 +1376,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                     action_name: Some("lookup".to_string()),
                 })
             );
+            assert_eq!(read_only_hint, &Some(false));
             let result = result.as_ref().expect("redacted MCP result");
             assert_eq!(
                 result.content,
@@ -1410,6 +1412,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
     let ThreadItem::McpToolCall {
         arguments,
         app_context,
+        read_only_hint,
         result,
         ..
     } = normal_mcp_item
@@ -1427,6 +1430,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
             action_name: Some("lookup".to_string()),
         })
     );
+    assert_eq!(read_only_hint, &Some(false));
     let result = result.as_ref().expect("normal MCP result");
     assert_eq!(
         result.content,
@@ -1534,6 +1538,7 @@ fn append_resume_redaction_history(
             app_name: Some("Calendar".to_string()),
             action_name: Some("lookup".to_string()),
             plugin_id: None,
+            read_only_hint: Some(false),
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {
                 content: vec![json!({

@@ -1970,6 +1970,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             app_name: None,
             action_name: None,
             plugin_id: None,
+            read_only_hint: Some(true),
         },
     );
 

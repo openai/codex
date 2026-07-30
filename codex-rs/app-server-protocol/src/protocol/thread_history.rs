@@ -787,6 +787,7 @@ impl ThreadHistoryBuilder {
                 }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
+            read_only_hint: payload.read_only_hint,
             result: None,
             error: None,
             duration_ms: None,
@@ -839,6 +840,7 @@ impl ThreadHistoryBuilder {
                 }),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             plugin_id: payload.plugin_id.clone(),
+            read_only_hint: payload.read_only_hint,
             result,
             error,
             duration_ms,
@@ -2782,6 +2784,7 @@ mod tests {
                 app_name: None,
                 action_name: None,
                 plugin_id: None,
+                read_only_hint: None,
                 duration: Duration::from_millis(8),
                 result: Err("boom".into()),
             }),
@@ -2840,6 +2843,7 @@ mod tests {
                 app_context: None,
                 mcp_app_resource_uri: None,
                 plugin_id: None,
+                read_only_hint: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "boom".into(),
@@ -2872,6 +2876,7 @@ mod tests {
                 app_name: Some("Calendar".into()),
                 action_name: Some("lookup".into()),
                 plugin_id: Some("sample@test".into()),
+                read_only_hint: Some(false),
                 duration: Duration::from_millis(8),
                 result: Ok(CallToolResult {
                     content: vec![serde_json::json!({
@@ -2910,6 +2915,7 @@ mod tests {
                 }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
                 plugin_id: Some("sample@test".into()),
+                read_only_hint: Some(false),
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({
                         "type": "text",

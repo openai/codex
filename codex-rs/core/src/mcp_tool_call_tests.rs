@@ -1155,6 +1155,11 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
         /*tool_description*/ None,
     );
     metadata.link_id = Some("link_fedcba9876543210fedcba9876543210".to_string());
+    metadata.annotations = Some(annotations(
+        Some(false),
+        /*destructive*/ None,
+        /*open_world*/ None,
+    ));
     metadata.codex_apps_meta = Some(
         serde_json::json!({
             "resource_uri": "/asdk_app_0123456789abcdef0123456789abcdef/link_fedcba9876543210fedcba9876543210/create_event",
@@ -1173,6 +1178,7 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
             app_name: Some("Calendar".to_string()),
             action_name: Some("create_event".to_string()),
             plugin_id: None,
+            read_only_hint: Some(false),
         }
     );
     assert_eq!(
@@ -1184,6 +1190,7 @@ fn mcp_tool_call_item_metadata_only_trusts_codex_apps_identity() {
             app_name: None,
             action_name: None,
             plugin_id: None,
+            read_only_hint: Some(false),
         }
     );
 }
@@ -1208,6 +1215,7 @@ async fn mcp_tool_call_item_includes_app_identity() {
             app_name: Some("Calendar".to_string()),
             action_name: Some("create_event".to_string()),
             plugin_id: Some("sample@test".to_string()),
+            read_only_hint: Some(false),
         },
     )
     .await;
@@ -1234,6 +1242,7 @@ async fn mcp_tool_call_item_includes_app_identity() {
     assert_eq!(item.plugin_id.as_deref(), Some("sample@test"));
     assert_eq!(item.app_name.as_deref(), Some("Calendar"));
     assert_eq!(item.action_name.as_deref(), Some("create_event"));
+    assert_eq!(item.read_only_hint, Some(false));
 }
 
 #[tokio::test]

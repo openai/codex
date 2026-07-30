@@ -101,6 +101,7 @@ fn mcp_tool_call_result_preserves_meta_in_jsonl_event() {
                 app_context: None,
                 mcp_app_resource_uri: None,
                 plugin_id: None,
+                read_only_hint: None,
                 result: Some(Box::new(codex_app_server_protocol::McpToolCallResult {
                     content: vec![json!({"type": "text", "text": "search result"})],
                     structured_content: None,

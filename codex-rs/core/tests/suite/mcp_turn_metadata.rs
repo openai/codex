@@ -9,11 +9,15 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::items::McpToolCallStatus;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -127,6 +131,25 @@ async fn submit_user_turn(
         })
         .await?;
     Ok(())
+}
+
+async fn wait_for_mcp_tool_call_item(
+    test: &TestCodex,
+    call_id: &str,
+    status: McpToolCallStatus,
+) -> Option<bool> {
+    wait_for_event_match(&test.codex, |event| {
+        let item = match event {
+            EventMsg::ItemStarted(event) => &event.item,
+            EventMsg::ItemCompleted(event) => &event.item,
+            _ => return None,
+        };
+        let TurnItem::McpToolCall(item) = item else {
+            return None;
+        };
+        (item.id == call_id && item.status == status).then_some(item.read_only_hint)
+    })
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -405,6 +428,10 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
     )
     .await?;
 
+    assert_eq!(
+        wait_for_mcp_tool_call_item(&test, read_call_id, McpToolCallStatus::InProgress).await,
+        Some(true)
+    );
     let EventMsg::McpToolCallBegin(read_begin) = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::McpToolCallBegin(_))
     })
@@ -413,7 +440,16 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
         unreachable!("event guard guarantees McpToolCallBegin");
     };
     assert_eq!(read_begin.call_id, read_call_id);
+    assert_eq!(read_begin.read_only_hint, Some(true));
 
+    assert_eq!(
+        wait_for_mcp_tool_call_item(&test, read_call_id, McpToolCallStatus::Completed).await,
+        Some(true)
+    );
+    assert_eq!(
+        wait_for_mcp_tool_call_item(&test, write_call_id, McpToolCallStatus::InProgress).await,
+        Some(false)
+    );
     let next_route = wait_for_event(&test.codex, |event| {
         matches!(
             event,
@@ -425,6 +461,7 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
         panic!("read-only app action should not prompt in writes mode");
     };
     assert_eq!(write_begin.call_id, write_call_id);
+    assert_eq!(write_begin.read_only_hint, Some(false));
 
     let EventMsg::ElicitationRequest(request) = wait_for_event(&test.codex, |event| {
         matches!(
@@ -447,6 +484,10 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
         })
         .await?;
 
+    assert_eq!(
+        wait_for_mcp_tool_call_item(&test, write_call_id, McpToolCallStatus::Completed).await,
+        Some(false)
+    );
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -455,6 +496,32 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
     assert_eq!(responses.requests().len(), 3);
     recorded_apps_tool_call_by_call_id(&server, read_call_id).await;
     recorded_apps_tool_call_by_call_id(&server, write_call_id).await;
+
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let persisted_hints = tokio::fs::read_to_string(rollout_path)
+        .await?
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<serde_json::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::McpToolCallEnd(event))
+                if event.call_id == read_call_id || event.call_id == write_call_id =>
+            {
+                Some((event.call_id, event.read_only_hint))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        persisted_hints,
+        vec![
+            (read_call_id.to_string(), Some(true)),
+            (write_call_id.to_string(), Some(false)),
+        ]
+    );
 
     Ok(())
 }

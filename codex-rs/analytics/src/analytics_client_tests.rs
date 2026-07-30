@@ -4536,6 +4536,7 @@ async fn turn_event_counts_completed_tool_items() {
         }),
         mcp_app_resource_uri: None,
         plugin_id: Some("sample@test".to_string()),
+        read_only_hint: None,
         result: None,
         error: None,
         duration_ms,
