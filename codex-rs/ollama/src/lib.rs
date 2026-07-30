@@ -6,7 +6,6 @@ mod url;
 
 pub use client::OllamaClient;
 use codex_core::config::Config;
-use codex_model_provider_info::ModelProviderInfo;
 pub use pull::CliProgressReporter;
 pub use pull::PullEvent;
 pub use pull::PullProgressReporter;
@@ -20,24 +19,19 @@ pub const DEFAULT_OSS_MODEL: &str = "gpt-oss:20b";
 ///
 /// - Ensures a local Ollama server is reachable.
 /// - Checks if the model exists locally and pulls it if missing.
-pub async fn ensure_oss_ready(config: &Config) -> std::io::Result<()> {
+pub async fn ensure_oss_ready(config: &Config, client: &OllamaClient) -> std::io::Result<()> {
     // Only download when the requested model is the default OSS model (or when -m is not provided).
     let model = match config.model.as_ref() {
         Some(model) => model,
         None => DEFAULT_OSS_MODEL,
     };
 
-    // Verify local Ollama is reachable.
-    let ollama_client = crate::OllamaClient::try_from_oss_provider(config).await?;
-
     // If the model is not present locally, pull it.
-    match ollama_client.fetch_models().await {
+    match client.fetch_models().await {
         Ok(models) => {
             if !models.iter().any(|m| m == model) {
                 let mut reporter = crate::CliProgressReporter::new();
-                ollama_client
-                    .pull_with_reporter(model, &mut reporter)
-                    .await?;
+                client.pull_with_reporter(model, &mut reporter).await?;
             }
         }
         Err(err) => {
@@ -60,8 +54,7 @@ fn supports_responses(version: &Version) -> bool {
 /// Ensure the running Ollama server is new enough to support the Responses API.
 ///
 /// Returns `Ok(())` when the version endpoint is missing or unparsable.
-pub async fn ensure_responses_supported(provider: &ModelProviderInfo) -> std::io::Result<()> {
-    let client = crate::OllamaClient::try_from_provider(provider).await?;
+pub async fn ensure_responses_supported(client: &OllamaClient) -> std::io::Result<()> {
     let Some(version) = client.fetch_version().await? else {
         return Ok(());
     };
@@ -79,6 +72,60 @@ pub async fn ensure_responses_supported(provider: &ModelProviderInfo) -> std::io
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
+    use codex_model_provider_info::WireApi;
+    use codex_model_provider_info::create_oss_provider_with_base_url;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn version_check_reuses_existing_ollama_client() {
+        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            tracing::info!(
+                "{} set; skipping version_check_reuses_existing_ollama_client",
+                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+            );
+            return;
+        }
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/tags"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"models": [{"name": "gpt-oss:20b"}]})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/version"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"version": "0.14.1"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let provider = create_oss_provider_with_base_url(&server.uri(), WireApi::Responses);
+        let client = OllamaClient::try_from_provider(
+            &provider,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        )
+        .await
+        .expect("create Ollama client");
+
+        ensure_responses_supported(&client)
+            .await
+            .expect("version check should reuse the existing client");
+        assert_eq!(
+            client.fetch_models().await.expect("fetch models"),
+            vec!["gpt-oss:20b"]
+        );
+
+        server.verify().await;
+    }
 
     #[test]
     fn supports_responses_for_dev_zero() {
