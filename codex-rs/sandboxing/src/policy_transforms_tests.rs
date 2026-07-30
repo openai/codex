@@ -294,6 +294,41 @@ fn intersect_permission_profiles_drops_explicit_empty_reads_without_grant() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn intersect_permission_profiles_rejects_symbolic_slash_tmp_grants() {
+    let cwd = TempDir::new().expect("tempdir");
+    let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute tmp path");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![slash_tmp]),
+        )),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                },
+                FileSystemAccessMode::Write,
+            )],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted.clone(), cwd.path()),
+        PermissionProfile::default()
+    );
+    assert_eq!(
+        intersect_permission_profiles(granted.clone(), granted, cwd.path()),
+        PermissionProfile::default()
+    );
+}
+
 #[test]
 fn intersect_permission_profiles_accepts_child_path_granted_for_requested_cwd() {
     let temp_dir = TempDir::new().expect("create temp dir");

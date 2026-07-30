@@ -462,10 +462,15 @@ impl FileSystemSandboxPolicy {
 
     pub fn has_denied_read_restrictions(&self) -> bool {
         matches!(self.kind, FileSystemSandboxKind::Restricted)
-            && self
-                .entries
-                .iter()
-                .any(|entry| entry.access == FileSystemAccessMode::Deny)
+            && self.entries.iter().any(|entry| {
+                entry.access == FileSystemAccessMode::Deny
+                    && !matches!(
+                        &entry.path,
+                        FileSystemPath::Special {
+                            value: FileSystemSpecialPath::SlashTmp,
+                        } if !cfg!(unix)
+                    )
+            })
     }
 
     pub fn from_legacy_sandbox_policy_preserving_deny_entries(
@@ -546,6 +551,7 @@ impl FileSystemSandboxPolicy {
                     FileSystemPath::GlobPattern { .. } => true,
                     FileSystemPath::Special { value } => match value {
                         FileSystemSpecialPath::Root => entry.access == FileSystemAccessMode::Deny,
+                        FileSystemSpecialPath::SlashTmp if !cfg!(unix) => false,
                         FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
                             false
                         }
@@ -1249,7 +1255,7 @@ impl FileSystemSandboxPolicy {
                 } else if unbridgeable_root_write
                     || !writable_roots.is_empty()
                     || tmpdir_writable
-                    || slash_tmp_writable
+                    || (cfg!(unix) && slash_tmp_writable)
                 {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -1523,6 +1529,9 @@ fn resolve_file_system_special_path(
             }
         }
         FileSystemSpecialPath::SlashTmp => {
+            if !cfg!(unix) {
+                return None;
+            }
             #[allow(clippy::expect_used)]
             let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
             if !slash_tmp.as_path().is_dir() {
@@ -1957,6 +1966,86 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_write_ignores_slash_tmp_special_path_but_preserves_literal_path() {
+        let cwd = TempDir::new().expect("tempdir");
+        let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute tmp path");
+        let slash_tmp_only_policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                },
+                FileSystemAccessMode::Write,
+            ),
+        ]);
+        assert_eq!(
+            slash_tmp_only_policy
+                .to_legacy_sandbox_policy(NetworkSandboxPolicy::Restricted, cwd.path())
+                .expect("legacy sandbox policy"),
+            SandboxPolicy::ReadOnly {
+                network_access: false,
+            }
+        );
+        assert!(
+            !slash_tmp_only_policy
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path())
+        );
+
+        for access in [FileSystemAccessMode::Read, FileSystemAccessMode::Deny] {
+            let policy = FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry::new(
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    FileSystemAccessMode::Write,
+                ),
+                FileSystemSandboxEntry::new(
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::SlashTmp,
+                    },
+                    access,
+                ),
+            ]);
+            assert!(policy.has_full_disk_write_access());
+            assert!(policy.has_full_disk_read_access());
+        }
+
+        let legacy_policy = SandboxPolicy::new_workspace_write_policy();
+        assert_eq!(
+            FileSystemSandboxPolicy::from(&legacy_policy)
+                .to_legacy_sandbox_policy(NetworkSandboxPolicy::Restricted, cwd.path())
+                .expect("legacy workspace-write policy"),
+            legacy_policy
+        );
+        assert_eq!(
+            FileSystemSandboxPolicy::from(&legacy_policy)
+                .get_writable_roots_with_cwd(cwd.path())
+                .into_iter()
+                .map(|root| root.root)
+                .collect::<Vec<_>>(),
+            legacy_policy
+                .get_writable_roots_with_cwd(cwd.path())
+                .into_iter()
+                .map(|root| normalize_effective_absolute_path(root.root))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            FileSystemSandboxPolicy::workspace_write(
+                std::slice::from_ref(&slash_tmp),
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ false,
+            )
+            .can_write_path_with_cwd(slash_tmp.as_path(), cwd.path())
+        );
     }
 
     #[cfg(unix)]
