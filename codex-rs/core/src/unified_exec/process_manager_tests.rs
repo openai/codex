@@ -110,9 +110,6 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         .expect("current dir")
         .try_into()
         .expect("absolute path");
-    let file_system_sandbox_policy =
-        codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted();
-    let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
     let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let managed_network = ManagedNetworkSandboxContext {
         loopback_ports: vec![43123],
@@ -167,8 +164,6 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         permission_profile: permission_profile.clone(),
-        file_system_sandbox_policy,
-        network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
         exec_server_sandbox: None,

@@ -112,10 +112,8 @@ impl FileSystemSandboxRunner {
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
         let sandbox_manager = SandboxManager::new();
-        let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
         let sandbox = sandbox_manager.select_initial(
-            &file_system_policy,
-            network_policy,
+            permission_profile,
             SandboxablePreference::Auto,
             sandbox_context.windows_sandbox_level,
             /*has_managed_network_requirements*/ false,

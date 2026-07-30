@@ -30,7 +30,6 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -115,14 +114,12 @@ pub enum ExecCapturePolicy {
 }
 
 fn select_process_exec_tool_sandbox_type(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+    permission_profile: &PermissionProfile,
     windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     enforce_managed_network: bool,
 ) -> SandboxType {
     SandboxManager::new().select_initial(
-        file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         SandboxablePreference::Auto,
         windows_sandbox_level,
         enforce_managed_network,
@@ -345,11 +342,8 @@ pub fn build_exec_request(
     } = params;
 
     let enforce_managed_network = network.is_some();
-    let (file_system_sandbox_policy, network_sandbox_policy) =
-        permission_profile.to_runtime_permissions();
     let sandbox_type = select_process_exec_tool_sandbox_type(
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         windows_sandbox_level,
         enforce_managed_network,
     );
@@ -453,8 +447,6 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_level,
         windows_sandbox_private_desktop,
         permission_profile,
-        file_system_sandbox_policy: _,
-        network_sandbox_policy,
         windows_sandbox_filesystem_overrides,
         network_environment_id,
         arg0,
@@ -463,6 +455,7 @@ pub(crate) async fn execute_exec_request(
         exec_server_managed_network: _,
         exec_server_network_proxy: _,
     } = exec_request;
+    let network_sandbox_policy = permission_profile.network_sandbox_policy();
 
     // TODO(anp): Keep PathUri through the local process launch boundary.
     let cwd = cwd

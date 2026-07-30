@@ -22,8 +22,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
@@ -59,8 +57,6 @@ pub struct ExecRequest {
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub permission_profile: PermissionProfile,
-    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
-    pub network_sandbox_policy: NetworkSandboxPolicy,
     pub(crate) windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     pub arg0: Option<String>,
     pub(crate) exec_server_sandbox: Option<FileSystemSandboxContext>,
@@ -88,8 +84,6 @@ impl ExecRequest {
     ) -> Self {
         let cwd = PathUri::from_abs_path(&cwd);
         let windows_sandbox_policy_cwd = cwd.clone();
-        let (file_system_sandbox_policy, network_sandbox_policy) =
-            permission_profile.to_runtime_permissions();
         Self {
             command,
             cwd,
@@ -105,8 +99,6 @@ impl ExecRequest {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,
             arg0,
             exec_server_sandbox: None,
@@ -132,14 +124,14 @@ impl ExecRequest {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
             arg0,
+            ..
         } = request;
         let ExecOptions {
             expiration,
             capture_policy,
         } = options;
+        let network_sandbox_policy = permission_profile.network_sandbox_policy();
         if !network_sandbox_policy.is_enabled() {
             env.insert(
                 CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
@@ -165,8 +157,6 @@ impl ExecRequest {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,
             arg0,
             exec_server_sandbox: None,

@@ -29,8 +29,7 @@ use tempfile::TempDir;
 fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
     let manager = SandboxManager::new();
     let sandbox = manager.select_initial(
-        &FileSystemSandboxPolicy::unrestricted(),
-        NetworkSandboxPolicy::Enabled,
+        &PermissionProfile::Disabled,
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
         /*has_managed_network_requirements*/ false,
@@ -44,8 +43,7 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
     let expected =
         get_platform_sandbox(/*windows_sandbox_enabled*/ false).unwrap_or(SandboxType::None);
     let sandbox = manager.select_initial(
-        &FileSystemSandboxPolicy::unrestricted(),
-        NetworkSandboxPolicy::Enabled,
+        &PermissionProfile::Disabled,
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
         /*has_managed_network_requirements*/ true,
@@ -58,7 +56,7 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
     let manager = SandboxManager::new();
     let expected =
         get_platform_sandbox(/*windows_sandbox_enabled*/ false).unwrap_or(SandboxType::None);
-    let sandbox = manager.select_initial(
+    let permissions = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::Root,
@@ -67,6 +65,9 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
             missing_path_behavior: None,
         }]),
         NetworkSandboxPolicy::Enabled,
+    );
+    let sandbox = manager.select_initial(
+        &permissions,
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
         /*has_managed_network_requirements*/ false,
@@ -112,11 +113,11 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
     assert_eq!(exec_request.cwd, cwd_uri);
     assert_eq!(exec_request.sandbox_policy_cwd, cwd_uri);
     assert_eq!(
-        exec_request.file_system_sandbox_policy,
+        exec_request.permission_profile.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::unrestricted()
     );
     assert_eq!(
-        exec_request.network_sandbox_policy,
+        exec_request.permission_profile.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted
     );
 }
@@ -172,7 +173,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
         }
     );
     assert_eq!(
-        exec_request.network_sandbox_policy,
+        exec_request.permission_profile.network_sandbox_policy(),
         NetworkSandboxPolicy::Enabled
     );
 }
@@ -239,7 +240,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
         .expect("transform");
 
     assert_eq!(
-        exec_request.file_system_sandbox_policy,
+        exec_request.permission_profile.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -261,7 +262,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
         ])
     );
     assert_eq!(
-        exec_request.network_sandbox_policy,
+        exec_request.permission_profile.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted
     );
 }

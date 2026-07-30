@@ -160,8 +160,7 @@ impl ToolOrchestrator {
         let permissions = permission_profile
             .clone()
             .materialize_project_roots_with_workspace_roots(&materialized_workspace_roots);
-        let (file_system_sandbox_policy, network_sandbox_policy) =
-            permissions.to_runtime_permissions();
+        let file_system_sandbox_policy = permissions.file_system_sandbox_policy();
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
@@ -235,16 +234,14 @@ impl ToolOrchestrator {
         let sandbox_requested = match sandbox_override {
             SandboxOverride::BypassSandboxFirstAttempt => false,
             SandboxOverride::NoOverride => self.sandbox.should_sandbox(
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
+                &permissions,
                 sandbox_preference,
                 managed_network_active,
             ),
         };
         let initial_sandbox = if sandbox_requested {
             self.sandbox.select_initial(
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
+                &permissions,
                 sandbox_preference,
                 turn_ctx.windows_sandbox_level,
                 managed_network_active,
@@ -423,15 +420,13 @@ impl ToolOrchestrator {
 
                 let retry_sandbox_requested = !unsandboxed_allowed
                     && self.sandbox.should_sandbox(
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
+                        &permissions,
                         sandbox_preference,
                         managed_network_active,
                     );
                 let retry_sandbox = if retry_sandbox_requested {
                     self.sandbox.select_initial(
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
+                        &permissions,
                         sandbox_preference,
                         turn_ctx.windows_sandbox_level,
                         managed_network_active,

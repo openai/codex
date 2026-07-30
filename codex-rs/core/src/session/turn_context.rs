@@ -16,8 +16,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
-use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
-use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -335,21 +334,9 @@ impl TurnContext {
         additional_permissions: Option<AdditionalPermissionProfile>,
         environment: &TurnEnvironment,
     ) -> FileSystemSandboxContext {
-        let permission_profile = self.config.permissions.permission_profile();
-        let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
-            permission_profile.to_runtime_permissions();
-        let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-            &base_file_system_sandbox_policy,
+        let permissions = effective_permission_profile(
+            self.config.permissions.permission_profile(),
             additional_permissions.as_ref(),
-        );
-        let network_sandbox_policy = effective_network_sandbox_policy(
-            base_network_sandbox_policy,
-            additional_permissions.as_ref(),
-        );
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            permission_profile.enforcement(),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
         );
         FileSystemSandboxContext {
             permissions: permissions.into(),

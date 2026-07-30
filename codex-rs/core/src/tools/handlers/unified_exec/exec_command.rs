@@ -155,8 +155,7 @@ impl ExecCommandHandler {
         // permissions config below. Consult the configured platform-sandbox requirement before
         // deciding whether parsing may continue without that base path.
         let sandbox = SandboxManager::new().select_initial(
-            &turn.file_system_sandbox_policy(),
-            turn.network_sandbox_policy(),
+            &turn.permission_profile,
             SandboxablePreference::Auto,
             turn.windows_sandbox_level,
             turn.network.is_some(),

@@ -317,13 +317,15 @@ fn shell_request_escalation_execution_is_explicit() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
     );
-    let read_only_file_system_policy = read_only_file_system_sandbox_policy();
+    let read_only_permission_profile = PermissionProfile::from_runtime_permissions(
+        &read_only_file_system_sandbox_policy(),
+        network_sandbox_policy,
+    );
 
     assert_eq!(
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::UseDefault,
             &permission_profile,
-            &file_system_sandbox_policy,
             /*additional_permissions*/ None,
         ),
         EscalationExecution::TurnDefault,
@@ -331,8 +333,7 @@ fn shell_request_escalation_execution_is_explicit() {
     assert_eq!(
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::RequireEscalated,
-            &permission_profile,
-            &read_only_file_system_policy,
+            &read_only_permission_profile,
             /*additional_permissions*/ None,
         ),
         EscalationExecution::Unsandboxed,
@@ -341,7 +342,6 @@ fn shell_request_escalation_execution_is_explicit() {
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::RequireEscalated,
             &permission_profile,
-            &file_system_sandbox_policy,
             /*additional_permissions*/ None,
         ),
         EscalationExecution::TurnDefault,
@@ -350,7 +350,6 @@ fn shell_request_escalation_execution_is_explicit() {
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::WithAdditionalPermissions,
             &permission_profile,
-            &file_system_sandbox_policy,
             Some(&requested_permissions),
         ),
         EscalationExecution::Permissions(EscalationPermissions::ResolvedPermissionProfile(
@@ -366,8 +365,6 @@ async fn unsandboxed_intercepted_exec_strips_managed_network_env() -> anyhow::Re
         command: Vec::new(),
         cwd: workdir.clone(),
         permission_profile: PermissionProfile::workspace_write(),
-        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
-        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         sandbox: SandboxType::None,
         env: HashMap::new(),
         network: None,
@@ -435,7 +432,6 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: permission_profile.clone(),
-        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: Some(requested_permissions),
@@ -571,7 +567,6 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::read_only(),
-        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
@@ -782,7 +777,6 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile,
-        file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::UseDefault,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: None,
@@ -825,7 +819,6 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
             mcp_elicitations: true,
         }),
         permission_profile,
-        file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,

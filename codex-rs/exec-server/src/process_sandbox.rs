@@ -150,6 +150,7 @@ pub(crate) async fn prepare_exec_request(
         managed_mitm_ca_trust_bundle_path.as_ref(),
         native_sandbox_policy_cwd.as_path(),
     );
+    #[cfg(unix)]
     let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
     #[cfg(unix)]
     let sandbox_helper_paths = params
@@ -179,8 +180,7 @@ pub(crate) async fn prepare_exec_request(
     );
     let sandbox_manager = SandboxManager::new();
     let sandbox = sandbox_manager.select_initial(
-        &file_system_policy,
-        network_policy,
+        &permissions,
         SandboxablePreference::Require,
         sandbox_context.windows_sandbox_level,
         params.enforce_managed_network,

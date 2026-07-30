@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_sandboxing::SandboxType;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -1049,8 +1050,10 @@ fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() 
 
     assert_eq!(
         select_process_exec_tool_sandbox_type(
-            &FileSystemSandboxPolicy::unrestricted(),
-            NetworkSandboxPolicy::Restricted,
+            &PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Restricted,
+            ),
             codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             /*enforce_managed_network*/ false,
         ),

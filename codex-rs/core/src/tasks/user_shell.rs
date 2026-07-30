@@ -225,9 +225,7 @@ pub(crate) async fn execute_user_shell_command(
             .config
             .permissions
             .windows_sandbox_private_desktop,
-        permission_profile: permission_profile.clone(),
-        file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),
-        network_sandbox_policy: permission_profile.network_sandbox_policy(),
+        permission_profile,
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
         exec_server_sandbox: None,
