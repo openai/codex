@@ -94,7 +94,7 @@ pub enum Feature {
     // Experimental
     /// Record model-attempted tool calls in internal Responses metadata.
     ExecutedToolCallMetadata,
-    /// Enable JavaScript code mode backed by the in-process V8 runtime.
+    /// Enable JavaScript code mode backed by the standalone host process.
     CodeMode,
     /// Use a 30-second default yield timeout for code mode exec calls.
     CodeModeBufferedExec,

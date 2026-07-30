@@ -63,7 +63,7 @@ pub(crate) fn tool_user_shell_type(
     }
 }
 
-fn effective_tool_mode(turn_context: &TurnContext) -> ToolMode {
+pub(crate) fn requested_tool_mode(turn_context: &TurnContext) -> ToolMode {
     turn_context.model_info.tool_mode.unwrap_or_else(|| {
         if turn_context.config.features.enabled(Feature::CodeModeOnly) {
             ToolMode::CodeModeOnly
@@ -73,6 +73,18 @@ fn effective_tool_mode(turn_context: &TurnContext) -> ToolMode {
             ToolMode::Direct
         }
     })
+}
+
+pub(crate) fn effective_tool_mode(turn_context: &TurnContext) -> ToolMode {
+    let requested_tool_mode = requested_tool_mode(turn_context);
+    if !turn_context.code_mode_available
+        && requested_tool_mode == ToolMode::CodeMode
+        && !turn_context.config.code_mode.disable_in_process_fallback
+    {
+        ToolMode::Direct
+    } else {
+        requested_tool_mode
+    }
 }
 
 /// Format the combined exec output for sending back to the model.

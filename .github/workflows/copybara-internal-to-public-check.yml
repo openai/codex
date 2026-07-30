@@ -194,10 +194,9 @@ jobs:
             # path. V8 consumers under `//codex-rs/...` still participate
             # transitively through `//...`.
             -//third_party/v8:all
-            # Keep V8-backed code-mode tests out of the ordinary Linux leg;
-            # the public Bazel matrix exercises these on authenticated Windows
-            # cross-compiled shards.
-            -//codex-rs/code-mode:code-mode-unit-tests
+            # Avoid duplicating V8-backed tests in the public-projection job;
+            # the blocking Bazel matrix runs them on Linux, macOS, and Windows.
+            -//codex-rs/code-mode-runtime:code-mode-runtime-unit-tests
             -//codex-rs/v8-poc:v8-poc-unit-tests
           )
 

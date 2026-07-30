@@ -1,8 +1,8 @@
-use codex_code_mode::ExecuteRequest;
-use codex_code_mode::InProcessCodeModeSession;
-use codex_code_mode::RuntimeResponse;
-use codex_code_mode::V8JitMode;
-use codex_code_mode::initialize_v8;
+use codex_code_mode_runtime::ExecuteRequest;
+use codex_code_mode_runtime::InProcessCodeModeSession;
+use codex_code_mode_runtime::RuntimeResponse;
+use codex_code_mode_runtime::V8JitMode;
+use codex_code_mode_runtime::initialize_v8;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]

@@ -232,6 +232,48 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_code_mode_only_selector_fails_closed_when_host_is_disabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut model = remote_model("test-tool-mode-code-mode-only-host-disabled");
+    model.tool_mode = Some(ToolMode::CodeModeOnly);
+    let response = response_for_remote_model(model, |config| {
+        config
+            .features
+            .disable(Feature::CodeModeHost)
+            .expect("code-mode host should be disabled");
+    })
+    .await?;
+
+    let tools = tool_names(&response.body);
+    assert!(
+        tools
+            .iter()
+            .any(|name| name == codex_code_mode::PUBLIC_TOOL_NAME)
+            && tools
+                .iter()
+                .any(|name| name == codex_code_mode::WAIT_TOOL_NAME),
+        "code-mode-only must retain code-mode tools: {tools:?}"
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|name| { !matches!(name.as_str(), "shell" | "shell_command" | "exec_command") }),
+        "code-mode-only must never expose direct shell tools: {tools:?}"
+    );
+    assert!(
+        response
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Code mode will fail closed")),
+        "code-mode-only should explain that it fails closed: {:?}",
+        response.warnings
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unsupported_code_mode_warning_is_emitted_each_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

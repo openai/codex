@@ -1096,6 +1096,7 @@ pub struct Config {
 pub struct CodeModeConfig {
     pub excluded_tool_namespaces: Vec<String>,
     pub direct_only_tool_namespaces: Vec<String>,
+    /// Keep code mode fail-closed when the standalone host is unavailable.
     pub disable_in_process_fallback: bool,
 }
 

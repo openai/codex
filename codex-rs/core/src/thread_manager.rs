@@ -24,10 +24,8 @@ use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
-use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
-use codex_code_mode::CodeModeSessionProviderFuture;
-use codex_code_mode::InProcessCodeModeSessionProvider;
+use codex_code_mode::DisabledCodeModeSessionProvider;
 use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
@@ -98,19 +96,6 @@ use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
-
-struct DisabledCodeModeSessionProvider;
-
-impl CodeModeSessionProvider for DisabledCodeModeSessionProvider {
-    fn create_session<'a>(
-        &'a self,
-        _delegate: Arc<dyn CodeModeSessionDelegate>,
-    ) -> CodeModeSessionProviderFuture<'a> {
-        Box::pin(async {
-            Err("code-mode host is disabled and in-process fallback is disabled".to_string())
-        })
-    }
-}
 
 /// Test-only override for enabling thread-manager behaviors used by integration
 /// tests.
@@ -392,17 +377,12 @@ impl ThreadManager {
             restriction_product,
         ));
         let code_mode_session_provider: Arc<dyn CodeModeSessionProvider> =
-            if config.features.enabled(Feature::CodeModeHost) {
-                let provider = ProcessOwnedCodeModeSessionProvider::default();
-                if config.code_mode.disable_in_process_fallback {
-                    Arc::new(provider.without_in_process_fallback())
-                } else {
-                    Arc::new(provider)
-                }
-            } else if config.code_mode.disable_in_process_fallback {
-                Arc::new(DisabledCodeModeSessionProvider)
+            if config.features.enabled(Feature::CodeModeHost)
+                || config.code_mode.disable_in_process_fallback
+            {
+                Arc::new(ProcessOwnedCodeModeSessionProvider::default())
             } else {
-                Arc::new(InProcessCodeModeSessionProvider)
+                Arc::new(DisabledCodeModeSessionProvider)
             };
         Self {
             state: Arc::new(ThreadManagerState {
@@ -447,17 +427,14 @@ impl ThreadManager {
     pub(crate) fn with_code_mode_host_program_for_tests(
         mut self,
         host_program: PathBuf,
-        config: &Config,
+        _config: &Config,
     ) -> Self {
         let Some(state) = Arc::get_mut(&mut self.state) else {
             unreachable!("new thread manager state should not be shared");
         };
-        let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(host_program);
-        state.code_mode_session_provider = if config.code_mode.disable_in_process_fallback {
-            Arc::new(provider.without_in_process_fallback())
-        } else {
-            Arc::new(provider)
-        };
+        state.code_mode_session_provider = Arc::new(
+            ProcessOwnedCodeModeSessionProvider::with_host_program(host_program),
+        );
         self
     }
 
@@ -550,7 +527,7 @@ impl ThreadManager {
                 skills_service,
                 plugins_manager,
                 mcp_manager,
-                code_mode_session_provider: Arc::new(InProcessCodeModeSessionProvider),
+                code_mode_session_provider: Arc::new(DisabledCodeModeSessionProvider),
                 extensions: empty_extension_registry(),
                 user_instructions_provider: Arc::new(
                     crate::test_support::EmptyUserInstructionsProvider,

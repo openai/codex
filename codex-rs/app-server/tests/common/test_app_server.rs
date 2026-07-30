@@ -157,13 +157,13 @@ pub struct TestAppServer {
     // removing an owned CODEX_HOME that may still be its cwd on Windows.
     _delayed_exec_server: Option<(LocalWebsocketExecServer, WebsocketDelayInterposer)>,
     _attribution_settings_server: Option<MockServer>,
+    _owned_install_dir: Option<TempDir>,
     _owned_codex_home: Option<TempDir>,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tasks-for-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
-const CODE_MODE_HOST_PATH_ENV_VAR: &str = "CODEX_CODE_MODE_HOST_PATH";
 #[cfg(windows)]
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 #[cfg(not(windows))]
@@ -293,6 +293,7 @@ impl TestAppServer {
             json_logs,
             _delayed_exec_server: None,
             _attribution_settings_server: None,
+            _owned_install_dir: None,
             _owned_codex_home: None,
         })
     }
@@ -1997,25 +1998,42 @@ impl TestAppServerBuilder {
                 (None, None)
             }
         };
-        if !env_overrides
-            .iter()
-            .any(|(key, _)| key == CODE_MODE_HOST_PATH_ENV_VAR)
-            && let Ok(code_mode_host_program) =
-                codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")
-        {
-            env_overrides.insert(
-                0,
-                (
-                    CODE_MODE_HOST_PATH_ENV_VAR.to_string(),
-                    Some(code_mode_host_program.to_string_lossy().into_owned()),
-                ),
-            );
-        }
-        let program = match program {
+        let custom_program = program.is_some();
+        let mut program = match program {
             Some(program) => program,
             None => codex_utils_cargo_bin::cargo_bin("codex-app-server")
                 .context("should find binary for codex-app-server")?,
         };
+        let mut owned_install_dir = None;
+        if !custom_program
+            && codex_utils_cargo_bin::runfiles_available()
+            && let Ok(code_mode_host_program) =
+                codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")
+        {
+            // Bazel keeps binary targets in separate package directories.
+            // Recreate the installed sibling layout without a path override.
+            let install_dir = TempDir::new()?;
+            let staged_program = install_dir.path().join(
+                program
+                    .file_name()
+                    .context("app-server executable should have a filename")?,
+            );
+            let staged_host = install_dir.path().join(
+                code_mode_host_program
+                    .file_name()
+                    .context("code-mode host executable should have a filename")?,
+            );
+            for (source, destination) in [
+                (&program, &staged_program),
+                (&code_mode_host_program, &staged_host),
+            ] {
+                std::fs::hard_link(source, destination)
+                    .or_else(|_| std::fs::copy(source, destination).map(|_| ()))
+                    .with_context(|| format!("stage executable {}", source.display()))?;
+            }
+            program = staged_program;
+            owned_install_dir = Some(install_dir);
+        }
         let env_overrides = env_overrides
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_deref()))
@@ -2029,6 +2047,7 @@ impl TestAppServerBuilder {
         )
         .await?;
         app_server.auto_env = auto_env;
+        app_server._owned_install_dir = owned_install_dir;
         app_server._owned_codex_home = owned_codex_home;
         app_server._delayed_exec_server = delayed_exec_server;
         app_server._attribution_settings_server = attribution_settings_server;

@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_code_mode::InProcessCodeModeSession;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::EncodedFrame;
@@ -23,6 +22,7 @@ use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_code_mode_runtime::InProcessCodeModeSession;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::sync::Semaphore;

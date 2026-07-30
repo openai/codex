@@ -34,7 +34,7 @@ impl FeatureConfig for CodeModeConfigToml {
 pub struct CodeModeHostConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// Fail instead of running embedded V8 when the standalone host is unavailable.
+    /// Keep code mode fail-closed when the standalone host is unavailable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_in_process_fallback: Option<bool>,
 }

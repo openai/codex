@@ -71,15 +71,6 @@ pub(super) enum ConnectionError {
     Other(String),
 }
 
-impl ConnectionError {
-    pub(super) fn host_program_not_found(&self) -> bool {
-        matches!(
-            self,
-            Self::Spawn { error, .. } if error.kind() == io::ErrorKind::NotFound
-        )
-    }
-}
-
 impl fmt::Display for ConnectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

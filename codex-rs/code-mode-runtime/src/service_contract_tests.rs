@@ -3,6 +3,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_code_mode_protocol::NotificationFuture;
+use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;

@@ -104,6 +104,34 @@ pub trait CodeModeSessionDelegate: Send + Sync {
     fn cell_closed(&self, cell_id: &CellId);
 }
 
+/// A session delegate for clients that do not expose nested tools or notifications.
+pub struct NoopCodeModeSessionDelegate;
+
+impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        _invocation: CodeModeNestedToolCall,
+        cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        Box::pin(async move {
+            cancellation_token.cancelled().await;
+            Err("code mode nested tools are unavailable".to_string())
+        })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
 /// A durable code-mode session owned by one Codex thread.
 ///
 /// Cells executed in the same session share stored values. Separate sessions
@@ -127,6 +155,11 @@ pub trait CodeModeSession: Send + Sync {
 /// Implementations may share a remote host process across all sessions created
 /// by one provider.
 pub trait CodeModeSessionProvider: Send + Sync {
+    /// Reports whether this provider can execute code without starting its host.
+    fn availability(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     fn create_session<'a>(
         &'a self,
         delegate: Arc<dyn CodeModeSessionDelegate>,

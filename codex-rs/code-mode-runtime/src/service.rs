@@ -5,8 +5,6 @@ use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeNestedToolCall;
 use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
-use codex_code_mode_protocol::CodeModeSessionProvider;
-use codex_code_mode_protocol::CodeModeSessionProviderFuture;
 use codex_code_mode_protocol::CodeModeSessionResultFuture;
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::DEFAULT_EXEC_YIELD_TIME_MS;
@@ -14,10 +12,9 @@ use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::ExecuteToPendingOutcome;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
-use codex_code_mode_protocol::NotificationFuture;
+use codex_code_mode_protocol::NoopCodeModeSessionDelegate;
 use codex_code_mode_protocol::RuntimeResponse;
 use codex_code_mode_protocol::StartedCell;
-use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::WaitToPendingOutcome;
@@ -38,49 +35,6 @@ fn yield_timeout(yield_time_ms: u64) -> Duration {
         yield_time.saturating_add(YIELD_GRACE_PERIOD)
     } else {
         yield_time
-    }
-}
-
-pub struct NoopCodeModeSessionDelegate;
-
-impl CodeModeSessionDelegate for NoopCodeModeSessionDelegate {
-    fn invoke_tool<'a>(
-        &'a self,
-        _invocation: CodeModeNestedToolCall,
-        cancellation_token: CancellationToken,
-    ) -> ToolInvocationFuture<'a> {
-        Box::pin(async move {
-            cancellation_token.cancelled().await;
-            Err("code mode nested tools are unavailable".to_string())
-        })
-    }
-
-    fn notify<'a>(
-        &'a self,
-        _call_id: String,
-        _cell_id: CellId,
-        _text: String,
-        _cancellation_token: CancellationToken,
-    ) -> NotificationFuture<'a> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
-}
-
-#[derive(Default)]
-pub struct InProcessCodeModeSessionProvider;
-
-impl CodeModeSessionProvider for InProcessCodeModeSessionProvider {
-    fn create_session<'a>(
-        &'a self,
-        delegate: Arc<dyn CodeModeSessionDelegate>,
-    ) -> CodeModeSessionProviderFuture<'a> {
-        Box::pin(async move {
-            let session: Arc<dyn CodeModeSession> =
-                Arc::new(InProcessCodeModeSession::with_delegate(delegate));
-            Ok(session)
-        })
     }
 }
 

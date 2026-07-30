@@ -389,7 +389,7 @@
       "additionalProperties": false,
       "properties": {
         "disable_in_process_fallback": {
-          "description": "Fail instead of running embedded V8 when the standalone host is unavailable.",
+          "description": "Keep code mode fail-closed when the standalone host is unavailable.",
           "type": "boolean"
         },
         "enabled": {
