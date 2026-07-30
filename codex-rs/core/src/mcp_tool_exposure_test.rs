@@ -90,9 +90,11 @@ fn expected_runtimes(
         .collect()
 }
 
-fn runtimes_by_name(runtimes: &[Arc<dyn CoreToolRuntime>]) -> HashMap<ToolName, ToolExposure> {
+fn runtimes_by_name(
+    runtimes: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>,
+) -> HashMap<ToolName, ToolExposure> {
     runtimes
-        .iter()
+        .into_iter()
         .map(|runtime| (runtime.tool_name(), runtime.exposure()))
         .collect()
 }
@@ -117,7 +119,7 @@ async fn directly_exposes_effective_tool_sets_when_search_is_unavailable() {
     );
 
     assert_eq!(
-        runtimes_by_name(&runtimes),
+        runtimes_by_name(runtimes),
         expected_runtimes(&mcp_tools, ToolExposure::Direct)
     );
 }
@@ -194,7 +196,7 @@ async fn excludes_tools_hidden_from_model_exposure() {
     );
 
     assert_eq!(
-        runtimes_by_name(&runtimes),
+        runtimes_by_name(runtimes),
         expected_runtimes(&[visible_tool, visible_app_tool], ToolExposure::Direct)
     );
 }
@@ -236,15 +238,16 @@ enabled = true
     );
     let connectors = vec![make_connector("calendar", "Calendar")];
 
+    let mcp_tools = [enabled_tool.clone(), disabled_tool];
     let runtimes = build_mcp_tool_runtimes(
-        &[enabled_tool.clone(), disabled_tool],
+        &mcp_tools,
         Some(connectors.as_slice()),
         &config,
         /*search_tool_enabled*/ false,
     );
 
     assert_eq!(
-        runtimes_by_name(&runtimes),
+        runtimes_by_name(runtimes),
         expected_runtimes(&[enabled_tool], ToolExposure::Direct)
     );
 }
@@ -259,7 +262,7 @@ async fn defers_effective_tool_sets_when_search_is_available() {
     );
 
     assert_eq!(
-        runtimes_by_name(&runtimes),
+        runtimes_by_name(runtimes),
         expected_runtimes(&mcp_tools, ToolExposure::Deferred)
     );
 }
@@ -295,7 +298,7 @@ async fn defers_apps_and_non_app_mcp_tools() {
     );
 
     assert_eq!(
-        runtimes_by_name(&runtimes),
+        runtimes_by_name(runtimes),
         expected_runtimes(&mcp_tools, ToolExposure::Deferred)
     );
 }

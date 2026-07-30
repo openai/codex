@@ -129,7 +129,7 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
 fn test_tool_router(
     step_context: &StepContext,
     mcp_tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
-    extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
+    extension_tool_executors: impl IntoIterator<Item = Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRouter {
     let mut tool_runtimes = build_core_tool_runtimes(

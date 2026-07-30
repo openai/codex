@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -39,8 +38,9 @@ use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
+use indexmap::IndexMap;
+use indexmap::map::Entry;
 use serde_json::Value;
-use tracing::instrument;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
@@ -334,27 +334,87 @@ impl CoreToolRuntime for ExposureOverride {
     }
 }
 
+#[derive(Default)]
 pub struct ToolRegistry {
-    tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
+    tools: IndexMap<ToolName, Arc<dyn CoreToolRuntime>>,
 }
 
 impl ToolRegistry {
-    fn new(tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>) -> Self {
-        Self { tools }
+    #[cfg(test)]
+    pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
+        let mut registry = Self {
+            tools: IndexMap::new(),
+        };
+
+        for runtime in tools {
+            registry.register_trusted(runtime);
+        }
+
+        registry
     }
 
-    #[instrument(level = "trace", skip_all)]
-    pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
-        let mut tools_by_name = HashMap::new();
-        for tool in tools {
-            let name = tool.tool_name();
-            if tools_by_name.contains_key(&name) {
-                error_or_panic(format!("tool {name} already registered"));
-                continue;
+    pub(crate) fn add<T>(&mut self, handler: T)
+    where
+        T: CoreToolRuntime + 'static,
+    {
+        self.register_trusted(Arc::new(handler));
+    }
+
+    pub(crate) fn add_with_exposure<T>(&mut self, handler: T, exposure: ToolExposure)
+    where
+        T: CoreToolRuntime + 'static,
+    {
+        self.register_trusted(override_tool_exposure(Arc::new(handler), exposure));
+    }
+
+    pub(crate) fn register_trusted(&mut self, runtime: Arc<dyn CoreToolRuntime>) {
+        match self.tools.entry(runtime.tool_name()) {
+            Entry::Vacant(entry) => {
+                entry.insert(runtime);
             }
-            tools_by_name.insert(name, tool);
+            Entry::Occupied(entry) => {
+                let tool_name = entry.key();
+                error_or_panic(format!("tool {tool_name} already registered"));
+            }
         }
-        Self::new(tools_by_name)
+    }
+
+    pub(crate) fn prepend_trusted(&mut self, runtime: Arc<dyn CoreToolRuntime>) {
+        let tool_name = runtime.tool_name();
+        if self.tools.contains_key(&tool_name) {
+            error_or_panic(format!("tool {tool_name} already registered"));
+            return;
+        }
+
+        self.tools.shift_insert(0, tool_name, runtime);
+    }
+
+    pub(crate) fn register_external(&mut self, runtime: Arc<dyn CoreToolRuntime>) -> bool {
+        match self.tools.entry(runtime.tool_name()) {
+            Entry::Vacant(entry) => {
+                entry.insert(runtime);
+                true
+            }
+            Entry::Occupied(entry) => {
+                tracing::warn!(
+                    tool_name = %entry.key(),
+                    "skipping duplicate external tool that is already registered"
+                );
+                false
+            }
+        }
+    }
+
+    pub(crate) fn remove(&mut self, tool_name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
+        self.tools.shift_remove(tool_name)
+    }
+
+    pub(crate) fn runtimes(&self) -> impl Iterator<Item = &Arc<dyn CoreToolRuntime>> {
+        self.tools.values()
+    }
+
+    pub(crate) fn runtimes_mut(&mut self) -> impl Iterator<Item = &mut Arc<dyn CoreToolRuntime>> {
+        self.tools.values_mut()
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
@@ -386,7 +446,7 @@ impl ToolRegistry {
 
     #[cfg(test)]
     pub(crate) fn empty_for_test() -> Self {
-        Self::new(HashMap::new())
+        Self::from_tools(std::iter::empty())
     }
 
     #[cfg(test)]
@@ -394,8 +454,7 @@ impl ToolRegistry {
     where
         T: CoreToolRuntime + 'static,
     {
-        let name = handler.tool_name();
-        Self::new(HashMap::from([(name, handler as Arc<dyn CoreToolRuntime>)]))
+        Self::from_tools([handler as Arc<dyn CoreToolRuntime>])
     }
 
     pub(crate) fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {

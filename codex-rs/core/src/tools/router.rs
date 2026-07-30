@@ -1,16 +1,19 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+#[cfg(test)]
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+#[cfg(test)]
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec_plan::build_tool_router;
+#[cfg(test)]
+use crate::tools::spec_plan::finalize_tool_router;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
@@ -80,15 +83,16 @@ pub(crate) struct ToolSuggestCandidates {
 }
 
 impl ToolRouter {
+    #[cfg(test)]
     pub(crate) fn from_tools(
         turn_context: &TurnContext,
         tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
         hosted_specs: Vec<ToolSpec>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {
-        build_tool_router(
+        finalize_tool_router(
             turn_context,
-            tool_runtimes,
+            ToolRegistry::from_tools(tool_runtimes),
             hosted_specs,
             tool_search_handler_cache,
         )

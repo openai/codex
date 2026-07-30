@@ -183,10 +183,8 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let namespaced_handler = Arc::new(TestHandler {
         tool_name: namespaced_name.clone(),
     }) as Arc<dyn CoreToolRuntime>;
-    let registry = ToolRegistry::new(HashMap::from([
-        (plain_name.clone(), Arc::clone(&plain_handler)),
-        (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
-    ]));
+    let registry =
+        ToolRegistry::from_tools([Arc::clone(&plain_handler), Arc::clone(&namespaced_handler)]);
 
     let plain = registry.tool(&plain_name);
     let namespaced = registry.tool(&namespaced_name);
@@ -207,6 +205,32 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
         namespaced
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
+    );
+}
+
+#[test]
+fn registry_preserves_external_winners_and_trusted_synthetic_order() {
+    let handler = |tool_name| Arc::new(TestHandler { tool_name }) as Arc<dyn CoreToolRuntime>;
+    let [first_name, second_name, synthetic_name] =
+        ["first", "second", "synthetic"].map(codex_tools::ToolName::plain);
+    let first_handler = handler(first_name.clone());
+
+    let mut registry = ToolRegistry::from_tools([Arc::clone(&first_handler)]);
+    assert!(!registry.register_external(handler(first_name.clone())));
+    assert!(registry.register_external(handler(second_name.clone())));
+    registry.prepend_trusted(handler(synthetic_name.clone()));
+
+    assert_eq!(
+        registry
+            .runtimes()
+            .map(|runtime| runtime.tool_name())
+            .collect::<Vec<_>>(),
+        vec![synthetic_name, first_name.clone(), second_name],
+    );
+    assert!(
+        registry
+            .remove(&first_name)
+            .is_some_and(|handler| Arc::ptr_eq(&handler, &first_handler))
     );
 }
 
@@ -496,10 +520,7 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
         tool_name: failing_tool.clone(),
         result: LifecycleTestResult::Err,
     }) as Arc<dyn CoreToolRuntime>;
-    let registry = ToolRegistry::new(HashMap::from([
-        (ok_tool.clone(), ok_handler),
-        (failing_tool.clone(), failing_handler),
-    ]));
+    let registry = ToolRegistry::from_tools([ok_handler, failing_handler]);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 

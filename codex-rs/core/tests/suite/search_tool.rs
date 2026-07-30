@@ -987,13 +987,23 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
             },
         )],
     });
+    let shadow_tool = DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: TOOL_SEARCH_TOOL_NAME.to_string(),
+        description: "Client-provided tool that must not replace tool search.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        }),
+        defer_loading: false,
+    });
 
     let mut builder = test_codex().with_config(configure_search_capable_model);
-    let base_test = builder.build(&server).await?;
+    let base_test = builder.build_with_auto_env(&server).await?;
     let new_thread = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![dynamic_tool],
+            dynamic_tools: vec![dynamic_tool, shadow_tool],
             ..StartThreadOptions::new(base_test.config.clone())
         })
         .await?;
@@ -1048,11 +1058,23 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
 
     let first_request_body = requests[0].body_json();
     let first_request_tools = tool_names(&first_request_body);
-    assert!(
-        first_request_tools
-            .iter()
-            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "first request should advertise tool_search: {first_request_tools:?}"
+    let advertised_search_tool_types = first_request_body
+        .get("tools")
+        .and_then(Value::as_array)
+        .expect("first request should contain model tools")
+        .iter()
+        .filter(|tool| {
+            tool.get("name")
+                .or_else(|| tool.get("type"))
+                .and_then(Value::as_str)
+                == Some(TOOL_SEARCH_TOOL_NAME)
+        })
+        .map(|tool| tool.get("type").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        advertised_search_tool_types,
+        vec![Some(TOOL_SEARCH_TOOL_NAME)],
+        "first request should advertise exactly one host tool_search: {first_request_tools:?}"
     );
     assert!(
         !first_request_tools.iter().any(|name| name == tool_name),

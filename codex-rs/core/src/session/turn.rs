@@ -28,7 +28,6 @@ use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
-use crate::mcp_tool_exposure::build_mcp_tool_runtimes;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
@@ -60,10 +59,7 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
-use crate::tools::spec_plan::append_source_tool_runtimes;
-use crate::tools::spec_plan::build_core_tool_runtimes;
-use crate::tools::spec_plan::extension_tool_executors;
-use crate::tools::spec_plan::search_tool_enabled;
+use crate::tools::spec_plan::build_tool_router;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
@@ -1549,35 +1545,14 @@ pub(crate) async fn built_tools(
             .instrument(trace_span!("built_tools.load_discoverable_tools"))
             .await
         };
-    let mcp_tool_runtimes = build_mcp_tool_runtimes(
-        &all_mcp_tools,
-        connectors.as_deref(),
-        &turn_context.config,
-        search_tool_enabled(turn_context),
-    );
-    let wait_for_environment_tool_config = sess
-        .services
-        .thread_extension_data
-        .get::<crate::WaitForEnvironmentToolConfig>();
-    let mut tool_runtimes = build_core_tool_runtimes(
+    let tool_router = Arc::new(build_tool_router(
+        sess,
         turn_context,
         environments,
         mcp,
+        connectors.as_deref(),
+        step_store,
         tool_suggest_candidates.as_ref(),
-        wait_for_environment_tool_config.as_ref(),
-    );
-    let hosted_specs = append_source_tool_runtimes(
-        turn_context,
-        &mut tool_runtimes,
-        mcp_tool_runtimes,
-        extension_tool_executors(sess, step_store),
-        &turn_context.dynamic_tools,
-    );
-    let tool_router = Arc::new(ToolRouter::from_tools(
-        turn_context,
-        tool_runtimes,
-        hosted_specs,
-        &sess.services.tool_search_handler_cache,
     ));
     (all_mcp_tools, tool_router)
 }
