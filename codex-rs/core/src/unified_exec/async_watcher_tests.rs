@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use super::TRAILING_OUTPUT_GRACE;
@@ -203,36 +204,76 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
 
 #[test]
 fn split_valid_utf8_prefix_respects_max_bytes_for_ascii() {
-    let mut buf = b"hello word!".to_vec();
+    let mut buf = VecDeque::from(b"hello word!".to_vec());
 
     let first =
         split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 5).expect("expected prefix");
     assert_eq!(first, b"hello".to_vec());
-    assert_eq!(buf, b" word!".to_vec());
+    assert_eq!(buf, VecDeque::from(b" word!".to_vec()));
 
     let second =
         split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 5).expect("expected prefix");
     assert_eq!(second, b" word".to_vec());
-    assert_eq!(buf, b"!".to_vec());
+    assert_eq!(buf, VecDeque::from(b"!".to_vec()));
 }
 
 #[test]
 fn split_valid_utf8_prefix_avoids_splitting_utf8_codepoints() {
     // "é" is 2 bytes in UTF-8. With a max of 3 bytes, we should only emit 1 char (2 bytes).
-    let mut buf = "ééé".as_bytes().to_vec();
+    let mut buf = VecDeque::from("ééé".as_bytes().to_vec());
 
     let first =
         split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 3).expect("expected prefix");
     assert_eq!(std::str::from_utf8(&first).unwrap(), "é");
-    assert_eq!(buf, "éé".as_bytes().to_vec());
+    assert_eq!(buf, VecDeque::from("éé".as_bytes().to_vec()));
 }
 
 #[test]
 fn split_valid_utf8_prefix_makes_progress_on_invalid_utf8() {
-    let mut buf = vec![0xff, b'a', b'b'];
+    let mut buf = VecDeque::from(vec![0xff, b'a', b'b']);
 
     let first =
         split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 2).expect("expected prefix");
     assert_eq!(first, vec![0xff]);
-    assert_eq!(buf, b"ab".to_vec());
+    assert_eq!(buf, VecDeque::from(b"ab".to_vec()));
+}
+
+#[test]
+fn split_valid_utf8_prefix_consumes_all_valid_bytes_before_invalid_utf8() {
+    let mut bytes = vec![b'a'; 4096];
+    bytes.push(0xff);
+    bytes.extend(vec![b'b'; 4096]);
+    let mut buf = VecDeque::from(bytes);
+
+    let first =
+        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 8192).expect("expected prefix");
+    assert_eq!(first, vec![b'a'; 4096]);
+
+    let second =
+        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 8192).expect("expected prefix");
+    assert_eq!(second, vec![0xff]);
+
+    let third =
+        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 8192).expect("expected prefix");
+    assert_eq!(third, vec![b'b'; 4096]);
+    assert!(buf.is_empty());
+}
+
+#[test]
+fn split_invalid_utf8_advances_without_shifting_remaining_bytes() {
+    let mut buf = VecDeque::from(vec![0xff; 1024]);
+    let initial = buf.as_slices().0.as_ptr();
+
+    for offset in 0..1024 {
+        assert_eq!(
+            split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 128),
+            Some(vec![0xff])
+        );
+        if let Some(first) = buf.as_slices().0.first() {
+            assert_eq!(first, &0xff);
+            assert_eq!(buf.as_slices().0.as_ptr(), initial.wrapping_add(offset + 1));
+        }
+    }
+
+    assert!(buf.is_empty());
 }

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -61,7 +62,7 @@ pub(crate) fn start_streaming_output(
     tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
 
-        let mut pending = Vec::<u8>::new();
+        let mut pending = VecDeque::<u8>::new();
         let mut emitted_deltas: usize = 0;
 
         let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
@@ -220,7 +221,7 @@ pub(crate) fn spawn_exit_watcher(
 }
 
 async fn process_chunk(
-    pending: &mut Vec<u8>,
+    pending: &mut VecDeque<u8>,
     transcript: &Arc<Mutex<HeadTailBuffer>>,
     call_id: &str,
     session_ref: &Arc<Session>,
@@ -228,7 +229,7 @@ async fn process_chunk(
     emitted_deltas: &mut usize,
     chunk: Vec<u8>,
 ) {
-    pending.extend_from_slice(&chunk);
+    pending.extend(chunk);
     while let Some(prefix) = split_valid_utf8_prefix(pending) {
         {
             let mut guard = transcript.lock().await;
@@ -354,34 +355,24 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
         .await;
 }
 
-fn split_valid_utf8_prefix(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
+fn split_valid_utf8_prefix(buffer: &mut VecDeque<u8>) -> Option<Vec<u8>> {
     split_valid_utf8_prefix_with_max(buffer, UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES)
 }
 
-fn split_valid_utf8_prefix_with_max(buffer: &mut Vec<u8>, max_bytes: usize) -> Option<Vec<u8>> {
+fn split_valid_utf8_prefix_with_max(
+    buffer: &mut VecDeque<u8>,
+    max_bytes: usize,
+) -> Option<Vec<u8>> {
     if buffer.is_empty() {
         return None;
     }
 
     let max_len = buffer.len().min(max_bytes);
-    let mut split = max_len;
-    while split > 0 {
-        if std::str::from_utf8(&buffer[..split]).is_ok() {
-            let prefix = buffer[..split].to_vec();
-            buffer.drain(..split);
-            return Some(prefix);
-        }
-
-        if max_len - split > 4 {
-            break;
-        }
-        split -= 1;
-    }
-
-    // If no valid UTF-8 prefix was found, emit the first byte so the stream
-    // keeps making progress and the transcript reflects all bytes.
-    let byte = buffer.drain(..1).collect();
-    Some(byte)
+    let split = match std::str::from_utf8(&buffer.make_contiguous()[..max_len]) {
+        Ok(_) => max_len,
+        Err(error) => error.valid_up_to().max(1),
+    };
+    Some(buffer.drain(..split).collect())
 }
 
 async fn resolve_aggregated_output(

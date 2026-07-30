@@ -1,3 +1,5 @@
+use bytes::Buf;
+use bytes::BytesMut;
 use codex_exec_server_protocol::JSONRPCMessage;
 
 use crate::ExecServerError;
@@ -31,7 +33,7 @@ pub(crate) fn frame_jsonrpc_message(message: &JSONRPCMessage) -> Result<Vec<u8>,
 /// here so a bad authenticated peer cannot grow the reassembly buffer forever.
 #[derive(Default)]
 pub(crate) struct JsonRpcMessageDecoder {
-    buffered: Vec<u8>,
+    buffered: BytesMut,
 }
 
 impl JsonRpcMessageDecoder {
@@ -67,7 +69,7 @@ impl JsonRpcMessageDecoder {
             messages.push(serde_json::from_slice(
                 &self.buffered[LENGTH_PREFIX_BYTES..framed_len],
             )?);
-            self.buffered.drain(..framed_len);
+            self.buffered.advance(framed_len);
         }
 
         // Even before a message is complete, keep reassembly memory bounded.
