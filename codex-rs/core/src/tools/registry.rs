@@ -14,6 +14,7 @@ use crate::memory_usage::emit_metric_for_tool_read;
 use crate::memory_usage::shell_script_for_invocation;
 use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
+use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -51,8 +52,8 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
-    /// Returns the MCP server that owns this runtime, when this is an MCP tool.
-    fn mcp_server_name(&self) -> Option<&str> {
+    /// Returns a readiness wait for this exact tool before taking the execution gate.
+    fn wait_until_ready<'a>(&'a self, _session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         None
     }
 
@@ -288,8 +289,8 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
 }
 
 impl CoreToolRuntime for ExposureOverride {
-    fn mcp_server_name(&self) -> Option<&str> {
-        self.handler.mcp_server_name()
+    fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
+        self.handler.wait_until_ready(session)
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -397,12 +398,8 @@ impl ToolRegistry {
         Self::new(HashMap::from([(name, handler as Arc<dyn CoreToolRuntime>)]))
     }
 
-    fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
+    pub(crate) fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
         self.tools.get(name).map(Arc::clone)
-    }
-
-    pub(crate) fn mcp_server_name(&self, name: &ToolName) -> Option<&str> {
-        self.tools.get(name)?.mcp_server_name()
     }
 
     #[cfg(test)]

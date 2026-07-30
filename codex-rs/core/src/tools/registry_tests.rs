@@ -1,6 +1,10 @@
 use super::*;
+use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 struct TestHandler {
     tool_name: codex_tools::ToolName,
@@ -28,6 +32,33 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 }
 
 impl CoreToolRuntime for TestHandler {}
+
+struct ReadinessTestHandler {
+    handler: TestHandler,
+    readiness_waits: Arc<AtomicUsize>,
+}
+
+impl ToolExecutor<ToolInvocation> for ReadinessTestHandler {
+    fn tool_name(&self) -> codex_tools::ToolName {
+        self.handler.tool_name()
+    }
+
+    fn spec(&self) -> codex_tools::ToolSpec {
+        self.handler.spec()
+    }
+
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        self.handler.handle(invocation)
+    }
+}
+
+impl CoreToolRuntime for ReadinessTestHandler {
+    fn wait_until_ready<'a>(&'a self, _session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
+        Some(Box::pin(async {
+            self.readiness_waits.fetch_add(1, Ordering::Relaxed);
+        }))
+    }
+}
 
 #[derive(Clone)]
 enum LifecycleTestResult {
@@ -176,6 +207,80 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
         namespaced
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
+    );
+}
+
+#[tokio::test]
+async fn readiness_selects_exact_tool_and_forwards_exposure_overrides() {
+    let (session, _turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let plain_name = codex_tools::ToolName::plain("echo");
+    let namespaced_name = codex_tools::ToolName::namespaced("mcp__server__", "echo");
+    assert!(
+        TestHandler {
+            tool_name: plain_name.clone(),
+        }
+        .wait_until_ready(&session)
+        .is_none()
+    );
+    let plain_readiness_waits = Arc::new(AtomicUsize::new(0));
+    let namespaced_readiness_waits = Arc::new(AtomicUsize::new(0));
+    let plain_handler = Arc::new(ReadinessTestHandler {
+        handler: TestHandler {
+            tool_name: plain_name.clone(),
+        },
+        readiness_waits: Arc::clone(&plain_readiness_waits),
+    }) as Arc<dyn CoreToolRuntime>;
+    let namespaced_handler = override_tool_exposure(
+        Arc::new(ReadinessTestHandler {
+            handler: TestHandler {
+                tool_name: namespaced_name.clone(),
+            },
+            readiness_waits: Arc::clone(&namespaced_readiness_waits),
+        }),
+        ToolExposure::DirectModelOnly,
+    );
+    let registry = ToolRegistry::from_tools([plain_handler, namespaced_handler]);
+
+    registry
+        .tool(&plain_name)
+        .expect("plain runtime should be registered")
+        .wait_until_ready(&session)
+        .expect("plain runtime should provide a readiness wait")
+        .await;
+    assert_eq!(
+        [
+            plain_readiness_waits.load(Ordering::Relaxed),
+            namespaced_readiness_waits.load(Ordering::Relaxed),
+        ],
+        [1, 0]
+    );
+
+    registry
+        .tool(&namespaced_name)
+        .expect("namespaced runtime should be registered")
+        .wait_until_ready(&session)
+        .expect("namespaced runtime should forward its readiness wait")
+        .await;
+    assert_eq!(
+        [
+            plain_readiness_waits.load(Ordering::Relaxed),
+            namespaced_readiness_waits.load(Ordering::Relaxed),
+        ],
+        [1, 1]
+    );
+
+    assert!(
+        registry
+            .tool(&codex_tools::ToolName::namespaced("mcp__missing__", "echo"))
+            .is_none()
+    );
+    assert_eq!(
+        [
+            plain_readiness_waits.load(Ordering::Relaxed),
+            namespaced_readiness_waits.load(Ordering::Relaxed),
+        ],
+        [1, 1]
     );
 }
 

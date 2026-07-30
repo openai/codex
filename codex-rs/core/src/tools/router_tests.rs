@@ -181,15 +181,17 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         .expect("test session should expose a parallel shell-like tool");
 
     assert_eq!(
-        router.mcp_server_name(&ToolCall {
-            tool_name: ToolName::plain(parallel_tool_name),
-            call_id: "call-local-tool".to_string(),
-            payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-            encrypted_function_args: None,
-        }),
-        None
+        router
+            .tool_runtime(&ToolCall {
+                tool_name: ToolName::plain(parallel_tool_name),
+                call_id: "call-local-tool".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+                encrypted_function_args: None,
+            })
+            .map(|runtime| runtime.tool_name()),
+        Some(ToolName::plain(parallel_tool_name))
     );
 
     assert!(!router.tool_supports_parallel(&ToolCall {
@@ -303,7 +305,12 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
         encrypted_function_args: None,
     };
     assert!(router.tool_supports_parallel(&call));
-    assert_eq!(router.mcp_server_name(&call), Some("echo"));
+    assert_eq!(
+        router
+            .tool_runtime(&call)
+            .map(|runtime| runtime.tool_name()),
+        Some(call.tool_name.clone())
+    );
 
     let different_server_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
@@ -315,8 +322,10 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     };
     assert!(!router.tool_supports_parallel(&different_server_call));
     assert_eq!(
-        router.mcp_server_name(&different_server_call),
-        Some("hello_echo")
+        router
+            .tool_runtime(&different_server_call)
+            .map(|runtime| runtime.tool_name()),
+        Some(different_server_call.tool_name.clone())
     );
 
     Ok(())

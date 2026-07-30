@@ -135,8 +135,8 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
-    pub(crate) fn mcp_server_name(&self, call: &ToolCall) -> Option<&str> {
-        self.registry.mcp_server_name(&call.tool_name)
+    pub(crate) fn tool_runtime(&self, call: &ToolCall) -> Option<Arc<dyn CoreToolRuntime>> {
+        self.registry.tool(&call.tool_name)
     }
 
     pub fn tool_waits_for_runtime_cancellation(&self, call: &ToolCall) -> bool {
