@@ -56,6 +56,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
@@ -465,6 +467,20 @@ fn sample_turn_steer_request() -> ClientRequest {
     }
 }
 
+fn sample_turn_interrupt_request(turn_id: &str) -> ClientRequest {
+    ClientRequest::TurnInterrupt {
+        request_id: RequestId::Integer(3),
+        params: TurnInterruptParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: turn_id.to_string(),
+        },
+    }
+}
+
+fn sample_turn_interrupt_response() -> ClientResponsePayload {
+    ClientResponsePayload::TurnInterrupt(TurnInterruptResponse {})
+}
+
 fn sample_thread_archive_request() -> ClientRequest {
     ClientRequest::ThreadArchive {
         request_id: RequestId::Integer(3),
@@ -599,11 +615,36 @@ fn track_request_only_enqueues_analytics_relevant_requests() {
         ));
     }
 
+    client.track_request(
+        /*connection_id*/ 7,
+        RequestId::Integer(3),
+        &sample_turn_interrupt_request("turn-1"),
+    );
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(AnalyticsEventsQueueMessage::Fact(input))
+            if matches!(
+                *input,
+                AnalyticsFact::ExplicitClientInterruptRequest {
+                    ref turn_id,
+                    requested_at_ms,
+                    ..
+                } if turn_id == "turn-1" && requested_at_ms > 0
+            )
+    ));
+
     let ignored_request = sample_thread_archive_request();
     client.track_request(
         /*connection_id*/ 7,
         RequestId::Integer(3),
         &ignored_request,
+    );
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+
+    client.track_request(
+        /*connection_id*/ 7,
+        RequestId::Integer(4),
+        &sample_turn_interrupt_request(""),
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }
@@ -618,6 +659,7 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         (RequestId::Integer(3), sample_thread_fork_response()),
         (RequestId::Integer(4), sample_turn_start_response()),
         (RequestId::Integer(5), sample_turn_steer_response()),
+        (RequestId::Integer(6), sample_turn_interrupt_response()),
     ] {
         client.track_response(/*connection_id*/ 7, request_id, &response);
         assert!(matches!(
@@ -629,7 +671,7 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
 
     client.track_response(
         /*connection_id*/ 7,
-        RequestId::Integer(6),
+        RequestId::Integer(7),
         &ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));

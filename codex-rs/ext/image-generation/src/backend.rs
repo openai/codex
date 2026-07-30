@@ -7,6 +7,9 @@ use codex_login::default_client::add_originator_header;
 use codex_login::default_client::create_client;
 use codex_model_provider::SharedModelProvider;
 use http::HeaderMap;
+use http::HeaderValue;
+
+const X_CODEX_IMAGE_TURN_ID_HEADER: &str = "x-codex-image-turn-id";
 
 #[derive(Clone)]
 pub(crate) struct CodexImagesBackend {
@@ -46,26 +49,40 @@ impl CodexImagesBackend {
     pub(crate) async fn generate(
         &self,
         request: ImageGenerationRequest,
+        turn_id: &str,
     ) -> Result<ImageResponse, String> {
         self.client()
             .await?
-            .generate(&request, image_request_headers(self.originator.as_deref()))
+            .generate(
+                &request,
+                image_request_headers(self.originator.as_deref(), turn_id),
+            )
             .await
             .map_err(|err| err.to_string())
     }
 
     /// Sends a standalone image edit request through the configured Images client.
-    pub(crate) async fn edit(&self, request: ImageEditRequest) -> Result<ImageResponse, String> {
+    pub(crate) async fn edit(
+        &self,
+        request: ImageEditRequest,
+        turn_id: &str,
+    ) -> Result<ImageResponse, String> {
         self.client()
             .await?
-            .edit(&request, image_request_headers(self.originator.as_deref()))
+            .edit(
+                &request,
+                image_request_headers(self.originator.as_deref(), turn_id),
+            )
             .await
             .map_err(|err| err.to_string())
     }
 }
 
-fn image_request_headers(originator: Option<&str>) -> HeaderMap {
+fn image_request_headers(originator: Option<&str>, turn_id: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
+    if let Ok(turn_id) = HeaderValue::from_str(turn_id) {
+        headers.insert(X_CODEX_IMAGE_TURN_ID_HEADER, turn_id);
+    }
     if let Some(originator) = originator {
         add_originator_header(&mut headers, originator);
     }

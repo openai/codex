@@ -227,9 +227,11 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.turn_interrupt_inner(request_id, params)
-            .await
-            .map(|response| response.map(Into::into))
+        let result = self.turn_interrupt_inner(request_id, params).await;
+        if let Err(error) = &result {
+            self.track_error_response(request_id, error, /*error_type*/ None);
+        }
+        result.map(|response| response.map(Into::into))
     }
 
     pub(crate) async fn thread_realtime_start(

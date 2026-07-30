@@ -336,6 +336,7 @@ impl ThreadMetadataState {
 enum RequestState {
     TurnStart(PendingTurnStartState),
     TurnSteer(PendingTurnSteerState),
+    ExplicitClientInterrupt(PendingTurnInterruptState),
 }
 
 struct PendingTurnStartState {
@@ -348,6 +349,11 @@ struct PendingTurnSteerState {
     expected_turn_id: String,
     num_input_images: usize,
     created_at: u64,
+}
+
+struct PendingTurnInterruptState {
+    turn_id: String,
+    requested_at_ms: u64,
 }
 
 #[derive(Clone)]
@@ -368,6 +374,7 @@ struct TurnState {
     token_usage: Option<TokenUsage>,
     profile: Option<TurnProfile>,
     completed: Option<CompletedTurnState>,
+    explicit_client_interrupt_requested_at_ms: Option<u64>,
     codex_error: Option<TurnCodexError>,
     latest_diff: Option<String>,
     steer_count: usize,
@@ -444,6 +451,20 @@ impl AnalyticsReducer {
                 request,
             } => {
                 self.ingest_request(connection_id, request_id, *request);
+            }
+            AnalyticsFact::ExplicitClientInterruptRequest {
+                connection_id,
+                request_id,
+                turn_id,
+                requested_at_ms,
+            } => {
+                self.requests.insert(
+                    (connection_id, request_id),
+                    RequestState::ExplicitClientInterrupt(PendingTurnInterruptState {
+                        turn_id,
+                        requested_at_ms,
+                    }),
+                );
             }
             AnalyticsFact::ClientResponse {
                 connection_id,
@@ -961,6 +982,21 @@ impl AnalyticsReducer {
             } => {
                 self.ingest_turn_steer_response(connection_id, request_id, response, out);
             }
+            ClientResponse::TurnInterrupt { request_id, .. } => {
+                let Some(RequestState::ExplicitClientInterrupt(pending_request)) =
+                    self.requests.remove(&(connection_id, request_id))
+                else {
+                    return;
+                };
+                let turn_id = pending_request.turn_id;
+                let turn_state = self.turns.entry(turn_id.clone()).or_default();
+                let earliest_requested_at_ms = turn_state
+                    .explicit_client_interrupt_requested_at_ms
+                    .get_or_insert(pending_request.requested_at_ms);
+                *earliest_requested_at_ms =
+                    (*earliest_requested_at_ms).min(pending_request.requested_at_ms);
+                self.maybe_emit_turn_event(&turn_id, out).await;
+            }
             _ => {}
         }
     }
@@ -1196,6 +1232,7 @@ impl AnalyticsReducer {
                     out,
                 );
             }
+            RequestState::ExplicitClientInterrupt(_) => {}
         }
     }
 
@@ -2694,6 +2731,8 @@ fn codex_turn_event_params(
         num_input_images,
         is_first_turn,
         status: completed.status,
+        explicit_client_interrupt_requested_at_ms: turn_state
+            .explicit_client_interrupt_requested_at_ms,
         turn_error: completed.turn_error,
         codex_error_kind: codex_error.map(|error| error.kind),
         codex_error_http_status_code: codex_error.and_then(|error| error.http_status_code),
@@ -2853,10 +2892,53 @@ pub(crate) fn normalize_path_for_skill_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::JSONRPCErrorError;
     use codex_protocol::models::SandboxEnforcement;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn rejected_turn_interrupt_removes_pending_analytics_request() {
+        let mut reducer = AnalyticsReducer::default();
+        let mut out = Vec::new();
+        let connection_id = 7;
+        let request_id = RequestId::Integer(4);
+        let request_key = (connection_id, request_id.clone());
+
+        reducer
+            .ingest(
+                AnalyticsFact::ExplicitClientInterruptRequest {
+                    connection_id,
+                    request_id: request_id.clone(),
+                    turn_id: "turn-2".to_string(),
+                    requested_at_ms: 1716000000123,
+                },
+                &mut out,
+            )
+            .await;
+
+        assert!(reducer.requests.contains_key(&request_key));
+
+        reducer
+            .ingest(
+                AnalyticsFact::ErrorResponse {
+                    connection_id,
+                    request_id,
+                    error: JSONRPCErrorError {
+                        code: -32600,
+                        message: "no active turn to interrupt".to_string(),
+                        data: None,
+                    },
+                    error_type: None,
+                },
+                &mut out,
+            )
+            .await;
+
+        assert!(!reducer.requests.contains_key(&request_key));
+        assert!(out.is_empty());
+    }
 
     #[test]
     fn managed_full_disk_with_restricted_network_reports_external_sandbox() {

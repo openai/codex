@@ -137,6 +137,7 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
@@ -483,6 +484,10 @@ fn sample_turn_steer_response(turn_id: &str) -> ClientResponsePayload {
     ClientResponsePayload::TurnSteer(TurnSteerResponse {
         turn_id: turn_id.to_string(),
     })
+}
+
+fn sample_turn_interrupt_response() -> ClientResponsePayload {
+    ClientResponsePayload::TurnInterrupt(TurnInterruptResponse {})
 }
 
 fn no_active_turn_steer_error() -> JSONRPCErrorError {
@@ -4073,6 +4078,7 @@ fn turn_event_serializes_expected_shape() {
             num_input_images: 2,
             is_first_turn: true,
             status: Some(TurnStatus::Completed),
+            explicit_client_interrupt_requested_at_ms: None,
             turn_error: None,
             codex_error_kind: None,
             codex_error_http_status_code: None,
@@ -4147,6 +4153,7 @@ fn turn_event_serializes_expected_shape() {
                 "num_input_images": 2,
                 "is_first_turn": true,
                 "status": "completed",
+                "explicit_client_interrupt_requested_at_ms": null,
                 "turn_error": null,
                 "codex_error_kind": null,
                 "codex_error_http_status_code": null,
@@ -4942,7 +4949,7 @@ async fn turn_lifecycle_emits_failed_turn_event() {
 }
 
 #[tokio::test]
-async fn turn_lifecycle_emits_interrupted_turn_event_without_error() {
+async fn rejected_turn_interrupt_does_not_tag_interrupted_turn_event() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
 
@@ -4955,6 +4962,28 @@ async fn turn_lifecycle_emits_interrupted_turn_event_without_error() {
         /*include_token_usage*/ false,
     )
     .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ExplicitClientInterruptRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                turn_id: "turn-2".to_string(),
+                requested_at_ms: 1716000000123,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ErrorResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                error: no_active_turn_steer_error(),
+                error_type: None,
+            },
+            &mut out,
+        )
+        .await;
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
@@ -4970,8 +4999,146 @@ async fn turn_lifecycle_emits_interrupted_turn_event_without_error() {
     assert_eq!(out.len(), 1);
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["status"], json!("interrupted"));
+    assert_eq!(
+        payload["event_params"]["explicit_client_interrupt_requested_at_ms"],
+        json!(null)
+    );
     assert_eq!(payload["event_params"]["turn_error"], json!(null));
     assert_eq!(payload["event_params"]["codex_error_kind"], json!(null));
+}
+
+#[tokio::test]
+async fn accepted_turn_interrupt_records_requested_at_on_turn_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ExplicitClientInterruptRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                turn_id: "turn-2".to_string(),
+                requested_at_ms: 1716000000123,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                response: Box::new(sample_turn_interrupt_response()),
+                thread_originator: None,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Interrupted,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(
+        payload["event_params"]["explicit_client_interrupt_requested_at_ms"],
+        json!(1716000000123_u64)
+    );
+}
+
+#[tokio::test]
+async fn accepted_turn_interrupt_retries_preserve_earliest_requested_at() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ExplicitClientInterruptRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                turn_id: "turn-2".to_string(),
+                requested_at_ms: 1716000000123,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ExplicitClientInterruptRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(5),
+                turn_id: "turn-2".to_string(),
+                requested_at_ms: 1716000000456,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(5),
+                response: Box::new(sample_turn_interrupt_response()),
+                thread_originator: None,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                response: Box::new(sample_turn_interrupt_response()),
+                thread_originator: None,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Interrupted,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(
+        payload["event_params"]["explicit_client_interrupt_requested_at_ms"],
+        json!(1716000000123_u64)
+    );
 }
 
 #[tokio::test]

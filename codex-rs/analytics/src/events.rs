@@ -897,6 +897,9 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) num_input_images: usize,
     pub(crate) is_first_turn: bool,
     pub(crate) status: Option<TurnStatus>,
+    /// Client wall-clock time for the first non-startup turn/interrupt request
+    /// that later received a successful response.
+    pub(crate) explicit_client_interrupt_requested_at_ms: Option<u64>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
     pub(crate) codex_error_http_status_code: Option<u16>,

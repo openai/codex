@@ -93,7 +93,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    start_image_generation_turn(
+    let turn_id = start_image_generation_turn(
         &mut mcp,
         ThreadStartParams {
             service_name: Some("chatgpt_cca".to_string()),
@@ -144,6 +144,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
             .context("standalone image generation originator should be valid ASCII")?,
         "chatgpt_cca"
     );
+    assert_image_turn_id_header(&image_request, &turn_id)?;
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
@@ -446,7 +447,7 @@ generatedImage(result);
 async fn start_image_generation_turn(
     mcp: &mut TestAppServer,
     thread_start_params: ThreadStartParams,
-) -> Result<()> {
+) -> Result<String> {
     start_turn(
         mcp,
         thread_start_params,
@@ -500,7 +501,7 @@ async fn run_image_edit_test(
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    start_turn(
+    let turn_id = start_turn(
         &mut mcp,
         ThreadStartParams {
             service_name: Some("chatgpt_cca".to_string()),
@@ -538,14 +539,27 @@ async fn run_image_edit_test(
             .context("standalone image edit originator should be valid ASCII")?,
         "chatgpt_cca"
     );
+    assert_image_turn_id_header(image_request, &turn_id)?;
     Ok(image_request.body_json::<serde_json::Value>()?)
+}
+
+fn assert_image_turn_id_header(request: &wiremock::Request, expected_turn_id: &str) -> Result<()> {
+    let turn_id = request
+        .headers
+        .get("x-codex-image-turn-id")
+        .context("image request should include the current turn id")?
+        .to_str()
+        .context("image turn id should be valid ASCII")?;
+    uuid::Uuid::parse_str(turn_id).context("image turn id should be a UUID")?;
+    assert_eq!(turn_id, expected_turn_id);
+    Ok(())
 }
 
 async fn start_turn(
     mcp: &mut TestAppServer,
     thread_start_params: ThreadStartParams,
     input: Vec<V2UserInput>,
-) -> Result<()> {
+) -> Result<String> {
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(thread_start_params)
         .await?;
@@ -560,9 +574,10 @@ async fn start_turn(
             ..Default::default()
         })
         .await?;
-    let _: TurnStartResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
+    let TurnStartResponse { turn } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
 
-    Ok(())
+    Ok(turn.id)
 }
 
 async fn wait_for_image_generation_completed(

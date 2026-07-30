@@ -150,8 +150,8 @@ impl ImageGenerationTool {
             ))
             .await;
         let result = match request {
-            ImageRequest::Generate(request) => self.backend.generate(request).await,
-            ImageRequest::Edit(request) => self.backend.edit(request).await,
+            ImageRequest::Generate(request) => self.backend.generate(request, &call.turn_id).await,
+            ImageRequest::Edit(request) => self.backend.edit(request, &call.turn_id).await,
         }
         .map_err(|err| format!("image generation failed: {err}"))
         .and_then(|response| {

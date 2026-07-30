@@ -374,6 +374,12 @@ pub(crate) enum AnalyticsFact {
         request_id: RequestId,
         request: Box<ClientRequest>,
     },
+    ExplicitClientInterruptRequest {
+        connection_id: u64,
+        request_id: RequestId,
+        turn_id: String,
+        requested_at_ms: u64,
+    },
     ClientResponse {
         connection_id: u64,
         request_id: RequestId,

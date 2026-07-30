@@ -29,6 +29,7 @@ use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
+use crate::now_unix_millis;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -312,6 +313,18 @@ impl AnalyticsEventsClient {
         request_id: RequestId,
         request: &ClientRequest,
     ) {
+        if let ClientRequest::TurnInterrupt { params, .. } = request {
+            if params.turn_id.is_empty() {
+                return;
+            }
+            self.record_fact(AnalyticsFact::ExplicitClientInterruptRequest {
+                connection_id,
+                request_id,
+                turn_id: params.turn_id.clone(),
+                requested_at_ms: now_unix_millis(),
+            });
+            return;
+        }
         if !matches!(
             request,
             ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. }
@@ -519,6 +532,7 @@ impl AnalyticsEventsClient {
                 | ClientResponsePayload::ThreadFork(_)
                 | ClientResponsePayload::TurnStart(_)
                 | ClientResponsePayload::TurnSteer(_)
+                | ClientResponsePayload::TurnInterrupt(_)
         ) {
             return;
         }
