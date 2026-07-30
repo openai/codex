@@ -58,10 +58,11 @@ use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
-use crate::tools::router::ToolRouterParams;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
-use crate::tools::router::extension_tool_executors;
+use crate::tools::spec_plan::append_source_tool_runtimes;
+use crate::tools::spec_plan::build_core_tool_runtimes;
+use crate::tools::spec_plan::extension_tool_executors;
 use crate::tools::spec_plan::search_tool_enabled;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -1554,20 +1555,28 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         search_tool_enabled(turn_context),
     );
-    let tool_router = Arc::new(ToolRouter::from_context(
+    let wait_for_environment_tool_config = sess
+        .services
+        .thread_extension_data
+        .get::<crate::WaitForEnvironmentToolConfig>();
+    let mut tool_runtimes = build_core_tool_runtimes(
         turn_context,
         environments,
         mcp,
-        ToolRouterParams {
-            tool_runtimes: mcp_tool_runtimes,
-            tool_suggest_candidates,
-            extension_tool_executors: extension_tool_executors(sess, step_store),
-            wait_for_environment_tool_config: sess
-                .services
-                .thread_extension_data
-                .get::<crate::WaitForEnvironmentToolConfig>(),
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
+        tool_suggest_candidates.as_ref(),
+        wait_for_environment_tool_config.as_ref(),
+    );
+    let hosted_specs = append_source_tool_runtimes(
+        turn_context,
+        &mut tool_runtimes,
+        mcp_tool_runtimes,
+        extension_tool_executors(sess, step_store),
+        &turn_context.dynamic_tools,
+    );
+    let tool_router = Arc::new(ToolRouter::from_tools(
+        turn_context,
+        tool_runtimes,
+        hosted_specs,
         &sess.services.tool_search_handler_cache,
     ));
     (all_mcp_tools, tool_router)

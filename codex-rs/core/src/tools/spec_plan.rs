@@ -1,6 +1,7 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::default_exec_yield_time_override_ms;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
@@ -57,7 +58,7 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::registry::override_tool_exposure;
 use crate::tools::router::ToolRouter;
-use crate::tools::router::ToolRouterParams;
+use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::account::PlanType;
@@ -130,10 +131,6 @@ impl PlannedTools {
         self.add_with_exposure(handler, ToolExposure::Hidden);
     }
 
-    fn add_hosted_spec(&mut self, spec: ToolSpec) {
-        self.hosted_specs.push(spec);
-    }
-
     fn runtimes(&self) -> &[PlannedRuntime] {
         &self.runtimes
     }
@@ -144,70 +141,92 @@ struct CoreToolPlanContext<'a> {
     turn_context: &'a TurnContext,
     environments: &'a TurnEnvironmentSnapshot,
     mcp: &'a codex_mcp::McpBinding,
-    tool_runtimes: &'a [PlannedRuntime],
     tool_suggest_candidates: Option<&'a crate::tools::router::ToolSuggestCandidates>,
-    extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
     wait_for_environment_tool_config: Option<&'a Arc<crate::WaitForEnvironmentToolConfig>>,
-    dynamic_tools: &'a [DynamicToolSpec],
-    tool_search_handler_cache: &'a ToolSearchHandlerCache,
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
 }
 
 #[instrument(level = "trace", skip_all)]
-pub(crate) fn build_tool_router(
+pub(crate) fn build_core_tool_runtimes(
     turn_context: &TurnContext,
     environments: &TurnEnvironmentSnapshot,
     mcp: &codex_mcp::McpBinding,
-    params: ToolRouterParams<'_>,
-    tool_search_handler_cache: &ToolSearchHandlerCache,
-) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(
-        turn_context,
-        environments,
-        mcp,
-        params,
-        tool_search_handler_cache,
-    );
-    ToolRouter::from_parts(registry, model_visible_specs)
-}
-
-#[instrument(level = "trace", skip_all)]
-fn build_tool_specs_and_registry(
-    turn_context: &TurnContext,
-    environments: &TurnEnvironmentSnapshot,
-    mcp: &codex_mcp::McpBinding,
-    params: ToolRouterParams<'_>,
-    tool_search_handler_cache: &ToolSearchHandlerCache,
-) -> (Vec<ToolSpec>, ToolRegistry) {
-    let ToolRouterParams {
-        tool_runtimes,
-        tool_suggest_candidates,
-        extension_tool_executors,
-        wait_for_environment_tool_config,
-        dynamic_tools,
-    } = params;
+    tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
+    wait_for_environment_tool_config: Option<&Arc<crate::WaitForEnvironmentToolConfig>>,
+) -> Vec<Arc<dyn CoreToolRuntime>> {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let context = CoreToolPlanContext {
         turn_context,
         environments,
         mcp,
-        tool_runtimes: &tool_runtimes,
-        tool_suggest_candidates: tool_suggest_candidates.as_ref(),
-        extension_tool_executors: &extension_tool_executors,
-        wait_for_environment_tool_config: wait_for_environment_tool_config.as_ref(),
-        dynamic_tools,
-        tool_search_handler_cache,
+        tool_suggest_candidates,
+        wait_for_environment_tool_config,
         default_agent_type_description: &default_agent_type_description,
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
     };
     let mut planned_tools = PlannedTools::default();
-    add_tool_sources(&context, &mut planned_tools);
+    add_core_tool_sources(&context, &mut planned_tools);
+    planned_tools.runtimes
+}
+
+#[instrument(level = "trace", skip_all)]
+pub(crate) fn append_source_tool_runtimes(
+    turn_context: &TurnContext,
+    tool_runtimes: &mut Vec<Arc<dyn CoreToolRuntime>>,
+    mcp_tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
+    extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
+    dynamic_tools: &[DynamicToolSpec],
+) -> Vec<ToolSpec> {
+    if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
+        return Vec::new();
+    }
+
+    let hosted_specs = hosted_model_tool_specs(turn_context, &extension_tool_executors);
+    tool_runtimes.extend(mcp_tool_runtimes);
+    append_extension_tool_executors(turn_context, &extension_tool_executors, tool_runtimes);
+    append_dynamic_tool_runtimes(dynamic_tools, tool_runtimes);
+    hosted_specs
+}
+
+#[instrument(level = "trace", skip_all)]
+pub(crate) fn extension_tool_executors(
+    session: &Session,
+    step_store: &ExtensionData,
+) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
+    session
+        .services
+        .extensions
+        .tool_contributors()
+        .iter()
+        .flat_map(|contributor| {
+            contributor.tools_for_step(
+                &session.services.session_extension_data,
+                &session.services.thread_extension_data,
+                step_store,
+            )
+        })
+        .collect()
+}
+
+#[instrument(level = "trace", skip_all)]
+pub(crate) fn build_tool_router(
+    turn_context: &TurnContext,
+    tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
+    hosted_specs: Vec<ToolSpec>,
+    tool_search_handler_cache: &ToolSearchHandlerCache,
+) -> ToolRouter {
+    let mut planned_tools = PlannedTools {
+        runtimes: tool_runtimes,
+        hosted_specs,
+    };
     apply_direct_model_only_namespace_overrides(turn_context, &mut planned_tools);
-    append_tool_search_executor(&context, &mut planned_tools);
-    prepend_code_mode_executors(&context, &mut planned_tools);
-    build_model_visible_specs_and_registry(turn_context, planned_tools)
+    append_tool_search_executor(turn_context, &mut planned_tools, tool_search_handler_cache);
+    prepend_code_mode_executors(turn_context, &mut planned_tools);
+    let (model_visible_specs, registry) =
+        build_model_visible_specs_and_registry(turn_context, planned_tools);
+    ToolRouter::from_parts(registry, model_visible_specs)
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -226,15 +245,8 @@ fn apply_direct_model_only_namespace_overrides(
                     .direct_only_tool_namespaces
                     .contains(namespace)
             });
-        match runtime.exposure() {
-            ToolExposure::Direct | ToolExposure::Deferred if configured => {
-                *runtime =
-                    override_tool_exposure(Arc::clone(runtime), ToolExposure::DirectModelOnly);
-            }
-            ToolExposure::Direct
-            | ToolExposure::Deferred
-            | ToolExposure::DirectModelOnly
-            | ToolExposure::Hidden => {}
+        if configured && runtime.exposure().is_available_in_code_mode() {
+            *runtime = override_tool_exposure(Arc::clone(runtime), ToolExposure::DirectModelOnly);
         }
     }
 }
@@ -288,7 +300,7 @@ fn spec_for_model_request(
 ) -> ToolSpec {
     let tool_mode = effective_tool_mode(turn_context);
     if matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-        && exposure != ToolExposure::DirectModelOnly
+        && exposure.is_available_in_code_mode()
         && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
     {
@@ -299,17 +311,20 @@ fn spec_for_model_request(
 }
 
 #[instrument(level = "trace", skip_all)]
-fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
-    let turn_context = context.turn_context;
+fn hosted_model_tool_specs(
+    turn_context: &TurnContext,
+    extension_tool_executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
+) -> Vec<ToolSpec> {
     // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
-    if turn_context.model_info.use_responses_lite {
+    if turn_context.model_info.use_responses_lite
+        || crate::guardian::is_guardian_reviewer_source(&turn_context.session_source)
+    {
         return Vec::new();
     }
 
     let mut specs = Vec::new();
     let standalone_web_search_available = standalone_web_search_enabled(turn_context)
-        && context
-            .extension_tool_executors
+        && extension_tool_executors
             .iter()
             .any(|executor| executor.tool_name() == ToolName::namespaced("web", "run"));
     // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
@@ -438,7 +453,7 @@ fn is_hidden_by_code_mode_only(
 ) -> bool {
     let tool_mode = effective_tool_mode(turn_context);
     tool_mode == ToolMode::CodeModeOnly
-        && exposure != ToolExposure::DirectModelOnly
+        && exposure.is_available_in_code_mode()
         && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
             tool_name,
         ))
@@ -469,11 +484,7 @@ fn build_code_mode_executors(
     let deferred_tools_guidance_enabled = search_tool_enabled(turn_context);
     for executor in executors {
         let exposure = executor.exposure();
-        if exposure == ToolExposure::DirectModelOnly {
-            continue;
-        }
-
-        if exposure == ToolExposure::Hidden {
+        if !exposure.is_available_in_code_mode() {
             continue;
         }
 
@@ -605,7 +616,7 @@ fn code_mode_namespace_descriptions(
 }
 
 #[instrument(level = "trace", skip_all)]
-fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     // Guardian reviewers receive only `exec_command`, `write_stdin`, and `view_image`
     // when an environment is available; all general tool sources stay excluded.
     if crate::guardian::is_guardian_reviewer_source(&context.turn_context.session_source) {
@@ -637,14 +648,6 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_mcp_resource_tools(context, planned_tools);
     add_core_utility_tools(context, planned_tools);
     add_collaboration_tools(context, planned_tools);
-    for runtime in context.tool_runtimes {
-        planned_tools.add_arc(Arc::clone(runtime));
-    }
-    add_extension_tools(context, planned_tools);
-    add_dynamic_tools(context, planned_tools);
-    for spec in hosted_model_tool_specs(context) {
-        planned_tools.add_hosted_spec(spec);
-    }
 }
 
 fn standalone_web_search_enabled(turn_context: &TurnContext) -> bool {
@@ -910,9 +913,12 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
     }
 }
 
-#[instrument(level = "trace", skip_all, fields(dynamic_tool_count = context.dynamic_tools.len()))]
-fn add_dynamic_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
-    for spec in context.dynamic_tools {
+#[instrument(level = "trace", skip_all, fields(dynamic_tool_count = dynamic_tools.len()))]
+fn append_dynamic_tool_runtimes(
+    dynamic_tools: &[DynamicToolSpec],
+    tool_runtimes: &mut Vec<Arc<dyn CoreToolRuntime>>,
+) {
+    for spec in dynamic_tools {
         match spec {
             DynamicToolSpec::Function(tool) => {
                 let Some(handler) = DynamicToolHandler::new(tool) else {
@@ -922,7 +928,7 @@ fn add_dynamic_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plan
                     );
                     continue;
                 };
-                planned_tools.add(handler);
+                tool_runtimes.push(Arc::new(handler));
             }
             DynamicToolSpec::Namespace(namespace) => {
                 for tool in &namespace.tools {
@@ -936,34 +942,19 @@ fn add_dynamic_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plan
                         );
                         continue;
                     };
-                    planned_tools.add(handler);
+                    tool_runtimes.push(Arc::new(handler));
                 }
             }
         }
     }
 }
 
-#[instrument(
-    level = "trace",
-    skip_all,
-    fields(extension_tool_executor_count = context.extension_tool_executors.len())
-)]
-fn add_extension_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
-    // Extension ToolContributor implementations are resolved into executors
-    // before planning. Core only adapts those executors into its runtime set.
-    append_extension_tool_executors(
-        context.turn_context,
-        context.extension_tool_executors,
-        planned_tools,
-    );
-}
-
 #[instrument(level = "trace", skip_all)]
 fn append_tool_search_executor(
-    context: &CoreToolPlanContext<'_>,
+    turn_context: &TurnContext,
     planned_tools: &mut PlannedTools,
+    tool_search_handler_cache: &ToolSearchHandlerCache,
 ) {
-    let turn_context = context.turn_context;
     if !search_tool_enabled(turn_context) {
         return;
     }
@@ -987,17 +978,12 @@ fn append_tool_search_executor(
     } else {
         ToolSearchSourceListing::Include
     };
-    let handler: PlannedRuntime = context
-        .tool_search_handler_cache
-        .get_or_build(search_infos, source_listing);
+    let handler: PlannedRuntime =
+        tool_search_handler_cache.get_or_build(search_infos, source_listing);
     planned_tools.add_arc(handler);
 }
 
-fn prepend_code_mode_executors(
-    context: &CoreToolPlanContext<'_>,
-    planned_tools: &mut PlannedTools,
-) {
-    let turn_context = context.turn_context;
+fn prepend_code_mode_executors(turn_context: &TurnContext, planned_tools: &mut PlannedTools) {
     let code_mode_executors = build_code_mode_executors(turn_context, planned_tools.runtimes());
     planned_tools.runtimes.splice(0..0, code_mode_executors);
 }
@@ -1005,14 +991,13 @@ fn prepend_code_mode_executors(
 fn append_extension_tool_executors(
     turn_context: &TurnContext,
     executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
-    planned_tools: &mut PlannedTools,
+    tool_runtimes: &mut Vec<Arc<dyn CoreToolRuntime>>,
 ) {
     if executors.is_empty() {
         return;
     }
 
-    let mut reserved_tool_names = planned_tools
-        .runtimes()
+    let mut reserved_tool_names = tool_runtimes
         .iter()
         .map(|executor| executor.tool_name())
         .collect::<HashSet<_>>();
@@ -1022,8 +1007,7 @@ fn append_extension_tool_executors(
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
     }
     if search_tool_enabled(turn_context)
-        && planned_tools
-            .runtimes()
+        && tool_runtimes
             .iter()
             .any(|executor| executor.exposure() == ToolExposure::Deferred)
     {
@@ -1049,7 +1033,7 @@ fn append_extension_tool_executors(
             warn!("Skipping extension tool `{tool_name}`: tool already registered");
             continue;
         }
-        planned_tools.add(ExtensionToolAdapter::new(executor));
+        tool_runtimes.push(Arc::new(ExtensionToolAdapter::new(executor)));
     }
 }
 

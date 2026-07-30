@@ -39,6 +39,14 @@ impl ToolExposure {
     pub fn is_direct(self) -> bool {
         matches!(self, Self::Direct | Self::DirectModelOnly)
     }
+
+    /// Returns whether this tool can participate in code mode.
+    pub fn is_available_in_code_mode(self) -> bool {
+        match self {
+            Self::Direct | Self::Deferred => true,
+            Self::DirectModelOnly | Self::Hidden => false,
+        }
+    }
 }
 
 /// Shared runtime contract for model-visible tools.

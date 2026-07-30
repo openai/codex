@@ -9,6 +9,9 @@ use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::override_tool_exposure;
+use crate::tools::spec_plan::append_source_tool_runtimes;
+use crate::tools::spec_plan::build_core_tool_runtimes;
+use crate::tools::spec_plan::extension_tool_executors;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
@@ -37,8 +40,6 @@ use tokio_util::sync::CancellationToken;
 use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
-use super::ToolRouterParams;
-use super::extension_tool_executors;
 use super::tool_log_payload;
 
 struct ExtensionEchoContributor;
@@ -125,23 +126,44 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
     Arc::new(builder.build())
 }
 
+fn test_tool_router(
+    step_context: &StepContext,
+    mcp_tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
+    extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
+    dynamic_tools: &[DynamicToolSpec],
+) -> ToolRouter {
+    let mut tool_runtimes = build_core_tool_runtimes(
+        step_context.turn.as_ref(),
+        &step_context.environments,
+        step_context.mcp.as_ref(),
+        /*tool_suggest_candidates*/ None,
+        /*wait_for_environment_tool_config*/ None,
+    );
+    let hosted_specs = append_source_tool_runtimes(
+        step_context.turn.as_ref(),
+        &mut tool_runtimes,
+        mcp_tool_runtimes,
+        extension_tool_executors,
+        dynamic_tools,
+    );
+    ToolRouter::from_tools(
+        step_context.turn.as_ref(),
+        tool_runtimes,
+        hosted_specs,
+        &Default::default(),
+    )
+}
+
 #[tokio::test]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
-    let router = ToolRouter::from_context(
-        step_context.turn.as_ref(),
-        &step_context.environments,
-        step_context.mcp.as_ref(),
-        ToolRouterParams {
-            tool_suggest_candidates: None,
-            tool_runtimes: Vec::new(),
-            extension_tool_executors: Vec::new(),
-            wait_for_environment_tool_config: None,
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-        &Default::default(),
+    let router = test_tool_router(
+        step_context.as_ref(),
+        Vec::new(),
+        Vec::new(),
+        &turn.dynamic_tools,
     );
 
     let parallel_tool_name = ["exec_command", "shell_command"]
@@ -249,34 +271,27 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
-    let router = ToolRouter::from_context(
-        step_context.turn.as_ref(),
-        &step_context.environments,
-        step_context.mcp.as_ref(),
-        ToolRouterParams {
-            tool_suggest_candidates: None,
-            tool_runtimes: vec![
+    let router = test_tool_router(
+        step_context.as_ref(),
+        vec![
+            mcp_runtime(mcp_tool_info(
+                "echo",
+                /*supports_parallel_tool_calls*/ true,
+                "mcp__echo__",
+                "query_with_delay",
+            )),
+            override_tool_exposure(
                 mcp_runtime(mcp_tool_info(
-                    "echo",
-                    /*supports_parallel_tool_calls*/ true,
-                    "mcp__echo__",
+                    "hello_echo",
+                    /*supports_parallel_tool_calls*/ false,
+                    "mcp__hello_echo__",
                     "query_with_delay",
                 )),
-                override_tool_exposure(
-                    mcp_runtime(mcp_tool_info(
-                        "hello_echo",
-                        /*supports_parallel_tool_calls*/ false,
-                        "mcp__hello_echo__",
-                        "query_with_delay",
-                    )),
-                    ToolExposure::DirectModelOnly,
-                ),
-            ],
-            extension_tool_executors: Vec::new(),
-            wait_for_environment_tool_config: None,
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-        &Default::default(),
+                ToolExposure::DirectModelOnly,
+            ),
+        ],
+        Vec::new(),
+        &turn.dynamic_tools,
     );
 
     let call = ToolCall {
@@ -312,18 +327,11 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
     let (_, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
-    let router = ToolRouter::from_context(
-        step_context.turn.as_ref(),
-        &step_context.environments,
-        step_context.mcp.as_ref(),
-        ToolRouterParams {
-            tool_suggest_candidates: None,
-            tool_runtimes: Vec::new(),
-            extension_tool_executors: Vec::new(),
-            wait_for_environment_tool_config: None,
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-        &Default::default(),
+    let router = test_tool_router(
+        step_context.as_ref(),
+        Vec::new(),
+        Vec::new(),
+        &turn.dynamic_tools,
     );
 
     assert!(!router.tool_supports_parallel(&ToolCall {
@@ -372,18 +380,11 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         ],
     })];
 
-    let router = ToolRouter::from_context(
-        step_context.turn.as_ref(),
-        &step_context.environments,
-        step_context.mcp.as_ref(),
-        ToolRouterParams {
-            tool_suggest_candidates: None,
-            tool_runtimes: Vec::new(),
-            extension_tool_executors: Vec::new(),
-            wait_for_environment_tool_config: None,
-            dynamic_tools: &dynamic_tools,
-        },
-        &Default::default(),
+    let router = test_tool_router(
+        step_context.as_ref(),
+        Vec::new(),
+        Vec::new(),
+        &dynamic_tools,
     );
 
     assert_eq!(
@@ -450,21 +451,14 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let mut expected_history_item = history_item.clone();
     expected_history_item.set_turn_id_if_missing(&turn.sub_id);
 
-    let router = ToolRouter::from_context(
-        step_context.turn.as_ref(),
-        &step_context.environments,
-        step_context.mcp.as_ref(),
-        ToolRouterParams {
-            tool_suggest_candidates: None,
-            tool_runtimes: Vec::new(),
-            extension_tool_executors: extension_tool_executors(
-                &session,
-                &codex_extension_api::ExtensionData::new(turn.sub_id.clone()),
-            ),
-            wait_for_environment_tool_config: None,
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-        &Default::default(),
+    let router = test_tool_router(
+        step_context.as_ref(),
+        Vec::new(),
+        extension_tool_executors(
+            &session,
+            &codex_extension_api::ExtensionData::new(turn.sub_id.clone()),
+        ),
+        &turn.dynamic_tools,
     );
 
     assert!(
