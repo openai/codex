@@ -40,7 +40,12 @@ pub(super) fn normalize_model_items(
         if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
             continue;
         }
-        normalized_items.push(normalize_model_item(item, raw_payload)?);
+
+        let mut model_visible_item = item.clone();
+        if let Some(object) = model_visible_item.as_object_mut() {
+            object.remove("internal_chat_message_metadata_passthrough");
+        }
+        normalized_items.push(normalize_model_item(&model_visible_item, raw_payload)?);
     }
     Ok(normalized_items)
 }

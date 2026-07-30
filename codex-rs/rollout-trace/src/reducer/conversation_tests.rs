@@ -256,6 +256,188 @@ fn later_full_request_reuses_prior_json_tool_call_by_position() -> anyhow::Resul
 }
 
 #[test]
+fn request_reuses_prior_tool_search_call_with_internal_metadata() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [message("user", "search")]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+
+    let response = writer.write_json_payload(
+        RawPayloadKind::InferenceResponse,
+        &json!({
+            "response_id": "resp-1",
+            "output_items": [{
+                "type": "tool_search_call",
+                "status": "completed",
+                "call_id": "call-search",
+                "arguments": {
+                    "query": "spawn subagent launch manage agents report result",
+                    "limit": 10
+                },
+                "execution": "client"
+            }]
+        }),
+    )?;
+    append_inference_completion(&writer, "inference-1", "resp-1", response)?;
+    start_turn(&writer, "turn-2")?;
+
+    let next_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [
+                message("user", "search"),
+                {
+                    "type": "tool_search_call",
+                    "status": "completed",
+                    "call_id": "call-search",
+                    "arguments": {
+                        "query": "spawn subagent launch manage agents report result",
+                        "limit": 10
+                    },
+                    "execution": "client",
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-1"
+                    }
+                }
+            ]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-2", "turn-2", next_request)?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let first = &rollout.inference_calls["inference-1"];
+    let second = &rollout.inference_calls["inference-2"];
+
+    assert_eq!(
+        second.request_item_ids,
+        vec![
+            first.request_item_ids[0].clone(),
+            first.response_item_ids[0].clone(),
+        ],
+    );
+    assert_eq!(rollout.conversation_items.len(), 2);
+
+    Ok(())
+}
+
+#[test]
+fn request_reuses_prior_tool_outputs_with_internal_metadata() -> anyhow::Result<()> {
+    for item_type in ["tool_search_output", "mcp_tool_call_output"] {
+        let temp = TempDir::new()?;
+        let writer = create_started_writer(&temp)?;
+        start_turn(&writer, "turn-1")?;
+
+        let output = json!({
+            "type": item_type,
+            "status": "completed",
+            "call_id": "call-search",
+            "execution": "client",
+            "tools": [{
+                "name": "search",
+                "internal_chat_message_metadata_passthrough": "model-visible"
+            }]
+        });
+        let first_request = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({
+                "input": [message("user", "search"), output.clone()]
+            }),
+        )?;
+        let first_request_payload_id = first_request.raw_payload_id.clone();
+        append_inference_start(&writer, "inference-1", "turn-1", first_request)?;
+        start_turn(&writer, "turn-2")?;
+
+        let mut replayed_output = output.clone();
+        replayed_output["internal_chat_message_metadata_passthrough"] = json!({
+            "turn_id": "turn-1"
+        });
+        let next_request = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({
+                "input": [message("user", "search"), replayed_output]
+            }),
+        )?;
+        append_inference_start(&writer, "inference-2", "turn-2", next_request)?;
+
+        let rollout = replay_bundle(temp.path())?;
+        let first = &rollout.inference_calls["inference-1"];
+        let second = &rollout.inference_calls["inference-2"];
+
+        assert_eq!(second.request_item_ids, first.request_item_ids);
+        assert_eq!(
+            rollout.conversation_items[&first.request_item_ids[1]].body,
+            ConversationBody {
+                parts: vec![ConversationPart::Json {
+                    summary: serde_json::to_string(&output)?,
+                    raw_payload_id: first_request_payload_id,
+                }],
+            },
+        );
+        assert_eq!(rollout.conversation_items.len(), 2);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn tool_output_call_id_reuse_with_different_nested_metadata_is_reducer_error() -> anyhow::Result<()>
+{
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [{
+                "type": "tool_search_output",
+                "status": "completed",
+                "call_id": "call-search",
+                "execution": "client",
+                "tools": [{
+                    "name": "search",
+                    "internal_chat_message_metadata_passthrough": "first"
+                }]
+            }]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+    start_turn(&writer, "turn-2")?;
+
+    let conflicting_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [{
+                "type": "tool_search_output",
+                "status": "completed",
+                "call_id": "call-search",
+                "execution": "client",
+                "tools": [{
+                    "name": "search",
+                    "internal_chat_message_metadata_passthrough": "different"
+                }],
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": "turn-1"
+                }
+            }]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-2", "turn-2", conflicting_request)?;
+
+    expect_replay_error(
+        &temp,
+        "model-visible call id call-search was reused with different content",
+    )
+}
+
+#[test]
 fn incremental_request_carries_prior_request_and_response_items_forward() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
