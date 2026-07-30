@@ -12,14 +12,9 @@ use tracing::warn;
 
 use super::LocalThreadStore;
 use super::thread_history::ProjectedRolloutLine;
+use super::thread_history::RolloutProjectionStep;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
-
-struct CompleteRolloutLine {
-    line: RolloutLine,
-    start_byte_offset: u64,
-    end_byte_offset: u64,
-}
 
 pub(super) async fn materialize_to_sqlite(
     store: &LocalThreadStore,
@@ -29,12 +24,15 @@ pub(super) async fn materialize_to_sqlite(
     if store.state_db.is_none() {
         return Ok(());
     }
-    let start_offset = super::thread_history::projection_state(store, thread_id)
-        .await?
+    let projection_state = super::thread_history::projection_state(store, thread_id).await?;
+    let start_offset = projection_state
+        .as_ref()
         .map_or(0, |state| state.next_byte_offset);
-    let (lines, next_offset) = read_complete_rollout_lines(rollout_path, start_offset).await?;
-    // Empty valid records can still consume bytes through blank or rejected complete lines.
-    if lines.is_empty() && start_offset == next_offset {
+    if projection_state.is_none()
+        && !tokio::fs::try_exists(rollout_path)
+            .await
+            .map_err(thread_store_io_error)?
+    {
         return Ok(());
     }
     let session_meta = codex_rollout::read_session_meta_line(rollout_path)
@@ -45,31 +43,21 @@ pub(super) async fn materialize_to_sqlite(
         .history_base
         .map_or(0, |base| base.end_ordinal_exclusive);
     let subagent_history_start_ordinal = session_meta.subagent_history_start_ordinal;
-
-    let projections = lines
-        .iter()
-        .map(|record| {
-            let line = &record.line;
-            let ordinal = line.ordinal.ok_or_else(|| ThreadStoreError::Internal {
-                message: format!("paginated rollout line for {thread_id} is missing an ordinal"),
-            })?;
-            let created_at_ms = DateTime::parse_from_rfc3339(line.timestamp.as_str())
-                .map(|timestamp| timestamp.timestamp_millis())
-                .map_err(thread_history_error)?;
-            let changes = if subagent_history_start_ordinal.is_some_and(|start| ordinal < start) {
-                ThreadHistoryChangeSet::default()
-            } else {
-                project_rollout_line(line)
-            };
-            Ok(ProjectedRolloutLine {
-                ordinal,
-                start_byte_offset: record.start_byte_offset,
-                end_byte_offset: record.end_byte_offset,
-                created_at_ms,
-                changes,
-            })
-        })
-        .collect::<ThreadStoreResult<Vec<_>>>()?;
+    let expected_ordinal = projection_state
+        .as_ref()
+        .map_or(initial_ordinal, |state| state.next_ordinal);
+    let (projections, next_offset) = read_projection_steps(
+        rollout_path,
+        start_offset,
+        expected_ordinal,
+        thread_id,
+        subagent_history_start_ordinal,
+    )
+    .await?;
+    // Empty valid records can still consume bytes through blank complete lines.
+    if projections.is_empty() && start_offset == next_offset {
+        return Ok(());
+    }
     super::thread_history::apply_projection(
         store,
         thread_id,
@@ -81,11 +69,14 @@ pub(super) async fn materialize_to_sqlite(
     .await
 }
 
-async fn read_complete_rollout_lines(
+async fn read_projection_steps(
     rollout_path: &Path,
     start_offset: u64,
-) -> ThreadStoreResult<(Vec<CompleteRolloutLine>, u64)> {
-    let next_offset = match tokio::fs::metadata(rollout_path).await {
+    expected_ordinal: u64,
+    thread_id: ThreadId,
+    subagent_history_start_ordinal: Option<u64>,
+) -> ThreadStoreResult<(Vec<RolloutProjectionStep>, u64)> {
+    let file_end_offset = match tokio::fs::metadata(rollout_path).await {
         Ok(metadata) => metadata.len(),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && start_offset == 0 => {
             return Ok((Vec::new(), 0));
@@ -93,7 +84,7 @@ async fn read_complete_rollout_lines(
         Err(err) => return Err(thread_store_io_error(err)),
     };
     let byte_count =
-        next_offset
+        file_end_offset
             .checked_sub(start_offset)
             .ok_or_else(|| ThreadStoreError::Internal {
                 message: "durable rollout shrank before projection".to_string(),
@@ -117,19 +108,13 @@ async fn read_complete_rollout_lines(
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |index| index + 1);
-    let next_offset = start_offset
-        .checked_add(u64::try_from(complete_byte_count).map_err(|_| {
-            ThreadStoreError::Internal {
-                message: "durable rollout append exceeds addressable memory".to_string(),
-            }
-        })?)
-        .ok_or_else(|| ThreadStoreError::Internal {
-            message: "durable rollout byte offset overflow".to_string(),
-        })?;
-    let mut lines = Vec::new();
+    let mut projections = Vec::new();
+    let mut next_ordinal = expected_ordinal;
+    let mut next_offset = start_offset;
+    let mut pending_rejected_line_count = 0;
     let mut line_start_offset = start_offset;
-    // Preserve each complete physical line's trailing newline so byte offsets advance through
-    // every durable byte, including blank or rejected lines that do not project a row.
+    // Keep rejected lines pending until a later valid ordinal proves whether they consumed history.
+    // This lets a same-ordinal retry replace a failed write without advancing only one checkpoint.
     for line_bytes in bytes[..complete_byte_count].split_inclusive(|byte| *byte == b'\n') {
         let line_end_offset = line_start_offset
             .checked_add(u64::try_from(line_bytes.len()).map_err(|_| {
@@ -140,35 +125,153 @@ async fn read_complete_rollout_lines(
             .ok_or_else(|| ThreadStoreError::Internal {
                 message: "durable rollout byte offset overflow".to_string(),
             })?;
-        // Blank physical lines consume bytes but are not rollout records.
-        if !line_bytes.iter().all(u8::is_ascii_whitespace) {
-            match serde_json::from_slice::<serde_json::Value>(line_bytes)
-                .and_then(serde_json::from_value::<RolloutLine>)
-            {
-                Ok(line) => lines.push(CompleteRolloutLine {
-                    line,
-                    start_byte_offset: line_start_offset,
-                    end_byte_offset: line_end_offset,
-                }),
+        if line_bytes.iter().all(u8::is_ascii_whitespace) {
+            if pending_rejected_line_count == 0 {
+                next_offset = line_end_offset;
+            }
+            line_start_offset = line_end_offset;
+            continue;
+        }
+        let value = match serde_json::from_slice::<serde_json::Value>(line_bytes) {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    thread_id = %thread_id,
+                    rollout_path = %rollout_path.display(),
+                    line_start_byte_offset = line_start_offset,
+                    line_end_byte_offset = line_end_offset,
+                    expected_ordinal = next_ordinal,
+                    error = %err,
+                    "deferring rejected rollout line until a later ordinal resolves it"
+                );
+                pending_rejected_line_count += 1;
+                line_start_offset = line_end_offset;
+                continue;
+            }
+        };
+        let value_ordinal = value.get("ordinal").and_then(serde_json::Value::as_u64);
+        let line = match serde_json::from_value::<RolloutLine>(value) {
+            Ok(line) => Some(line),
+            Err(err) => {
+                warn!(
+                    thread_id = %thread_id,
+                    rollout_path = %rollout_path.display(),
+                    line_start_byte_offset = line_start_offset,
+                    line_end_byte_offset = line_end_offset,
+                    expected_ordinal = next_ordinal,
+                    line_ordinal = ?value_ordinal,
+                    error = %err,
+                    "deferring unknown rollout line until a later ordinal resolves it"
+                );
+                None
+            }
+        };
+        let ordinal = match line
+            .as_ref()
+            .and_then(|line| line.ordinal)
+            .or(value_ordinal)
+        {
+            Some(ordinal) => ordinal,
+            None if line.is_none() => {
+                pending_rejected_line_count += 1;
+                line_start_offset = line_end_offset;
+                continue;
+            }
+            None => {
+                return Err(ThreadStoreError::Internal {
+                    message: format!(
+                        "paginated rollout line for {thread_id} is missing an ordinal"
+                    ),
+                });
+            }
+        };
+        if ordinal < next_ordinal {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {ordinal}"
+                ),
+            });
+        }
+        let Some(line) = line else {
+            pending_rejected_line_count += 1;
+            line_start_offset = line_end_offset;
+            continue;
+        };
+        let skipped_ordinal_count = ordinal - next_ordinal;
+        if skipped_ordinal_count > pending_rejected_line_count {
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {ordinal}; {pending_rejected_line_count} rejected rollout lines cannot cover that gap"
+                ),
+            });
+        }
+        let changes = if subagent_history_start_ordinal.is_some_and(|start| ordinal < start) {
+            ThreadHistoryChangeSet::default()
+        } else {
+            project_rollout_line(&line)
+        };
+        let fallback_created_at_ms = if changes
+            .changed_items
+            .iter()
+            .any(|item| item.started_at_ms.is_none())
+        {
+            match DateTime::parse_from_rfc3339(line.timestamp.as_str()) {
+                Ok(timestamp) => Some(timestamp.timestamp_millis()),
                 Err(err) => {
-                    // A failed append can leave a partial record behind. The rollout writer
-                    // repairs its newline before retrying, so skip rejected lines just like the
-                    // canonical rollout loader and keep projecting the valid retry that follows.
                     warn!(
-                        "skipping rejected rollout line while projecting {rollout_path:?}: {err}"
+                        thread_id = %thread_id,
+                        rollout_path = %rollout_path.display(),
+                        line_start_byte_offset = line_start_offset,
+                        line_end_byte_offset = line_end_offset,
+                        expected_ordinal = next_ordinal,
+                        line_ordinal = ordinal,
+                        error = %err,
+                        "deferring rollout line with invalid timestamp until a later ordinal resolves it"
                     );
+                    pending_rejected_line_count += 1;
+                    line_start_offset = line_end_offset;
+                    continue;
                 }
             }
+        } else {
+            None
+        };
+        if skipped_ordinal_count > 0 {
+            warn!(
+                thread_id = %thread_id,
+                rollout_path = %rollout_path.display(),
+                line_start_byte_offset = line_start_offset,
+                line_end_byte_offset = line_end_offset,
+                expected_ordinal = next_ordinal,
+                line_ordinal = ordinal,
+                skipped_ordinal_start = next_ordinal,
+                skipped_ordinal_end_exclusive = ordinal,
+                "skipping rollout ordinal range after rejected lines"
+            );
+            projections.push(RolloutProjectionStep::SkippedOrdinalRange {
+                start_ordinal: next_ordinal,
+                end_ordinal_exclusive: ordinal,
+            });
         }
+        pending_rejected_line_count = 0;
+        let next_line_ordinal =
+            ordinal
+                .checked_add(1)
+                .ok_or_else(|| ThreadStoreError::Internal {
+                    message: "rollout ordinal exceeds SQLite integer range".to_string(),
+                })?;
+        projections.push(RolloutProjectionStep::Line(ProjectedRolloutLine {
+            ordinal,
+            start_byte_offset: line_start_offset,
+            end_byte_offset: line_end_offset,
+            fallback_created_at_ms,
+            changes,
+        }));
+        next_ordinal = next_line_ordinal;
+        next_offset = line_end_offset;
         line_start_offset = line_end_offset;
     }
-    Ok((lines, next_offset))
-}
-
-fn thread_history_error(err: impl std::fmt::Display) -> ThreadStoreError {
-    ThreadStoreError::Internal {
-        message: format!("failed to project thread history: {err}"),
-    }
+    Ok((projections, next_offset))
 }
 
 fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {

@@ -21,14 +21,25 @@ pub(super) use turn_lookup::find_visible_turn;
 
 /// A valid complete rollout line with its absolute byte span in durable JSONL.
 ///
-/// `start_byte_offset..end_byte_offset` includes the terminating newline. Blank and rejected
-/// lines do not produce a value here, but still advance later spans.
+/// `start_byte_offset..end_byte_offset` includes the terminating newline.
 pub(super) struct ProjectedRolloutLine {
     pub ordinal: u64,
     pub start_byte_offset: u64,
     pub end_byte_offset: u64,
-    pub created_at_ms: i64,
+    pub fallback_created_at_ms: Option<i64>,
     pub changes: ThreadHistoryChangeSet,
+}
+
+/// One ordered update to apply while advancing a rollout projection checkpoint.
+///
+/// Skipped ordinal ranges keep the byte and ordinal checkpoints describing the same durable
+/// prefix even when a complete rollout line cannot be projected.
+pub(super) enum RolloutProjectionStep {
+    Line(ProjectedRolloutLine),
+    SkippedOrdinalRange {
+        start_ordinal: u64,
+        end_ordinal_exclusive: u64,
+    },
 }
 
 pub(super) struct RolloutProjectionState {
@@ -91,7 +102,7 @@ pub(super) async fn apply_projection(
     start_offset: u64,
     next_offset: u64,
     initial_ordinal: u64,
-    projections: Vec<ProjectedRolloutLine>,
+    projections: Vec<RolloutProjectionStep>,
 ) -> ThreadStoreResult<()> {
     let pool = store.thread_history_db().await?;
     // Write the projected rows and advance the JSONL offset and ordinal in one transaction. If
@@ -123,29 +134,57 @@ WHERE thread_id = ?
     }
 
     for projection in projections {
-        let ordinal = sqlite_integer(projection.ordinal, "rollout ordinal")?;
-        if ordinal != next_ordinal {
-            return Err(ThreadStoreError::Internal {
-                message: format!(
-                    "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {ordinal}"
-                ),
-            });
+        match projection {
+            RolloutProjectionStep::Line(projection) => {
+                let ordinal = sqlite_integer(projection.ordinal, "rollout ordinal")?;
+                if ordinal != next_ordinal {
+                    return Err(ThreadStoreError::Internal {
+                        message: format!(
+                            "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {ordinal}"
+                        ),
+                    });
+                }
+                apply_change_set(
+                    &mut transaction,
+                    thread_id.as_str(),
+                    ordinal,
+                    sqlite_integer(projection.start_byte_offset, "rollout byte offset")?,
+                    sqlite_integer(projection.end_byte_offset, "rollout byte offset")?,
+                    projection.fallback_created_at_ms,
+                    projection.changes,
+                )
+                .await?;
+                next_ordinal =
+                    next_ordinal
+                        .checked_add(1)
+                        .ok_or_else(|| ThreadStoreError::Internal {
+                            message: "rollout ordinal exceeds SQLite integer range".to_string(),
+                        })?;
+            }
+            RolloutProjectionStep::SkippedOrdinalRange {
+                start_ordinal,
+                end_ordinal_exclusive,
+            } => {
+                let start_ordinal = sqlite_integer(start_ordinal, "rollout ordinal")?;
+                if start_ordinal != next_ordinal {
+                    return Err(ThreadStoreError::Internal {
+                        message: format!(
+                            "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {start_ordinal}"
+                        ),
+                    });
+                }
+                let end_ordinal_exclusive =
+                    sqlite_integer(end_ordinal_exclusive, "rollout ordinal")?;
+                if end_ordinal_exclusive <= start_ordinal {
+                    return Err(ThreadStoreError::Internal {
+                        message: format!(
+                            "thread history projection for {thread_id} has an empty skipped ordinal range"
+                        ),
+                    });
+                }
+                next_ordinal = end_ordinal_exclusive;
+            }
         }
-        apply_change_set(
-            &mut transaction,
-            thread_id.as_str(),
-            ordinal,
-            sqlite_integer(projection.start_byte_offset, "rollout byte offset")?,
-            sqlite_integer(projection.end_byte_offset, "rollout byte offset")?,
-            projection.created_at_ms,
-            projection.changes,
-        )
-        .await?;
-        next_ordinal = next_ordinal
-            .checked_add(1)
-            .ok_or_else(|| ThreadStoreError::Internal {
-                message: "rollout ordinal exceeds SQLite integer range".to_string(),
-            })?;
     }
 
     sqlx::query(
@@ -214,7 +253,7 @@ async fn apply_change_set(
     rollout_ordinal: i64,
     rollout_byte_offset: i64,
     rollout_end_byte_offset: i64,
-    created_at_ms: i64,
+    fallback_created_at_ms: Option<i64>,
     changes: ThreadHistoryChangeSet,
 ) -> ThreadStoreResult<()> {
     for turn in changes.changed_turns {
@@ -342,6 +381,14 @@ WHERE thread_id = ?
     }
 
     for item in changes.changed_items {
+        let created_at_ms =
+            item.started_at_ms
+                .or(fallback_created_at_ms)
+                .ok_or_else(|| ThreadStoreError::Internal {
+                    message: format!(
+                        "thread history projection for {thread_id} is missing an item creation timestamp"
+                    ),
+                })?;
         let item_id = item.item.id().to_string();
         let item_json = serde_json::to_string(&item.item).map_err(thread_history_error)?;
         // Completed items are immutable: local producers emit ItemCompleted exactly once per
