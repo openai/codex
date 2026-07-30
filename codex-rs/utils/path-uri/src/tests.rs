@@ -915,7 +915,22 @@ fn join_windows_root_relative_path_preserves_drive_or_share() {
 }
 
 #[test]
-fn join_rejects_windows_drive_relative_path() {
+fn join_resolves_windows_same_drive_relative_path() {
+    for (base, path, expected) in [
+        ("file:///C:/base", r"C:tmp", "file:///C:/base/tmp"),
+        ("file:///C:/base", r"c:tmp", "file:///C:/base/tmp"),
+        ("file:///C:/base/dir", r"C:..\tmp", "file:///C:/base/tmp"),
+        ("file:///C:/base", "C:", "file:///C:/base"),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn join_rejects_windows_other_drive_relative_path() {
     let base = PathUri::parse("file:///C:/base").expect("valid base URI");
 
     assert_eq!(

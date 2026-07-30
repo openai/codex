@@ -325,14 +325,17 @@ impl PathUri {
     /// Path text is interpreted using the POSIX or Windows convention inferred
     /// from the base URI. An absolute path replaces the base URI's path, while a
     /// relative path is appended lexically. Windows root-relative paths retain
-    /// the base drive or UNC share, while drive-relative paths are rejected.
+    /// the base drive or UNC share. Same-drive relative paths are appended to
+    /// the base, while other-drive relative paths are rejected because their
+    /// current directory belongs to the executor.
     /// Empty and `.` segments are ignored, while `..` removes one segment
     /// without escaping the POSIX root, Windows drive, or UNC share. Literal
     /// `%`, `?`, and `#` characters are percent-encoded as filename text. Paths
     /// containing a null character are rejected because they cannot be safely
     /// converted to native paths.
     /// Opaque fallback URIs created by [`Self::from_abs_path`] reject non-empty
-    /// joins.
+    /// joins. Home-directory expansion also requires executor-native context
+    /// and is intentionally not performed.
     pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
         if path.contains('\0') {
             return Err(PathUriParseError::InvalidFileUriPath {
@@ -353,13 +356,26 @@ impl PathUri {
             return Ok(absolute);
         }
         let path_bytes = path.as_bytes();
-        if convention == PathConvention::Windows
+        let path = if convention == PathConvention::Windows
             && matches!(path_bytes, [drive, b':', ..] if drive.is_ascii_alphabetic())
         {
-            return Err(PathUriParseError::InvalidFileUriPath {
-                path: path.to_string(),
-            });
-        }
+            let same_drive = self
+                .0
+                .path_segments()
+                .and_then(|mut segments| segments.find(|segment| !segment.is_empty()))
+                .is_some_and(|segment| {
+                    matches!(segment.as_bytes(), [drive, b':'] if drive.eq_ignore_ascii_case(&path_bytes[0]))
+                });
+            if !same_drive {
+                return Err(PathUriParseError::InvalidFileUriPath {
+                    path: path.to_string(),
+                });
+            }
+            &path[2..]
+        } else {
+            path
+        };
+        let path_bytes = path.as_bytes();
         if decode_bad_path_uri(&self.0).is_some() {
             return Err(PathUriParseError::InvalidFileUriPath {
                 path: self.to_string(),
