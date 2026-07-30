@@ -70,11 +70,8 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         false
     }
 
-    fn telemetry_tags<'a>(
-        &'a self,
-        _invocation: &'a ToolInvocation,
-    ) -> BoxFuture<'a, ToolTelemetryTags> {
-        Box::pin(async { Vec::new() })
+    fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
+        Vec::new()
     }
 
     fn post_tool_use_payload(
@@ -322,10 +319,7 @@ impl CoreToolRuntime for ExposureOverride {
             .with_updated_hook_input(invocation, updated_input)
     }
 
-    fn telemetry_tags<'a>(
-        &'a self,
-        invocation: &'a ToolInvocation,
-    ) -> BoxFuture<'a, ToolTelemetryTags> {
+    fn telemetry_tags(&self, invocation: &ToolInvocation) -> ToolTelemetryTags {
         self.handler.telemetry_tags(invocation)
     }
 
@@ -552,7 +546,7 @@ impl ToolRegistry {
             }
         };
 
-        let telemetry_tags = tool.telemetry_tags(&invocation).await;
+        let telemetry_tags = tool.telemetry_tags(&invocation);
         let mut tool_result_tags =
             Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len() + 1);
         let mut extra_trace_fields = Vec::new();

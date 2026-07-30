@@ -179,17 +179,12 @@ impl CoreToolRuntime for McpHandler {
         }))
     }
 
-    fn telemetry_tags<'a>(
-        &'a self,
-        _invocation: &'a ToolInvocation,
-    ) -> BoxFuture<'a, ToolTelemetryTags> {
-        Box::pin(async {
-            let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
-            if let Some(origin) = &self.tool_info.server_origin {
-                tags.push(("mcp_server_origin", origin.clone()));
-            }
-            tags
-        })
+    fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
+        let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
+        if let Some(origin) = &self.tool_info.server_origin {
+            tags.push(("mcp_server_origin", origin.clone()));
+        }
+        tags
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
