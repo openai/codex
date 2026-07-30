@@ -95,8 +95,7 @@ use eventsource_stream::EventStreamError;
 use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
-use http::StatusCode as HttpStatusCode;
-use reqwest::StatusCode;
+use http::StatusCode;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -2323,7 +2322,7 @@ impl RequestTelemetry for ApiTelemetry {
     fn on_request(
         &self,
         attempt: u64,
-        status: Option<HttpStatusCode>,
+        status: Option<StatusCode>,
         error: Option<&TransportError>,
         duration: Duration,
     ) {
