@@ -53,6 +53,9 @@ impl CodeModeExecuteHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         let cell_id = started_cell.cell_id.clone();
+        if let Some(executed_tool_calls) = exec.session.services.executed_tool_calls.as_ref() {
+            executed_tool_calls.register_cell(&cell_id, &call_id);
+        }
         let runtime_cell_id = cell_id.to_string();
         let code_cell_trace = exec
             .session

@@ -531,6 +531,9 @@
             "exec_permission_approvals": {
               "type": "boolean"
             },
+            "executed_tool_call_metadata": {
+              "type": "boolean"
+            },
             "executor_capability_discovery": {
               "type": "boolean"
             },
@@ -5089,6 +5092,9 @@
           "type": "boolean"
         },
         "exec_permission_approvals": {
+          "type": "boolean"
+        },
+        "executed_tool_call_metadata": {
           "type": "boolean"
         },
         "executor_capability_discovery": {

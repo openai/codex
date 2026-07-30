@@ -66,6 +66,7 @@ impl CodeModeWaitHandler {
         let ToolInvocation {
             session,
             turn,
+            call_id,
             tool_name,
             payload,
             ..
@@ -79,6 +80,11 @@ impl CodeModeWaitHandler {
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
                 let cell_id = codex_code_mode::CellId::new(args.cell_id);
+                if let Some(executed_tool_calls) =
+                    exec.session.services.executed_tool_calls.as_ref()
+                {
+                    executed_tool_calls.register_cell(&cell_id, &call_id);
+                }
                 let wait_response = if args.terminate {
                     exec.session
                         .services

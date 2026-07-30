@@ -195,6 +195,7 @@ async fn run_code_mode_turn_with_model_and_config(
 ) -> Result<(TestCodex, ResponseMock)> {
     let builder = test_codex().with_model(model).with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
         configure(config);
     });
     run_code_mode_turn_with_builder(server, prompt, code, builder).await
@@ -985,6 +986,13 @@ text(output.output);
         "code_mode_only nested tool call failed unexpectedly: {output}"
     );
     assert_eq!(output, "code_mode_only_nested_tool_marker");
+    assert!(
+        request
+            .custom_tool_call_output("call-1")
+            .pointer("/internal_chat_message_metadata_passthrough/executed_tool_calls")
+            .is_none(),
+        "nested tool calls must not be recorded while executed-tool-call metadata is disabled",
+    );
 
     Ok(())
 }
@@ -1581,6 +1589,13 @@ try {
     .await?;
 
     let request = second_mock.single_request();
+    assert_eq!(
+        request.custom_tool_call_output("call-1")["internal_chat_message_metadata_passthrough"]["executed_tool_calls"],
+        serde_json::json!([
+            {"name": "exec_command", "arguments": {}},
+        ]),
+        "failed nested tool attempts remain private request metadata",
+    );
     let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
     assert_ne!(
         success,

@@ -2,6 +2,7 @@ mod approvals;
 pub(crate) mod code_mode;
 pub(crate) mod context;
 pub(crate) mod events;
+mod executed_tool_calls;
 pub(crate) mod handlers;
 pub(crate) mod hook_names;
 pub(crate) mod hosted_spec;
@@ -26,6 +27,7 @@ use codex_tools::ToolName;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_text;
+pub(crate) use executed_tool_calls::ExecutedToolCallRecorder;
 pub use router::ToolRouter;
 
 // Telemetry preview limits: keep log events smaller than model budgets.

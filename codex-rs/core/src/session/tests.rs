@@ -5718,6 +5718,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let mcp_runtime = Arc::new(codex_mcp::McpRuntime::empty(config.prefix_mcp_tool_names()));
+    let executed_tool_calls = config
+        .features
+        .enabled(Feature::ExecutedToolCallMetadata)
+        .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
     let services = SessionServices {
         mcp_runtime,
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -5793,6 +5797,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*attestation_provider*/ None,
             config.http_client_factory(),
         ),
+        executed_tool_calls,
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
             &config.features,
@@ -7901,6 +7906,10 @@ where
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let mcp_runtime = Arc::new(codex_mcp::McpRuntime::empty(config.prefix_mcp_tool_names()));
+    let executed_tool_calls = config
+        .features
+        .enabled(Feature::ExecutedToolCallMetadata)
+        .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
     let services = SessionServices {
         mcp_runtime,
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -7976,6 +7985,7 @@ where
             /*attestation_provider*/ None,
             config.http_client_factory(),
         ),
+        executed_tool_calls,
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
             &config.features,

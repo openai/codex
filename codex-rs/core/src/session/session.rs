@@ -1083,6 +1083,10 @@ impl Session {
                 }).await;
             }
 
+            let executed_tool_calls = config
+                .features
+                .enabled(Feature::ExecutedToolCallMetadata)
+                .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.
@@ -1160,6 +1164,7 @@ impl Session {
                         session_configuration.parent_thread_id,
                     ),
                 ),
+                executed_tool_calls,
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
                     Arc::clone(&code_mode_session_provider),
                     &config.features,
