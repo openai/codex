@@ -1755,21 +1755,25 @@ async fn code_mode_yield_and_termination_are_not_starved_by_runtime_output() -> 
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
+    let termination_gate = test.workspace_path("code-mode-output-termination.ready");
+    let termination_wait = wait_for_file_source(&termination_gate)?;
 
     // Exact controller arbitration is covered by deterministic code-mode contract tests. Keep
     // this end-to-end load bounded while exercising a substantial runtime output backlog.
-    let code = r#"// @exec: {"yield_time_ms": 0, "max_output_tokens": 16}
-for (let index = 0; index < 16_384; index++) {
-    text(`event ${index}`);
-}
-while (true) {}
-"#;
+    let code = format!(
+        r#"// @exec: {{"yield_time_ms": 0, "max_output_tokens": 16}}
+for (let index = 0; index < 256; index++) {{
+    text(`event ${{index}}`);
+}}
+{termination_wait}
+"#
+    );
 
     responses::mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "exec", code),
+            ev_custom_tool_call("call-1", "exec", &code),
             ev_completed("resp-1"),
         ]),
     )
@@ -1783,11 +1787,7 @@ while (true) {}
     )
     .await;
 
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        test.submit_turn("start the busy loop"),
-    )
-    .await??;
+    test.submit_turn("start the bounded output backlog").await?;
 
     let first_request = first_completion.single_request();
     let first_items = custom_tool_output_items(&first_request, "call-1");
