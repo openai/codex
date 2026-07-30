@@ -2747,9 +2747,11 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("patch applied")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     MockResponsesConfig::new(&server.uri())
         .with_approval_policy("untrusted")
+        // Snapshot startup is unrelated to the file-approval behavior under test.
+        .disable_feature(Feature::ShellSnapshot)
         .write(&codex_home)?;
 
     let mut mcp = TestAppServer::builder()
@@ -2879,6 +2881,20 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let status = timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
+    anyhow::ensure!(
+        status.success(),
+        "app-server exited unsuccessfully: {status}"
+    );
+    let response_requests = server
+        .received_requests()
+        .await
+        .expect("mock server should record requests")
+        .into_iter()
+        .filter(|request| request.method == "POST" && request.url.path().ends_with("/responses"))
+        .count();
+    assert_eq!(response_requests, 2);
 
     Ok(())
 }
