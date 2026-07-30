@@ -336,7 +336,11 @@ fn usage_limit_reached_error_formats_team_plan() {
 
 #[test]
 fn usage_limit_reached_error_formats_business_plan_without_reset() {
-    for plan in [KnownPlan::Business, KnownPlan::Ent26] {
+    for plan in [
+        KnownPlan::Business,
+        KnownPlan::Ent26,
+        KnownPlan::EnterpriseCbpAutomation,
+    ] {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(plan)),
             resets_at: None,

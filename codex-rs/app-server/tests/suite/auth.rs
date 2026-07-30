@@ -154,7 +154,7 @@ async fn personal_access_token_without_email_supports_auth_status_and_account_re
             "email": null,
             "chatgpt_user_id": "user-123",
             "chatgpt_account_id": "account-123",
-            "chatgpt_plan_type": "pro",
+            "chatgpt_plan_type": "enterprise_cbp_automation",
             "chatgpt_account_is_fedramp": false,
         })))
         .expect(1..)
@@ -209,11 +209,19 @@ async fn personal_access_token_without_email_supports_auth_status_and_account_re
         Some(&serde_json::Value::Null),
     );
     assert_eq!(
+        response
+            .result
+            .get("account")
+            .and_then(|account| account.get("planType"))
+            .and_then(serde_json::Value::as_str),
+        Some("enterprise_cbp_automation"),
+    );
+    assert_eq!(
         to_response::<GetAccountResponse>(response)?,
         GetAccountResponse {
             account: Some(Account::Chatgpt {
                 email: None,
-                plan_type: AccountPlanType::Pro,
+                plan_type: AccountPlanType::EnterpriseCbpAutomation,
             }),
             requires_openai_auth: true,
         }

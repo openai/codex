@@ -691,6 +691,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                 | KnownPlan::SelfServeBusinessUsageBased
                 | KnownPlan::Business
                 | KnownPlan::Ent26
+                | KnownPlan::EnterpriseCbpAutomation
                 | KnownPlan::EnterpriseCbpUsageBased,
             )) => {
                 format!(

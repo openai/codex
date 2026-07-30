@@ -127,7 +127,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             .expect("parse second reset credit grant timestamp")
             .timestamp();
     let response_body = json!({
-        "plan_type": "self_serve_business_prolite",
+        "plan_type": "enterprise_cbp_automation",
         "rate_limit": {
             "allowed": true,
             "limit_reached": false,
@@ -251,7 +251,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 resets_at: secondary_reset_timestamp,
             }),
             spend_control_reached: Some(false),
-            plan_type: Some(AccountPlanType::SelfServeBusinessProLite),
+            plan_type: Some(AccountPlanType::EnterpriseCbpAutomation),
             rate_limit_reached_type: Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached),
         },
         rate_limits_by_limit_id: Some(
@@ -279,7 +279,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                             resets_at: secondary_reset_timestamp,
                         }),
                         spend_control_reached: Some(false),
-                        plan_type: Some(AccountPlanType::SelfServeBusinessProLite),
+                        plan_type: Some(AccountPlanType::EnterpriseCbpAutomation),
                         rate_limit_reached_type: Some(
                             RateLimitReachedType::WorkspaceMemberUsageLimitReached,
                         ),
@@ -299,7 +299,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         credits: None,
                         individual_limit: None,
                         spend_control_reached: None,
-                        plan_type: Some(AccountPlanType::SelfServeBusinessProLite),
+                        plan_type: Some(AccountPlanType::EnterpriseCbpAutomation),
                         rate_limit_reached_type: None,
                     },
                 ),

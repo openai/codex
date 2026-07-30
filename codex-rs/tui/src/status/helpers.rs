@@ -97,7 +97,9 @@ pub(crate) fn compose_account_display(
 }
 
 pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
-    if plan_type.is_team_like() {
+    if plan_type == PlanType::EnterpriseCbpAutomation {
+        "Enterprise (Automation)".to_string()
+    } else if plan_type.is_team_like() {
         "Business".to_string()
     } else if plan_type.is_business_like() {
         "Enterprise".to_string()
@@ -222,6 +224,7 @@ mod tests {
             (PlanType::SelfServeBusinessProLite, "Business"),
             (PlanType::SelfServeBusinessUsageBased, "Business"),
             (PlanType::Business, "Enterprise"),
+            (PlanType::EnterpriseCbpAutomation, "Enterprise (Automation)"),
             (PlanType::EnterpriseCbpUsageBased, "Enterprise"),
             (PlanType::Enterprise, "Enterprise"),
             (PlanType::Edu, "Edu"),

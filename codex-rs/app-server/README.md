@@ -2114,7 +2114,7 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 
 ### Authentication modes
 
-Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, and can be inferred from `account/read`. Self-serve Business ProLite accounts use the `self_serve_business_prolite` plan type.
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, and can be inferred from `account/read`. Self-serve Business ProLite accounts use the `self_serve_business_prolite` plan type; Enterprise automation accounts use `enterprise_cbp_automation`.
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.

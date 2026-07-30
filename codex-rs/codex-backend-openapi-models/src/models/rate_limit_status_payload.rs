@@ -120,6 +120,8 @@ pub enum PlanType {
     Business,
     #[serde(rename = "ent26")]
     Ent26,
+    #[serde(rename = "enterprise_cbp_automation")]
+    EnterpriseCbpAutomation,
     #[serde(rename = "enterprise_cbp_usage_based")]
     EnterpriseCbpUsageBased,
     #[serde(rename = "education")]

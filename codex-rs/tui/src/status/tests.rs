@@ -365,7 +365,7 @@ async fn status_snapshot_shows_chatgpt_plan_without_email() {
 
     write_chatgpt_auth(
         temp_home.path(),
-        ChatGptAuthFixture::new("access-chatgpt").plan_type("enterprise"),
+        ChatGptAuthFixture::new("access-chatgpt").plan_type("enterprise_cbp_automation"),
         AuthCredentialsStoreMode::File,
     )
     .expect("write email-less ChatGPT auth");
@@ -384,7 +384,7 @@ async fn status_snapshot_shows_chatgpt_plan_without_email() {
         account_display,
         StatusAccountDisplay::ChatGpt {
             email: None,
-            plan: Some("Enterprise".to_string()),
+            plan: Some("Enterprise (Automation)".to_string()),
         }
     );
     let usage = TokenUsage::default();

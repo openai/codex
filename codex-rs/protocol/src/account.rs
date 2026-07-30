@@ -25,6 +25,9 @@ pub enum PlanType {
     SelfServeBusinessUsageBased,
     Business,
     Ent26,
+    #[serde(rename = "enterprise_cbp_automation")]
+    #[ts(rename = "enterprise_cbp_automation")]
+    EnterpriseCbpAutomation,
     #[serde(rename = "enterprise_cbp_usage_based")]
     #[ts(rename = "enterprise_cbp_usage_based")]
     EnterpriseCbpUsageBased,
@@ -58,7 +61,10 @@ impl PlanType {
     pub fn is_business_like(self) -> bool {
         matches!(
             self,
-            Self::Business | Self::Ent26 | Self::EnterpriseCbpUsageBased
+            Self::Business
+                | Self::Ent26
+                | Self::EnterpriseCbpAutomation
+                | Self::EnterpriseCbpUsageBased
         )
     }
 
@@ -70,6 +76,7 @@ impl PlanType {
                 | Self::SelfServeBusinessUsageBased
                 | Self::Business
                 | Self::Ent26
+                | Self::EnterpriseCbpAutomation
                 | Self::EnterpriseCbpUsageBased
                 | Self::Enterprise
                 | Self::Edu
@@ -99,6 +106,7 @@ impl From<KnownPlan> for PlanType {
             KnownPlan::SelfServeBusinessUsageBased => Self::SelfServeBusinessUsageBased,
             KnownPlan::Business => Self::Business,
             KnownPlan::Ent26 => Self::Ent26,
+            KnownPlan::EnterpriseCbpAutomation => Self::EnterpriseCbpAutomation,
             KnownPlan::EnterpriseCbpUsageBased => Self::EnterpriseCbpUsageBased,
             KnownPlan::Enterprise => Self::Enterprise,
             KnownPlan::Edu => Self::Edu,
@@ -131,6 +139,11 @@ mod tests {
             "\"enterprise_cbp_usage_based\""
         );
         assert_eq!(
+            serde_json::to_string(&PlanType::EnterpriseCbpAutomation)
+                .expect("enterprise cbp automation should serialize"),
+            "\"enterprise_cbp_automation\""
+        );
+        assert_eq!(
             serde_json::to_string(&PlanType::Ent26).expect("ent26 should serialize"),
             "\"ent26\""
         );
@@ -158,6 +171,11 @@ mod tests {
             PlanType::EnterpriseCbpUsageBased
         );
         assert_eq!(
+            serde_json::from_str::<PlanType>("\"enterprise_cbp_automation\"")
+                .expect("enterprise cbp automation should deserialize"),
+            PlanType::EnterpriseCbpAutomation
+        );
+        assert_eq!(
             serde_json::from_str::<PlanType>("\"ent26\"").expect("ent26 should deserialize"),
             PlanType::Ent26
         );
@@ -173,6 +191,7 @@ mod tests {
 
         assert_eq!(PlanType::Business.is_business_like(), true);
         assert_eq!(PlanType::Ent26.is_business_like(), true);
+        assert_eq!(PlanType::EnterpriseCbpAutomation.is_business_like(), true);
         assert_eq!(PlanType::EnterpriseCbpUsageBased.is_business_like(), true);
         assert_eq!(PlanType::Team.is_business_like(), false);
     }
@@ -191,6 +210,10 @@ mod tests {
         assert_eq!(PlanType::Business.is_workspace_account(), true);
         assert_eq!(PlanType::Ent26.is_workspace_account(), true);
         assert_eq!(
+            PlanType::EnterpriseCbpAutomation.is_workspace_account(),
+            true
+        );
+        assert_eq!(
             PlanType::EnterpriseCbpUsageBased.is_workspace_account(),
             true
         );
@@ -208,6 +231,10 @@ mod tests {
         assert_eq!(
             PlanType::from(AuthPlanType::Known(KnownPlan::EnterpriseCbpUsageBased)),
             PlanType::EnterpriseCbpUsageBased
+        );
+        assert_eq!(
+            PlanType::from(AuthPlanType::Known(KnownPlan::EnterpriseCbpAutomation)),
+            PlanType::EnterpriseCbpAutomation
         );
         assert_eq!(
             PlanType::from(AuthPlanType::Known(KnownPlan::Ent26)),

@@ -14,7 +14,7 @@ expression: sanitized
 │  Directory: [[workspace]]                                                │
 │  Permissions:   Custom (workspace with network access, Ask for approval) │
 │  Agents.md:     <none>                                                   │
-│  Account:       Enterprise                                               │
+│  Account:       Enterprise (Automation)                                  │
 │                                                                          │
 │  Limits:        data not available yet                                   │
 ╰──────────────────────────────────────────────────────────────────────────╯
