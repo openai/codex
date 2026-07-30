@@ -13,6 +13,7 @@ use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
+use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -33,6 +34,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -54,6 +56,7 @@ use attempt::run_remote_compact_v2_attempt;
 // Mirror the current /responses/compact retained-message default while the
 // server-side path remains the reference implementation.
 const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
+const MAX_RETAINED_AGENT_MESSAGE_TOKENS: i64 = 10_000;
 // Compact attempts can run much longer than normal turns, so keep the per-transport
 // retry budget smaller than the general Responses stream retry budget.
 const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
@@ -457,6 +460,16 @@ fn build_v2_compacted_history(
 }
 
 fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
+    if let ResponseItem::AgentMessage { content, .. } = item {
+        let is_completion = matches!(
+            content.first(),
+            Some(AgentMessageInputContent::InputText { text })
+                if text.starts_with("Message Type: FINAL_ANSWER\n")
+        );
+        return !is_completion
+            && estimate_item_token_count(item) <= MAX_RETAINED_AGENT_MESSAGE_TOKENS;
+    }
+
     let ResponseItem::Message { role, .. } = item else {
         return false;
     };
@@ -503,7 +516,7 @@ fn truncate_retained_messages_for_remote_compaction(
 
 fn message_text_token_count(item: &ResponseItem) -> usize {
     let ResponseItem::Message { content, .. } = item else {
-        return 0;
+        return usize::try_from(estimate_item_token_count(item)).unwrap_or(usize::MAX);
     };
 
     content
@@ -529,7 +542,7 @@ fn truncate_message_text_to_token_budget(
         internal_chat_message_metadata_passthrough: metadata,
     } = item
     else {
-        return Some(item);
+        return None;
     };
 
     let mut remaining = max_tokens;

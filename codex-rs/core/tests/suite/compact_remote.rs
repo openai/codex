@@ -10,6 +10,7 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuth;
 use codex_login::auth::AgentIdentityAuthRecord;
+use codex_protocol::AgentPath;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -27,6 +28,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
@@ -937,6 +939,10 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
                 responses::ev_completed("resp-1"),
             ]),
             responses::sse(vec![
+                responses::ev_assistant_message("m-agent", "DELEGATED_TASK_REPLY"),
+                responses::ev_completed("resp-agent"),
+            ]),
+            responses::sse(vec![
                 serde_json::json!({
                     "type": "response.output_item.done",
                     "item": {
@@ -968,6 +974,31 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         .await?;
     wait_for_turn_complete(&codex).await;
 
+    codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::root().join("child").expect("valid child path"),
+                AgentPath::root(),
+                Vec::new(),
+                "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/child\nPayload:\nchild completion".to_string(),
+                /*trigger_turn*/ false,
+            ),
+        })
+        .await?;
+    let delegated_task_ciphertext = format!("delegated compact task{}", "x".repeat(40_000));
+    codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new_encrypted(
+                AgentPath::root(),
+                AgentPath::root().join("worker").expect("valid worker path"),
+                Vec::new(),
+                delegated_task_ciphertext.clone(),
+                /*trigger_turn*/ true,
+            ),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
     codex.submit(Op::Compact).await?;
     wait_for_turn_complete(&codex).await;
 
@@ -986,7 +1017,22 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     wait_for_turn_complete(&codex).await;
 
     let response_requests = responses_mock.requests();
-    let compact_request = &response_requests[1];
+    let compact_request = &response_requests[2];
+    assert!(
+        compact_request
+            .inputs_of_type("agent_message")
+            .iter()
+            .any(|item| item["content"][1]["encrypted_content"].as_str()
+                == Some(delegated_task_ciphertext.as_str())),
+        "expected v2 compaction input to include the encrypted delegated task"
+    );
+    assert!(
+        compact_request
+            .inputs_of_type("agent_message")
+            .iter()
+            .any(|item| item.to_string().contains("child completion")),
+        "expected v2 compaction input to include the child completion"
+    );
     assert!(
         compact_request
             .header("x-codex-beta-features")
@@ -1036,6 +1082,21 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     );
 
     let follow_up_request = response_requests.last().expect("follow-up request missing");
+    assert!(
+        follow_up_request
+            .inputs_of_type("agent_message")
+            .iter()
+            .any(|item| item["content"][1]["encrypted_content"].as_str()
+                == Some(delegated_task_ciphertext.as_str())),
+        "expected v2 follow-up request to retain the encrypted delegated task"
+    );
+    assert!(
+        follow_up_request
+            .inputs_of_type("agent_message")
+            .iter()
+            .all(|item| !item.to_string().contains("child completion")),
+        "expected v2 follow-up request to omit the child completion"
+    );
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(
         follow_up_body.contains("\"type\":\"compaction\""),

@@ -2204,6 +2204,23 @@ fn encrypted_function_output_uses_plaintext_byte_estimate() {
         + estimate_encrypted_function_output_length(encrypted_content.len()) as i64;
 
     assert_eq!(estimated, expected);
+
+    let agent_message = InterAgentCommunication::new_encrypted(
+        AgentPath::root(),
+        AgentPath::root().join("worker").expect("valid worker path"),
+        Vec::new(),
+        encrypted_content.clone(),
+        /*trigger_turn*/ true,
+    )
+    .to_model_input_item();
+    let agent_raw_len = serde_json::to_string(&agent_message).unwrap().len() as i64;
+    let expected_agent = agent_raw_len - encrypted_content.len() as i64
+        + estimate_encrypted_function_output_length(encrypted_content.len()) as i64;
+
+    assert_eq!(
+        estimate_response_item_model_visible_bytes(&agent_message),
+        expected_agent
+    );
 }
 
 #[test]
