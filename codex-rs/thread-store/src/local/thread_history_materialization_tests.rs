@@ -17,11 +17,14 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -1359,6 +1362,148 @@ async fn summary_items_use_final_answers_and_ignore_commentary() {
             ("turn-2", vec!["user-2"]),
         ]
     );
+}
+
+#[tokio::test]
+async fn paginated_projection_accepts_float_rate_limits_and_later_final_answers() {
+    let home = TempDir::new().expect("temp dir");
+    let store = projection_store(home.path()).await;
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+    store
+        .persist_thread(thread_id)
+        .await
+        .expect("persist session metadata");
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![turn_started("turn-1")],
+        })
+        .await
+        .expect("append projected turn start");
+
+    let pool = codex_state::open_thread_history_db(&codex_state::SqliteConfig::new_for_testing(
+        home.path().abs(),
+    ))
+    .await
+    .expect("open thread history db");
+    let checkpoint = projection_state(&pool, thread_id).await;
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    let token_count = |primary: Option<f64>, secondary: Option<f64>| {
+        RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: Some(RateLimitSnapshot {
+                limit_id: None,
+                limit_name: None,
+                primary: primary.map(|used_percent| RateLimitWindow {
+                    used_percent,
+                    window_minutes: Some(60),
+                    resets_at: Some(1_800_000_000),
+                }),
+                secondary: secondary.map(|used_percent| RateLimitWindow {
+                    used_percent,
+                    window_minutes: Some(10_080),
+                    resets_at: Some(1_800_100_000),
+                }),
+                credits: None,
+                individual_limit: None,
+                spend_control_reached: None,
+                plan_type: None,
+                rate_limit_reached_type: None,
+            }),
+        }))
+    };
+
+    let recorder = store
+        .live_recorders
+        .lock()
+        .await
+        .get(&thread_id)
+        .expect("live recorder")
+        .recorder
+        .clone();
+    recorder
+        .record_canonical_items(&[
+            token_count(Some(0.0), Some(1.0)),
+            completed_item(
+                thread_id,
+                "turn-1",
+                agent_message("final-1", MessagePhase::FinalAnswer),
+            ),
+            token_count(Some(12.5), None),
+            turn_completed("turn-1"),
+        ])
+        .await
+        .expect("queue unprojected history");
+    recorder.flush().await.expect("flush unprojected history");
+    assert_eq!(projection_state(&pool, thread_id).await, checkpoint);
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("project floating-point rate limits");
+
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("turn-2"),
+                token_count(None, Some(87.25)),
+                completed_item(
+                    thread_id,
+                    "turn-2",
+                    agent_message("final-2", MessagePhase::FinalAnswer),
+                ),
+                token_count(Some(1e-12), Some(1_000_000.0)),
+                turn_completed("turn-2"),
+            ],
+        })
+        .await
+        .expect("append history after unprojected floating-point rate limits");
+
+    let final_answers = sqlx::query_as::<_, (String, String, String, i64)>(
+        r#"
+SELECT turns.turn_id, items.item_id, turns.status, items.rollout_ordinal
+FROM thread_turns AS turns
+JOIN thread_items AS items
+  ON items.thread_id = turns.thread_id
+ AND items.turn_id = turns.turn_id
+ AND items.item_id = turns.final_agent_item_id
+WHERE turns.thread_id = ?
+ORDER BY turns.rollout_ordinal
+        "#,
+    )
+    .bind(thread_id.to_string())
+    .fetch_all(&pool)
+    .await
+    .expect("read projected final answers");
+    assert_eq!(
+        final_answers,
+        vec![
+            (
+                "turn-1".to_string(),
+                "final-1".to_string(),
+                "completed".to_string(),
+                3,
+            ),
+            (
+                "turn-2".to_string(),
+                "final-2".to_string(),
+                "completed".to_string(),
+                8,
+            ),
+        ]
+    );
+
+    let rollout_len = i64::try_from(
+        fs::metadata(rollout_path.as_path())
+            .expect("rollout metadata")
+            .len(),
+    )
+    .expect("rollout length");
+    assert_eq!(projection_state(&pool, thread_id).await, (rollout_len, 11));
 }
 
 #[tokio::test]
