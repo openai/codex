@@ -27,6 +27,7 @@ impl EnvironmentsState {
     pub(crate) fn from_turn_context_with_environments(
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
+        current_date: Option<String>,
     ) -> Self {
         let workspace_roots = environments
             .primary()
@@ -34,7 +35,7 @@ impl EnvironmentsState {
             .unwrap_or_default();
         Self {
             environments: environment_states(environments),
-            current_date: turn_context.current_date.clone(),
+            current_date,
             timezone: turn_context.timezone.clone(),
             network: network_from_turn_context(turn_context),
             filesystem: Some(FileSystemContext::from_permission_profile(

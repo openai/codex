@@ -54,6 +54,7 @@ async fn external_sleep_polls_current_time_and_emits_items() -> Result<()> {
 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
+        .with_root_config("include_environment_context = false")
         .with_extra_config(
             r#"[features.current_time_reminder]
 enabled = true

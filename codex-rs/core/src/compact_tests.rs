@@ -18,7 +18,12 @@ async fn process_compacted_history_with_test_session(
         .await;
     let step_context =
         crate::session::step_context::StepContext::for_test(Arc::clone(&turn_context));
-    let world_state = Arc::new(session.build_world_state_for_step(&step_context).await);
+    let world_state = Arc::new(
+        session
+            .build_world_state_for_step(&step_context)
+            .await
+            .expect("world state should build"),
+    );
     let initial_context = session
         .build_initial_context_with_world_state(&turn_context, world_state.as_ref())
         .await;

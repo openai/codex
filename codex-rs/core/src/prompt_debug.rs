@@ -88,7 +88,7 @@ pub(crate) async fn build_prompt_input_from_session(
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
         .await?;
     sess.record_context_updates_and_set_reference_context_item(step_context.as_ref())
-        .await;
+        .await?;
 
     if !input.is_empty() {
         let response_item = sess.response_item_from_user_input(input);

@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use chrono::DateTime;
+use chrono::Local;
 use chrono::Utc;
 use codex_core::SleepFuture;
 use codex_core::TimeFuture;
@@ -100,6 +101,7 @@ fn enable_current_time_reminder(
     interval: u64,
     clock_source: CurrentTimeSource,
 ) {
+    config.include_environment_context = false;
     config
         .features
         .enable(Feature::CurrentTimeReminder)
@@ -109,6 +111,56 @@ fn enable_current_time_reminder(
         clock_source,
         ..CurrentTimeReminderConfig::default()
     });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn environment_context_uses_external_current_time_on_each_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let time_provider = Arc::new(TestTimeProvider::default());
+    let test = test_codex()
+        .with_config(|config| {
+            enable_current_time_reminder(config, /*interval*/ 0, CurrentTimeSource::External);
+            config.include_environment_context = true;
+        })
+        .with_external_time_provider(time_provider.clone())
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("first simulated day").await?;
+    time_provider
+        .current_time
+        .store(FIRST_TIME_UNIX_SECONDS + 86_400, Ordering::Relaxed);
+    test.submit_turn("second simulated day").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    for (request, timestamp) in requests
+        .iter()
+        .zip([FIRST_TIME_UNIX_SECONDS, FIRST_TIME_UNIX_SECONDS + 86_400])
+    {
+        let current_date = DateTime::<Utc>::from_timestamp(timestamp, 0)
+            .expect("test timestamp should be valid")
+            .with_timezone(&Local)
+            .format("%Y-%m-%d")
+            .to_string();
+        assert!(request.message_input_texts("user").iter().any(|text| {
+            text.contains("<environment_context>")
+                && text.contains(&format!("<current_date>{current_date}</current_date>"))
+        }));
+    }
+    assert_eq!(current_time_reminders(&requests[0]), vec![SECOND_REMINDER]);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -368,10 +420,11 @@ async fn time_provider_failure_stops_before_inference() -> Result<()> {
     .await;
     let test = test_codex()
         .with_config(|config| {
-            enable_current_time_reminder(config, /*interval*/ 1, CurrentTimeSource::External)
+            enable_current_time_reminder(config, /*interval*/ 1, CurrentTimeSource::External);
+            config.include_environment_context = true;
         })
         .with_external_time_provider(Arc::new(FailingTimeProvider))
-        .build(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     test.codex

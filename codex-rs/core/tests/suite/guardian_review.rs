@@ -1,8 +1,18 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
+use chrono::DateTime;
+use chrono::Local;
+use chrono::Utc;
+use codex_core::SleepFuture;
+use codex_core::TimeFuture;
+use codex_core::TimeProvider;
 use codex_core::config::Constrained;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_features::CurrentTimeSource;
+use codex_features::Feature;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::ModelsResponse;
@@ -33,8 +43,33 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
+
+const CURRENT_TIME_AT: i64 = 1_781_717_655;
+
+struct RecordingTimeProvider {
+    thread_ids: Mutex<Vec<ThreadId>>,
+}
+
+impl TimeProvider for RecordingTimeProvider {
+    fn current_time(&self, thread_id: ThreadId) -> TimeFuture<'_> {
+        self.thread_ids
+            .lock()
+            .expect("time-provider thread ids lock should not be poisoned")
+            .push(thread_id);
+        Box::pin(async {
+            Ok(DateTime::<Utc>::from_timestamp(CURRENT_TIME_AT, 0)
+                .expect("test timestamp should be valid"))
+        })
+    }
+
+    fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()> {
@@ -85,17 +120,31 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         ]],
     ])
     .await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.model_catalog = Some(ModelsResponse {
-            models: vec![review_model],
-        });
-        config.model_context_window = Some(900_000);
-        config.model_auto_compact_token_limit = Some(600_000);
-        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    let time_provider = Arc::new(RecordingTimeProvider {
+        thread_ids: Mutex::new(Vec::new()),
     });
+    let mut builder = test_codex()
+        .with_config(move |config| {
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![review_model],
+            });
+            config.model_context_window = Some(900_000);
+            config.model_auto_compact_token_limit = Some(600_000);
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow current-time reminders");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                clock_source: CurrentTimeSource::External,
+                ..CurrentTimeReminderConfig::default()
+            });
+        })
+        .with_external_time_provider(time_provider.clone());
 
     let test = builder.build_with_websocket_server(&server).await?;
+    let root_thread_id = test.session_configured.thread_id;
     let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(
             server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
@@ -103,6 +152,14 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         )
     })
     .await?;
+    assert!(
+        time_provider
+            .thread_ids
+            .lock()
+            .expect("time-provider thread ids lock should not be poisoned")
+            .is_empty(),
+        "startup prewarm must not request the external clock"
+    );
     let prewarm_requests = [first.body_json(), second.body_json()];
     let guardian_prewarm = prewarm_requests
         .iter()
@@ -145,6 +202,32 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         guardian_review["client_metadata"]["thread_id"].as_str(),
         Some(guardian_thread_id)
     );
+    let current_date = DateTime::<Utc>::from_timestamp(CURRENT_TIME_AT, 0)
+        .expect("test timestamp should be valid")
+        .with_timezone(&Local)
+        .format("%Y-%m-%d")
+        .to_string();
+    assert!(
+        guardian_review
+            .to_string()
+            .contains(&format!("<current_date>{current_date}</current_date>")),
+        "guardian's environment context should use the simulated current date"
+    );
+    let guardian_thread_id = ThreadId::from_string(guardian_thread_id)?;
+    {
+        let thread_ids = time_provider
+            .thread_ids
+            .lock()
+            .expect("time-provider thread ids lock should not be poisoned");
+        assert!(thread_ids.contains(&root_thread_id));
+        assert!(thread_ids.contains(&guardian_thread_id));
+        assert!(
+            thread_ids
+                .iter()
+                .all(|thread_id| thread_id == &root_thread_id || thread_id == &guardian_thread_id),
+            "clock requests should use the corresponding agent's own thread id: {thread_ids:?}"
+        );
+    }
     assert_eq!(guardian_review.get("generate"), None);
 
     let guardian_rollout_path = test

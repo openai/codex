@@ -40,7 +40,7 @@ pub(crate) async fn run_manual_compact_task(
     let step_context = sess
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
         .await?;
-    let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await);
+    let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await?);
     run_compact_task_inner(&sess, &step_context, world_state, CompactionTrigger::Manual).await
 }
 
@@ -57,7 +57,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     let world_state = match initial_context_injection {
         InitialContextInjection::BeforeLastUserMessage { world_state, .. } => world_state,
         InitialContextInjection::DoNotInject => {
-            Arc::new(sess.build_world_state_for_step(&step_context).await)
+            Arc::new(sess.build_world_state_for_step(&step_context).await?)
         }
     };
     run_compact_task_inner(&sess, &step_context, world_state, CompactionTrigger::Auto).await

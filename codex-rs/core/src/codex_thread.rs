@@ -498,7 +498,7 @@ impl CodexThread {
                 .await?;
             self.session
                 .record_context_updates_and_set_reference_context_item(step_context.as_ref())
-                .await;
+                .await?;
         }
         self.session
             .inject_no_new_turn(items, Some(turn_context.as_ref()))
