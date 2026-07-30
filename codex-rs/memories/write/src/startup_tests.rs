@@ -128,7 +128,7 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> anyhow::
         "expected workspace diff file in prompt: {prompt}"
     );
 
-    wait_for_phase2_workspace_reset(&memory_root).await?;
+    wait_for_phase2_workspace_reset(db.as_ref(), &memory_root).await?;
     let raw_memories = tokio::fs::read_to_string(memory_root.join("raw_memories.md")).await?;
     assert!(raw_memories.contains("raw memory B"));
     assert!(!raw_memories.contains("raw memory A"));
@@ -263,7 +263,7 @@ async fn memories_startup_phase2_prunes_old_extension_resources() -> anyhow::Res
         "expected workspace diff file in prompt: {prompt}"
     );
 
-    wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
+    wait_for_phase2_workspace_reset(db.as_ref(), &home.path().join("memories")).await?;
     wait_for_file_removed(&old_file).await?;
     assert!(
         !tokio::fs::try_exists(&old_file).await?,
@@ -324,8 +324,8 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
         "expected workspace diff file in prompt: {prompt}"
     );
 
+    wait_for_phase2_workspace_reset(db.as_ref(), &home.path().join("memories")).await?;
     wait_for_file_removed(&old_file).await?;
-    wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
 
     shutdown_test_codex(&test).await?;
     Ok(())
@@ -558,8 +558,20 @@ async fn run_memory_phase_two_model_request_test(
     let parent_permission_profile = config.permissions.effective_permission_profile();
     phase2::run(context, config, parent_permission_profile).await;
     let request = wait_for_single_request(&response).await;
-    wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
-    shutdown_test_codex(&test).await?;
+    let consolidation_thread_id = ThreadId::from_string(
+        request.body_json()["client_metadata"]["thread_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("phase-2 request should include the child thread id"))?,
+    )?;
+    wait_for_phase2_workspace_reset(db.as_ref(), &home.path().join("memories")).await?;
+    assert!(
+        test.thread_manager
+            .remove_thread(&consolidation_thread_id)
+            .await
+            .is_none(),
+        "phase-2 consolidation agent should be removed after shutdown"
+    );
+    test.codex.shutdown_and_wait().await?;
     Ok(request)
 }
 
@@ -854,21 +866,17 @@ fn phase2_prompt_text(request: &ResponsesRequest) -> String {
         .expect("phase2 prompt text")
 }
 
-async fn wait_for_phase2_workspace_reset(memory_root: &Path) -> anyhow::Result<()> {
-    wait_for_file_removed(&memory_root.join("phase2_workspace_diff.md")).await?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Ok(diff) = diff_since_latest_init(memory_root).await
-            && !diff.has_changes()
-        {
-            return Ok(());
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for clean memory workspace baseline"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+async fn wait_for_phase2_workspace_reset(
+    db: &codex_state::StateRuntime,
+    memory_root: &Path,
+) -> anyhow::Result<()> {
+    assert_eq!(
+        wait_for_phase2_job_to_finish(db).await?,
+        Phase2JobClaimOutcome::SkippedCooldown
+    );
+    assert!(!tokio::fs::try_exists(memory_root.join("phase2_workspace_diff.md")).await?);
+    assert!(!diff_since_latest_init(memory_root).await?.has_changes());
+    Ok(())
 }
 
 async fn wait_for_phase2_job_to_finish(
