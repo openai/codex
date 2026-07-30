@@ -3779,6 +3779,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn_1.id);
 
+    let resolved_request_id = request_id.clone();
     mcp.send_response(
         request_id,
         serde_json::to_value(FileChangeRequestApprovalResponse {
@@ -3787,11 +3788,36 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     )
     .await?;
 
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/completed"),
-    )
-    .await??;
+    let mut approval_resolved = false;
+    let mut patch_completed = false;
+    while !approval_resolved || !patch_completed {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                    notification.params.expect("serverRequest/resolved params"),
+                )?;
+                if resolved.request_id == resolved_request_id {
+                    assert_eq!(resolved.thread_id, thread.id);
+                    approval_resolved = true;
+                }
+            }
+            "item/completed" => {
+                let completed: ItemCompletedNotification =
+                    serde_json::from_value(notification.params.expect("item/completed params"))?;
+                if matches!(completed.item, ThreadItem::FileChange { ref id, .. } if id == "patch-call-1")
+                {
+                    assert_eq!(completed.thread_id, thread.id);
+                    assert_eq!(completed.turn_id, turn_1.id);
+                    patch_completed = true;
+                }
+            }
+            _ => {}
+        }
+    }
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -3802,7 +3828,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     assert_eq!(std::fs::read_to_string(&readme_path)?, "new line\n");
 
     // Second turn: apply a patch to the same file. Approval should be skipped due to AcceptForSession.
-    let _: TurnStartResponse = mcp
+    let TurnStartResponse { turn: turn_2 } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -3833,13 +3859,30 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     assert_eq!(id, "patch-call-2");
     assert_eq!(status, PatchApplyStatus::InProgress);
 
-    // If the server incorrectly emits FileChangeRequestApproval, the helper below will error
-    // (it bails on unexpected JSONRPCMessage::Request), causing the test to fail.
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/completed"),
-    )
+    let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            match mcp.read_next_message().await? {
+                JSONRPCMessage::Request(request) => {
+                    anyhow::bail!("unexpected approval request for session-approved patch: {request:?}");
+                }
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "item/completed" =>
+                {
+                    let completed: ItemCompletedNotification = serde_json::from_value(
+                        notification.params.expect("item/completed params"),
+                    )?;
+                    if matches!(completed.item, ThreadItem::FileChange { ref id, .. } if id == "patch-call-2")
+                    {
+                        return Ok::<ItemCompletedNotification, anyhow::Error>(completed);
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
     .await??;
+    assert_eq!(completed_file_change.thread_id, thread.id);
+    assert_eq!(completed_file_change.turn_id, turn_2.id);
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -3847,6 +3890,11 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     .await??;
 
     assert_eq!(std::fs::read_to_string(readme_path)?, "updated line\n");
+    let status = timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
+    anyhow::ensure!(
+        status.success(),
+        "app-server exited unsuccessfully: {status}"
+    );
 
     Ok(())
 }
