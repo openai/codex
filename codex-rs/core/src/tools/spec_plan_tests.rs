@@ -31,6 +31,7 @@ use serde_json::json;
 use crate::WaitForEnvironmentToolConfig;
 use crate::config::CurrentTimeReminderConfig;
 use crate::environment_selection::TurnEnvironmentState;
+use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::mcp_config_for_test;
@@ -1077,6 +1078,93 @@ async fn unified_tool_runtimes_preserve_source_order_and_collision_priority() {
         panic!("expected exactly one MCP tool after the extension collision");
     };
     assert_eq!(tool.description, "lookup test tool");
+}
+
+#[tokio::test]
+async fn code_mode_uses_the_first_normalized_tool_identity() {
+    for (code_mode_only, winner_exposure, shadow_is_deferred) in [
+        (false, ToolExposure::Direct, true),
+        (false, ToolExposure::Deferred, false),
+        (true, ToolExposure::Direct, true),
+        (true, ToolExposure::Deferred, false),
+    ] {
+        let mut metadata_state = None;
+        let plan = probe_with(
+            |turn| {
+                set_feature(turn, Feature::CodeMode, /*enabled*/ true);
+                if code_mode_only {
+                    set_feature(turn, Feature::CodeModeOnly, /*enabled*/ true);
+                }
+                turn.model_info.supports_search_tool = true;
+                turn.model_info.use_responses_lite = true;
+                metadata_state = Some(Arc::clone(&turn.turn_metadata_state));
+            },
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "winner",
+                    "normalized-alias",
+                    "lookup",
+                    winner_exposure,
+                )],
+                dynamic_tools: vec![dynamic_tool(
+                    Some("normalized_alias"),
+                    "lookup",
+                    shadow_is_deferred,
+                )],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        let winner_name = ToolName::namespaced("normalized-alias", "lookup");
+        let shadow_name = ToolName::namespaced("normalized_alias", "lookup");
+        plan.assert_registered_contains(&[&winner_name.to_string(), &shadow_name.to_string()]);
+        assert_eq!(plan.exposure(&winner_name.to_string()), winner_exposure);
+        assert_eq!(
+            plan.exposure(&shadow_name.to_string()),
+            if shadow_is_deferred {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            },
+        );
+
+        let metadata = metadata_state
+            .expect("tool planning should capture the turn metadata")
+            .to_responses_metadata(
+                "installation".to_string(),
+                "window".to_string(),
+                CodexResponsesRequestKind::Turn,
+            );
+        let code_mode_tool_names = metadata
+            .code_mode_tool_names
+            .as_ref()
+            .expect("Responses Lite should receive the supported code-mode tools");
+        assert_eq!(
+            code_mode_tool_names.get("normalized_alias__lookup"),
+            Some(&winner_name),
+        );
+        assert!(!code_mode_tool_names.contains_key(codex_tools::TOOL_SEARCH_TOOL_NAME));
+
+        if !code_mode_only && !shadow_is_deferred {
+            let ToolSpec::Namespace(namespace) = plan.visible_spec("normalized_alias") else {
+                panic!("expected the shadowed dynamic tool to remain directly visible");
+            };
+            let [ResponsesApiNamespaceTool::Function(shadow)] = namespace.tools.as_slice() else {
+                panic!("expected exactly one shadowed dynamic tool");
+            };
+            assert_eq!(shadow.description, "lookup dynamic tool");
+        }
+
+        let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+            panic!("expected code mode exec tool");
+        };
+        assert!(!exec.description.contains("lookup dynamic tool"));
+        assert_eq!(
+            exec.description.contains("lookup test tool"),
+            code_mode_only && winner_exposure == ToolExposure::Direct,
+        );
+    }
 }
 
 #[tokio::test]

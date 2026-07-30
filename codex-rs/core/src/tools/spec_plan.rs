@@ -90,6 +90,7 @@ use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
 use futures::future::BoxFuture;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -261,9 +262,10 @@ pub(crate) fn finalize_tool_router(
         append_tool_search_executor(turn_context, &mut registry, tool_search_handler_cache);
     }
 
-    register_code_mode_executors(turn_context, &mut registry);
+    let code_mode_tool_names = register_code_mode_executors(turn_context, &mut registry);
 
-    let model_visible_specs = build_model_visible_specs(turn_context, &registry, hosted_specs);
+    let model_visible_specs =
+        build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs);
     ToolRouter::from_parts(registry, model_visible_specs)
 }
 
@@ -293,6 +295,7 @@ fn apply_direct_model_only_namespace_overrides(
 fn build_model_visible_specs(
     turn_context: &TurnContext,
     registry: &ToolRegistry,
+    code_mode_tool_names: &BTreeMap<String, ToolName>,
     hosted_specs: Vec<ToolSpec>,
 ) -> Vec<ToolSpec> {
     let mut specs = Vec::new();
@@ -306,6 +309,7 @@ fn build_model_visible_specs(
                 turn_context,
                 exposure,
                 &tool_name,
+                code_mode_tool_names,
                 spec,
             ));
         }
@@ -324,6 +328,7 @@ fn spec_for_model_request(
     turn_context: &TurnContext,
     exposure: ToolExposure,
     tool_name: &ToolName,
+    code_mode_tool_names: &BTreeMap<String, ToolName>,
     spec: ToolSpec,
 ) -> ToolSpec {
     let tool_mode = effective_tool_mode(turn_context);
@@ -331,6 +336,11 @@ fn spec_for_model_request(
         && exposure.is_available_in_code_mode()
         && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
+        && code_mode_tool_names
+            .get(&codex_code_mode::normalize_code_mode_identifier(
+                &codex_tools::code_mode_name_for_tool_name(tool_name),
+            ))
+            .is_some_and(|winner| winner == tool_name)
     {
         codex_tools::augment_tool_spec_for_code_mode(spec)
     } else {
@@ -495,12 +505,16 @@ fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) 
     })
 }
 
-fn register_code_mode_executors(turn_context: &TurnContext, registry: &mut ToolRegistry) {
+fn register_code_mode_executors(
+    turn_context: &TurnContext,
+    registry: &mut ToolRegistry,
+) -> BTreeMap<String, ToolName> {
     let tool_mode = effective_tool_mode(turn_context);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
-        return;
+        return BTreeMap::new();
     }
 
+    let mut code_mode_tool_names = BTreeMap::new();
     let mut code_mode_nested_tool_specs = Vec::new();
     let mut exec_prompt_tool_specs = Vec::new();
     let mut deferred_exec_prompt_tool_specs = Vec::new();
@@ -511,11 +525,33 @@ fn register_code_mode_executors(turn_context: &TurnContext, registry: &mut ToolR
             continue;
         }
 
-        if is_excluded_from_code_mode(turn_context, &executor.tool_name()) {
+        let tool_name = executor.tool_name();
+        if is_excluded_from_code_mode(turn_context, &tool_name) {
             continue;
         }
 
         let spec = executor.spec();
+        let Some(code_mode_tool) = codex_tools::tool_spec_to_code_mode_tool_definition(&spec)
+        else {
+            continue;
+        };
+
+        let code_mode_name = code_mode_tool.name;
+        match code_mode_tool_names.entry(codex_code_mode::normalize_code_mode_identifier(
+            &code_mode_name,
+        )) {
+            Entry::Vacant(entry) => {
+                entry.insert(tool_name);
+            }
+            Entry::Occupied(_) => {
+                tracing::warn!(
+                    tool_name = %tool_name,
+                    code_mode_name = %code_mode_name,
+                    "skipping tool with a duplicate normalized code-mode name"
+                );
+                continue;
+            }
+        }
 
         if exposure == ToolExposure::Deferred {
             if deferred_tools_guidance_enabled {
@@ -528,19 +564,9 @@ fn register_code_mode_executors(turn_context: &TurnContext, registry: &mut ToolR
     }
 
     if turn_context.model_info.use_responses_lite {
-        let code_mode_tool_names =
-            collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter())
-                .into_iter()
-                .map(|tool| {
-                    (
-                        codex_code_mode::normalize_code_mode_identifier(&tool.name),
-                        tool.tool_name,
-                    )
-                })
-                .collect();
         turn_context
             .turn_metadata_state
-            .set_code_mode_tool_names(code_mode_tool_names);
+            .set_code_mode_tool_names(code_mode_tool_names.clone());
     }
 
     let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
@@ -567,6 +593,8 @@ fn register_code_mode_executors(turn_context: &TurnContext, registry: &mut ToolR
 
     registry.prepend_trusted(Arc::new(CodeModeWaitHandler));
     registry.prepend_trusted(Arc::new(execute_handler));
+
+    code_mode_tool_names
 }
 
 #[instrument(level = "trace", skip_all, fields(tool_spec_count = specs.len()))]
