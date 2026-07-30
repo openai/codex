@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_path_uri::PathUri;
 use tokio::io;
+use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tracing::trace;
 
 use crate::CopyOptions;
@@ -35,14 +40,20 @@ const NOT_FOUND_ERROR_CODE: i64 = -32004;
 #[path = "remote_file_stream.rs"]
 mod file_stream;
 
+type InFlightMetadataRequest = OnceCell<Result<FileMetadata, Arc<io::Error>>>;
+
 pub(crate) struct RemoteFileSystem {
     client: LazyRemoteExecServerClient,
+    metadata_requests: Mutex<HashMap<PathUri, Arc<InFlightMetadataRequest>>>,
 }
 
 impl RemoteFileSystem {
     pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
         trace!("remote fs new");
-        Self { client }
+        Self {
+            client,
+            metadata_requests: Mutex::new(HashMap::new()),
+        }
     }
 
     async fn canonicalize(
@@ -108,14 +119,15 @@ impl RemoteFileSystem {
     ) -> FileSystemResult<()> {
         trace!("remote fs write_file");
         let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let result = client
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 sandbox: remote_sandbox_context(sandbox),
             })
-            .await
-            .map_err(map_remote_error)?;
+            .await;
+        self.metadata_requests.lock().await.clear();
+        result.map_err(map_remote_error)?;
         Ok(())
     }
 
@@ -127,18 +139,58 @@ impl RemoteFileSystem {
     ) -> FileSystemResult<()> {
         trace!("remote fs create_directory");
         let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let result = client
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 sandbox: remote_sandbox_context(sandbox),
             })
-            .await
-            .map_err(map_remote_error)?;
+            .await;
+        self.metadata_requests.lock().await.clear();
+        result.map_err(map_remote_error)?;
         Ok(())
     }
 
+    /// Shares identical unsandboxed metadata requests only while their RPC remains in flight.
     async fn get_metadata(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        if sandbox.is_some() {
+            return self.get_metadata_uncached(path, sandbox).await;
+        }
+
+        let request = {
+            let mut requests = self.metadata_requests.lock().await;
+            requests.retain(|_, in_flight| Arc::strong_count(in_flight) > 1);
+            Arc::clone(requests.entry(path.clone()).or_default())
+        };
+        let result = match request
+            .get_or_init(|| async {
+                self.get_metadata_uncached(path, /*sandbox*/ None)
+                    .await
+                    .map_err(Arc::new)
+            })
+            .await
+        {
+            Ok(metadata) => Ok(metadata.clone()),
+            Err(error) => Err(io::Error::new(error.kind(), error.to_string())),
+        };
+
+        let mut requests = self.metadata_requests.lock().await;
+        if requests
+            .get(path)
+            .is_some_and(|in_flight| Arc::ptr_eq(in_flight, &request))
+        {
+            requests.remove(path);
+        }
+
+        result
+    }
+
+    /// Sends a fresh metadata request without sharing another caller's sandbox or result.
+    async fn get_metadata_uncached(
         &self,
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
@@ -226,15 +278,16 @@ impl RemoteFileSystem {
     ) -> FileSystemResult<()> {
         trace!("remote fs remove");
         let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let result = client
             .fs_remove(FsRemoveParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 force: Some(options.force),
                 sandbox: remote_sandbox_context(sandbox),
             })
-            .await
-            .map_err(map_remote_error)?;
+            .await;
+        self.metadata_requests.lock().await.clear();
+        result.map_err(map_remote_error)?;
         Ok(())
     }
 
@@ -247,15 +300,16 @@ impl RemoteFileSystem {
     ) -> FileSystemResult<()> {
         trace!("remote fs copy");
         let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let result = client
             .fs_copy(FsCopyParams {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
                 sandbox: remote_sandbox_context(sandbox),
             })
-            .await
-            .map_err(map_remote_error)?;
+            .await;
+        self.metadata_requests.lock().await.clear();
+        result.map_err(map_remote_error)?;
         Ok(())
     }
 }
