@@ -30,6 +30,7 @@ use codex_state::ExternalAgentConfigImportSuccessRecord;
 pub(super) fn detect_response(items: Vec<CoreMigrationItem>) -> ExternalAgentConfigDetectResponse {
     ExternalAgentConfigDetectResponse {
         items: items.into_iter().map(protocol_migration_item).collect(),
+        connectors: Vec::new(),
     }
 }
 

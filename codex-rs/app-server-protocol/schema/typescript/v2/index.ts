@@ -132,6 +132,8 @@ export type { ExternalAgentConfigImportResponse } from "./ExternalAgentConfigImp
 export type { ExternalAgentConfigImportTypeResult } from "./ExternalAgentConfigImportTypeResult";
 export type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigrationItem";
 export type { ExternalAgentConfigMigrationItemType } from "./ExternalAgentConfigMigrationItemType";
+export type { ExternalAgentDetectedConnectorCandidate } from "./ExternalAgentDetectedConnectorCandidate";
+export type { ExternalAgentDetectedConnectorSource } from "./ExternalAgentDetectedConnectorSource";
 export type { ExternalAgentImportedConnectorCandidate } from "./ExternalAgentImportedConnectorCandidate";
 export type { ExternalAgentImportedConnectorSource } from "./ExternalAgentImportedConnectorSource";
 export type { FeedbackRequirements } from "./FeedbackRequirements";
