@@ -8,6 +8,7 @@ mod orchestrator;
 
 use codex_core_skills::HostSkillsSnapshot;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -46,6 +47,7 @@ pub struct SkillReadRequest {
     pub package: SkillPackageId,
     pub resource: SkillResourceId,
     pub resolved_executor_roots: Vec<ResolvedSelectedCapabilityRoot>,
+    pub sandbox: Option<FileSystemSandboxContext>,
     pub host_snapshot: Option<Arc<HostSkillsSnapshot>>,
     pub mcp_resources: Option<Arc<McpResourceClient>>,
 }

@@ -20,8 +20,15 @@ use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SkillScope;
 use codex_skills_extension::ExecutorSkillProvider;
+use codex_skills_extension::catalog::SkillAuthority;
+use codex_skills_extension::catalog::SkillPackageId;
+use codex_skills_extension::catalog::SkillResourceId;
+use codex_skills_extension::catalog::SkillSourceKind;
 use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProvider;
 use codex_skills_extension::provider::SkillReadRequest;
@@ -235,6 +242,42 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
 }
 
 #[tokio::test]
+async fn windows_executor_skill_read_rejects_disabled_sandbox_on_any_orchestrator() {
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        Arc::new(EnvironmentManager::default_for_tests()),
+        /*restriction_product*/ None,
+    );
+    let sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(Vec::new()),
+            NetworkSandboxPolicy::Restricted,
+        ),
+    );
+    let resource = SkillResourceId::environment(
+        "skill://windows-root/C:/skill/SKILL.md",
+        "local",
+        PathUri::parse("file:///C:/skill/SKILL.md").expect("Windows resource URI"),
+    );
+    let error = provider
+        .read(SkillReadRequest {
+            authority: SkillAuthority::new(SkillSourceKind::Executor, "windows-root"),
+            package: SkillPackageId("skill://windows-root/C:/skill".into()),
+            resource,
+            resolved_executor_roots: Vec::new(),
+            sandbox: Some(sandbox),
+            host_snapshot: None,
+            mcp_resources: None,
+        })
+        .await
+        .expect_err("disabled Windows sandbox must fail closed");
+
+    assert_eq!(
+        error.message,
+        "executor skill resource requires an unavailable filesystem sandbox"
+    );
+}
+
+#[tokio::test]
 async fn selected_root_id_distinguishes_identical_executor_paths() {
     let root_label = if cfg!(unix) {
         r"root\identity"
@@ -346,6 +389,7 @@ async fn high_level_discovery_reuses_materialized_skill_contents_for_reads() {
         package: entry.id.clone(),
         resource: entry.main_prompt.clone(),
         resolved_executor_roots: Vec::new(),
+        sandbox: None,
         host_snapshot: None,
         mcp_resources: None,
     };

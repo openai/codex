@@ -4,9 +4,13 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use codex_app_server_protocol::CapabilityRootLocation;
+use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PermissionGrantScope;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -15,6 +19,8 @@ use codex_app_server_protocol::WarningNotification;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
+use core_test_support::skip_if_remote;
+use core_test_support::skip_if_target_windows;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
@@ -22,6 +28,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(target_os = "macos")]
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(target_os = "macos"))]
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 const SKILL_NAME: &str = "demo-plugin:deploy";
 const SKILL_MARKER: &str = "EXECUTOR_SKILL_BODY_MARKER";
@@ -32,6 +41,8 @@ const REFERENCE_MARKER: &str = "EXECUTOR_SKILL_REFERENCE_MARKER";
 enum ExecutorSkillScenario {
     VisibleWithBudgetWarning,
     ExplicitOnly,
+    RestrictedPermittedReference,
+    RestrictedDeniedReference,
 }
 
 #[tokio::test]
@@ -44,16 +55,59 @@ async fn explicit_executor_skill_can_read_referenced_file() -> Result<()> {
     exercise_executor_skill(ExecutorSkillScenario::ExplicitOnly).await
 }
 
+#[tokio::test]
+async fn restricted_executor_skill_can_read_permitted_reference() -> Result<()> {
+    exercise_executor_skill(ExecutorSkillScenario::RestrictedPermittedReference).await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn restricted_executor_skill_rejects_reference_until_permission_approved() -> Result<()> {
+    exercise_executor_skill(ExecutorSkillScenario::RestrictedDeniedReference).await
+}
+
 async fn exercise_executor_skill(scenario: ExecutorSkillScenario) -> Result<()> {
+    let restricted = matches!(
+        scenario,
+        ExecutorSkillScenario::RestrictedPermittedReference
+            | ExecutorSkillScenario::RestrictedDeniedReference
+    );
+    if restricted {
+        skip_if_target_windows!(
+            Ok(()),
+            "the unelevated Windows sandbox cannot enforce restricted filesystem reads"
+        );
+    }
+    if scenario == ExecutorSkillScenario::RestrictedDeniedReference {
+        skip_if_remote!(Ok(()), "the external symlink fixture is host-local");
+    }
+
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
+    let (sandbox_config, permission_profile) = if restricted {
+        (
+            "default_permissions = \"workspace\"",
+            "\n[permissions.workspace.filesystem.\":workspace_roots\"]\n\".\" = \"write\"\n\n[windows]\nsandbox = \"unelevated\"\n",
+        )
+    } else {
+        ("sandbox_mode = \"read-only\"", "")
+    };
+    let (approval_policy, requested_permission_feature) =
+        if scenario == ExecutorSkillScenario::RestrictedDeniedReference {
+            (
+                "on-request",
+                "\n[features]\nrequest_permissions_tool = true\n",
+            )
+        } else {
+            ("never", "")
+        };
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
             r#"
 model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
+approval_policy = "{approval_policy}"
+{sandbox_config}
 model_provider = "mock_provider"
 
 [skills]
@@ -65,6 +119,8 @@ base_url = "{}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+{permission_profile}
+{requested_permission_feature}
 "#,
             server.uri()
         ),
@@ -104,7 +160,9 @@ stream_max_retries = 0
     let reference_path = reference_dir.join("details.md")?;
     let reference_size = match scenario {
         ExecutorSkillScenario::VisibleWithBudgetWarning => 600 * 1024,
-        ExecutorSkillScenario::ExplicitOnly => 40 * 1024,
+        ExecutorSkillScenario::ExplicitOnly
+        | ExecutorSkillScenario::RestrictedPermittedReference
+        | ExecutorSkillScenario::RestrictedDeniedReference => 40 * 1024,
     };
     let allow_implicit_invocation = scenario == ExecutorSkillScenario::VisibleWithBudgetWarning;
     let reference_contents = format!("{REFERENCE_MARKER}\n{}", "x".repeat(reference_size));
@@ -136,6 +194,19 @@ stream_max_retries = 0
             /*sandbox*/ None,
         ),
     )?;
+    #[cfg(unix)]
+    if scenario == ExecutorSkillScenario::RestrictedDeniedReference {
+        let external_reference_dir = codex_home.path().join("external-reference");
+        std::fs::create_dir_all(&external_reference_dir)?;
+        let external_reference = external_reference_dir.join("details.md");
+        std::fs::write(
+            &external_reference,
+            format!("DENIED_REFERENCE_MARKER\n{REFERENCE_MARKER}"),
+        )?;
+        let reference_native_path = reference_path.to_abs_path()?;
+        std::fs::remove_file(reference_native_path.as_path())?;
+        std::os::unix::fs::symlink(external_reference, reference_native_path.as_path())?;
+    }
     if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
         futures::stream::iter(0..200)
             .map(|index| {
@@ -194,21 +265,56 @@ stream_max_retries = 0
             responses::ev_completed(&format!("resp-{call_id}")),
         ])
     };
-    let response_mock = responses::mount_sse_sequence(
-        &server,
-        vec![
-            tool_response("list", "list", json!({"authority": {"kind": "executor"}})),
+    let mut model_responses = vec![
+        tool_response("list", "list", json!({"authority": {"kind": "executor"}})),
+        tool_response(
+            "main",
+            "read",
+            json!({
+                "authority": {"kind": "executor", "id": authority_id},
+                "package": package.clone(),
+                "resource": main_resource.clone(),
+            }),
+        ),
+        tool_response(
+            "reference",
+            "read",
+            json!({
+                "authority": {"kind": "executor", "id": authority_id},
+                "package": package.clone(),
+                "resource": reference_resource.clone(),
+            }),
+        ),
+        responses::sse(vec![
+            responses::ev_response_created("resp-done"),
+            responses::ev_assistant_message("msg-done", "Done"),
+            responses::ev_completed("resp-done"),
+        ]),
+    ];
+    if scenario == ExecutorSkillScenario::RestrictedDeniedReference {
+        let external_reference_dir = codex_home.path().join("external-reference");
+        model_responses.insert(
+            3,
+            responses::sse(vec![
+                responses::ev_response_created("resp-permissions"),
+                responses::ev_function_call(
+                    "permissions",
+                    "request_permissions",
+                    &json!({
+                        "reason": "Read the approved skill reference",
+                        "permissions": {
+                            "file_system": {"read": [external_reference_dir]}
+                        }
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-permissions"),
+            ]),
+        );
+        model_responses.insert(
+            4,
             tool_response(
-                "main",
-                "read",
-                json!({
-                    "authority": {"kind": "executor", "id": authority_id},
-                    "package": package.clone(),
-                    "resource": main_resource.clone(),
-                }),
-            ),
-            tool_response(
-                "reference",
+                "approved-reference",
                 "read",
                 json!({
                     "authority": {"kind": "executor", "id": authority_id},
@@ -216,14 +322,9 @@ stream_max_retries = 0
                     "resource": reference_resource.clone(),
                 }),
             ),
-            responses::sse(vec![
-                responses::ev_response_created("resp-done"),
-                responses::ev_assistant_message("msg-done", "Done"),
-                responses::ev_completed("resp-done"),
-            ]),
-        ],
-    )
-    .await;
+        );
+    }
+    let response_mock = responses::mount_sse_sequence(&server, model_responses).await;
 
     timeout(READ_TIMEOUT, app_server.initialize()).await??;
 
@@ -263,6 +364,26 @@ stream_max_retries = 0
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    if scenario == ExecutorSkillScenario::RestrictedDeniedReference {
+        let request =
+            timeout(READ_TIMEOUT, app_server.read_stream_until_request_message()).await??;
+        let ServerRequest::PermissionsRequestApproval { request_id, params } = request else {
+            panic!("expected a skill reference permissions request, got {request:?}");
+        };
+        app_server
+            .send_response(
+                request_id,
+                serde_json::to_value(PermissionsRequestApprovalResponse {
+                    permissions: GrantedPermissionProfile {
+                        network: None,
+                        file_system: params.permissions.file_system,
+                    },
+                    scope: PermissionGrantScope::Turn,
+                    strict_auto_review: None,
+                })?,
+            )
+            .await?;
+    }
     if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
         let warning = timeout(READ_TIMEOUT, async {
             loop {
@@ -313,7 +434,9 @@ stream_max_retries = 0
         ExecutorSkillScenario::VisibleWithBudgetWarning => {
             assert!(!skill_fragment.contains("<resource_access>"));
         }
-        ExecutorSkillScenario::ExplicitOnly => {
+        ExecutorSkillScenario::ExplicitOnly
+        | ExecutorSkillScenario::RestrictedPermittedReference
+        | ExecutorSkillScenario::RestrictedDeniedReference => {
             let resource_access = skill_fragment
                 .split_once("<resource_access>")
                 .and_then(|(_, rest)| rest.split_once("</resource_access>"))
@@ -353,7 +476,9 @@ stream_max_retries = 0
             );
             assert!(list_output["next_cursor"].is_string());
         }
-        ExecutorSkillScenario::ExplicitOnly => {
+        ExecutorSkillScenario::ExplicitOnly
+        | ExecutorSkillScenario::RestrictedPermittedReference
+        | ExecutorSkillScenario::RestrictedDeniedReference => {
             assert_eq!(list_output["skills"], json!([]));
         }
     }
@@ -363,11 +488,19 @@ stream_max_retries = 0
             .expect("main skill output")
             .contains(SKILL_MARKER)
     );
-    let reference_output = serde_json::from_str::<serde_json::Value>(
-        &requests[3]
-            .function_call_output_text("reference")
-            .expect("referenced skill file output"),
-    )?;
+    let reference_output_text = requests[3]
+        .function_call_output_text("reference")
+        .expect("referenced skill file output");
+    if scenario == ExecutorSkillScenario::RestrictedDeniedReference {
+        assert!(reference_output_text.contains("failed to read skill resource"));
+        assert!(!reference_output_text.contains("DENIED_REFERENCE_MARKER"));
+        let approved_reference_output = requests[5]
+            .function_call_output_text("approved-reference")
+            .expect("approved skill reference output");
+        assert!(approved_reference_output.contains(REFERENCE_MARKER));
+        return Ok(());
+    }
+    let reference_output = serde_json::from_str::<serde_json::Value>(&reference_output_text)?;
     assert!(
         reference_output["contents"]
             .as_str()
@@ -377,7 +510,9 @@ stream_max_retries = 0
         ExecutorSkillScenario::VisibleWithBudgetWarning => {
             assert!(reference_output["next_cursor"].is_string());
         }
-        ExecutorSkillScenario::ExplicitOnly => {
+        ExecutorSkillScenario::ExplicitOnly
+        | ExecutorSkillScenario::RestrictedPermittedReference
+        | ExecutorSkillScenario::RestrictedDeniedReference => {
             assert!(reference_output["next_cursor"].is_null());
         }
     }

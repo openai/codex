@@ -96,6 +96,27 @@ impl ToolExecutor<ToolCall> for ReadTool {
                 .as_ref()
                 .map(|query| query.resolved_executor_roots.clone())
                 .unwrap_or_default();
+            let sandbox = requested_resource
+                .environment_path()
+                .and_then(|(environment_id, _)| {
+                    self.context.sandbox_contexts.as_ref().and_then(|contexts| {
+                        contexts.get(environment_id).map(|captured| {
+                            call.environments
+                                .iter()
+                                .find(|environment| environment.environment_id == environment_id)
+                                .map(|environment| environment.file_system_sandbox_context.clone())
+                                .unwrap_or_else(|| captured.clone())
+                        })
+                    })
+                });
+            if self.context.sandbox_contexts.is_some()
+                && requested_resource.environment_path().is_some()
+                && sandbox.is_none()
+            {
+                return Err(FunctionCallError::RespondToModel(
+                    "failed to read skill resource".to_string(),
+                ));
+            }
             let result = self
                 .context
                 .thread_state
@@ -106,6 +127,7 @@ impl ToolExecutor<ToolCall> for ReadTool {
                         package,
                         resource: requested_resource.clone(),
                         resolved_executor_roots,
+                        sandbox,
                         host_snapshot: None,
                         mcp_resources: self.context.mcp_resources.clone(),
                     },

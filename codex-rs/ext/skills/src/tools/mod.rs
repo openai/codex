@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ResponsesApiTool;
@@ -44,6 +46,7 @@ pub(crate) fn skill_tools(
     thread_state: Arc<SkillsThreadState>,
     orchestrator_available: bool,
     executor_query: Option<SkillListQuery>,
+    sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
     shadow_selection: Arc<ShadowSelectionExperiment>,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let context = SkillToolContext {
@@ -52,6 +55,7 @@ pub(crate) fn skill_tools(
         thread_state,
         orchestrator_available,
         executor_query,
+        sandbox_contexts,
         executor_catalog: Arc::new(OnceCell::new()),
         shadow_selection,
     };
@@ -70,6 +74,7 @@ struct SkillToolContext {
     thread_state: Arc<SkillsThreadState>,
     orchestrator_available: bool,
     executor_query: Option<SkillListQuery>,
+    sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
     executor_catalog: Arc<OnceCell<SkillCatalog>>,
     shadow_selection: Arc<ShadowSelectionExperiment>,
 }
