@@ -89,11 +89,21 @@ pub(crate) enum TrackEventRequest {
     PluginInstallFailed(CodexPluginInstallFailedEventRequest),
     ExternalAgentConfigImportCompleted(CodexOnboardingExternalAgentImportCompleteEventRequest),
     ExternalAgentConfigImportFailure(CodexOnboardingExternalAgentImportFailureEventRequest),
+    // copybara:strip-for-public begin
+    InternalStructuredLog(Box<CodexInternalStructuredLogEventRequest>),
+    // copybara:strip-for-public end
 }
 
 impl TrackEventRequest {
     pub(crate) fn should_send_in_isolated_request(&self) -> bool {
-        matches!(self, Self::AcceptedLineFingerprints(_))
+        // copybara:replace-for-public begin
+        matches!(
+            self,
+            Self::AcceptedLineFingerprints(_) | Self::InternalStructuredLog(_)
+        )
+        // copybara:replace-for-public with
+        // copybara:public matches!(self, Self::AcceptedLineFingerprints(_))
+        // copybara:replace-for-public end
     }
 
     pub(crate) fn can_send_with_api_key_auth(&self) -> bool {
@@ -105,6 +115,33 @@ impl TrackEventRequest {
         }
     }
 }
+// copybara:strip-for-public begin
+#[derive(Serialize)]
+pub(crate) struct CodexInternalStructuredLogEventParams {
+    pub(crate) created_at_ms: u64,
+    pub(crate) sequence_number: u64,
+    pub(crate) level: &'static str,
+    pub(crate) logger_name: &'static str,
+    pub(crate) message: &'static str,
+    pub(crate) error_fingerprint: &'static str,
+    pub(crate) app_session_id: String,
+    pub(crate) source: &'static str,
+    pub(crate) env: &'static str,
+    pub(crate) fields_json: String,
+    pub(crate) app_version: Option<&'static str>,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) process_kind: Option<&'static str>,
+    pub(crate) process_id: Option<u32>,
+    pub(crate) platform: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexInternalStructuredLogEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexInternalStructuredLogEventParams,
+}
+// copybara:strip-for-public end
 
 #[derive(Serialize)]
 pub(crate) struct CodexAcceptedLineFingerprintsEventParams {

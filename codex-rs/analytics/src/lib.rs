@@ -41,6 +41,11 @@ pub use facts::ExternalAgentConfigImportFailureInput;
 pub use facts::GoalEventKind;
 pub use facts::HookRunFact;
 pub use facts::InputError;
+// copybara:strip-for-public begin
+pub use facts::InternalToolHookOutcome;
+pub use facts::InternalToolInputLog;
+pub use facts::InternalToolSourceKind;
+// copybara:strip-for-public end
 pub use facts::InvocationType;
 pub use facts::PluginInstallRequestSource;
 pub use facts::PluginInstallRequested;

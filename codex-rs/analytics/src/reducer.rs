@@ -19,6 +19,10 @@ use crate::events::CodexGoalEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexImageGenerationEventParams;
 use crate::events::CodexImageGenerationEventRequest;
+// copybara:strip-for-public begin
+use crate::events::CodexInternalStructuredLogEventParams;
+use crate::events::CodexInternalStructuredLogEventRequest;
+// copybara:strip-for-public end
 use crate::events::CodexMcpToolCallEventParams;
 use crate::events::CodexMcpToolCallEventRequest;
 use crate::events::CodexOnboardingExternalAgentImportCompleteEventRequest;
@@ -77,6 +81,7 @@ use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunInput;
+use crate::facts::InternalToolInputLog; // copybara:strip-for-public
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequestedInput;
 use crate::facts::PluginState;
@@ -94,6 +99,7 @@ use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
 use crate::facts::TurnTokenUsageFact;
+use crate::now_unix_millis; // copybara:strip-for-public
 use crate::now_unix_seconds;
 use crate::option_i64_to_u64;
 use crate::serialize_enum_as_string;
@@ -145,6 +151,13 @@ use sha1::Digest;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+// copybara:strip-for-public begin
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
+const MAX_INTERNAL_TOOL_FIELDS_JSON_BYTES: usize = 64 * 1024;
+static INTERNAL_TOOL_INPUT_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(1);
+// copybara:strip-for-public end
 
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
@@ -573,9 +586,59 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::ExternalAgentConfigImportFailure(input) => {
                     self.ingest_external_agent_config_import_failure(input, out);
                 }
+                // copybara:strip-for-public begin
+                CustomAnalyticsFact::InternalToolInput(input) => {
+                    self.ingest_internal_tool_input(*input, out);
+                } // copybara:strip-for-public end
             },
         }
     }
+    // copybara:strip-for-public begin
+    fn ingest_internal_tool_input(
+        &mut self,
+        input: InternalToolInputLog,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Ok(mut fields) = serde_json::to_value(&input) else {
+            return;
+        };
+        let Some(fields) = fields.as_object_mut() else {
+            return;
+        };
+        fields.insert("schema_version".to_string(), serde_json::json!(1));
+        let Ok(fields_json) = serde_json::to_string(fields) else {
+            return;
+        };
+        if fields_json.len() > MAX_INTERNAL_TOOL_FIELDS_JSON_BYTES {
+            return;
+        }
+
+        out.push(TrackEventRequest::InternalStructuredLog(Box::new(
+            CodexInternalStructuredLogEventRequest {
+                event_type: "codex_internal_structured_log_event",
+                event_params: CodexInternalStructuredLogEventParams {
+                    created_at_ms: now_unix_millis(),
+                    sequence_number: INTERNAL_TOOL_INPUT_SEQUENCE_NUMBER
+                        .fetch_add(1, Ordering::Relaxed),
+                    level: "info",
+                    logger_name: "codex_core::tools",
+                    message: "Codex tool invocation",
+                    error_fingerprint: "",
+                    app_session_id: input.thread_id.clone(),
+                    source: "codex_harness",
+                    env: "client",
+                    fields_json,
+                    app_version: Some(env!("CARGO_PKG_VERSION")),
+                    thread_id: Some(input.thread_id),
+                    turn_id: input.turn_id,
+                    process_kind: Some("codex_harness"),
+                    process_id: Some(std::process::id()),
+                    platform: Some(std::env::consts::OS),
+                },
+            },
+        )));
+    }
+    // copybara:strip-for-public end
 
     fn ingest_initialize(
         &mut self,
@@ -2897,6 +2960,100 @@ mod tests {
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
+    // copybara:strip-for-public begin
+    #[tokio::test]
+    async fn internal_tool_input_reduces_to_isolated_bounded_structured_log() {
+        let input = InternalToolInputLog {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            tool_call_id: "call-1".to_string(),
+            item_id: Some("item-1".to_string()),
+            tool_name: "shell".to_string(),
+            namespace: Some("functions".to_string()),
+            source_kind: crate::facts::InternalToolSourceKind::Direct,
+            arguments_before_hooks: serde_json::json!({ "command": "echo hello" }),
+            hook_normalized_input: Some(serde_json::json!({ "command": "echo hello" })),
+            arguments_after_hooks: Some(serde_json::json!({ "command": "echo hello" })),
+            hook_outcome: crate::facts::InternalToolHookOutcome::Unchanged,
+            code_mode_cell_id: None,
+            code_mode_runtime_tool_call_id: None,
+        };
+        let mut expected_fields =
+            serde_json::to_value(&input).expect("internal tool input serializes");
+        expected_fields["schema_version"] = serde_json::json!(1);
+
+        let mut reducer = AnalyticsReducer::default();
+        let mut events = Vec::new();
+        reducer.ingest(input.clone().into(), &mut events).await;
+
+        let [event] = events.as_slice() else {
+            panic!("expected exactly one internal structured log event");
+        };
+        assert!(event.should_send_in_isolated_request());
+        let TrackEventRequest::InternalStructuredLog(event) = event else {
+            panic!("expected an internal structured log event");
+        };
+        assert!(event.event_params.created_at_ms > 0);
+        assert!(event.event_params.sequence_number > 0);
+        assert_eq!(
+            serde_json::to_value(event.as_ref()).expect("internal structured event serializes"),
+            serde_json::json!({
+                "event_type": "codex_internal_structured_log_event",
+                "event_params": {
+                    "created_at_ms": event.event_params.created_at_ms,
+                    "sequence_number": event.event_params.sequence_number,
+                    "level": "info",
+                    "logger_name": "codex_core::tools",
+                    "message": "Codex tool invocation",
+                    "error_fingerprint": "",
+                    "app_session_id": "thread-1",
+                    "source": "codex_harness",
+                    "env": "client",
+                    "fields_json": event.event_params.fields_json,
+                    "app_version": env!("CARGO_PKG_VERSION"),
+                    "thread_id": "thread-1",
+                    "turn_id": "turn-1",
+                    "process_kind": "codex_harness",
+                    "process_id": std::process::id(),
+                    "platform": std::env::consts::OS,
+                },
+            }),
+        );
+        assert_eq!(
+            event.event_params.fields_json,
+            serde_json::to_string(&expected_fields).expect("expected fields serialize"),
+        );
+
+        events.clear();
+        let mut boundary_input = input;
+        boundary_input.arguments_before_hooks = serde_json::json!({ "command": "" });
+        let mut boundary_fields =
+            serde_json::to_value(&boundary_input).expect("boundary input serializes");
+        boundary_fields["schema_version"] = serde_json::json!(1);
+        let padding = MAX_INTERNAL_TOOL_FIELDS_JSON_BYTES
+            - serde_json::to_string(&boundary_fields)
+                .expect("boundary fields serialize")
+                .len();
+        boundary_input.arguments_before_hooks =
+            serde_json::json!({ "command": "x".repeat(padding) });
+        reducer
+            .ingest(boundary_input.clone().into(), &mut events)
+            .await;
+        let [TrackEventRequest::InternalStructuredLog(boundary_event)] = events.as_slice() else {
+            panic!("expected a structured log at the exact size boundary");
+        };
+        assert_eq!(
+            boundary_event.event_params.fields_json.len(),
+            MAX_INTERNAL_TOOL_FIELDS_JSON_BYTES,
+        );
+
+        events.clear();
+        boundary_input.arguments_before_hooks =
+            serde_json::json!({ "command": "x".repeat(padding + 1) });
+        reducer.ingest(boundary_input.into(), &mut events).await;
+        assert!(events.is_empty());
+    }
+    // copybara:strip-for-public end
 
     #[tokio::test]
     async fn rejected_turn_interrupt_removes_pending_analytics_request() {

@@ -29,6 +29,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
+use serde_json::Value; // copybara:strip-for-public
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -44,6 +45,42 @@ pub struct TrackEventsContext {
     pub turn_id: String,
     pub product_client_id: String,
 }
+// copybara:strip-for-public begin
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InternalToolSourceKind {
+    Direct,
+    CodeMode,
+    UserShell,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InternalToolHookOutcome {
+    NotApplicable,
+    Unchanged,
+    Rewritten,
+    Blocked,
+    RewriteFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct InternalToolInputLog {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub tool_call_id: String,
+    pub item_id: Option<String>,
+    pub tool_name: String,
+    pub namespace: Option<String>,
+    pub source_kind: InternalToolSourceKind,
+    pub arguments_before_hooks: Value,
+    pub hook_normalized_input: Option<Value>,
+    pub arguments_after_hooks: Option<Value>,
+    pub hook_outcome: InternalToolHookOutcome,
+    pub code_mode_cell_id: Option<String>,
+    pub code_mode_runtime_tool_call_id: Option<String>,
+}
+// copybara:strip-for-public end
 
 pub fn build_track_events_context(
     model_slug: String,
@@ -414,6 +451,13 @@ pub(crate) enum AnalyticsFact {
     // would require non-trivial protocol reshaping on this branch.
     Custom(CustomAnalyticsFact),
 }
+// copybara:strip-for-public begin
+impl From<InternalToolInputLog> for AnalyticsFact {
+    fn from(input: InternalToolInputLog) -> Self {
+        Self::Custom(CustomAnalyticsFact::InternalToolInput(Box::new(input)))
+    }
+}
+// copybara:strip-for-public end
 
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
@@ -434,6 +478,9 @@ pub(crate) enum CustomAnalyticsFact {
     PluginInstallFailed(PluginInstallFailedInput),
     ExternalAgentConfigImportCompleted(ExternalAgentConfigImportCompletedInput),
     ExternalAgentConfigImportFailure(ExternalAgentConfigImportFailureInput),
+    // copybara:strip-for-public begin
+    InternalToolInput(Box<InternalToolInputLog>),
+    // copybara:strip-for-public end
 }
 
 pub(crate) struct SkillInvokedInput {
