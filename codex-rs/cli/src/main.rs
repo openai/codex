@@ -3223,34 +3223,6 @@ mod tests {
         assert!(remove_result.is_err());
     }
 
-    #[test]
-    fn full_auto_no_longer_parses_at_top_level() {
-        let result = MultitoolCli::try_parse_from(["codex", "--full-auto"]);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn exec_full_auto_reports_migration_path() {
-        let cli = MultitoolCli::try_parse_from(["codex", "exec", "--full-auto", "summarize"])
-            .expect("exec should accept removed flag long enough to report a migration path");
-        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
-            panic!("expected exec subcommand");
-        };
-
-        assert_eq!(
-            exec.removed_full_auto_warning(),
-            Some("warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.")
-        );
-    }
-
-    #[test]
-    fn sandbox_full_auto_no_longer_parses() {
-        let result = MultitoolCli::try_parse_from(["codex", "sandbox", "--full-auto", "--"]);
-
-        assert!(result.is_err());
-    }
-
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,

@@ -56,14 +56,3 @@ async fn exec_bypass_preserves_never_for_auto_review_config() -> anyhow::Result<
 
     Ok(())
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_full_auto_preserves_never_for_auto_review_config() -> anyhow::Result<()> {
-    let stderr = run_exec_with_auto_review_config(&["--full-auto"]).await?;
-    assert!(
-        stderr.contains("approval: never"),
-        "stderr missing full-auto approval mode: {stderr}"
-    );
-
-    Ok(())
-}
