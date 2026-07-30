@@ -1,8 +1,16 @@
+use crate::export::GenerateTsOptions;
+use crate::export::generate_internal_json_schema;
+use crate::export::generate_json_with_experimental;
+use crate::export::generate_ts_with_options;
+use crate::precomputed_exports::decode_precomputed_exports;
+use crate::schema_fixtures::SchemaFixtureOptions;
+use crate::schema_fixtures::collect_export_files_recursive;
+use crate::schema_fixtures::generate_typescript_schema_fixture_subtree_for_tests;
+use crate::schema_fixtures::read_schema_fixture_subtree;
+use crate::schema_fixtures::write_schema_fixtures_with_options;
 use anyhow::Context;
 use anyhow::Result;
-use codex_app_server_protocol::generate_json_with_experimental;
-use codex_app_server_protocol::generate_typescript_schema_fixture_subtree_for_tests;
-use codex_app_server_protocol::read_schema_fixture_subtree;
+use pretty_assertions::assert_eq;
 use similar::TextDiff;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,6 +43,81 @@ fn json_schema_fixtures_match_generated() -> Result<()> {
     })
 }
 
+#[test]
+fn stable_precomputed_exports_match_schema_fixtures() -> Result<()> {
+    let schema_root = schema_root()?;
+    let exports = decode_precomputed_exports(/*experimental_api*/ false)?;
+
+    assert_eq!(
+        exports.typescript,
+        collect_export_files_recursive(&schema_root.join("typescript"))?
+    );
+    assert_eq!(
+        exports.json_schema,
+        collect_export_files_recursive(&schema_root.join("json"))?
+    );
+
+    let internal_dir = tempfile::tempdir().context("create internal schema temp dir")?;
+    generate_internal_json_schema(internal_dir.path())?;
+    assert_json_export_trees_match(
+        &exports.internal_json_schema,
+        &collect_export_files_recursive(internal_dir.path())?,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn experimental_precomputed_exports_match_generated() -> Result<()> {
+    let output_dir = tempfile::tempdir().context("create experimental schema temp dir")?;
+    let typescript_dir = output_dir.path().join("typescript");
+    let json_dir = output_dir.path().join("json");
+    generate_ts_with_options(
+        &typescript_dir,
+        /*prettier*/ None,
+        GenerateTsOptions {
+            experimental_api: true,
+            ..GenerateTsOptions::default()
+        },
+    )?;
+    generate_json_with_experimental(&json_dir, /*experimental_api*/ true)?;
+
+    let exports = decode_precomputed_exports(/*experimental_api*/ true)?;
+    assert_eq!(
+        exports.typescript,
+        collect_export_files_recursive(&typescript_dir)?
+    );
+    assert_json_export_trees_match(
+        &exports.json_schema,
+        &collect_export_files_recursive(&json_dir)?,
+    )?;
+    assert_eq!(exports.internal_json_schema, BTreeMap::new());
+    Ok(())
+}
+
+#[test]
+#[ignore = "invoked by `just write-app-server-schema`"]
+fn write_schema_fixtures_from_env() -> Result<()> {
+    let schema_root = std::env::var_os("CODEX_APP_SERVER_SCHEMA_ROOT")
+        .map(PathBuf::from)
+        .context("CODEX_APP_SERVER_SCHEMA_ROOT must be set")?;
+    let prettier = std::env::var_os("CODEX_APP_SERVER_SCHEMA_PRETTIER").map(PathBuf::from);
+    let experimental = std::env::var("CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL")
+        .context("CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL must be set")?;
+    let experimental_api = match experimental.as_str() {
+        "0" => false,
+        "1" => true,
+        value => {
+            anyhow::bail!("CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL must be 0 or 1, got {value:?}")
+        }
+    };
+
+    write_schema_fixtures_with_options(
+        &schema_root,
+        prettier.as_deref(),
+        SchemaFixtureOptions { experimental_api },
+    )
+}
+
 fn assert_schema_fixtures_match_generated(
     label: &'static str,
     generate: impl FnOnce(&Path) -> Result<()>,
@@ -52,9 +135,24 @@ fn assert_schema_fixtures_match_generated(
     })?;
 
     let generated_tree = read_tree(temp_dir.path(), label)?;
+    assert_schema_trees_match(label, &fixture_tree, &generated_tree)
+}
 
-    assert_schema_trees_match(label, &fixture_tree, &generated_tree)?;
-
+fn assert_json_export_trees_match(
+    expected: &BTreeMap<String, String>,
+    actual: &BTreeMap<String, String>,
+) -> Result<()> {
+    assert_eq!(
+        expected.keys().collect::<Vec<_>>(),
+        actual.keys().collect::<Vec<_>>()
+    );
+    for (path, expected) in expected {
+        let expected: serde_json::Value = serde_json::from_str(expected)
+            .with_context(|| format!("parse precomputed JSON export {path}"))?;
+        let actual: serde_json::Value = serde_json::from_str(&actual[path])
+            .with_context(|| format!("parse freshly generated JSON export {path}"))?;
+        assert_eq!(expected, actual, "JSON export differs: {path}");
+    }
     Ok(())
 }
 
@@ -86,7 +184,6 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}"
         );
     }
 
-    // If the file sets match, diff contents for each file for a nicer error.
     for (path, expected) in fixture_tree {
         let actual = generated_tree
             .get(path)
@@ -113,8 +210,6 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}",
 }
 
 fn schema_root() -> Result<PathBuf> {
-    // In Bazel runfiles (especially manifest-only mode), resolving directories is not
-    // reliable. Resolve a known file, then walk up to the schema root.
     let typescript_index = codex_utils_cargo_bin::find_resource!("schema/typescript/index.ts")
         .context("resolve TypeScript schema index.ts")?;
     let schema_root = typescript_index
@@ -123,7 +218,6 @@ fn schema_root() -> Result<PathBuf> {
         .context("derive schema root from schema/typescript/index.ts")?
         .to_path_buf();
 
-    // Sanity check that the JSON fixtures resolve to the same schema root.
     let json_bundle =
         codex_utils_cargo_bin::find_resource!("schema/json/codex_app_server_protocol.schemas.json")
             .context("resolve JSON schema bundle")?;

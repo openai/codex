@@ -2139,7 +2139,7 @@ name = "codex-app-server-protocol"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "clap",
+ "codex-app-server-protocol-noop-macros",
  "codex-experimental-api-macros",
  "codex-extension-items",
  "codex-internal-extra-config",
@@ -2162,7 +2162,12 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+ "zstd",
 ]
+
+[[package]]
+name = "codex-app-server-protocol-noop-macros"
+version = "0.0.0"
 
 [[package]]
 name = "codex-app-server-test-client"

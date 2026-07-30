@@ -1,0 +1,13 @@
+[package]
+name = "codex-app-server-protocol-noop-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+test = false
+doctest = false
+
+[lints]
+workspace = true

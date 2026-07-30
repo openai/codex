@@ -1,4 +1,6 @@
 use super::shared::v2_enum_from_core;
+use crate::JsonSchema;
+use crate::TS;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
@@ -19,13 +21,11 @@ use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequest
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathConvention;
-use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use ts_rs::TS;
 
 v2_enum_from_core! {
     pub enum NetworkApprovalProtocol from CoreNetworkApprovalProtocol {

@@ -1,8 +1,10 @@
 use crate::ClientNotification;
 use crate::ClientRequest;
+use crate::JsonSchema;
 use crate::ServerNotification;
 use crate::ServerNotificationEnvelope;
 use crate::ServerRequest;
+use crate::TS;
 use crate::experimental_api::experimental_fields;
 use crate::export_client_notification_schemas;
 use crate::export_client_param_schemas;
@@ -22,7 +24,6 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_protocol::protocol::RolloutLine;
-use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
 use serde_json::Map;
@@ -38,7 +39,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
-use ts_rs::TS;
 
 pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
@@ -87,11 +87,6 @@ impl GeneratedSchema {
 }
 
 type JsonSchemaEmitter = fn(&Path) -> Result<GeneratedSchema>;
-pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
-    generate_ts(out_dir, prettier)?;
-    generate_json(out_dir)?;
-    Ok(())
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct GenerateTsOptions {
@@ -110,10 +105,6 @@ impl Default for GenerateTsOptions {
             experimental_api: false,
         }
     }
-}
-
-pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
-    generate_ts_with_options(out_dir, prettier, GenerateTsOptions::default())
 }
 
 pub fn generate_ts_with_options(

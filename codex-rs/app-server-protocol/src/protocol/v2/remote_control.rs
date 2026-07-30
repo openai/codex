@@ -1,7 +1,7 @@
-use schemars::JsonSchema;
+use crate::JsonSchema;
+use crate::TS;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

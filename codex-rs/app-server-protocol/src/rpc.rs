@@ -1,12 +1,12 @@
 //! We do not do true JSON-RPC 2.0, as we neither send nor expect the
 //! "jsonrpc": "2.0" field.
 
+use crate::JsonSchema;
+use crate::TS;
 use codex_protocol::protocol::W3cTraceContext;
-use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
-use ts_rs::TS;
 
 pub const JSONRPC_VERSION: &str = "2.0";
 

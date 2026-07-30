@@ -5,6 +5,7 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
+#[cfg(test)]
 pub(crate) fn nullable_string_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {

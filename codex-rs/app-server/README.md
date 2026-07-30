@@ -2438,7 +2438,7 @@ For server-initiated request payloads, annotate the field the same way so schema
 
    ```bash
    just write-app-server-schema
-   # Include experimental API fields/methods in fixtures.
+   # Refresh the embedded exports that include experimental API fields/methods.
    just write-app-server-schema --experimental
    ```
 
