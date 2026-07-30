@@ -4,6 +4,7 @@ use std::sync::Arc;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::injection::HostSkillsCatalogInWorldState;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
+use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
@@ -457,7 +458,9 @@ where
             include_bundled_skills: false,
             include_orchestrator_skills: false,
             mcp_resources: None,
-            executor_capability_discovery: None,
+            executor_capability_discovery: step_store
+                .get::<ExecutorCapabilityDiscoverySnapshot>()
+                .map(|discovery| discovery.as_ref().clone()),
         });
         self.build_skill_tools(
             session_store,

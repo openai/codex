@@ -589,6 +589,7 @@ async fn executor_bundle_parser_matches_the_existing_environment_loader() {
             roots: vec![CapabilityRootDiscoverRequest {
                 id: "demo@1".to_string(),
                 path: root_uri,
+                sandbox: None,
             }],
         },
     )
@@ -656,6 +657,7 @@ async fn executor_bundle_preserves_parent_namespace_and_manifest_precedence() {
             roots: vec![CapabilityRootDiscoverRequest {
                 id: "skills-only".to_string(),
                 path: root_uri,
+                sandbox: None,
             }],
         },
     )

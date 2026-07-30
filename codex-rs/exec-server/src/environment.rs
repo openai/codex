@@ -814,7 +814,24 @@ impl Environment {
         params: CapabilityRootsDiscoverParams,
     ) -> Result<CapabilityRootsDiscoverResponse, ExecServerError> {
         match &self.remote_client {
-            Some(client) => client.get().await?.discover_capability_roots(params).await,
+            Some(client) => {
+                let client = client.get().await?;
+                if params.roots.iter().any(|root| {
+                    root.sandbox
+                        .as_ref()
+                        .is_some_and(crate::FileSystemSandboxContext::should_run_in_sandbox)
+                }) && !client
+                    .environment_info()
+                    .await?
+                    .capabilities
+                    .capability_discovery_sandbox
+                {
+                    return Err(ExecServerError::Protocol(
+                        "exec-server does not support sandboxed capability discovery".to_string(),
+                    ));
+                }
+                client.discover_capability_roots(params).await
+            }
             None => crate::discover_capability_roots(self.filesystem.as_ref(), params)
                 .await
                 .map_err(|error| ExecServerError::Protocol(error.to_string())),

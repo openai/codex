@@ -36,6 +36,7 @@ const SKILL_NAME: &str = "demo-plugin:deploy";
 const SKILL_MARKER: &str = "EXECUTOR_SKILL_BODY_MARKER";
 const LOCAL_SKILL_MARKER: &str = "LOCAL_SKILL_BODY_MARKER";
 const REFERENCE_MARKER: &str = "EXECUTOR_SKILL_REFERENCE_MARKER";
+const DENIED_SKILL_NAME: &str = "demo-plugin:denied";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExecutorSkillScenario {
@@ -43,6 +44,7 @@ enum ExecutorSkillScenario {
     ExplicitOnly,
     RestrictedPermittedReference,
     RestrictedDeniedReference,
+    RestrictedVisible,
 }
 
 #[tokio::test]
@@ -66,11 +68,17 @@ async fn restricted_executor_skill_rejects_reference_until_permission_approved()
     exercise_executor_skill(ExecutorSkillScenario::RestrictedDeniedReference).await
 }
 
+#[tokio::test]
+async fn restricted_executor_skill_is_listed_only_when_permitted() -> Result<()> {
+    exercise_executor_skill(ExecutorSkillScenario::RestrictedVisible).await
+}
+
 async fn exercise_executor_skill(scenario: ExecutorSkillScenario) -> Result<()> {
     let restricted = matches!(
         scenario,
         ExecutorSkillScenario::RestrictedPermittedReference
             | ExecutorSkillScenario::RestrictedDeniedReference
+            | ExecutorSkillScenario::RestrictedVisible
     );
     if restricted {
         skip_if_target_windows!(
@@ -162,9 +170,13 @@ stream_max_retries = 0
         ExecutorSkillScenario::VisibleWithBudgetWarning => 600 * 1024,
         ExecutorSkillScenario::ExplicitOnly
         | ExecutorSkillScenario::RestrictedPermittedReference
-        | ExecutorSkillScenario::RestrictedDeniedReference => 40 * 1024,
+        | ExecutorSkillScenario::RestrictedDeniedReference
+        | ExecutorSkillScenario::RestrictedVisible => 40 * 1024,
     };
-    let allow_implicit_invocation = scenario == ExecutorSkillScenario::VisibleWithBudgetWarning;
+    let allow_implicit_invocation = matches!(
+        scenario,
+        ExecutorSkillScenario::VisibleWithBudgetWarning | ExecutorSkillScenario::RestrictedVisible
+    );
     let reference_contents = format!("{REFERENCE_MARKER}\n{}", "x".repeat(reference_size));
     tokio::try_join!(
         file_system.write_file(
@@ -206,6 +218,19 @@ stream_max_retries = 0
         let reference_native_path = reference_path.to_abs_path()?;
         std::fs::remove_file(reference_native_path.as_path())?;
         std::os::unix::fs::symlink(external_reference, reference_native_path.as_path())?;
+    }
+    #[cfg(unix)]
+    if scenario == ExecutorSkillScenario::RestrictedVisible && !auto_env.environment().is_remote() {
+        let denied_skill_dir = codex_home.path().join("denied-skill");
+        std::fs::create_dir_all(&denied_skill_dir)?;
+        std::fs::write(
+            denied_skill_dir.join("SKILL.md"),
+            "---\nname: denied\ndescription: Skill outside the permitted workspace.\n---\n",
+        )?;
+        std::os::unix::fs::symlink(
+            denied_skill_dir,
+            plugin_dir.to_abs_path()?.join("skills/denied"),
+        )?;
     }
     if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
         futures::stream::iter(0..200)
@@ -431,7 +456,8 @@ stream_max_retries = 0
     assert!(skill_fragment.contains(SKILL_MARKER));
     assert!(!skill_fragment.contains(LOCAL_SKILL_MARKER));
     match scenario {
-        ExecutorSkillScenario::VisibleWithBudgetWarning => {
+        ExecutorSkillScenario::VisibleWithBudgetWarning
+        | ExecutorSkillScenario::RestrictedVisible => {
             assert!(!skill_fragment.contains("<resource_access>"));
         }
         ExecutorSkillScenario::ExplicitOnly
@@ -459,7 +485,8 @@ stream_max_retries = 0
             .expect("skills.list output"),
     )?;
     match scenario {
-        ExecutorSkillScenario::VisibleWithBudgetWarning => {
+        ExecutorSkillScenario::VisibleWithBudgetWarning
+        | ExecutorSkillScenario::RestrictedVisible => {
             let deploy_skill = list_output["skills"]
                 .as_array()
                 .and_then(|skills| skills.iter().find(|skill| skill["name"] == SKILL_NAME))
@@ -474,7 +501,16 @@ stream_max_retries = 0
                     "main_resource": main_resource,
                 })
             );
-            assert!(list_output["next_cursor"].is_string());
+            assert!(list_output["skills"].as_array().is_none_or(|skills| {
+                skills
+                    .iter()
+                    .all(|skill| skill["name"] != DENIED_SKILL_NAME)
+            }));
+            if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
+                assert!(list_output["next_cursor"].is_string());
+            } else {
+                assert!(list_output["next_cursor"].is_null());
+            }
         }
         ExecutorSkillScenario::ExplicitOnly
         | ExecutorSkillScenario::RestrictedPermittedReference
@@ -512,7 +548,8 @@ stream_max_retries = 0
         }
         ExecutorSkillScenario::ExplicitOnly
         | ExecutorSkillScenario::RestrictedPermittedReference
-        | ExecutorSkillScenario::RestrictedDeniedReference => {
+        | ExecutorSkillScenario::RestrictedDeniedReference
+        | ExecutorSkillScenario::RestrictedVisible => {
             assert!(reference_output["next_cursor"].is_null());
         }
     }

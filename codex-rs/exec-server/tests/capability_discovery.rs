@@ -4,11 +4,26 @@ use codex_exec_server::CAPABILITY_ROOTS_DISCOVER_METHOD;
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::CapabilityRootsDiscoverParams;
 use codex_exec_server::CapabilityRootsDiscoverResponse;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_exec_server_protocol::CapabilityRootDiscoverRequest;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
+#[cfg(unix)]
+use codex_protocol::models::PermissionProfile;
+#[cfg(unix)]
+use codex_protocol::permissions::FileSystemAccessMode;
+#[cfg(unix)]
+use codex_protocol::permissions::FileSystemPath;
+#[cfg(unix)]
+use codex_protocol::permissions::FileSystemSandboxEntry;
+#[cfg(unix)]
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+#[cfg(unix)]
+use codex_protocol::permissions::NetworkSandboxPolicy;
+#[cfg(unix)]
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
@@ -166,10 +181,103 @@ async fn discovers_cursor_plugin_without_reading_default_mcp_for_inline_servers(
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandboxed_discovery_follows_only_permitted_external_symlinks() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let external = tempfile::tempdir()?;
+    write_file(
+        &root.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"linked-plugin","mcpServers":"./external-mcp.json"}"#,
+    )?;
+    write_file(
+        &external.path().join("mcp.json"),
+        r#"{"mcpServers":{"linked":{"command":"linked-server"}}}"#,
+    )?;
+    write_file(
+        &external.path().join("skill/SKILL.md"),
+        "---\nname: linked\ndescription: Linked external skill.\n---\n",
+    )?;
+    std::fs::create_dir_all(root.path().join("skills"))?;
+    std::os::unix::fs::symlink(
+        external.path().join("skill"),
+        root.path().join("skills/linked"),
+    )?;
+    std::os::unix::fs::symlink(
+        external.path().join("mcp.json"),
+        root.path().join("external-mcp.json"),
+    )?;
+
+    let mut server = exec_server().await?;
+    initialize(&mut server).await?;
+    let root_uri = PathUri::from_host_native_path(root.path())?;
+    let root_path = AbsolutePathBuf::from_absolute_path(root.path())?;
+    let external_root = AbsolutePathBuf::from_absolute_path(external.path())?;
+    let path_entry =
+        |path, access| FileSystemSandboxEntry::new(FileSystemPath::Path { path }, access);
+    let read_root = path_entry(root_path, FileSystemAccessMode::Read);
+    let read_external = path_entry(external_root.clone(), FileSystemAccessMode::Read);
+    let deny_external_skill = path_entry(external_root.join("skill"), FileSystemAccessMode::Deny);
+    let cases = [
+        (
+            "permitted symlinks",
+            vec![read_root.clone(), read_external.clone()],
+            true,
+            true,
+        ),
+        (
+            "denied external root",
+            vec![read_root.clone()],
+            false,
+            false,
+        ),
+        (
+            "denied external skill",
+            vec![read_root, read_external, deny_external_skill],
+            false,
+            true,
+        ),
+    ];
+
+    for (scenario, entries, has_skill, has_mcp) in cases {
+        let policy = FileSystemSandboxPolicy::restricted(entries);
+        let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+            root_uri.clone(),
+        );
+        let discovery =
+            discover_root_with_sandbox(&mut server, "linked", root_uri.clone(), Some(sandbox))
+                .await?;
+
+        assert_eq!(discovery.error, None, "{scenario}");
+        assert_eq!(discovery.skills.len(), usize::from(has_skill), "{scenario}");
+        assert_eq!(
+            discovery
+                .plugin
+                .and_then(|plugin| plugin.mcp_config)
+                .is_some_and(|config| config.contents.contains("linked-server")),
+            has_mcp,
+            "{scenario}"
+        );
+    }
+
+    server.shutdown().await?;
+    Ok(())
+}
+
 async fn discover_root(
     server: &mut common::exec_server::ExecServerHarness,
     id: &str,
     path: PathUri,
+) -> anyhow::Result<CapabilityRootDiscovery> {
+    discover_root_with_sandbox(server, id, path, /*sandbox*/ None).await
+}
+
+async fn discover_root_with_sandbox(
+    server: &mut common::exec_server::ExecServerHarness,
+    id: &str,
+    path: PathUri,
+    sandbox: Option<FileSystemSandboxContext>,
 ) -> anyhow::Result<CapabilityRootDiscovery> {
     let request_id = server
         .send_request(
@@ -178,6 +286,7 @@ async fn discover_root(
                 roots: vec![CapabilityRootDiscoverRequest {
                     id: id.to_string(),
                     path,
+                    sandbox,
                 }],
             })?,
         )

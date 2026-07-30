@@ -2,12 +2,14 @@ use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
@@ -90,6 +92,12 @@ impl Session {
         config: &Config,
     ) -> (McpConfig, McpRuntimeContext) {
         let originator = self.originator().await;
+        let windows_sandbox_level = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .windows_sandbox_level;
         let environments = self.services.turn_environments.snapshot().await;
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)
@@ -97,7 +105,12 @@ impl Session {
         let ready_selected_capability_roots =
             Self::ready_selected_capability_roots(&selected_capability_roots);
         let executor_capability_discovery = self
-            .executor_capability_discovery_for_step(config, &ready_selected_capability_roots)
+            .executor_capability_discovery_for_step(
+                config,
+                &ready_selected_capability_roots,
+                &environments,
+                windows_sandbox_level,
+            )
             .await;
         let mcp_config = self
             .services
@@ -172,6 +185,8 @@ impl Session {
                 .executor_capability_discovery_for_step(
                     &desired.config,
                     &ready_selected_capability_roots,
+                    &desired.environments,
+                    desired.windows_sandbox_level,
                 )
                 .await;
             let mcp_projection = self
@@ -224,6 +239,8 @@ impl Session {
             .executor_capability_discovery_for_step(
                 &desired.config,
                 &ready_selected_capability_roots,
+                &desired.environments,
+                desired.windows_sandbox_level,
             )
             .await;
         let mcp_projection = self
@@ -294,20 +311,67 @@ impl Session {
         &self,
         config: &Config,
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
+        environments: &TurnEnvironmentSnapshot,
+        windows_sandbox_level: WindowsSandboxLevel,
     ) -> Option<Arc<ExecutorCapabilityDiscoverySnapshot>> {
-        if !config
-            .features
-            .enabled(Feature::ExecutorCapabilityDiscovery)
+        let restricted_file_system = !config
+            .permissions
+            .file_system_sandbox_policy()
+            .has_full_disk_read_access();
+        if !restricted_file_system
+            && !config
+                .features
+                .enabled(Feature::ExecutorCapabilityDiscovery)
         {
             return None;
         }
+        let sandbox_contexts = if restricted_file_system {
+            environments
+                .turn_environments()
+                .map(|environment| {
+                    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+                        config.permissions.permission_profile().clone(),
+                        environment.cwd().clone(),
+                    );
+                    sandbox.workspace_roots = environment.workspace_roots().to_vec();
+                    sandbox.windows_sandbox_level = windows_sandbox_level;
+                    sandbox.windows_sandbox_private_desktop =
+                        config.permissions.windows_sandbox_private_desktop;
+                    sandbox.use_legacy_landlock = config.features.use_legacy_landlock();
+                    (environment.environment_id.clone(), sandbox)
+                })
+                .collect::<HashMap<_, _>>()
+        } else {
+            HashMap::new()
+        };
         let environment_manager = self.services.turn_environments.environment_manager();
         let cache = self
             .services
             .thread_extension_data
             .get_or_init(|| ExecutorCapabilityDiscoveryCache::new(environment_manager));
+        let selected_capability_roots = ready_selected_capability_roots
+            .iter()
+            .filter(|selected_root| {
+                if !restricted_file_system {
+                    return true;
+                }
+                let CapabilityRootLocation::Environment { environment_id, .. } =
+                    &selected_root.location;
+                if sandbox_contexts.contains_key(environment_id) {
+                    return true;
+                }
+                warn!(
+                    selected_root = selected_root.id,
+                    environment_id, "skipping capability root without a filesystem sandbox context"
+                );
+                false
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         Some(Arc::new(
-            cache.snapshot(ready_selected_capability_roots).await,
+            cache
+                .snapshot(&selected_capability_roots, &sandbox_contexts)
+                .await,
         ))
     }
 
@@ -535,10 +599,13 @@ impl Session {
             .services
             .mcp_runtime
             .current_ready_selected_capability_roots();
+        let environments = self.services.turn_environments.snapshot().await;
         let executor_capability_discovery = self
             .executor_capability_discovery_for_step(
                 refresh_config,
                 &ready_selected_capability_roots,
+                &environments,
+                turn_context.windows_sandbox_level,
             )
             .await;
         let mcp_projection = self

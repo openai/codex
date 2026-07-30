@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -365,7 +366,7 @@ async fn high_level_discovery_reuses_materialized_skill_contents_for_reads() {
         },
     }];
     let executor_capability_discovery = ExecutorCapabilityDiscoveryCache::new(manager)
-        .snapshot(&executor_roots)
+        .snapshot(&executor_roots, &Default::default())
         .await;
     let catalog = provider
         .list(SkillListQuery {
@@ -401,6 +402,81 @@ async fn high_level_discovery_reuses_materialized_skill_contents_for_reads() {
         .expect("read materialized executor skill");
 
     assert_eq!(read.contents, SKILL_CONTENTS);
+}
+
+#[tokio::test]
+async fn high_level_discovery_cache_separates_filesystem_permission_contexts() {
+    let test_root = create_local_skill_root("permission-context").expect("create local skill root");
+    let manager = Arc::new(EnvironmentManager::default_for_tests());
+    let cache = ExecutorCapabilityDiscoveryCache::new(manager);
+    let executor_roots = vec![SelectedCapabilityRoot {
+        id: "permission-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "local".to_string(),
+            path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
+        },
+    }];
+    cache.snapshot(&executor_roots, &HashMap::new()).await;
+
+    let updated_contents =
+        "---\nname: synthetic\ndescription: Updated executor skill.\n---\n\nUPDATED_BODY\n";
+    std::fs::write(test_root.join("skill/SKILL.md"), updated_contents)
+        .expect("update executor skill");
+    let sandbox_contexts = HashMap::from([(
+        "local".to_string(),
+        FileSystemSandboxContext::from_permission_profile(PermissionProfile::Disabled),
+    )]);
+    let second_snapshot = cache.snapshot(&executor_roots, &sandbox_contexts).await;
+    let second_discovery = second_snapshot.roots()[0]
+        .result
+        .as_ref()
+        .expect("second discovery");
+
+    assert_eq!(
+        second_discovery.skills[0].instructions.contents,
+        updated_contents
+    );
+    assert_eq!(second_snapshot.sandbox_contexts(), &sandbox_contexts);
+
+    let restored_contents =
+        "---\nname: synthetic\ndescription: Restored executor skill.\n---\n\nRESTORED_BODY\n";
+    std::fs::write(test_root.join("skill/SKILL.md"), restored_contents)
+        .expect("restore executor skill");
+    let restored_snapshot = cache.snapshot(&executor_roots, &HashMap::new()).await;
+    let restored_discovery = restored_snapshot.roots()[0]
+        .result
+        .as_ref()
+        .expect("restored discovery");
+
+    assert_eq!(
+        restored_discovery.skills[0].instructions.contents,
+        restored_contents
+    );
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+#[tokio::test]
+async fn high_level_discovery_batches_more_than_128_roots() {
+    let test_root = create_local_skill_root("many-roots").expect("create local skill root");
+    let manager = Arc::new(EnvironmentManager::default_for_tests());
+    let cache = ExecutorCapabilityDiscoveryCache::new(manager);
+    let executor_roots = (0..129)
+        .map(|index| SelectedCapabilityRoot {
+            id: format!("root-{index}"),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "local".to_string(),
+                path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
+            },
+        })
+        .collect::<Vec<_>>();
+
+    let snapshot = cache.snapshot(&executor_roots, &HashMap::new()).await;
+
+    assert_eq!(snapshot.roots().len(), executor_roots.len());
+    assert!(snapshot.roots().iter().all(|root| root.result.is_ok()));
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }
 
 fn create_local_skill_root(label: &str) -> io::Result<std::path::PathBuf> {

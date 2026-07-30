@@ -230,7 +230,7 @@ async fn raw_selected_plugin_contributions(
     {
         Some(
             ExecutorCapabilityDiscoveryCache::new(environment_manager)
-                .snapshot(&selected_capability_roots)
+                .snapshot(&selected_capability_roots, &Default::default())
                 .await,
         )
     } else {

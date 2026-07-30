@@ -105,6 +105,9 @@ pub struct EnvironmentCapabilities {
     /// Whether `exec` accepts instructions for launching an executor-local network proxy.
     #[serde(default)]
     pub network_proxy_launch: bool,
+    /// Whether capability discovery applies the filesystem sandbox sent with each root.
+    #[serde(default)]
+    pub capability_discovery_sandbox: bool,
 }
 
 /// Status returned by an initialized exec-server connection.
@@ -136,6 +139,7 @@ impl EnvironmentInfo {
                 .and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
+                capability_discovery_sandbox: true,
             },
         }
     }
@@ -475,6 +479,9 @@ pub struct CapabilityRootDiscoverRequest {
     pub id: String,
     /// Absolute root URI interpreted using the exec-server host's path rules.
     pub path: PathUri,
+    /// Filesystem permissions for this root and its symlink targets.
+    #[serde(default)]
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 /// Executor-local discovery results in request order.
@@ -539,6 +546,7 @@ pub struct CapabilityRootDiscovery {
 #[derive(Clone, Debug)]
 pub struct ExecutorCapabilityDiscoverySnapshot {
     roots: Arc<[ExecutorCapabilityDiscoverySnapshotEntry]>,
+    sandbox_contexts: Arc<HashMap<String, FileSystemSandboxContext>>,
 }
 
 #[derive(Clone, Debug)]
@@ -551,6 +559,7 @@ impl ExecutorCapabilityDiscoverySnapshot {
     pub fn new(
         selected_roots: &[SelectedCapabilityRoot],
         discoveries: Vec<Result<Arc<CapabilityRootDiscovery>, String>>,
+        sandbox_contexts: HashMap<String, FileSystemSandboxContext>,
     ) -> Self {
         debug_assert_eq!(selected_roots.len(), discoveries.len());
         Self {
@@ -565,11 +574,16 @@ impl ExecutorCapabilityDiscoverySnapshot {
                     },
                 )
                 .collect(),
+            sandbox_contexts: Arc::new(sandbox_contexts),
         }
     }
 
     pub fn roots(&self) -> &[ExecutorCapabilityDiscoverySnapshotEntry] {
         &self.roots
+    }
+
+    pub fn sandbox_contexts(&self) -> &HashMap<String, FileSystemSandboxContext> {
+        self.sandbox_contexts.as_ref()
     }
 }
 
