@@ -25,10 +25,12 @@ pub(crate) fn read_json_file(path: &Path) -> io::Result<Option<JsonValue>> {
 }
 
 pub(super) fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
-    if !path.exists() {
-        return Ok(true);
-    }
-    if !path.is_file() {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(err) => return Err(err),
+    };
+    if !metadata.is_file() {
         return Ok(false);
     }
 

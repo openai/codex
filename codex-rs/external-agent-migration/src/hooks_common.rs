@@ -1,4 +1,5 @@
 use crate::invalid_data_error;
+use crate::utils::is_missing_or_empty_text_file;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
@@ -269,17 +270,6 @@ pub(crate) fn json_u64(value: &JsonValue) -> Option<u64> {
         return None;
     }
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
-}
-
-fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
-    if !path.exists() {
-        return Ok(true);
-    }
-    if !path.is_file() {
-        return Ok(false);
-    }
-
-    Ok(fs::read_to_string(path)?.trim().is_empty())
 }
 
 pub(crate) fn external_agent_config_dir() -> String {
