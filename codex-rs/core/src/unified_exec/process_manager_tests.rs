@@ -512,6 +512,7 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
         crate::unified_exec::process_tests::remote_process(
             codex_exec_server::WriteStatus::Accepted,
             /*terminate_error*/ None,
+            codex_sandboxing::SandboxType::None,
         )
         .await,
     );
@@ -523,6 +524,7 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
         crate::unified_exec::process_tests::remote_process(
             codex_exec_server::WriteStatus::Accepted,
             /*terminate_error*/ None,
+            codex_sandboxing::SandboxType::None,
         )
         .await,
     );

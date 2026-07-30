@@ -35,6 +35,7 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
+use codex_exec_server_protocol::ProcessSandboxType;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::cache_system_proxy_route_for_test;
@@ -414,6 +415,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         response,
         ExecResponse {
             process_id: ProcessId::from("proc-1"),
+            sandbox_type: Some(ProcessSandboxType::None),
         }
     );
 

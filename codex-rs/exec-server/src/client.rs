@@ -104,6 +104,7 @@ use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ProcessOutputChunk;
+use crate::protocol::ProcessSandboxType;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -211,6 +212,7 @@ struct OrderedSessionEvents {
 pub(crate) struct Session {
     client: ExecServerClient,
     process_id: ProcessId,
+    sandbox_type: Option<ProcessSandboxType>,
     state: Arc<SessionState>,
 }
 
@@ -936,11 +938,12 @@ impl ExecServerClient {
                     .call_rpc::<_, ExecResponse>(&rpc_client, EXEC_METHOD, &params)
                     .await
                 {
-                    Ok(_) => {
+                    Ok(response) => {
                         state.recoverable.store(true, Ordering::Release);
                         let session = Session {
                             client: client.clone(),
                             process_id: process_id.clone(),
+                            sandbox_type: response.sandbox_type,
                             state: Arc::clone(&state),
                         };
                         // Wait for caller receipt so cancellation after send still triggers cleanup.
@@ -990,6 +993,7 @@ impl ExecServerClient {
         Ok(Session {
             client: self.clone(),
             process_id: process_id.clone(),
+            sandbox_type: None,
             state,
         })
     }
@@ -1340,6 +1344,10 @@ impl Session {
         &self.process_id
     }
 
+    pub(crate) fn sandbox_type(&self) -> Option<ProcessSandboxType> {
+        self.sandbox_type
+    }
+
     pub(crate) fn subscribe_wake(&self) -> watch::Receiver<u64> {
         self.state.subscribe()
     }
@@ -1662,6 +1670,7 @@ mod tests {
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeResponse;
     use crate::protocol::ProcessOutputChunk;
+    use crate::protocol::ProcessSandboxType;
     use crate::protocol::ReadResponse;
     use crate::protocol::WriteParams;
     use crate::protocol::WriteResponse;
@@ -1733,6 +1742,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(ExecResponse {
                         process_id: params.process_id,
+                        sandbox_type: Some(ProcessSandboxType::LinuxSeccomp),
                     })
                     .expect("process start response should serialize"),
                 }),
@@ -1790,6 +1800,10 @@ mod tests {
             .expect("process start should succeed");
 
         assert_eq!(session.process_id(), &process_id);
+        assert_eq!(
+            session.sandbox_type(),
+            Some(ProcessSandboxType::LinuxSeccomp)
+        );
         let trace = server.await.expect("server task").expect("trace context");
         let expected_traceparent = expected_trace
             .traceparent

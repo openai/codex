@@ -7,6 +7,7 @@ pub mod policy_transforms;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 mod spawn;
+mod violation;
 mod windows;
 
 #[cfg(target_os = "linux")]
@@ -29,6 +30,14 @@ pub use manager::with_managed_mitm_ca_readable_root;
 pub use spawn::SpawnRequest;
 pub use spawn::WindowsSandboxSpawnRequest;
 pub use spawn::spawn_process;
+pub use violation::FileSystemSandboxViolation;
+pub use violation::FileSystemSandboxViolationReason;
+pub use violation::NetworkSandboxViolation;
+pub use violation::SandboxViolationBackend;
+pub use violation::SandboxViolationEvent;
+pub use violation::record_filesystem_sandbox_violation;
+pub use violation::record_network_sandbox_violation;
+pub use violation::record_sandbox_violation;
 pub use windows::WindowsSandboxFilesystemOverrides;
 pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
 pub use windows::resolve_windows_elevated_filesystem_overrides;

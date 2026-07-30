@@ -304,6 +304,7 @@ async fn blocking_terminate_unified_process(
                 allow_terminate,
                 wake_tx,
             }),
+            sandbox_type: Some(codex_sandboxing::SandboxType::None),
         })
         .await?,
     ))

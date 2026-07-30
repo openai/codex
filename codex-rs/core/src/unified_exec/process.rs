@@ -12,7 +12,6 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-use crate::exec::is_likely_sandbox_denied;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::ProcessSignal as ExecServerProcessSignal;
@@ -23,6 +22,8 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::is_likely_sandbox_denied;
+use codex_sandboxing::record_filesystem_sandbox_violation;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
@@ -315,7 +316,11 @@ impl UnifiedExecProcess {
             aggregated_output: StreamOutput::new(text.to_string()),
             ..Default::default()
         };
-        if executor_reported_denial || is_likely_sandbox_denied(sandbox_type, &exec_output) {
+        let likely_sandbox_denial = is_likely_sandbox_denied(sandbox_type, &exec_output);
+        if likely_sandbox_denial {
+            record_filesystem_sandbox_violation(sandbox_type, &exec_output);
+        }
+        if executor_reported_denial || likely_sandbox_denial {
             let snippet = formatted_truncate_text(
                 text,
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
@@ -394,11 +399,10 @@ impl UnifiedExecProcess {
         started: StartedExecProcess,
     ) -> Result<Self, UnifiedExecError> {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
-        let mut managed = Self::new(
-            process_handle,
-            SandboxType::None,
-            /*spawn_lifecycle*/ None,
-        );
+        // Older peers do not report this field. In that case, skip local
+        // classification rather than attributing a violation to a guessed backend.
+        let sandbox_type = started.sandbox_type.unwrap_or(SandboxType::None);
+        let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
         let output_handles = managed.output_handles();
         managed.output_task = Some(Self::spawn_exec_server_output_task(
             started,

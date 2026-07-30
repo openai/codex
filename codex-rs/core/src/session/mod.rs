@@ -1112,11 +1112,9 @@ impl Session {
             current_exec_policy.as_ref(),
             &session_configuration.permission_profile(),
             /*network_policy_decider*/ None,
-            self.services
-                .managed_network_requirements_configured
-                .then(|| {
-                    build_blocked_request_observer(Arc::clone(&self.services.network_approval))
-                }),
+            Some(build_blocked_request_observer(Arc::clone(
+                &self.services.network_approval,
+            ))),
             self.services.managed_network_requirements_configured,
             self.services.network_proxy_audit_metadata.clone(),
         )

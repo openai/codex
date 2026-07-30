@@ -36,6 +36,7 @@ use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::network_policy_decisions::network_policy_decider;
 use crate::process::ExecProcessEventLog;
+use crate::process::sandbox_type_from_protocol;
 use crate::process_sandbox::prepare_exec_request;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
@@ -47,6 +48,7 @@ use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::MAX_NETWORK_POLICY_PROCESS_ID_BYTES;
 use crate::protocol::ProcessOutputChunk;
+use crate::protocol::ProcessSandboxType;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -302,6 +304,12 @@ impl LocalProcess {
         if prepared.command.is_empty() {
             return Err(invalid_params("argv must not be empty".to_string()));
         }
+        let sandbox_type = match prepared.sandbox {
+            SandboxType::None => Some(ProcessSandboxType::None),
+            SandboxType::MacosSeatbelt => Some(ProcessSandboxType::MacosSeatbelt),
+            SandboxType::LinuxSeccomp => Some(ProcessSandboxType::LinuxSeccomp),
+            SandboxType::WindowsRestrictedToken => Some(ProcessSandboxType::WindowsRestrictedToken),
+        };
 
         let start = Arc::new(ProcessStart);
         {
@@ -417,7 +425,14 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok((ExecResponse { process_id }, wake_tx, events))
+        Ok((
+            ExecResponse {
+                process_id,
+                sandbox_type,
+            },
+            wake_tx,
+            events,
+        ))
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
@@ -662,6 +677,7 @@ impl LocalProcess {
             .start_process(params)
             .await
             .map_err(map_handler_error)?;
+        let sandbox_type = sandbox_type_from_protocol(response.sandbox_type);
         Ok(StartedExecProcess {
             process: Arc::new(LocalExecProcess {
                 process_id: response.process_id,
@@ -669,6 +685,7 @@ impl LocalProcess {
                 wake_tx,
                 events,
             }),
+            sandbox_type,
         })
     }
 }
@@ -928,6 +945,8 @@ async fn watch_exit(
                     ),
                     ..Default::default()
                 };
+                // Transport the classification to the caller; recording there
+                // attaches audit context once and avoids duplicate events.
                 process.sandbox_denied = is_likely_sandbox_denied(process.sandbox, &exec_output);
             }
             let _ = process.wake_tx.send(seq);

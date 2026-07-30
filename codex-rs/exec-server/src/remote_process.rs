@@ -12,6 +12,7 @@ use crate::ExecProcessFuture;
 use crate::StartedExecProcess;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::Session;
+use crate::process::sandbox_type_from_protocol;
 use crate::protocol::ExecParams;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadResponse;
@@ -39,9 +40,11 @@ impl RemoteProcess {
     ) -> Result<StartedExecProcess, crate::ExecServerError> {
         let client = self.client.get().await?;
         let session = client.start_process(params, network_policy_decider).await?;
+        let sandbox_type = sandbox_type_from_protocol(session.sandbox_type());
 
         Ok(StartedExecProcess {
             process: Arc::new(RemoteExecProcess { session }),
+            sandbox_type,
         })
     }
 }

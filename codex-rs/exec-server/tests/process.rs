@@ -12,6 +12,7 @@ use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::ProcessSandboxType;
 use codex_utils_path_uri::PathUri;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
@@ -72,6 +73,7 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
         process_start_response,
         ExecResponse {
             process_id: ProcessId::from("proc-1"),
+            sandbox_type: Some(ProcessSandboxType::None),
         }
     );
 
@@ -137,6 +139,7 @@ async fn exec_server_defaults_omitted_pipe_stdin_to_closed_stdin() -> anyhow::Re
         process_start_response,
         ExecResponse {
             process_id: ProcessId::from("proc-default-stdin"),
+            sandbox_type: Some(ProcessSandboxType::None),
         }
     );
 

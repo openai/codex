@@ -997,15 +997,11 @@ impl Session {
             } else {
                 None
             };
-            let blocked_request_observer = if managed_network_requirements_configured {
-                config
-                    .permissions
-                    .network
-                    .as_ref()
-                    .map(|_| build_blocked_request_observer(Arc::clone(&network_approval)))
-            } else {
-                None
-            };
+            let blocked_request_observer = config
+                .permissions
+                .network
+                .as_ref()
+                .map(|_| build_blocked_request_observer(Arc::clone(&network_approval)));
             let network_policy_decider =
                 network_policy_decider_session
                     .as_ref()

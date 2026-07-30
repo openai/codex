@@ -88,6 +88,7 @@ impl ExecProcess for MockExecProcess {
 pub(super) async fn remote_process(
     write_status: WriteStatus,
     terminate_error: Option<String>,
+    sandbox_type: codex_sandboxing::SandboxType,
 ) -> UnifiedExecProcess {
     let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {
@@ -100,6 +101,7 @@ pub(super) async fn remote_process(
             terminate_error,
             wake_tx,
         }),
+        sandbox_type: Some(sandbox_type),
     };
 
     UnifiedExecProcess::from_exec_server_started(started)
@@ -109,7 +111,12 @@ pub(super) async fn remote_process(
 
 #[tokio::test]
 async fn remote_write_unknown_process_marks_process_exited() {
-    let process = remote_process(WriteStatus::UnknownProcess, /*terminate_error*/ None).await;
+    let process = remote_process(
+        WriteStatus::UnknownProcess,
+        /*terminate_error*/ None,
+        codex_sandboxing::SandboxType::None,
+    )
+    .await;
 
     let err = process
         .write(b"hello")
@@ -122,7 +129,12 @@ async fn remote_write_unknown_process_marks_process_exited() {
 
 #[tokio::test]
 async fn remote_write_closed_stdin_marks_process_exited() {
-    let process = remote_process(WriteStatus::StdinClosed, /*terminate_error*/ None).await;
+    let process = remote_process(
+        WriteStatus::StdinClosed,
+        /*terminate_error*/ None,
+        codex_sandboxing::SandboxType::None,
+    )
+    .await;
 
     let err = process
         .write(b"hello")
@@ -135,7 +147,12 @@ async fn remote_write_closed_stdin_marks_process_exited() {
 
 #[tokio::test]
 async fn fail_and_terminate_preserves_failure_message() {
-    let process = remote_process(WriteStatus::Accepted, /*terminate_error*/ None).await;
+    let process = remote_process(
+        WriteStatus::Accepted,
+        /*terminate_error*/ None,
+        codex_sandboxing::SandboxType::None,
+    )
+    .await;
 
     process.fail_and_terminate("network denied".to_string());
     process.fail_and_terminate("second failure".to_string());
@@ -152,6 +169,7 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
     let process = remote_process(
         WriteStatus::Accepted,
         Some("terminate unavailable".to_string()),
+        codex_sandboxing::SandboxType::None,
     )
     .await;
 
@@ -163,7 +181,12 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
     assert!(matches!(err, UnifiedExecError::ProcessFailed { .. }));
     assert!(!process.has_exited());
 
-    let process = remote_process(WriteStatus::Accepted, /*terminate_error*/ None).await;
+    let process = remote_process(
+        WriteStatus::Accepted,
+        /*terminate_error*/ None,
+        codex_sandboxing::SandboxType::None,
+    )
+    .await;
 
     process
         .terminate_confirmed()
@@ -171,4 +194,19 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
         .expect("terminate should succeed");
 
     assert!(process.has_exited());
+}
+
+#[tokio::test]
+async fn remote_process_preserves_executor_sandbox_type() {
+    let process = remote_process(
+        WriteStatus::Accepted,
+        /*terminate_error*/ None,
+        codex_sandboxing::SandboxType::LinuxSeccomp,
+    )
+    .await;
+
+    assert_eq!(
+        process.sandbox_type(),
+        codex_sandboxing::SandboxType::LinuxSeccomp
+    );
 }

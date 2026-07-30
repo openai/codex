@@ -215,6 +215,20 @@ pub struct ExecEnvPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: ProcessId,
+    /// `None` means the peer did not report its sandbox type. Current peers
+    /// report [`ProcessSandboxType::None`] when the process was not sandboxed.
+    #[serde(default)]
+    pub sandbox_type: Option<ProcessSandboxType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProcessSandboxType {
+    /// The process was explicitly started without a platform sandbox.
+    None,
+    MacosSeatbelt,
+    LinuxSeccomp,
+    WindowsRestrictedToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -747,9 +761,11 @@ mod tests {
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
     use super::ExecParams;
+    use super::ExecResponse;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use super::ProcessId;
+    use super::ProcessSandboxType;
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
     use codex_network_proxy::ManagedNetworkSandboxContext;
@@ -1049,5 +1065,23 @@ mod tests {
         .expect("legacy exited notification should deserialize");
 
         assert_eq!(notification.sandbox_denied, None);
+    }
+
+    #[test]
+    fn exec_response_distinguishes_unknown_from_explicitly_unsandboxed() {
+        let unknown: ExecResponse = serde_json::from_value(serde_json::json!({
+            "processId": "legacy",
+        }))
+        .expect("legacy response should deserialize");
+        let unsandboxed: ExecResponse = serde_json::from_value(serde_json::json!({
+            "processId": "current",
+            "sandboxType": "none",
+        }))
+        .expect("explicitly unsandboxed response should deserialize");
+
+        assert_eq!(
+            (unknown.sandbox_type, unsandboxed.sandbox_type),
+            (None, Some(ProcessSandboxType::None))
+        );
     }
 }
