@@ -34,6 +34,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoalClearResponse;
@@ -55,6 +56,7 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -3700,7 +3702,9 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
-    mock_responses_config(&server.uri()).write(&codex_home)?;
+    mock_responses_config(&server.uri())
+        .disable_feature(Feature::ShellSnapshot)
+        .write(&codex_home)?;
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(&codex_home)
@@ -3793,7 +3797,23 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
     let ServerRequest::FileChangeRequestApproval { .. } = &original_request else {
         panic!("expected FileChangeRequestApproval request, got {original_request:?}");
     };
-    primary.clear_message_buffer();
+
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notification: ThreadStatusChangedNotification =
+                primary.read_notification("thread/status/changed").await?;
+            if notification.thread_id == thread.id
+                && matches!(
+                    notification.status,
+                    ThreadStatus::Active { active_flags }
+                        if active_flags.contains(&ThreadActiveFlag::WaitingOnApproval)
+                )
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await??;
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
@@ -3838,6 +3858,11 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
     )
     .await??;
     wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
+    let status = timeout(DEFAULT_READ_TIMEOUT, primary.shutdown_gracefully()).await??;
+    anyhow::ensure!(
+        status.success(),
+        "app-server exited unsuccessfully: {status}"
+    );
 
     Ok(())
 }
