@@ -8,6 +8,7 @@ use codex_core::config::Constrained;
 use codex_core::config::ThreadStoreConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
@@ -808,7 +809,12 @@ async fn expect_patch_approval(
         |event| {
             matches!(
                 event,
-                EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+                EventMsg::ApplyPatchApprovalRequest(_)
+                    | EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::Error(_)
+                    | EventMsg::TurnAborted(_)
+                    | EventMsg::ShutdownComplete
+                    | EventMsg::TurnComplete(_)
             )
         },
         Duration::from_secs(15),
@@ -1852,8 +1858,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let model = model_override.unwrap_or("gpt-5.4");
     let policy_src = scenario.action.policy_src();
     let thread_store_id = format!("approval-scenario-{}", scenario.name);
+    let model_catalog = bundled_models_response()?;
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
+        config.model_catalog = Some(model_catalog);
         // These scenarios assert tool behavior, not rollout persistence.
         config.experimental_thread_store = ThreadStoreConfig::InMemory {
             id: thread_store_id,
