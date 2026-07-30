@@ -48,6 +48,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -1158,15 +1159,28 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
         )
         .mount(&server)
         .await;
-    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
-        requests: vec![vec![]],
-        response_headers: Vec::new(),
-        accept_delay: Some(Duration::from_millis(500)),
-        close_after_requests: false,
-    }])
-    .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let realtime_ws_base_url = format!("ws://{}", listener.local_addr()?);
+    let (pending_handshake_tx, pending_handshake_rx) = oneshot::channel();
+    let (release_handshake_tx, release_handshake_rx) = oneshot::channel();
+    let handshake_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut request = Vec::new();
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let bytes_read = stream.read_buf(&mut request).await?;
+            anyhow::ensure!(
+                bytes_read > 0,
+                "sideband closed before sending its handshake"
+            );
+        }
+        pending_handshake_tx
+            .send(())
+            .expect("pending sideband handshake should have a receiver");
+        release_handshake_rx.await?;
+        stream.read_to_end(&mut request).await?;
+        Ok::<Vec<u8>, anyhow::Error>(request)
+    });
 
-    let realtime_ws_base_url = realtime_server.uri().to_string();
     let mut builder = test_codex().with_config(move |config| {
         config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
         config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
@@ -1205,10 +1219,9 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     })
     .await;
     assert_eq!(sdp, "v=answer\r\n");
-    assert!(
-        realtime_server.handshakes().is_empty(),
-        "sideband websocket should still be pending when SDP is emitted"
-    );
+    timeout(Duration::from_secs(10), pending_handshake_rx)
+        .await
+        .context("timed out waiting for the sideband handshake")??;
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
     let closed = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1218,30 +1231,40 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     .await;
     assert_eq!(closed.reason.as_deref(), Some("requested"));
 
-    let stale_event = timeout(Duration::from_millis(700), async {
-        wait_for_event_match(&test.codex, |msg| match msg {
-            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-                payload: RealtimeEvent::Error(message),
-            }) => Some(format!("stale realtime error: {message}")),
-            EventMsg::RealtimeConversationClosed(closed) => {
-                Some(format!("stale close event: {:?}", closed.reason))
-            }
-            _ => None,
-        })
+    release_handshake_tx
+        .send(())
+        .expect("pending sideband handshake should still be waiting");
+    let handshake_request = timeout(Duration::from_secs(10), handshake_task)
         .await
-    })
-    .await;
+        .context("timed out waiting for the canceled sideband handshake")???;
     assert!(
-        stale_event.is_err(),
-        "pending sideband task leaked after close: {:?}",
-        stale_event.ok()
-    );
-    assert!(
-        realtime_server.handshakes().is_empty(),
-        "pending sideband task should abort before websocket handshake completes"
+        handshake_request.starts_with(b"GET "),
+        "pending sideband connection should close before completing its handshake"
     );
 
-    realtime_server.shutdown().await;
+    timeout(Duration::from_secs(10), async {
+        test.codex.submit(Op::Shutdown).await?;
+        loop {
+            match test.codex.next_event().await?.msg {
+                EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }) => {
+                    anyhow::bail!("pending sideband task emitted a stale realtime error: {message}")
+                }
+                EventMsg::RealtimeConversationClosed(closed) => {
+                    anyhow::bail!(
+                        "pending sideband task emitted a duplicate close event: {closed:?}"
+                    )
+                }
+                EventMsg::ShutdownComplete => break,
+                _ => {}
+            }
+        }
+        test.codex.wait_until_terminated().await;
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("timed out waiting for realtime session shutdown")??;
     Ok(())
 }
 
