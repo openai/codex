@@ -4,7 +4,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_sandboxing::SandboxManager;
@@ -179,7 +178,7 @@ async fn sandbox_cwd_uses_patch_action_cwd() {
 }
 
 #[tokio::test]
-async fn file_system_sandbox_context_uses_active_attempt() {
+async fn file_system_sandbox_context_preserves_executor_workspace_permissions() {
     let path = std::env::temp_dir()
         .join("apply-patch-runtime-attempt.txt")
         .abs();
@@ -205,18 +204,18 @@ async fn file_system_sandbox_context_uses_active_attempt() {
         additional_permissions: Some(additional_permissions.clone()),
         permissions_preapproved: false,
     };
-    let file_system_policy = FileSystemSandboxPolicy::default();
-    let permissions = PermissionProfile::from_runtime_permissions(
-        &file_system_policy,
-        NetworkSandboxPolicy::Restricted,
-    );
+    let exec_server_permissions = PermissionProfile::workspace_write();
+    let file_system_policy = exec_server_permissions.file_system_sandbox_policy();
+    let permissions = exec_server_permissions
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&path));
     let manager = SandboxManager::new();
     let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox: SandboxType::MacosSeatbelt,
         sandbox_requested: true,
         permissions: &permissions,
-        exec_server_permissions: &permissions,
+        exec_server_permissions: &exec_server_permissions,
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &sandbox_policy_cwd,

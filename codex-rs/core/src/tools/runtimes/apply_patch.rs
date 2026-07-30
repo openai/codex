@@ -91,8 +91,10 @@ impl ApplyPatchRuntime {
             return None;
         }
 
-        let permissions =
-            effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
+        let permissions = effective_permission_profile(
+            attempt.exec_server_permissions,
+            req.additional_permissions.as_ref(),
+        );
         Some(FileSystemSandboxContext {
             permissions: permissions.into(),
             cwd: Some(attempt.sandbox_cwd.clone()),
