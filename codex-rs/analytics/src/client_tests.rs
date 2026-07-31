@@ -2,6 +2,7 @@ use super::AnalyticsEventsClient;
 use super::AnalyticsEventsDestination;
 use super::AnalyticsEventsQueue;
 use super::AnalyticsEventsQueueMessage;
+use super::InternalToolInputQueue; // copybara:strip-for-public
 #[cfg(debug_assertions)]
 use super::capture_track_events_request;
 #[cfg(debug_assertions)]
@@ -75,6 +76,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock; // copybara:strip-for-public
 #[cfg(debug_assertions)]
 use std::time::SystemTime;
 use tokio::sync::mpsc;
@@ -83,11 +85,21 @@ use tokio::sync::mpsc::error::TryRecvError;
 #[cfg(debug_assertions)]
 impl AnalyticsEventsClient {
     pub(crate) fn new_for_capture_file(auth_manager: Arc<AuthManager>, path: PathBuf) -> Self {
+        // copybara:strip-for-public begin
+        let internal_tool_input = InternalToolInputQueue {
+            auth_manager: Arc::clone(&auth_manager),
+            destination: AnalyticsEventsDestination::CaptureFile { path: path.clone() },
+            queue: Arc::new(OnceLock::new()),
+        };
+        // copybara:strip-for-public end
         Self {
             queue: Some(AnalyticsEventsQueue::new(
                 auth_manager,
                 AnalyticsEventsDestination::CaptureFile { path },
             )),
+            // copybara:strip-for-public begin
+            internal_tool_input: Some(internal_tool_input),
+            // copybara:strip-for-public end
         }
     }
 }
@@ -229,7 +241,17 @@ fn client_with_receiver() -> (
         app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
         plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
     };
-    (AnalyticsEventsClient { queue: Some(queue) }, receiver)
+    // copybara:replace-for-public begin
+    (
+        AnalyticsEventsClient {
+            queue: Some(queue),
+            internal_tool_input: None,
+        },
+        receiver,
+    )
+    // copybara:replace-for-public with
+    // copybara:public (AnalyticsEventsClient { queue: Some(queue) }, receiver)
+    // copybara:replace-for-public end
 }
 
 #[test]
@@ -782,3 +804,231 @@ fn track_event_request_batches_only_isolates_accepted_line_fingerprint_events() 
     assert!(batches[1][0].should_send_in_isolated_request());
     assert!(batches[2][0].should_send_in_isolated_request());
 }
+// copybara:strip-for-public begin
+use crate::facts::CustomAnalyticsFact;
+use crate::facts::InternalToolHookOutcome;
+use crate::facts::InternalToolInputLog;
+use crate::facts::InternalToolSourceKind;
+use codex_login::CodexAuth;
+
+const ALICE_TOKEN: &str = "e30.eyJlbWFpbCI6ImFsaWNlQG9wZW5haS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF91c2VyX2lkIjoiZW1wbG95ZWUtYWxpY2UiLCJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2NvdW50LXRlc3QifX0.sig";
+const ALICE_OTHER_USER_TOKEN: &str = "e30.eyJlbWFpbCI6ImFsaWNlQG9wZW5haS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF91c2VyX2lkIjoiZW1wbG95ZWUtb3RoZXItYWxpY2UifX0.sig";
+const BOB_TOKEN: &str = "e30.eyJlbWFpbCI6ImJvYkBvcGVuYWkuY29tIiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfdXNlcl9pZCI6ImVtcGxveWVlLWJvYiJ9fQ.sig";
+const OUTSIDER_TOKEN: &str = "e30.eyJlbWFpbCI6Im91dHNpZGVyQGV4YW1wbGUuY29tIiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfdXNlcl9pZCI6ImV4dGVybmFsLXVzZXIifX0.sig";
+
+fn internal_tool_input_auth(access_token: &str, account_id: &str) -> CodexAuth {
+    CodexAuth::from_external_chatgpt_tokens(
+        access_token,
+        account_id,
+        /*chatgpt_plan_type*/ None,
+    )
+    .unwrap()
+}
+
+fn internal_tool_input() -> InternalToolInputLog {
+    InternalToolInputLog {
+        thread_id: "thread-123".to_string(),
+        turn_id: Some("turn-123".to_string()),
+        tool_call_id: "call-123".to_string(),
+        item_id: Some("item-123".to_string()),
+        tool_name: "exec_command".to_string(),
+        namespace: Some("functions".to_string()),
+        source_kind: InternalToolSourceKind::Direct,
+        arguments_before_hooks: serde_json::json!({
+            "commands": [{"command": "git", "subcommand": "status", "flags": ["--short"]}]
+        }),
+        hook_normalized_input: Some(serde_json::json!({
+            "commands": [{"command": "curl", "flags": ["-H", "--data"]}]
+        })),
+        arguments_after_hooks: Some(serde_json::json!({})),
+        hook_outcome: InternalToolHookOutcome::Unchanged,
+        code_mode_cell_id: None,
+        code_mode_runtime_tool_call_id: None,
+    }
+}
+
+#[tokio::test]
+async fn internal_tool_inputs_require_employee_auth_and_a_trusted_destination() {
+    let employee = internal_tool_input_auth(ALICE_TOKEN, "account-test");
+    let outsider = internal_tool_input_auth(OUTSIDER_TOKEN, "account-test");
+    let mismatched = internal_tool_input_auth(ALICE_TOKEN, "other-workspace");
+    let trusted = "https://chatgpt.com/backend-api";
+    let untrusted = "https://chatgpt.com.attacker.invalid/backend-api";
+    for (auth, analytics_enabled, base_url) in [
+        (CodexAuth::from_api_key("sk-test"), Some(true), trusted),
+        (outsider, Some(true), trusted),
+        (mismatched, Some(true), trusted),
+        (employee.clone(), Some(false), trusted),
+        (employee.clone(), Some(true), untrusted),
+    ] {
+        let client = AnalyticsEventsClient::new(
+            codex_login::AuthManager::from_auth_for_testing(auth),
+            base_url.to_string(),
+            analytics_enabled,
+        );
+        assert!(!client.is_internal_tool_input_logging_enabled());
+    }
+
+    let client = AnalyticsEventsClient::new(
+        codex_login::AuthManager::from_auth_for_testing(employee.clone()),
+        trusted.to_string(),
+        /*analytics_enabled*/ None,
+    );
+    assert!(client.is_internal_tool_input_logging_enabled());
+    assert!(
+        !client
+            .without_internal_tool_input_logging()
+            .is_internal_tool_input_logging_enabled()
+    );
+    #[cfg(debug_assertions)]
+    assert!(
+        AnalyticsEventsClient::new(
+            codex_login::AuthManager::from_auth_for_testing(employee),
+            "http://127.0.0.1:1234".to_string(),
+            /*analytics_enabled*/ None,
+        )
+        .is_internal_tool_input_logging_enabled()
+    );
+}
+
+#[tokio::test]
+async fn internal_tool_inputs_accept_only_bounded_metadata_in_an_isolated_queue() {
+    let employee = internal_tool_input_auth(ALICE_TOKEN, "account-test");
+    let (mut client, mut receiver) = client_with_receiver();
+    let (internal_client, mut internal_receiver) = client_with_receiver();
+    client.internal_tool_input = Some(InternalToolInputQueue {
+        auth_manager: codex_login::AuthManager::from_auth_for_testing(employee),
+        destination: AnalyticsEventsDestination::from_base_url(
+            "https://chatgpt.com/backend-api".to_string(),
+        ),
+        queue: Arc::new(OnceLock::from(internal_client.queue.unwrap())),
+    });
+
+    for metadata in [
+        serde_json::json!({"cmd": "Bearer private-canary"}),
+        serde_json::json!({"commands": [{"command": "git", "flags": ["--token=private-canary"]}]}),
+        serde_json::json!({"commands": [{"command": "git", "flags": []}], "password": "private-canary"}),
+        serde_json::json!({"commands": vec![serde_json::json!({"command": "git", "flags": []}); 17]}),
+        serde_json::json!({"commands": [{"command": "git", "flags": vec!["--short"; 33]}]}),
+    ] {
+        let mut rejected = internal_tool_input();
+        rejected.arguments_before_hooks = metadata;
+        client.track_internal_tool_input(rejected);
+        assert!(matches!(
+            internal_receiver.try_recv(),
+            Err(TryRecvError::Empty)
+        ));
+    }
+    let raw = serde_json::json!({"cmd": "Bearer private-canary"});
+    let mut rejected = internal_tool_input();
+    rejected.hook_normalized_input = Some(raw.clone());
+    client.track_internal_tool_input(rejected);
+    let mut rejected = internal_tool_input();
+    rejected.arguments_after_hooks = Some(raw);
+    client.track_internal_tool_input(rejected);
+    assert!(matches!(
+        internal_receiver.try_recv(),
+        Err(TryRecvError::Empty)
+    ));
+
+    let input = internal_tool_input();
+    for _ in 0..9 {
+        client.track_internal_tool_input(input.clone());
+    }
+    assert_eq!(internal_receiver.len(), 8);
+    assert!(!client.is_internal_tool_input_logging_enabled());
+    let AnalyticsEventsQueueMessage::InternalFact(fact, identity) =
+        internal_receiver.try_recv().unwrap()
+    else {
+        unreachable!("tool inputs must enqueue an analytics fact")
+    };
+    assert!(client.is_internal_tool_input_logging_enabled());
+    let AnalyticsFact::Custom(CustomAnalyticsFact::InternalToolInput(queued)) = fact.as_ref()
+    else {
+        unreachable!("tool inputs must contain an internal diagnostic")
+    };
+    assert_eq!(queued.as_ref(), &input);
+    assert_eq!(
+        identity,
+        ("account-test".to_string(), "employee-alice".to_string())
+    );
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[tokio::test]
+#[cfg(debug_assertions)]
+async fn internal_tool_inputs_remain_bound_to_the_authenticated_employee() {
+    use codex_login::AuthCredentialsStoreMode as Store;
+
+    let employee = internal_tool_input_auth(ALICE_TOKEN, "account-test");
+    let identity = super::internal_tool_input_identity(&employee).unwrap();
+    let input = internal_tool_input();
+    let path = unique_capture_path("internal-tool-input");
+    let home = unique_capture_path("internal-tool-auth-home");
+    let auth_manager =
+        codex_login::AuthManager::from_auth_for_testing_with_home(employee, home.clone());
+    let client =
+        AnalyticsEventsClient::new_for_capture_file(Arc::clone(&auth_manager), path.clone());
+    client.track_internal_tool_input(input.clone());
+    client.flush().await;
+
+    assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
+
+    let queue = client
+        .internal_tool_input
+        .as_ref()
+        .unwrap()
+        .queue
+        .get()
+        .unwrap();
+    let refreshed = ALICE_TOKEN.replace(".sig", ".refreshed");
+    for (access, id, account, deliver) in [
+        (BOB_TOKEN, BOB_TOKEN, "account-test", false),
+        (ALICE_TOKEN, ALICE_TOKEN, "other-workspace", false),
+        (OUTSIDER_TOKEN, ALICE_TOKEN, "account-test", false),
+        (ALICE_OTHER_USER_TOKEN, ALICE_TOKEN, "account-test", false),
+        (refreshed.as_str(), refreshed.as_str(), "account-test", true),
+    ] {
+        let mut stored: codex_login::AuthDotJson = serde_json::from_value(serde_json::json!({
+            "auth_mode": "chatgptAuthTokens",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": id,
+                "access_token": access,
+                "refresh_token": "",
+                "account_id": account,
+            },
+        }))
+        .unwrap();
+        stored.last_refresh = Some(SystemTime::now().into());
+        codex_login::save_auth(&home, &stored, Store::File, Default::default()).unwrap();
+        auth_manager.reload().await;
+        queue
+            .sender
+            .try_send(AnalyticsEventsQueueMessage::InternalFact(
+                Box::new(input.clone().into()),
+                identity.clone(),
+            ))
+            .unwrap();
+        client.flush().await;
+        assert_eq!(
+            fs::read_to_string(&path).unwrap().lines().count(),
+            1 + usize::from(deliver)
+        );
+    }
+
+    fs::remove_file(home.join("auth.json")).unwrap();
+    auth_manager.reload().await;
+    queue
+        .sender
+        .try_send(AnalyticsEventsQueueMessage::InternalFact(
+            Box::new(input.into()),
+            identity,
+        ))
+        .unwrap();
+    client.flush().await;
+    assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
+    fs::remove_file(&path).unwrap();
+    fs::remove_dir(home).unwrap();
+}
+// copybara:strip-for-public end
