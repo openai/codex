@@ -140,16 +140,7 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
-    sess.refresh_mcp_if_dirty().await;
-    let current_binding = sess
-        .services
-        .mcp_runtime
-        .current_binding_for_call(&server)
-        .await;
-    let Some(prepared_call) = current_binding
-        .as_ref()
-        .and_then(|binding| binding.prepare_call(&server, &tool_name))
-    else {
+    let Some(prepared_call) = sess.prepare_mcp_call(&server, &tool_name).await else {
         let item_metadata =
             McpToolCallItemMetadata::from_tool_metadata(&server, /*metadata*/ None);
         let result = notify_mcp_tool_call_skip(

@@ -8,6 +8,7 @@ use super::session::SessionConfiguration;
 use super::*;
 use crate::mcp::McpRuntimeProjection;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::PreparedMcpCall;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 pub(super) struct McpDesiredState {
@@ -30,6 +31,29 @@ impl McpDesiredState {
 }
 
 impl Session {
+    /// Waits on this session's refreshed server before tool execution is admitted.
+    pub(crate) async fn wait_for_mcp_server(self: &Arc<Self>, server: &str) {
+        self.refresh_mcp_if_dirty().await;
+        self.services
+            .mcp_runtime
+            .wait_for_server_startup(server)
+            .await;
+    }
+
+    /// Captures this session's current MCP client and catalog for one tool call.
+    pub(crate) async fn prepare_mcp_call(
+        self: &Arc<Self>,
+        server: &str,
+        tool: &str,
+    ) -> Option<PreparedMcpCall> {
+        self.refresh_mcp_if_dirty().await;
+        self.services
+            .mcp_runtime
+            .current_binding_for_call(server)
+            .await?
+            .prepare_call(server, tool)
+    }
+
     pub(super) async fn latest_mcp_desired_state(
         &self,
         auth: Option<CodexAuth>,
