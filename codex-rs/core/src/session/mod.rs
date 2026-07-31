@@ -865,7 +865,7 @@ impl SessionIo {
 ///
 /// Some use cases take advantage of the fact that these are UUID7 which
 /// encodes a timestamp, so think carefully before changing this.
-fn new_submission_id() -> String {
+pub(crate) fn new_submission_id() -> String {
     Uuid::now_v7().to_string()
 }
 
@@ -1190,7 +1190,7 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        handlers::user_input_or_turn_inner(
+        handlers::user_input_or_turn(
             self,
             Uuid::now_v7().to_string(),
             Op::UserInput {

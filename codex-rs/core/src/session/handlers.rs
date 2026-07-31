@@ -22,6 +22,9 @@ use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
+use crate::user_message_admission::UserMessageAdmission;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -85,7 +88,16 @@ pub async fn user_input_or_turn(
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
 ) {
-    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id, parent_turn_id).await;
+    let admission = user_input_or_turn_inner(
+        sess,
+        sub_id.clone(),
+        op,
+        client_user_message_id,
+        parent_turn_id,
+    )
+    .await;
+    sess.pending_user_message_admissions
+        .complete(&sub_id, admission);
 }
 
 pub async fn update_thread_settings(
@@ -180,7 +192,7 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
-) {
+) -> CodexResult<UserMessageAdmission> {
     let Op::UserInput {
         items,
         final_output_json_schema,
@@ -199,10 +211,8 @@ pub(super) async fn user_input_or_turn_inner(
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
 
-    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
-        // new_turn_with_sub_id already emits the error event.
-        return;
-    };
+    // new_turn_with_sub_id already emits an error event when settings are invalid.
+    let current_context = sess.new_turn_with_sub_id(sub_id.clone(), updates).await?;
     if emit_thread_settings_applied {
         sess.send_event_raw_without_materializing_rollout(Event {
             id: sub_id.clone(),
@@ -222,8 +232,9 @@ pub(super) async fn user_input_or_turn_inner(
         )
         .await
     {
-        Ok(_) => {
+        Ok(turn_id) => {
             current_context.session_telemetry.user_prompt(&items);
+            Ok(UserMessageAdmission::Steered { turn_id })
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
             if let Some(id) = parent_turn_id {
@@ -256,13 +267,17 @@ pub(super) async fn user_input_or_turn_inner(
                 crate::tasks::RegularTask::new(),
             )
             .await;
+            Ok(UserMessageAdmission::Started { turn_id: sub_id })
         }
         Err(err) => {
             sess.send_event_raw(Event {
-                id: sub_id,
+                id: sub_id.clone(),
                 msg: EventMsg::Error(err.to_error_event()),
             })
             .await;
+            Err(CodexErr::InvalidRequest(format!(
+                "failed to admit user message: {err:?}"
+            )))
         }
     }
 }
