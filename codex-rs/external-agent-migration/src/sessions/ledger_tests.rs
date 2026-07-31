@@ -1,11 +1,14 @@
 use super::CompletedExternalAgentSessionImport;
 use super::ImportedConnectorCandidate;
 use super::ImportedExternalAgentSessionLedger;
+use super::checkpoint_existing_session_import;
 use super::read_imported_connector_candidates;
 use super::record_completed_session_imports;
 use codex_protocol::ThreadId;
+use pretty_assertions::assert_eq;
 use sha2::Digest;
 use sha2::Sha256;
+use std::path::Path;
 use tempfile::TempDir;
 
 #[test]
@@ -96,6 +99,75 @@ fn completed_import_refreshes_existing_record_metadata() {
 }
 
 #[test]
+fn checkpoint_is_compare_and_swap_and_preserves_record_metadata() {
+    let root = TempDir::new().expect("tempdir");
+    let codex_home = root.path().join("codex-home");
+    let source_path = root.path().join("session.jsonl");
+    std::fs::write(&source_path, "old").expect("initial source");
+    let source_path = std::fs::canonicalize(source_path).expect("canonical source");
+    let thread_id = ThreadId::new();
+    let old_hash = format!("{:x}", Sha256::digest("old"));
+    let new_hash = format!("{:x}", Sha256::digest("new"));
+    record_completed_session_imports(
+        &codex_home,
+        vec![CompletedExternalAgentSessionImport {
+            source_path: source_path.clone(),
+            source_content_sha256: old_hash.clone(),
+            imported_thread_id: thread_id,
+            connector_names: vec!["Gmail".to_string()],
+            title: Some("Original title".to_string()),
+        }],
+    )
+    .expect("record initial import");
+    std::fs::write(&source_path, "new").expect("updated source");
+    let ledger_before = ledger_bytes(&codex_home);
+    for (candidate_thread_id, expected_hash, candidate_hash) in [
+        (ThreadId::new(), old_hash.as_str(), new_hash.as_str()),
+        (thread_id, "stale", new_hash.as_str()),
+        (thread_id, old_hash.as_str(), "not-the-source-hash"),
+    ] {
+        assert!(
+            !checkpoint_existing_session_import(
+                &codex_home,
+                &source_path,
+                candidate_thread_id,
+                expected_hash,
+                candidate_hash,
+            )
+            .expect("rejected checkpoint")
+        );
+    }
+    assert_eq!(ledger_bytes(&codex_home), ledger_before);
+
+    assert!(
+        checkpoint_existing_session_import(
+            &codex_home,
+            &source_path,
+            thread_id,
+            &old_hash,
+            &new_hash,
+        )
+        .expect("checkpoint")
+    );
+    let ledger = super::load_import_ledger(&codex_home).expect("updated ledger");
+    let [record] = ledger.records.as_slice() else {
+        panic!("checkpoint must preserve one record");
+    };
+    assert_eq!(
+        record,
+        &super::ImportedExternalAgentSessionRecord {
+            source_path: source_path.clone(),
+            content_sha256: new_hash,
+            imported_thread_id: thread_id,
+            imported_at: record.imported_at,
+            source_modified_at: super::session_modified_at(&source_path).expect("source mtime"),
+            connector_names: vec!["Gmail".to_string()],
+            title: Some("Original title".to_string()),
+        }
+    );
+}
+
+#[test]
 fn connector_candidates_use_latest_import_for_each_source() {
     let root = TempDir::new().expect("tempdir");
     let codex_home = root.path().join("codex-home");
@@ -143,4 +215,8 @@ fn connector_candidates_use_latest_import_for_each_source() {
             },
         ]
     );
+}
+
+fn ledger_bytes(codex_home: &Path) -> Vec<u8> {
+    std::fs::read(super::import_ledger_path(codex_home)).expect("ledger")
 }
