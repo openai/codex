@@ -25,9 +25,12 @@ codex-home = { workspace = true }
 codex-image-generation-extension = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
 codex-git-attribution = { workspace = true }
 codex-login = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-skills-extension = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 rmcp = { workspace = true }
@@ -44,6 +47,7 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
 app_test_support = { workspace = true }

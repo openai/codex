@@ -378,6 +378,12 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     // Run `codex mcp` with a specific config.toml.
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
+    let skill_dir = codex_home.path().join("skills").join("demo");
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse this skill.\n",
+    )?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-token").account_id("workspace-123"),
@@ -471,6 +477,11 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         1
     );
     assert_eq!(developer_text.matches("Generated with Codex.").count(), 1);
+    assert_eq!(
+        developer_text.matches("- demo: Demo skill.").count(),
+        1,
+        "host skill catalog should be included exactly once"
+    );
     assert!(
         developer_contents
             .iter()
@@ -488,6 +499,83 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
             .all(|request| request.url.path() != "/backend-api/wham/settings/user"),
         "attribution settings must use the process-level base URL"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_codex_tool_forwards_skills_extension_warnings() {
+    skip_if_no_network!();
+
+    codex_tool_forwards_skills_extension_warnings()
+        .await
+        .expect("codex tool should forward skills extension warnings");
+}
+
+async fn codex_tool_forwards_skills_extension_warnings() -> anyhow::Result<()> {
+    let server =
+        create_mock_responses_server(vec![create_final_assistant_message_sse_response("Enjoy!")?])
+            .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let skills_dir = codex_home.path().join("skills");
+    for index in 0..200 {
+        let name = format!("skill-{index:03}");
+        let skill_dir = skills_dir.join(&name);
+        std::fs::create_dir_all(&skill_dir)?;
+        let description = format!("Skill {index}: {}", "x".repeat(200));
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: {description}\n---\n# {name}\n\nUse this skill.\n"
+            ),
+        )?;
+    }
+    let mut mcp_process = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+
+    let codex_request_id = mcp_process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "How are you?".to_string(),
+            ..Default::default()
+        })
+        .await?;
+
+    let warning = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_codex_event_matching("warning", |params| {
+            params["msg"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("skills context budget"))
+        }),
+    )
+    .await??;
+    let warning_json = serde_json::to_value(&warning)?;
+    let params = warning
+        .notification
+        .params
+        .ok_or_else(|| anyhow::anyhow!("warning notification should include params"))?;
+    assert_eq!(
+        warning_json["params"]["_meta"]["requestId"],
+        codex_request_id
+    );
+    assert_eq!(warning_json["params"]["id"], codex_request_id.to_string());
+    assert!(
+        warning_json["params"]["_meta"]["threadId"]
+            .as_str()
+            .is_some_and(|thread_id| !thread_id.is_empty())
+    );
+    assert_eq!(params["msg"]["type"], "warning");
+    assert!(
+        params["msg"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("skills context budget"))
+    );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
+    )
+    .await??;
 
     Ok(())
 }

@@ -3594,12 +3594,15 @@ dependencies = [
  "codex-core",
  "codex-exec-server",
  "codex-extension-api",
+ "codex-features",
  "codex-git-attribution",
  "codex-home",
  "codex-image-generation-extension",
  "codex-login",
+ "codex-otel",
  "codex-protocol",
  "codex-shell-command",
+ "codex-skills-extension",
  "codex-utils-absolute-path",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
@@ -3616,6 +3619,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wiremock",
 ]
 

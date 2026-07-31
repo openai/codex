@@ -86,9 +86,7 @@ pub(crate) async fn handle_exec_approval_request(
             let message = format!("Failed to serialize ExecApprovalElicitRequestParams: {err}");
             error!("{message}");
 
-            outgoing
-                .send_error(request_id.clone(), ErrorData::invalid_params(message, None))
-                .await;
+            outgoing.send_error(request_id.clone(), ErrorData::invalid_params(message, None));
 
             return;
         }

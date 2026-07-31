@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
@@ -11,7 +10,6 @@ use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
-use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use rmcp::model::CallToolRequestParams;
@@ -29,13 +27,14 @@ use rmcp::model::JsonRpcResponse;
 use rmcp::model::RequestId;
 use rmcp::model::ServerCapabilities;
 use serde_json::json;
-use tokio::sync::Mutex;
 use tokio::task;
 
+use crate::active_turn_registry::ActiveTurnRegistry;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
+use crate::extension_event_sink::extension_event_sink;
 use crate::outgoing_message::OutgoingMessageSender;
 
 pub(crate) struct MessageProcessor {
@@ -43,7 +42,7 @@ pub(crate) struct MessageProcessor {
     initialized: bool,
     arg0_paths: Arg0DispatchPaths,
     thread_manager: Arc<ThreadManager>,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
+    active_turns: Arc<ActiveTurnRegistry>,
 }
 
 impl MessageProcessor {
@@ -66,7 +65,10 @@ impl MessageProcessor {
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         ));
-        let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+        let active_turns = Arc::new(ActiveTurnRegistry::default());
+        let mut extensions = ExtensionRegistryBuilder::<Config>::with_event_sink(
+            extension_event_sink(Arc::clone(&outgoing), Arc::clone(&active_turns)),
+        );
         codex_git_attribution::install(
             &mut extensions,
             auth_manager.clone(),
@@ -77,6 +79,21 @@ impl MessageProcessor {
             &mut extensions,
             auth_manager.clone(),
             |config: &Config| Some(config.codex_home.clone()),
+        );
+        let skill_providers = codex_skills_extension::SkillProviders::new()
+            .with_host_provider(Arc::new(codex_skills_extension::HostSkillProvider::new()));
+        codex_skills_extension::install_with_providers_and_metrics(
+            &mut extensions,
+            skill_providers,
+            codex_otel::global(),
+            |config: &Config| codex_skills_extension::SkillsExtensionConfig {
+                include_instructions: config.include_skill_instructions,
+                bundled_skills_enabled: config.bundled_skills_enabled(),
+                orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+                shadow_selection_enabled: config
+                    .features
+                    .enabled(codex_features::Feature::SkillSearch),
+            },
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
@@ -99,7 +116,7 @@ impl MessageProcessor {
             initialized: false,
             arg0_paths,
             thread_manager,
-            running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            active_turns,
         }
     }
 
@@ -156,17 +173,15 @@ impl MessageProcessor {
                     .await;
             }
             ClientRequest::CustomRequest(custom) => {
-                let method = custom.method.clone();
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        ErrorData::new(
-                            ErrorCode::METHOD_NOT_FOUND,
-                            format!("method not found: {method}"),
-                            Some(json!({ "method": method })),
-                        ),
-                    )
-                    .await;
+                let method = custom.method;
+                self.outgoing.send_error(
+                    request_id,
+                    ErrorData::new(
+                        ErrorCode::METHOD_NOT_FOUND,
+                        format!("method not found: {method}"),
+                        Some(json!({ "method": method })),
+                    ),
+                );
             }
             request => {
                 self.handle_unsupported_request(request_id, request.method())
@@ -219,12 +234,10 @@ impl MessageProcessor {
         tracing::info!("initialize -> params: {:?}", params);
 
         if self.initialized {
-            self.outgoing
-                .send_error(
-                    id,
-                    ErrorData::invalid_request("initialize called more than once", None),
-                )
-                .await;
+            self.outgoing.send_error(
+                id,
+                ErrorData::invalid_request("initialize called more than once", None),
+            );
             return;
         }
 
@@ -243,15 +256,13 @@ impl MessageProcessor {
         let mut server_info_value = match serde_json::to_value(&server_info) {
             Ok(value) => value,
             Err(err) => {
-                self.outgoing
-                    .send_error(
-                        id,
-                        ErrorData::internal_error(
-                            format!("failed to serialize server info: {err}"),
-                            None,
-                        ),
-                    )
-                    .await;
+                self.outgoing.send_error(
+                    id,
+                    ErrorData::internal_error(
+                        format!("failed to serialize server info: {err}"),
+                        None,
+                    ),
+                );
                 return;
             }
         };
@@ -264,20 +275,18 @@ impl MessageProcessor {
             .enable_tool_list_changed()
             .build();
         let result = InitializeResult::new(capabilities)
-            .with_protocol_version(params.protocol_version.clone())
+            .with_protocol_version(params.protocol_version)
             .with_server_info(server_info);
         let mut result_value = match serde_json::to_value(result) {
             Ok(value) => value,
             Err(err) => {
-                self.outgoing
-                    .send_error(
-                        id,
-                        ErrorData::internal_error(
-                            format!("failed to serialize initialize response: {err}"),
-                            None,
-                        ),
-                    )
-                    .await;
+                self.outgoing.send_error(
+                    id,
+                    ErrorData::internal_error(
+                        format!("failed to serialize initialize response: {err}"),
+                        None,
+                    ),
+                );
                 return;
             }
         };
@@ -287,12 +296,12 @@ impl MessageProcessor {
         }
 
         self.initialized = true;
-        self.outgoing.send_response(id, result_value).await;
+        self.outgoing.send_response(id, result_value);
     }
 
     async fn handle_ping(&self, id: RequestId) {
         tracing::info!("ping");
-        self.outgoing.send_response(id, json!({})).await;
+        self.outgoing.send_response(id, json!({}));
     }
 
     fn handle_list_resources(&self, params: Option<rmcp::model::PaginatedRequestParams>) {
@@ -334,7 +343,7 @@ impl MessageProcessor {
             create_tool_for_codex_tool_call_reply_param(),
         ]);
 
-        self.outgoing.send_response(id, result).await;
+        self.outgoing.send_response(id, result);
     }
 
     async fn handle_call_tool(&self, id: RequestId, params: CallToolRequestParams) {
@@ -353,7 +362,7 @@ impl MessageProcessor {
                 let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!(
                     "Unknown tool '{name}'"
                 ))]);
-                self.outgoing.send_response(id, result).await;
+                self.outgoing.send_response(id, result);
             }
         }
     }
@@ -372,7 +381,7 @@ impl MessageProcessor {
                         let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                             format!("Failed to load Codex configuration from overrides: {e}"),
                         )]);
-                        self.outgoing.send_response(id, result).await;
+                        self.outgoing.send_response(id, result);
                         return;
                     }
                 },
@@ -380,7 +389,7 @@ impl MessageProcessor {
                     let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                         format!("Failed to parse configuration for Codex tool: {e}"),
                     )]);
-                    self.outgoing.send_response(id, result).await;
+                    self.outgoing.send_response(id, result);
                     return;
                 }
             },
@@ -388,7 +397,7 @@ impl MessageProcessor {
                 let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                     "Missing arguments for codex tool-call; the `prompt` field is required.",
                 )]);
-                self.outgoing.send_response(id, result).await;
+                self.outgoing.send_response(id, result);
                 return;
             }
         };
@@ -396,7 +405,7 @@ impl MessageProcessor {
         // Clone outgoing and server to move into async task.
         let outgoing = self.outgoing.clone();
         let thread_manager = self.thread_manager.clone();
-        let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
+        let active_turns = Arc::clone(&self.active_turns);
 
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
@@ -408,7 +417,7 @@ impl MessageProcessor {
                 config,
                 outgoing,
                 thread_manager,
-                running_requests_id_to_codex_uuid,
+                active_turns,
             )
             .await;
         });
@@ -431,7 +440,7 @@ impl MessageProcessor {
                     let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                         format!("Failed to parse configuration for Codex tool: {e}"),
                     )]);
-                    self.outgoing.send_response(request_id, result).await;
+                    self.outgoing.send_response(request_id, result);
                     return;
                 }
             },
@@ -442,7 +451,7 @@ impl MessageProcessor {
                 let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                     "Missing arguments for codex-reply tool-call; the `thread_id` and `prompt` fields are required.",
                 )]);
-                self.outgoing.send_response(request_id, result).await;
+                self.outgoing.send_response(request_id, result);
                 return;
             }
         };
@@ -454,14 +463,14 @@ impl MessageProcessor {
                 let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!(
                     "Failed to parse thread_id: {e}"
                 ))]);
-                self.outgoing.send_response(request_id, result).await;
+                self.outgoing.send_response(request_id, result);
                 return;
             }
         };
 
         // Clone outgoing to move into async task.
         let outgoing = self.outgoing.clone();
-        let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
+        let active_turns = Arc::clone(&self.active_turns);
 
         let codex = match self.thread_manager.get_thread(thread_id).await {
             Ok(c) => c,
@@ -472,7 +481,7 @@ impl MessageProcessor {
                     format!("Session not found for thread_id: {thread_id}"),
                     Some(true),
                 );
-                outgoing.send_response(request_id, result).await;
+                outgoing.send_response(request_id, result);
                 return;
             }
         };
@@ -481,7 +490,7 @@ impl MessageProcessor {
         let prompt = codex_tool_call_reply_param.prompt.clone();
         tokio::spawn({
             let outgoing = outgoing.clone();
-            let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
+            let active_turns = Arc::clone(&active_turns);
 
             async move {
                 crate::codex_tool_runner::run_codex_tool_session_reply(
@@ -490,7 +499,7 @@ impl MessageProcessor {
                     outgoing,
                     request_id,
                     prompt,
-                    running_requests_id_to_codex_uuid,
+                    active_turns,
                 )
                 .await;
             }
@@ -507,16 +516,14 @@ impl MessageProcessor {
     }
 
     async fn handle_unsupported_request(&self, id: RequestId, method: &str) {
-        self.outgoing
-            .send_error(
-                id,
-                ErrorData::new(
-                    ErrorCode::METHOD_NOT_FOUND,
-                    format!("method not found: {method}"),
-                    Some(json!({ "method": method })),
-                ),
-            )
-            .await;
+        self.outgoing.send_error(
+            id,
+            ErrorData::new(
+                ErrorCode::METHOD_NOT_FOUND,
+                format!("method not found: {method}"),
+                Some(json!({ "method": method })),
+            ),
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -531,15 +538,12 @@ impl MessageProcessor {
         // Create a stable string form early for logging and submission id.
         let request_id_string = request_id.to_string();
 
-        // Obtain the thread id while holding the first lock, then release.
-        let thread_id = {
-            let map_guard = self.running_requests_id_to_codex_uuid.lock().await;
-            match map_guard.get(&request_id) {
-                Some(id) => *id,
-                None => {
-                    tracing::warn!("Session not found for request_id: {request_id_string}");
-                    return;
-                }
+        // Resolve the thread for the active MCP request.
+        let thread_id = match self.active_turns.thread_id(&request_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!("Session not found for request_id: {request_id_string}");
+                return;
             }
         };
         tracing::info!("thread_id: {thread_id}");
@@ -567,11 +571,8 @@ impl MessageProcessor {
             tracing::error!("Failed to submit interrupt to Codex: {e}");
             return;
         }
-        // unregister the id so we don't keep it in the map
-        self.running_requests_id_to_codex_uuid
-            .lock()
-            .await
-            .remove(&request_id);
+        // Stop routing extension events to the cancelled turn.
+        self.active_turns.unregister(&request_id);
     }
 
     fn handle_progress_notification(&self, params: rmcp::model::ProgressNotificationParam) {

@@ -78,9 +78,7 @@ pub(crate) async fn handle_patch_approval_request(
             let message = format!("Failed to serialize PatchApprovalElicitRequestParams: {err}");
             error!("{message}");
 
-            outgoing
-                .send_error(request_id.clone(), ErrorData::invalid_params(message, None))
-                .await;
+            outgoing.send_error(request_id.clone(), ErrorData::invalid_params(message, None));
 
             return;
         }

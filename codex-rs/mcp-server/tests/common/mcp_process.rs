@@ -311,23 +311,41 @@ impl McpProcess {
     ) -> anyhow::Result<JsonRpcNotification<CustomNotification>> {
         eprintln!("in read_stream_until_legacy_task_complete_notification()");
 
+        self.read_stream_until_codex_event("task_complete").await
+    }
+
+    pub async fn read_stream_until_codex_event(
+        &mut self,
+        event_type: &str,
+    ) -> anyhow::Result<JsonRpcNotification<CustomNotification>> {
+        self.read_stream_until_codex_event_matching(event_type, |_| true)
+            .await
+    }
+
+    pub async fn read_stream_until_codex_event_matching(
+        &mut self,
+        event_type: &str,
+        predicate: impl Fn(&serde_json::Value) -> bool,
+    ) -> anyhow::Result<JsonRpcNotification<CustomNotification>> {
+        eprintln!("in read_stream_until_codex_event({event_type})");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
             match message {
                 JsonRpcMessage::Notification(notification) => {
-                    let is_match = if notification.notification.method == "codex/event" {
-                        if let Some(params) = &notification.notification.params {
-                            params
-                                .get("msg")
-                                .and_then(|m| m.get("type"))
-                                .and_then(|t| t.as_str())
-                                == Some("task_complete")
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
+                    let is_match = notification.notification.method == "codex/event"
+                        && notification
+                            .notification
+                            .params
+                            .as_ref()
+                            .is_some_and(|params| {
+                                params
+                                    .get("msg")
+                                    .and_then(|m| m.get("type"))
+                                    .and_then(|t| t.as_str())
+                                    == Some(event_type)
+                                    && predicate(params)
+                            });
 
                     if is_match {
                         return Ok(notification);
