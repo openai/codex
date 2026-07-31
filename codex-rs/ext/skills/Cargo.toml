@@ -34,5 +34,6 @@ url = { workspace = true }
 [dev-dependencies]
 codex-models-manager = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

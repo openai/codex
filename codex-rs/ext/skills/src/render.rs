@@ -440,6 +440,7 @@ struct RenderedCatalog {
 pub(crate) struct AvailableSkillsRender {
     skill_root_lines: Vec<String>,
     skill_lines: Vec<String>,
+    preserve_empty_fragment: bool,
     pub(crate) report: SkillRenderReport,
 }
 
@@ -448,7 +449,7 @@ impl AvailableSkillsRender {
         self,
         include_skills_usage_instructions: bool,
     ) -> Option<AvailableSkillsInstructions> {
-        (!self.skill_lines.is_empty()).then(|| {
+        (self.preserve_empty_fragment || !self.skill_lines.is_empty()).then(|| {
             AvailableSkillsInstructions::from_skill_lines(
                 self.skill_root_lines,
                 self.skill_lines,
@@ -501,6 +502,7 @@ pub(crate) fn render_available_skills(
     Some(AvailableSkillsRender {
         skill_root_lines: selected.skill_root_lines,
         skill_lines: selected.skill_lines,
+        preserve_empty_fragment: policy == SkillCatalogRenderPolicy::CoreCompatible,
         report: selected.report,
     })
 }
@@ -615,6 +617,7 @@ fn render_combined_group(
     AvailableSkillsRender {
         skill_root_lines,
         skill_lines: lines.into_iter().map(|rendered| rendered.line).collect(),
+        preserve_empty_fragment: false,
         report: SkillRenderReport {
             total_count: skill_lines.len(),
             included_count: skill_lines.len().saturating_sub(omitted_count),

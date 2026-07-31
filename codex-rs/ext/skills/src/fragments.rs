@@ -1,4 +1,3 @@
-use codex_core_skills::AvailableSkills;
 use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ALIASES;
 use codex_core_skills::render_available_skills_body;
@@ -29,26 +28,6 @@ impl AvailableSkillsInstructions {
         }
         Self {
             skill_root_lines,
-            skill_lines,
-        }
-    }
-
-    pub(crate) fn from_available_skills(
-        available: AvailableSkills,
-        include_skills_usage_instructions: bool,
-    ) -> Self {
-        let mut skill_lines = available.skill_lines;
-        if include_skills_usage_instructions {
-            skill_lines.push("### How to use skills".to_string());
-            let instructions = if available.skill_root_lines.is_empty() {
-                SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
-            } else {
-                SKILLS_HOW_TO_USE_WITH_ALIASES
-            };
-            skill_lines.push(instructions.to_string());
-        }
-        Self {
-            skill_root_lines: available.skill_root_lines,
             skill_lines,
         }
     }

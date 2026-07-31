@@ -11,6 +11,7 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
 use codex_features::Feature;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -35,18 +36,24 @@ use codex_skills_extension::provider::SkillProviderFuture;
 use codex_skills_extension::provider::SkillReadRequest;
 use codex_skills_extension::provider::SkillSearchRequest;
 use codex_utils_string::approx_token_count;
+use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::time::Duration;
+use tokio::time::Instant;
 use toml::toml;
 
 struct StaticSkillProvider {
     catalog: SkillCatalog,
+    main_prompt_contents: Option<String>,
 }
 
 struct ExecutorSkillProvider {
@@ -92,12 +99,18 @@ impl SkillProvider for StaticSkillProvider {
         Box::pin(async move { Ok(catalog) })
     }
 
-    fn read(&self, _request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
-        Box::pin(async {
-            Err(SkillProviderError::new(
-                "production-flow catalog test does not read skills",
-            ))
-        })
+    fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
+        let result = self
+            .main_prompt_contents
+            .clone()
+            .map(|contents| SkillReadResult {
+                resource: request.resource,
+                contents,
+            })
+            .ok_or_else(|| {
+                SkillProviderError::new("production-flow catalog test does not read skills")
+            });
+        Box::pin(async move { result })
     }
 
     fn search(&self, _request: SkillSearchRequest) -> SkillProviderFuture<'_, SkillSearchResult> {
@@ -461,7 +474,10 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             SkillProviders::new().with_provider(SkillProviderSource::new(
                 source_kind,
                 "test",
-                Arc::new(StaticSkillProvider { catalog }),
+                Arc::new(StaticSkillProvider {
+                    catalog,
+                    main_prompt_contents: None,
+                }),
             )),
             |config: &Config| SkillsExtensionConfig {
                 include_instructions: config.include_skill_instructions,
@@ -576,9 +592,208 @@ async fn production_turn_shares_catalog_budget_across_host_and_executor_sections
 async fn production_turn_keeps_full_host_only_catalog_when_it_fits() -> Result<()> {
     let (developer_texts, _) =
         rendered_catalogs(&HOST_CATALOG, &[], FULL_CATALOG_CONTEXT_WINDOW).await?;
-    let host_lines = skill_lines(catalog_text(&developer_texts, "host"), "host");
+    let host_lines = developer_texts
+        .iter()
+        .flat_map(|text| skill_lines(text, "host"))
+        .collect::<Vec<_>>();
 
     assert_full_descriptions(&host_lines, &HOST_CATALOG);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_uses_provider_host_catalog_and_core_snapshot_injection() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_name = "snapshot-backed";
+    let snapshot_description = "This description comes from Core's host skills snapshot.";
+    write_host_skills(codex_home.path(), &[(skill_name, snapshot_description)])?;
+    let skill_path = codex_home
+        .path()
+        .join("skills")
+        .join(skill_name)
+        .join("SKILL.md");
+    let snapshot_contents = format!(
+        "---\nname: {skill_name}\ndescription: {snapshot_description}\n---\n\nUse $calendar.\n"
+    );
+    std::fs::write(&skill_path, &snapshot_contents)?;
+    let skill_resource = skill_path.to_string_lossy().into_owned();
+    let provider_description = "This skill comes from the extension host provider.";
+    let provider_contents = "# Provider instructions that Core must not inject.";
+    let provider_catalog = SkillCatalog {
+        entries: vec![
+            SkillCatalogEntry::new(
+                SkillPackageId(skill_resource.clone()),
+                SkillAuthority::new(SkillSourceKind::Host, "host"),
+                skill_name,
+                provider_description,
+                SkillResourceId::new(skill_resource.clone()),
+            )
+            .with_display_path(skill_resource.replace('\\', "/")),
+        ],
+        warnings: Vec::new(),
+    };
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new().with_host_provider(Arc::new(StaticSkillProvider {
+            catalog: provider_catalog,
+            main_prompt_contents: Some(provider_contents.to_string()),
+        })),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: false,
+            orchestrator_skills_enabled: false,
+            shadow_selection_enabled: false,
+        },
+    );
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url)
+        .with_home(Arc::clone(&codex_home))
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(configure_catalog_test);
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+
+    test.submit_turn(&format!("Use ${skill_name}.")).await?;
+    let request = response.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    let cutover_skill_lines = developer_texts
+        .iter()
+        .flat_map(|text| text.lines())
+        .filter(|line| line.contains(skill_name))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        cutover_skill_lines,
+        vec![format!(
+            "- {skill_name}: {provider_description} (file: {})",
+            skill_resource.replace('\\', "/")
+        )]
+    );
+    let user_text = request.message_input_texts("user").join("\n");
+    assert!(user_text.contains(&snapshot_contents));
+    assert!(!user_text.contains(provider_contents));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let app_mentioned_event = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(event) = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .find_map(|request| {
+                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+                payload["events"].as_array().and_then(|events| {
+                    events
+                        .iter()
+                        .find(|event| event["event_type"] == "codex_app_mentioned")
+                        .cloned()
+                })
+            })
+        {
+            break event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for app mentioned analytics");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(
+        app_mentioned_event["event_params"]["connector_id"],
+        "calendar"
+    );
+    assert_eq!(
+        app_mentioned_event["event_params"]["invoke_type"],
+        "explicit"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_keeps_full_snapshot_host_skill_prompt() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_dir = codex_home.path().join("skills").join("long-host");
+    std::fs::create_dir_all(&skill_dir)?;
+    let prompt_tail = "full host prompt tail";
+    let skill_contents = format!(
+        "---\nname: long-host\ndescription: Long host skill.\n---\n\n# Long host skill\n\n{}\n{prompt_tail}\n",
+        "x".repeat(8_000)
+    );
+    std::fs::write(skill_dir.join("SKILL.md"), &skill_contents)?;
+    let (extensions, _) =
+        catalog_extensions(SkillCatalog::default(), /*include_host_provider*/ true);
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_extensions(extensions)
+        .with_config(configure_catalog_test);
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("Use $long-host.").await?;
+    let user_text = response
+        .single_request()
+        .message_input_texts("user")
+        .join("\n");
+
+    assert!(user_text.contains(&skill_contents));
+    assert_eq!(
+        user_text.matches("<skill>\n<name>long-host</name>").count(),
+        1
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_keeps_core_host_injection_when_catalog_listings_are_disabled() -> Result<()>
+{
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_dir = codex_home.path().join("skills").join("long-host");
+    std::fs::create_dir_all(&skill_dir)?;
+    let prompt_tail = "full host prompt tail";
+    let skill_contents = format!(
+        "---\nname: long-host\ndescription: Long host skill.\n---\n\n# Long host skill\n\n{}\n{prompt_tail}\n",
+        "x".repeat(8_000)
+    );
+    std::fs::write(skill_dir.join("SKILL.md"), &skill_contents)?;
+    let (extensions, _) =
+        catalog_extensions(SkillCatalog::default(), /*include_host_provider*/ true);
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_extensions(extensions)
+        .with_config(configure_catalog_test)
+        .with_config(|config| {
+            config.include_skill_instructions = false;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("Use $long-host.").await?;
+    let user_text = response
+        .single_request()
+        .message_input_texts("user")
+        .join("\n");
+
+    assert!(user_text.contains(&skill_contents));
+    assert_eq!(
+        user_text.matches("<skill>\n<name>long-host</name>").count(),
+        1
+    );
 
     Ok(())
 }
@@ -621,13 +836,43 @@ async fn production_turn_omits_host_skills_under_extreme_host_only_pressure() ->
         skill_names(&host_lines),
         vec!["host-alpha", "host-beta", "host-delta"]
     );
-    let expected_warning = "Exceeded skills context budget of 2%. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list.";
+    let expected_warning = "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list.";
     assert_eq!(
         warning_messages
             .iter()
             .filter(|message| message.as_str() == expected_warning)
             .count(),
         1
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_preserves_empty_core_compatible_host_fragment() -> Result<()> {
+    let host_skills = [(
+        "host-a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-q-r-s-t-u-v-w-x-y-z-a-b",
+        "Host-only skill.",
+    )];
+    let (developer_texts, warning_messages) =
+        rendered_catalogs(&host_skills, &[], /*context_window*/ 1_000).await?;
+    let host_fragment = developer_texts
+        .iter()
+        .find(|text| text.contains("## Skills"))
+        .unwrap_or_else(|| {
+            panic!(
+                "production request should preserve the empty host skills fragment, got {developer_texts:?}"
+            )
+        });
+
+    assert!(!host_fragment.contains(&format!("- {}:", host_skills[0].0)));
+    assert!(!host_fragment.contains("## Host skills update"));
+    assert_eq!(
+        warning_messages,
+        vec![
+            "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
+                .to_string()
+        ]
     );
 
     Ok(())
@@ -642,7 +887,7 @@ async fn successive_turns_do_not_repeat_unchanged_host_budget_warning() -> Resul
         /*turn_count*/ 2,
     )
     .await?;
-    let expected_warning = "Exceeded skills context budget of 2%. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list.";
+    let expected_warning = "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list.";
 
     assert_eq!(
         warning_messages
@@ -757,7 +1002,10 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
         SkillProviders::new().with_provider(SkillProviderSource::new(
             source_kind,
             "test",
-            Arc::new(StaticSkillProvider { catalog }),
+            Arc::new(StaticSkillProvider {
+                catalog,
+                main_prompt_contents: None,
+            }),
         )),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,

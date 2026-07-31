@@ -1,9 +1,5 @@
 use std::sync::Arc;
 
-use codex_core_skills::HostSkillsSnapshot;
-use codex_core_skills::build_available_skills;
-use codex_core_skills::render::SkillRenderSideEffects;
-use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::RenderedWorldStateFragment;
@@ -12,8 +8,6 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use serde_json::json;
 
-use crate::fragments::AvailableSkillsInstructions;
-use crate::render::SkillMetadataBudget;
 use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_metrics;
 
@@ -82,60 +76,6 @@ pub(crate) fn executor_skills_world_state_section(
 }
 
 pub(crate) fn host_skills_world_state_section(
-    host_snapshot: &HostSkillsSnapshot,
-    include_instructions: bool,
-    include_skills_usage_instructions: bool,
-    metadata_budget: SkillMetadataBudget,
-    extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
-    warning_emitter: HostSkillsWarningEmitter,
-) -> WorldStateSectionContribution {
-    let outcome = host_snapshot.outcome();
-    let metadata_budget = match metadata_budget {
-        SkillMetadataBudget::Tokens(limit) => codex_core_skills::SkillMetadataBudget::Tokens(limit),
-        SkillMetadataBudget::Characters(limit) => {
-            codex_core_skills::SkillMetadataBudget::Characters(limit)
-        }
-    };
-    let available = if include_instructions {
-        build_available_skills(outcome, metadata_budget, SkillRenderSideEffects::None)
-    } else {
-        None
-    };
-    let warning_message = available
-        .as_ref()
-        .and_then(|available| available.warning_message.clone());
-    let render_metrics = include_instructions.then(|| {
-        available
-            .as_ref()
-            .map(|available| {
-                let report = &available.report;
-                (
-                    report.total_count,
-                    report.included_count,
-                    report.omitted_count,
-                    report.truncated_description_chars,
-                )
-            })
-            .unwrap_or_default()
-    });
-    let body = available.map(|available| {
-        AvailableSkillsInstructions::from_available_skills(
-            available,
-            include_skills_usage_instructions,
-        )
-        .body()
-    });
-    rendered_host_skills_world_state_section(
-        body,
-        include_instructions,
-        render_metrics,
-        extension_metrics,
-        warning_message,
-        warning_emitter,
-    )
-}
-
-pub(crate) fn rendered_host_skills_world_state_section(
     body: Option<String>,
     include_instructions: bool,
     render_metrics: Option<(usize, usize, usize, usize)>,

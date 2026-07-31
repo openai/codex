@@ -387,6 +387,10 @@ fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
             "- 1 additional skill omitted from this bounded skills list.".to_string(),
         ]
     );
+    assert!(
+        host.into_fragment(/*include_skills_usage_instructions*/ false)
+            .is_none()
+    );
 }
 
 #[test]
@@ -630,10 +634,11 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
     )
     .expect("core-compatible report should render");
     assert_eq!(core_render.report, expected_report);
-    assert_eq!(
-        core_render.into_fragment(/*include_skills_usage_instructions*/ false),
-        None
-    );
+    let core_fragment = core_render
+        .into_fragment(/*include_skills_usage_instructions*/ false)
+        .expect("core-compatible rendering should preserve an empty skills fragment");
+    assert!(core_fragment.body().contains("## Skills"));
+    assert!(!core_fragment.body().contains("- oversized:"));
     let render = render_available_skills(
         &catalog,
         SkillCatalogRenderPolicy::ExtensionCompatible,
