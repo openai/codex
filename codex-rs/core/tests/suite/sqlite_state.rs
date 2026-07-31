@@ -181,6 +181,7 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     })
     .await;
 
+    started.thread.shutdown_and_wait().await?;
     let mut resume_builder = test_codex().with_config(|config| {
         config
             .features

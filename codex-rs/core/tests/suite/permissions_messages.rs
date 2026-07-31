@@ -631,12 +631,6 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let initial = builder.build(&server).await?;
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
-    let home = initial.home.clone();
 
     initial
         .codex
@@ -677,7 +671,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let resumed = builder.resume(&server, home, rollout_path).await?;
+    let resumed = builder.restart(&server, &initial).await?;
     resumed
         .codex
         .submit(Op::UserInput {
@@ -736,7 +730,6 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .rollout_path
         .clone()
         .expect("rollout path");
-    let home = initial.home.clone();
 
     initial
         .codex
@@ -783,7 +776,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     builder = builder.with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
     });
-    let resumed = builder.resume(&server, home, rollout_path.clone()).await?;
+    let resumed = builder.restart(&server, &initial).await?;
     resumed
         .codex
         .submit(Op::UserInput {

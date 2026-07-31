@@ -35,7 +35,7 @@ pub(super) async fn delete_thread(
     if reference_index.reference_count(thread_id) > 0 {
         return Err(referenced_thread_error(thread_id));
     }
-    let mut writer_guards = store.acquire_paginated_writer_locks(&[thread_id]).await?;
+    let mut writer_guards = store.acquire_writer_locks(&[thread_id]).await?;
     delete_thread_after_reference_check(store, thread_id, &mut writer_guards).await
 }
 
@@ -84,9 +84,7 @@ pub(super) async fn delete_threads(
         }
     }
 
-    let mut writer_guards = store
-        .acquire_paginated_writer_locks(&lock_thread_ids)
-        .await?;
+    let mut writer_guards = store.acquire_writer_locks(&lock_thread_ids).await?;
     for thread_id in thread_ids {
         match delete_thread_after_reference_check(store, thread_id, &mut writer_guards).await {
             Ok(()) | Err(ThreadStoreError::ThreadNotFound { .. }) => {}
@@ -157,14 +155,8 @@ async fn delete_thread_after_reference_check(
     super::thread_history::delete_thread(store, thread_id).await?;
 
     // Drop the recorder before removing files, but retain its writer lock until cleanup finishes.
-    if let Some(writer_lock) = store
-        .live_recorders
-        .lock()
-        .await
-        .remove(&thread_id)
-        .and_then(|entry| entry.writer_lock)
-    {
-        writer_guards.push(writer_lock);
+    if let Some(entry) = store.live_recorders.lock().await.remove(&thread_id) {
+        writer_guards.push(entry.writer_lock);
     }
     let found_rollout_path = !rollout_paths.is_empty();
     for rollout_path in rollout_paths {
@@ -412,41 +404,52 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let owner = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let parent_uuid = Uuid::from_u128(309);
-        let parent_thread_id =
-            ThreadId::from_string(&parent_uuid.to_string()).expect("valid parent thread id");
-        let parent_path = write_session_file_with_history_mode(
-            home.path(),
-            "2025-01-03T12-00-00",
-            parent_uuid,
-            ThreadHistoryMode::Paginated,
-        )
-        .expect("parent session file");
-        let child_uuid = Uuid::from_u128(310);
-        let child_thread_id =
-            ThreadId::from_string(&child_uuid.to_string()).expect("valid child thread id");
-        let child_path = write_session_file_with_history_mode(
-            home.path(),
-            "2025-01-03T12-00-01",
-            child_uuid,
-            ThreadHistoryMode::Paginated,
-        )
-        .expect("child session file");
-        let _owner_guard = owner
-            .writer_lock_coordinator
-            .acquire(child_thread_id)
-            .expect("acquire child writer lock");
+        for (parent_uuid, child_uuid, history_mode) in [
+            (
+                Uuid::from_u128(309),
+                Uuid::from_u128(310),
+                ThreadHistoryMode::Legacy,
+            ),
+            (
+                Uuid::from_u128(312),
+                Uuid::from_u128(313),
+                ThreadHistoryMode::Paginated,
+            ),
+        ] {
+            let parent_thread_id =
+                ThreadId::from_string(&parent_uuid.to_string()).expect("valid parent thread id");
+            let parent_path = write_session_file_with_history_mode(
+                home.path(),
+                "2025-01-03T12-00-00",
+                parent_uuid,
+                history_mode,
+            )
+            .expect("parent session file");
+            let child_thread_id =
+                ThreadId::from_string(&child_uuid.to_string()).expect("valid child thread id");
+            let child_path = write_session_file_with_history_mode(
+                home.path(),
+                "2025-01-03T12-00-01",
+                child_uuid,
+                history_mode,
+            )
+            .expect("child session file");
+            let _owner_guard = owner
+                .writer_lock_coordinator
+                .acquire(child_thread_id)
+                .expect("acquire child writer lock");
 
-        let error = store
-            .delete_threads(DeleteThreadsParams {
-                thread_ids: vec![parent_thread_id, child_thread_id],
-            })
-            .await
-            .expect_err("owned descendant should block deletion");
+            let error = store
+                .delete_threads(DeleteThreadsParams {
+                    thread_ids: vec![parent_thread_id, child_thread_id],
+                })
+                .await
+                .expect_err("owned descendant should block deletion");
 
-        assert!(matches!(error, ThreadStoreError::Conflict { .. }));
-        assert!(parent_path.exists());
-        assert!(child_path.exists());
+            assert!(matches!(error, ThreadStoreError::Conflict { .. }));
+            assert!(parent_path.exists());
+            assert!(child_path.exists());
+        }
     }
 
     #[tokio::test]

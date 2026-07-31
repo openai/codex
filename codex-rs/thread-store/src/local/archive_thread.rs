@@ -29,21 +29,13 @@ pub(super) async fn archive_threads(
     let mut _live_writer_guards = Vec::with_capacity(lock_thread_ids.len());
     for thread_id in &lock_thread_ids {
         _live_writer_guards.push(store.live_writer_locks.lock(*thread_id).await);
-        if store
-            .live_recorders
-            .lock()
-            .await
-            .get(thread_id)
-            .is_some_and(|entry| entry.writer_lock.is_some())
-        {
+        if store.live_recorders.lock().await.contains_key(thread_id) {
             return Err(ThreadStoreError::Conflict {
                 message: format!("thread {thread_id} already has an active writer"),
             });
         }
     }
-    let _writer_guards = store
-        .acquire_paginated_writer_locks(&lock_thread_ids)
-        .await?;
+    let _writer_guards = store.acquire_writer_locks(&lock_thread_ids).await?;
 
     let parent_thread_id = thread_ids[0];
     let mut archived_thread_ids = Vec::new();
@@ -173,42 +165,53 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let owner = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let parent_uuid = Uuid::from_u128(203);
-        let parent_thread_id =
-            ThreadId::from_string(&parent_uuid.to_string()).expect("valid parent thread id");
-        let parent_path = write_session_file_with_history_mode(
-            home.path(),
-            "2025-01-03T12-00-00",
-            parent_uuid,
-            ThreadHistoryMode::Paginated,
-        )
-        .expect("parent session file");
-        let child_uuid = Uuid::from_u128(204);
-        let child_thread_id =
-            ThreadId::from_string(&child_uuid.to_string()).expect("valid child thread id");
-        let child_path = write_session_file_with_history_mode(
-            home.path(),
-            "2025-01-03T12-00-01",
-            child_uuid,
-            ThreadHistoryMode::Paginated,
-        )
-        .expect("child session file");
-        let _owner_guard = owner
-            .writer_lock_coordinator
-            .acquire(child_thread_id)
-            .expect("acquire child writer lock");
+        for (parent_uuid, child_uuid, history_mode) in [
+            (
+                Uuid::from_u128(203),
+                Uuid::from_u128(204),
+                ThreadHistoryMode::Legacy,
+            ),
+            (
+                Uuid::from_u128(206),
+                Uuid::from_u128(207),
+                ThreadHistoryMode::Paginated,
+            ),
+        ] {
+            let parent_thread_id =
+                ThreadId::from_string(&parent_uuid.to_string()).expect("valid parent thread id");
+            let parent_path = write_session_file_with_history_mode(
+                home.path(),
+                "2025-01-03T12-00-00",
+                parent_uuid,
+                history_mode,
+            )
+            .expect("parent session file");
+            let child_thread_id =
+                ThreadId::from_string(&child_uuid.to_string()).expect("valid child thread id");
+            let child_path = write_session_file_with_history_mode(
+                home.path(),
+                "2025-01-03T12-00-01",
+                child_uuid,
+                history_mode,
+            )
+            .expect("child session file");
+            let _owner_guard = owner
+                .writer_lock_coordinator
+                .acquire(child_thread_id)
+                .expect("acquire child writer lock");
 
-        let error = store
-            .archive_threads(ArchiveThreadsParams {
-                thread_ids: vec![parent_thread_id, child_thread_id],
-                writer_lock_thread_ids: Vec::new(),
-            })
-            .await
-            .expect_err("owned descendant should block archive");
+            let error = store
+                .archive_threads(ArchiveThreadsParams {
+                    thread_ids: vec![parent_thread_id, child_thread_id],
+                    writer_lock_thread_ids: Vec::new(),
+                })
+                .await
+                .expect_err("owned descendant should block archive");
 
-        assert!(matches!(error, ThreadStoreError::Conflict { .. }));
-        assert!(parent_path.exists());
-        assert!(child_path.exists());
+            assert!(matches!(error, ThreadStoreError::Conflict { .. }));
+            assert!(parent_path.exists());
+            assert!(child_path.exists());
+        }
     }
 
     #[tokio::test]

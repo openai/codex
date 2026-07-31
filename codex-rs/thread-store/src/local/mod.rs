@@ -107,7 +107,7 @@ struct LiveRecorderEntry {
     // canonical SessionMeta is durable. Retain the mode captured when live persistence was opened
     // so missing SQLite rows can still be seeded.
     history_mode: ThreadHistoryMode,
-    writer_lock: Option<WriterLockGuard>,
+    writer_lock: WriterLockGuard,
 }
 
 #[derive(Default)]
@@ -264,38 +264,16 @@ impl LocalThreadStore {
         Ok(())
     }
 
-    async fn acquire_paginated_writer_locks(
+    async fn acquire_writer_locks(
         &self,
         thread_ids: &[ThreadId],
     ) -> ThreadStoreResult<Vec<WriterLockGuard>> {
-        let mut writer_locks = Vec::new();
+        let mut writer_locks = Vec::with_capacity(thread_ids.len());
         for &thread_id in thread_ids {
-            if self
-                .live_recorders
-                .lock()
-                .await
-                .get(&thread_id)
-                .is_some_and(|entry| entry.writer_lock.is_some())
-            {
+            if self.live_recorders.lock().await.contains_key(&thread_id) {
                 continue;
             }
-
-            // Only a readable legacy header proves no paginated writer can own this id. Missing
-            // lazy rollouts and damaged headers must conservatively try the lock.
-            let history_mode = match read_thread::resolve_rollout_path(
-                self, thread_id, /*include_archived*/ true,
-            )
-            .await?
-            {
-                Some(rollout_path) => codex_rollout::read_session_meta_line(rollout_path.as_path())
-                    .await
-                    .ok()
-                    .map(|meta_line| meta_line.meta.history_mode),
-                None => None,
-            };
-            if !matches!(history_mode, Some(ThreadHistoryMode::Legacy)) {
-                writer_locks.push(self.writer_lock_coordinator.acquire(thread_id)?);
-            }
+            writer_locks.push(self.writer_lock_coordinator.acquire(thread_id)?);
         }
         Ok(writer_locks)
     }
@@ -305,7 +283,7 @@ impl LocalThreadStore {
         thread_id: ThreadId,
         recorder: RolloutRecorder,
         history_mode: ThreadHistoryMode,
-        writer_lock: Option<WriterLockGuard>,
+        writer_lock: WriterLockGuard,
     ) -> ThreadStoreResult<()> {
         match self.live_recorders.lock().await.entry(thread_id) {
             Entry::Occupied(entry) => Err(ThreadStoreError::InvalidRequest {
@@ -1200,6 +1178,8 @@ mod tests {
     async fn create_thread_rejects_missing_cwd() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let competing_store =
+            LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
             let thread_id = ThreadId::default();
             let mut params = create_thread_params(thread_id);
@@ -1219,10 +1199,10 @@ mod tests {
 
             let mut valid_params = create_thread_params(thread_id);
             valid_params.history_mode = history_mode;
-            store
+            competing_store
                 .create_thread(valid_params)
                 .await
-                .expect("failed initialization should release writer ownership");
+                .expect("failed initialization should release cross-process writer ownership");
         }
     }
 
@@ -1249,10 +1229,7 @@ mod tests {
                 .path()
                 .join("thread-writer-locks")
                 .join(format!("{thread_id}.lock"));
-            assert_eq!(
-                lock_path.exists(),
-                matches!(history_mode, ThreadHistoryMode::Paginated)
-            );
+            assert!(lock_path.exists());
             store
                 .discard_thread(thread_id)
                 .await
@@ -1336,6 +1313,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_writers_reject_cross_process_create_and_resume() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let primary = LocalThreadStore::new(config.clone(), /*state_db*/ None);
+        let secondary = LocalThreadStore::new(config, /*state_db*/ None);
+
+        for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+            let thread_id = ThreadId::default();
+            let mut create_params = create_thread_params(thread_id);
+            create_params.history_mode = history_mode;
+
+            primary
+                .create_thread(create_params.clone())
+                .await
+                .expect("create live thread");
+            primary
+                .persist_thread(thread_id)
+                .await
+                .expect("persist thread for resume");
+            let rollout_path = primary
+                .live_rollout_path(thread_id)
+                .await
+                .expect("load rollout path");
+            let resume_params = ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: true,
+                metadata: thread_metadata(),
+            };
+
+            let error = secondary
+                .create_thread(create_params)
+                .await
+                .expect_err("competing create should fail");
+            assert!(matches!(error, ThreadStoreError::Conflict { .. }));
+
+            let error = secondary
+                .resume_thread(resume_params.clone())
+                .await
+                .expect_err("competing resume should fail");
+            assert!(matches!(error, ThreadStoreError::Conflict { .. }));
+
+            primary
+                .shutdown_thread(thread_id)
+                .await
+                .expect("shutdown should release writer ownership");
+            secondary
+                .resume_thread(resume_params)
+                .await
+                .expect("resume after shutdown should acquire writer ownership");
+        }
+    }
+
+    #[tokio::test]
     async fn create_thread_rejects_duplicate_live_writer() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
@@ -1387,14 +1419,21 @@ mod tests {
     async fn resume_thread_rejects_missing_cwd() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let uuid = uuid::Uuid::from_u128(407);
+        let competing_store =
+            LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = uuid::Uuid::from_u128(408);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let rollout_path =
-            write_session_file(home.path(), "2025-01-04T11-30-00", uuid).expect("session file");
+        let rollout_path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-04T11-30-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("session file");
         let err = store
             .resume_thread(ResumeThreadParams {
                 thread_id,
-                rollout_path: Some(rollout_path),
+                rollout_path: Some(rollout_path.clone()),
                 history: None,
                 include_archived: true,
                 metadata: ThreadPersistenceMetadata {
@@ -1408,6 +1447,17 @@ mod tests {
 
         assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
         assert!(err.to_string().contains("requires a cwd"));
+
+        competing_store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: true,
+                metadata: thread_metadata(),
+            })
+            .await
+            .expect("failed initialization should release cross-process writer ownership");
     }
 
     #[tokio::test]

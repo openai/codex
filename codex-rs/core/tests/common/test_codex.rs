@@ -549,6 +549,21 @@ impl TestCodexBuilder {
         .await
     }
 
+    pub async fn restart(
+        &mut self,
+        server: &MockServer,
+        previous: &TestCodex,
+    ) -> Result<TestCodex> {
+        let rollout_path = previous
+            .session_configured
+            .rollout_path
+            .clone()
+            .context("rollout path")?;
+        previous.codex.shutdown_and_wait().await?;
+        self.resume(server, Arc::clone(&previous.home), rollout_path)
+            .await
+    }
+
     async fn build_with_home_and_base_url(
         &mut self,
         base_url: String,

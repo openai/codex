@@ -2041,12 +2041,6 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         let _ = config.features.disable(Feature::RemoteCompactionV2);
     });
     let initial = builder.build(&server).await.unwrap();
-    let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     // A single over-limit completion should not auto-compact until the next user message.
     mount_sse_once(
@@ -2069,10 +2063,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         config.model_auto_compact_token_limit = Some(limit);
         let _ = config.features.disable(Feature::RemoteCompactionV2);
     });
-    let resumed = resume_builder
-        .resume(&server, home, rollout_path)
-        .await
-        .unwrap();
+    let resumed = resume_builder.restart(&server, &initial).await.unwrap();
 
     let follow_up_user = "AFTER_RESUME_USER";
     let sse_follow_up = sse(vec![

@@ -424,12 +424,6 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         });
     let initial = initial_builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
-    let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let initial_mock = mount_sse_once(
         &server,
@@ -475,7 +469,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 .expect("test config should allow feature update");
             config.personality = Some(Personality::Pragmatic);
         });
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder.restart(&server, &initial).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
     let resume_override_cwd = resume_override_cwd.abs();
@@ -543,12 +537,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         });
     let initial = initial_builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
-    let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let initial_mock = mount_sse_once(
         &server,
@@ -589,7 +577,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         .with_config(|config| {
             config.model = Some("gpt-5.4".to_string());
         });
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder.restart(&server, &initial).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
     let resume_override_cwd = resume_override_cwd.abs();

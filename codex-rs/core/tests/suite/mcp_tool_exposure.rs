@@ -549,7 +549,6 @@ async fn deferred_tool_world_state_survives_resume_without_duplicate_updates() -
 
     initial.codex.ensure_rollout_materialized().await;
     initial.codex.flush_rollout().await?;
-    let home = initial.home.clone();
     let rollout_path = initial
         .session_configured
         .rollout_path
@@ -573,11 +572,10 @@ async fn deferred_tool_world_state_survives_resume_without_duplicate_updates() -
             "mcp__codex_apps__calendar": "Plan events and manage your calendar."
         })
     );
-    drop(initial);
-
     let mut resume_builder = search_capable_apps_builder(apps_server.chatgpt_base_url)
         .with_config(enable_deferred_tool_world_state_without_agents);
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder.restart(&server, &initial).await?;
+    drop(initial);
     wait_for_mcp_server(&resumed.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
     resumed
         .submit_turn("inspect unchanged deferred tools after resume")

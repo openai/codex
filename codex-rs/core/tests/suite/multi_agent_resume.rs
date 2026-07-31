@@ -245,12 +245,6 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     });
     let initial = initial_builder.build_with_auto_env(&server).await?;
     let root_thread_id = initial.session_configured.thread_id;
-    let home = initial.home.clone();
-    let rollout_path = initial
-        .codex
-        .rollout_path()
-        .expect("root rollout path")
-        .to_path_buf();
     let mut op = vec![UserInput::Text {
         text: INITIAL_PROMPT.to_string(),
         text_elements: Vec::new(),
@@ -382,9 +376,10 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     sibling_thread.flush_rollout().await?;
     worker_thread.flush_rollout().await?;
     initial.codex.flush_rollout().await?;
+    sibling_thread.shutdown_and_wait().await?;
+    worker_thread.shutdown_and_wait().await?;
     drop(sibling_thread);
     drop(worker_thread);
-    drop(initial);
 
     let followup_args = serde_json::to_string(&json!({
         "target": "worker",
@@ -437,7 +432,8 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     let mut resume_builder = test_codex().with_config(move |config| {
         configure_multi_agent_v2_with_role(config, &resumed_model_provider_base_url);
     });
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder.restart(&server, &initial).await?;
+    drop(initial);
     assert_eq!(
         resumed.thread_manager.list_thread_ids().await,
         vec![root_thread_id]

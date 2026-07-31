@@ -2005,12 +2005,6 @@ async fn resumed_thread_runs_resume_then_compact_session_start_hooks() -> Result
             trust_discovered_hooks(config);
         });
     let initial = builder.build(&server).await?;
-    let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .context("rollout path")?;
 
     initial.submit_turn("hello before resume").await?;
     assert_eq!(responses_mock.requests().len(), 1);
@@ -2019,7 +2013,7 @@ async fn resumed_thread_runs_resume_then_compact_session_start_hooks() -> Result
         config.model_auto_compact_token_limit = Some(limit);
         trust_discovered_hooks(config);
     });
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder.restart(&server, &initial).await?;
     resumed.submit_turn("hello after resume").await?;
 
     let requests = responses_mock.requests();
@@ -2129,12 +2123,6 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
         })
         .with_config(trust_discovered_hooks);
     let initial = initial_builder.build(&server).await?;
-    let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     initial.submit_turn("tell me something").await?;
 
@@ -2151,7 +2139,7 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
     .await;
 
     let mut resume_builder = test_codex().with_config(trust_discovered_hooks);
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder.restart(&server, &initial).await?;
 
     resumed.submit_turn("and now continue").await?;
 
