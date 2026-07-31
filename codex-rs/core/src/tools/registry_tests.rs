@@ -234,6 +234,26 @@ fn registry_preserves_external_winners_and_trusted_synthetic_order() {
     );
 }
 
+#[test]
+fn reserved_shell_command_rejects_external_runtimes_without_a_builtin() {
+    let handler = |tool_name| Arc::new(TestHandler { tool_name }) as Arc<dyn CoreToolRuntime>;
+    let shell_command_name = codex_tools::ToolName::plain("shell_command");
+    let namespaced_shell_command_name =
+        codex_tools::ToolName::namespaced("client", "shell_command");
+    let mut registry = ToolRegistry::default();
+
+    assert!(!registry.register_external(handler(shell_command_name.clone())));
+    assert!(registry.tool(&shell_command_name).is_none());
+
+    let namespaced_handler = handler(namespaced_shell_command_name.clone());
+    assert!(registry.register_external(Arc::clone(&namespaced_handler)));
+    assert!(
+        registry
+            .tool(&namespaced_shell_command_name)
+            .is_some_and(|runtime| Arc::ptr_eq(&runtime, &namespaced_handler))
+    );
+}
+
 #[tokio::test]
 async fn readiness_selects_exact_tool_and_forwards_exposure_overrides() {
     let (session, _turn) = crate::session::tests::make_session_and_context().await;

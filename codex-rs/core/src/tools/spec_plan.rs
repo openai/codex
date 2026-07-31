@@ -728,6 +728,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let allow_login_shell = turn_context.config.permissions.allow_login_shell;
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+    let supports_shell_command = context.environments.single_local_environment().is_some();
     let shell_command_options = ShellCommandHandlerOptions {
         backend_config: shell_command_backend_for_features(features),
         allow_login_shell,
@@ -747,18 +748,22 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
             }));
             registry.add(WriteStdinHandler);
 
-            // Keep the legacy shell tool registered while unified exec is
-            // model-visible.
-            registry.add_with_exposure(
-                ShellCommandHandler::new(shell_command_options),
-                ToolExposure::Hidden,
-            );
+            if supports_shell_command {
+                // Keep the legacy shell tool registered while unified exec is
+                // model-visible.
+                registry.add_with_exposure(
+                    ShellCommandHandler::new(shell_command_options),
+                    ToolExposure::Hidden,
+                );
+            }
         }
         ConfigShellToolType::Disabled => {}
         ConfigShellToolType::Default
         | ConfigShellToolType::Local
         | ConfigShellToolType::ShellCommand => {
-            registry.add(ShellCommandHandler::new(shell_command_options));
+            if supports_shell_command {
+                registry.add(ShellCommandHandler::new(shell_command_options));
+            }
         }
     }
 }

@@ -384,7 +384,13 @@ impl ToolRegistry {
     }
 
     pub(crate) fn register_external(&mut self, runtime: Arc<dyn CoreToolRuntime>) -> bool {
-        match self.tools.entry(runtime.tool_name()) {
+        let tool_name = runtime.tool_name();
+        if tool_name.namespace.is_none() && tool_name.name == "shell_command" {
+            tracing::warn!(tool_name = %tool_name, "skipping external tool with reserved name");
+            return false;
+        }
+
+        match self.tools.entry(tool_name) {
             Entry::Vacant(entry) => {
                 entry.insert(runtime);
                 true

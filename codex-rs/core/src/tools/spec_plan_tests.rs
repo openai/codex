@@ -659,6 +659,78 @@ async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
 }
 
 #[tokio::test]
+async fn shell_command_is_not_registered_without_a_single_local_environment() {
+    let remote_environment = probe(|turn| {
+        set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+        set_feature(turn, Feature::UnifiedExec, /*enabled*/ false);
+        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+
+        let TurnEnvironmentState::Ready(environment) = turn
+            .environments
+            .environments
+            .first_mut()
+            .expect("primary environment")
+        else {
+            panic!("primary environment should be ready");
+        };
+        environment.environment_id = "remote".to_string();
+        environment.environment = Arc::new(
+            codex_exec_server::Environment::create_for_tests(Some(
+                "ws://127.0.0.1:1/remote-exec-server".to_string(),
+            ))
+            .expect("remote test environment"),
+        );
+    })
+    .await;
+    remote_environment.assert_visible_lacks(&["shell_command", "exec_command", "write_stdin"]);
+    remote_environment.assert_registered_lacks(&["shell_command", "exec_command", "write_stdin"]);
+
+    let multiple_local_environments = probe(|turn| {
+        set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+        set_feature(turn, Feature::UnifiedExec, /*enabled*/ false);
+        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+        duplicate_primary_environment(turn);
+    })
+    .await;
+    multiple_local_environments.assert_visible_lacks(&["shell_command"]);
+    multiple_local_environments.assert_registered_lacks(&["shell_command"]);
+}
+
+#[tokio::test]
+async fn dynamic_tools_cannot_reclaim_the_reserved_shell_command_name() {
+    let plan = probe_with(
+        duplicate_primary_environment,
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(
+                    /*namespace*/ None,
+                    "shell_command",
+                    /*defer_loading*/ false,
+                ),
+                dynamic_tool(
+                    Some("client"),
+                    "shell_command",
+                    /*defer_loading*/ false,
+                ),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_lacks(&["shell_command"]);
+    plan.assert_registered_lacks(&["shell_command"]);
+    plan.assert_visible_contains(&["client"]);
+    plan.assert_registered_contains(
+        &[&ToolName::namespaced("client", "shell_command").to_string()],
+    );
+    assert_eq!(
+        plan.namespace_function_names("client"),
+        &["shell_command".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabled() {
     let standalone = probe(|turn| {
         set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
@@ -767,6 +839,8 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
     .await;
 
     plan.assert_visible_contains(&["exec_command", "write_stdin"]);
+    plan.assert_visible_lacks(&["shell_command"]);
+    plan.assert_registered_lacks(&["shell_command"]);
     assert!(has_parameter(plan.visible_spec("exec_command"), "shell"));
     assert!(has_parameter(
         plan.visible_spec("exec_command"),
@@ -812,6 +886,8 @@ async fn environment_count_controls_environment_backed_tools() {
         "view_image",
         "request_permissions",
     ]);
+    multiple_environments.assert_visible_lacks(&["shell_command"]);
+    multiple_environments.assert_registered_lacks(&["shell_command"]);
     assert!(has_parameter(
         multiple_environments.visible_spec("exec_command"),
         "environment_id"
