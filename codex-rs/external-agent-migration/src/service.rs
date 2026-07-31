@@ -6,7 +6,10 @@ use crate::config_values::write_toml_file;
 use crate::memory_import;
 use crate::migration_source::ExternalAgentSource;
 use crate::migration_source::InstructionSourceGroup;
+pub use crate::model::DetectedConnectorCandidate;
+pub use crate::model::DetectedConnectorSource;
 pub use crate::model::ExternalAgentConfigDetectOptions;
+pub use crate::model::ExternalAgentConfigDetection;
 pub use crate::model::ExternalAgentConfigImportItemResult;
 pub use crate::model::ExternalAgentConfigImportOutcome;
 pub use crate::model::ExternalAgentConfigImportRawError;
@@ -24,6 +27,7 @@ use crate::reporting::emit_migration_metric;
 use crate::reporting::migration_metric_tags;
 pub use crate::reporting::record_import_error;
 use crate::scope::MigrationScope;
+use crate::sessions::ExternalAgentSessionMigration;
 use crate::sessions::SessionMetadataMode;
 #[cfg(test)]
 use crate::source_cla::KNOWN_MARKETPLACES_PATH as EXTERNAL_AGENT_KNOWN_MARKETPLACES_PATH;
@@ -116,6 +120,17 @@ impl ExternalAgentConfigService {
 
     pub fn connector_metadata_roots(&self) -> &[PathBuf] {
         &self.connector_metadata_roots
+    }
+
+    pub fn detect_session_connectors(
+        &self,
+        sessions: &[ExternalAgentSessionMigration],
+    ) -> Vec<DetectedConnectorCandidate> {
+        self.source.detect_session_connectors(
+            sessions,
+            &self.connector_metadata_roots,
+            &self.external_agent_home,
+        )
     }
 
     pub fn codex_home(&self) -> &Path {

@@ -1,9 +1,15 @@
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::BufRead;
 use std::path::Path;
 use std::path::PathBuf;
+
+use crate::model::DetectedConnectorCandidate;
+use crate::model::DetectedConnectorSource;
+use crate::sessions::ExternalAgentSessionMigration;
 
 const SESSION_MANIFESTS_DIR: &str = "claude-code-sessions";
 
@@ -25,6 +31,32 @@ struct SessionManifest {
 struct RemoteMcpServerConfig {
     name: Option<String>,
     uuid: Option<String>,
+}
+
+pub(crate) fn detect_cla_session_connectors(
+    sessions: &[ExternalAgentSessionMigration],
+    connector_metadata_roots: &[PathBuf],
+) -> Vec<DetectedConnectorCandidate> {
+    let session_attributions = sessions
+        .iter()
+        .filter_map(session_connector_attribution)
+        .collect::<Vec<_>>();
+    let connector_names_by_session =
+        detect_imported_cla_session_connectors(&session_attributions, connector_metadata_roots);
+
+    let mut candidates = BTreeMap::<String, DetectedConnectorCandidate>::new();
+    for names in connector_names_by_session.into_values() {
+        for name in names {
+            let key = name.to_lowercase();
+            let candidate = candidates.entry(key).or_insert(DetectedConnectorCandidate {
+                name,
+                session_count: 0,
+                source: DetectedConnectorSource::RemoteMcpServersConfig,
+            });
+            candidate.session_count = candidate.session_count.saturating_add(1);
+        }
+    }
+    candidates.into_values().collect()
 }
 
 pub fn detect_imported_cla_session_connectors(
@@ -91,6 +123,36 @@ pub fn detect_imported_cla_session_connectors(
         .into_iter()
         .map(|(session_id, names)| (session_id, names.into_values().collect()))
         .collect()
+}
+
+fn session_connector_attribution(
+    session: &ExternalAgentSessionMigration,
+) -> Option<ImportedSessionConnectorAttribution> {
+    let session_id = session
+        .path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())?
+        .to_string();
+    let file = fs::File::open(&session.path).ok()?;
+    let server_ids = std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<JsonValue>(line.trim()).ok())
+        .filter_map(|record| {
+            record
+                .get("attributionMcpServer")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|server_id| !server_id.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect::<BTreeSet<_>>();
+    (!server_ids.is_empty()).then_some(ImportedSessionConnectorAttribution {
+        session_id,
+        server_ids,
+    })
 }
 
 fn read_session_manifest(path: &Path) -> Option<SessionManifest> {

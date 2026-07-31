@@ -30,6 +30,25 @@ pub struct ExternalAgentConfigDetectOptions {
     pub cwds: Option<Vec<PathBuf>>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExternalAgentConfigDetection {
+    pub items: Vec<ExternalAgentConfigMigrationItem>,
+    pub connectors: Vec<DetectedConnectorCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetectedConnectorCandidate {
+    pub name: String,
+    pub session_count: u32,
+    pub source: DetectedConnectorSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedConnectorSource {
+    RemoteMcpServersConfig,
+    SessionToolUse,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalAgentConfigMigrationItemType {
     Config,

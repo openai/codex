@@ -1,6 +1,5 @@
 use super::*;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeSet;
 use tempfile::TempDir;
 
 #[test]
@@ -22,19 +21,28 @@ fn resolves_attributed_server_name_from_session_manifest() {
         .to_string(),
     )
     .expect("manifest");
-    let attributions = vec![ImportedSessionConnectorAttribution {
-        session_id: "session-1".to_string(),
-        server_ids: BTreeSet::from(["figma".to_string()]),
+    let session_path = metadata_root.path().join("session-1.jsonl");
+    std::fs::write(
+        &session_path,
+        serde_json::json!({"attributionMcpServer": "figma"}).to_string(),
+    )
+    .expect("session");
+    let sessions = vec![ExternalAgentSessionMigration {
+        path: session_path,
+        cwd: metadata_root.path().to_path_buf(),
+        title: None,
     }];
 
-    let connector_names = detect_imported_cla_session_connectors(
-        &attributions,
-        &[metadata_root.path().to_path_buf()],
-    );
+    let connectors =
+        detect_cla_session_connectors(&sessions, &[metadata_root.path().to_path_buf()]);
 
     assert_eq!(
-        connector_names,
-        BTreeMap::from([("session-1".to_string(), vec!["Figma".to_string()])])
+        connectors,
+        vec![DetectedConnectorCandidate {
+            name: "Figma".to_string(),
+            session_count: 1,
+            source: DetectedConnectorSource::RemoteMcpServersConfig,
+        }]
     );
 }
 
@@ -57,18 +65,30 @@ fn still_resolves_attributed_server_uuid_from_session_manifest() {
         .to_string(),
     )
     .expect("manifest");
-    let attributions = vec![ImportedSessionConnectorAttribution {
-        session_id: "session-1".to_string(),
-        server_ids: BTreeSet::from(["c58ac595-58b5-48f8-ac77-d8d01523dede".to_string()]),
+    let session_path = metadata_root.path().join("session-1.jsonl");
+    std::fs::write(
+        &session_path,
+        serde_json::json!({
+            "attributionMcpServer": "c58ac595-58b5-48f8-ac77-d8d01523dede"
+        })
+        .to_string(),
+    )
+    .expect("session");
+    let sessions = vec![ExternalAgentSessionMigration {
+        path: session_path,
+        cwd: metadata_root.path().to_path_buf(),
+        title: None,
     }];
 
-    let connector_names = detect_imported_cla_session_connectors(
-        &attributions,
-        &[metadata_root.path().to_path_buf()],
-    );
+    let connectors =
+        detect_cla_session_connectors(&sessions, &[metadata_root.path().to_path_buf()]);
 
     assert_eq!(
-        connector_names,
-        BTreeMap::from([("session-1".to_string(), vec!["Figma".to_string()])])
+        connectors,
+        vec![DetectedConnectorCandidate {
+            name: "Figma".to_string(),
+            session_count: 1,
+            source: DetectedConnectorSource::RemoteMcpServersConfig,
+        }]
     );
 }
