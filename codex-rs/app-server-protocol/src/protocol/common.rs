@@ -729,6 +729,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::PluginListResponse,
     },
+    #[experimental("plugin/search")]
+    PluginSearch => "plugin/search" {
+        params: v2::PluginSearchParams,
+        serialization: None,
+        response: v2::PluginSearchResponse,
+    },
     PluginInstalled => "plugin/installed" {
         params: v2::PluginInstalledParams,
         serialization: None,

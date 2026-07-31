@@ -325,6 +325,8 @@ export type { PluginListResponse } from "./PluginListResponse";
 export type { PluginMarketplaceEntry } from "./PluginMarketplaceEntry";
 export type { PluginReadParams } from "./PluginReadParams";
 export type { PluginReadResponse } from "./PluginReadResponse";
+export type { PluginSearchResult } from "./PluginSearchResult";
+export type { PluginSearchScope } from "./PluginSearchScope";
 export type { PluginShareCheckoutParams } from "./PluginShareCheckoutParams";
 export type { PluginShareCheckoutResponse } from "./PluginShareCheckoutResponse";
 export type { PluginShareContext } from "./PluginShareContext";

@@ -34,6 +34,8 @@ use codex_protocol::auth::AuthMode as DomainAuthMode;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::perform_oauth_login_silent;
 
+mod search;
+
 #[derive(Clone)]
 pub(crate) struct PluginRequestProcessor {
     auth_manager: Arc<AuthManager>,
