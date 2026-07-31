@@ -892,7 +892,10 @@ fn build_alias_plan(
     let mut alias_root_by_display_root = HashMap::new();
     let mut alias_roots = Vec::new();
     let mut seen = HashSet::new();
-    for entry in entries {
+    let mut alias_ordered_entries = entries.to_vec();
+    alias_ordered_entries
+        .sort_by_key(|entry| entry.display_path_root_order().unwrap_or(usize::MAX));
+    for entry in alias_ordered_entries {
         if entry.authority.kind != SkillSourceKind::Host {
             continue;
         }

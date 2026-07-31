@@ -61,6 +61,11 @@ impl SkillLoadOutcome {
         self.skill_root_by_path.get(path)
     }
 
+    /// Returns loaded skill roots in discovery order.
+    pub fn skill_roots_in_discovery_order(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
+        self.skill_roots.iter()
+    }
+
     pub(crate) fn file_system_for_skill(
         &self,
         skill: &SkillMetadata,

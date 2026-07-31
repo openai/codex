@@ -35,6 +35,7 @@ use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProviderFuture;
 use codex_skills_extension::provider::SkillReadRequest;
 use codex_skills_extension::provider::SkillSearchRequest;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::approx_token_count;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::apps_enabled_builder;
@@ -599,6 +600,111 @@ async fn production_turn_keeps_full_host_only_catalog_when_it_fits() -> Result<(
 
     assert_full_descriptions(&host_lines, &HOST_CATALOG);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_preserves_host_alias_root_order_across_turns() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_sequence(
+        &server,
+        ["resp-1", "resp-2"]
+            .into_iter()
+            .map(|response_id| {
+                sse(vec![
+                    ev_response_created(response_id),
+                    ev_completed(response_id),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+    let temp_parent = TempDir::new()?;
+    let long_parent = temp_parent
+        .path()
+        .join("codex-home-with-long-shared-prefix-for-production-alias-order-test");
+    std::fs::create_dir_all(&long_parent)?;
+    let codex_home = Arc::new(TempDir::new_in(&long_parent)?);
+    let first_root_path = long_parent.join("first-discovered-skills-root-with-long-shared-prefix");
+    let second_root_path =
+        long_parent.join("second-discovered-skills-root-with-long-shared-prefix");
+    for (root, prefix) in [
+        (&first_root_path, "z-first"),
+        (&second_root_path, "a-second"),
+    ] {
+        for index in 0..6 {
+            let name = format!("{prefix}-{index:02}");
+            let skill_dir = root.join(&name);
+            std::fs::create_dir_all(&skill_dir)?;
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\n\n# body\n"),
+            )?;
+        }
+    }
+    let first_root = AbsolutePathBuf::try_from(std::fs::canonicalize(&first_root_path)?)?;
+    let second_root = AbsolutePathBuf::try_from(std::fs::canonicalize(&second_root_path)?)?;
+    let (extensions, _) =
+        catalog_extensions(SkillCatalog::default(), /*include_host_provider*/ true);
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.context_window = Some(SHORTENING_CONTEXT_WINDOW);
+            model_info.max_context_window = None;
+        })
+        .with_config(configure_catalog_test);
+    let test = builder.build_with_auto_env(&server).await?;
+    test.thread_manager
+        .skills_service()
+        .set_extra_roots(vec![first_root.clone(), second_root.clone()]);
+
+    test.submit_turn("Inspect the available skills.").await?;
+    test.submit_turn("Inspect the available skills again.")
+        .await?;
+
+    let expected_alias_lines = vec![
+        format!(
+            "- `r0` = `{}`",
+            first_root.to_string_lossy().replace('\\', "/")
+        ),
+        format!(
+            "- `r1` = `{}`",
+            second_root.to_string_lossy().replace('\\', "/")
+        ),
+    ];
+    let expected_skill_lines = vec![
+        "- a-second-00: d (file: r1/a-second-00/SKILL.md)".to_string(),
+        "- z-first-00: d (file: r0/z-first-00/SKILL.md)".to_string(),
+    ];
+    let actual = response
+        .requests()
+        .iter()
+        .map(|request| {
+            let developer_text = request.message_input_texts("developer").join("\n");
+            let alias_lines = developer_text
+                .lines()
+                .filter(|line| line.starts_with("- `r"))
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let skill_lines = developer_text
+                .lines()
+                .filter(|line| {
+                    line.starts_with("- a-second-00:") || line.starts_with("- z-first-00:")
+                })
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (alias_lines, skill_lines)
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual,
+        vec![
+            (expected_alias_lines.clone(), expected_skill_lines.clone()),
+            (expected_alias_lines, expected_skill_lines),
+        ]
+    );
     Ok(())
 }
 
