@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -13,6 +14,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 
@@ -120,6 +122,47 @@ async fn shell_command_works() -> anyhow::Result<()> {
 
     let output = harness.function_call_stdout(call_id).await;
     assert_shell_command_output(&output, "hello, world")?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_rejects_justification_without_sandbox_permissions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+    let call_id = "shell-command-missing-sandbox-permissions";
+    let args = json!({
+        "command": "echo should not run",
+        "justification": "Allow this command",
+    });
+    mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness
+        .submit_with_permission_profile(
+            "run the command with escalation",
+            PermissionProfile::Disabled,
+        )
+        .await?;
+
+    assert_eq!(
+        harness.function_call_stdout(call_id).await,
+        "`justification` requires an explicit `sandbox_permissions`; use `sandbox_permissions: \"require_escalated\"` for unsandboxed execution, or omit `justification`."
+    );
 
     Ok(())
 }

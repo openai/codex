@@ -229,6 +229,45 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
     );
 }
 
+#[tokio::test]
+async fn shell_command_handler_rejects_justification_without_sandbox_permissions() {
+    let (session, turn_context) = make_session_and_context().await;
+    let turn_environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment");
+    let cwd = turn_environment
+        .cwd()
+        .to_abs_path()
+        .expect("native environment cwd");
+    let params = ShellCommandToolCallParams {
+        command: "echo hello".to_string(),
+        workdir: None,
+        login: None,
+        timeout_ms: None,
+        sandbox_permissions: None,
+        additional_permissions: None,
+        prefix_rule: None,
+        justification: Some("Allow this command".to_string()),
+    };
+
+    let err = ShellCommandHandler::to_exec_params(
+        &params,
+        &session,
+        &turn_context,
+        turn_environment,
+        cwd,
+        /*allow_login_shell*/ false,
+    )
+    .expect_err("justification without sandbox permissions should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("`justification` requires an explicit `sandbox_permissions`"),
+        "unexpected error: {err}"
+    );
+}
+
 #[test]
 fn shell_command_handler_rejects_login_when_disallowed() {
     let err =

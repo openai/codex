@@ -89,6 +89,19 @@ where
     })
 }
 
+fn resolve_sandbox_permissions(
+    sandbox_permissions: Option<SandboxPermissions>,
+    justification: Option<&str>,
+) -> Result<SandboxPermissions, FunctionCallError> {
+    if justification.is_some() && sandbox_permissions.is_none() {
+        return Err(FunctionCallError::RespondToModel(
+            "`justification` requires an explicit `sandbox_permissions`; use `sandbox_permissions: \"require_escalated\"` for unsandboxed execution, or omit `justification`.".to_string(),
+        ));
+    }
+
+    Ok(sandbox_permissions.unwrap_or_default())
+}
+
 fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
     updated_input
         .get("command")
