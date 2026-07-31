@@ -7,10 +7,10 @@ use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
-use crate::tools::registry::override_tool_exposure;
-use crate::tools::spec_plan::append_source_tool_runtimes;
-use crate::tools::spec_plan::build_core_tool_runtimes;
+use crate::tools::spec_plan::append_source_tools;
+use crate::tools::spec_plan::build_core_tool_registry;
 use crate::tools::spec_plan::extension_tool_executors;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
@@ -128,27 +128,27 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
 
 fn test_tool_router(
     step_context: &StepContext,
-    mcp_tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
+    mcp_tools: Vec<RegisteredTool>,
     extension_tool_executors: impl IntoIterator<Item = Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRouter {
-    let mut tool_runtimes = build_core_tool_runtimes(
+    let mut registry = build_core_tool_registry(
         step_context.turn.as_ref(),
         &step_context.environments,
         step_context.mcp.as_ref(),
         /*tool_suggest_candidates*/ None,
         /*wait_for_environment_tool_config*/ None,
     );
-    let hosted_specs = append_source_tool_runtimes(
+    let hosted_specs = append_source_tools(
         step_context.turn.as_ref(),
-        &mut tool_runtimes,
-        mcp_tool_runtimes,
+        &mut registry,
+        mcp_tools,
         extension_tool_executors,
         dynamic_tools,
     );
-    ToolRouter::from_tools(
+    ToolRouter::from_registry(
         step_context.turn.as_ref(),
-        tool_runtimes,
+        registry,
         hosted_specs,
         &Default::default(),
     )
@@ -282,15 +282,24 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                 "mcp__echo__",
                 "query_with_delay",
             )),
-            override_tool_exposure(
-                mcp_runtime(mcp_tool_info(
+            RegisteredTool {
+                exposure: ToolExposure::DirectModelOnly,
+                ..mcp_runtime(mcp_tool_info(
                     "hello_echo",
                     /*supports_parallel_tool_calls*/ false,
                     "mcp__hello_echo__",
                     "query_with_delay",
-                )),
-                ToolExposure::DirectModelOnly,
-            ),
+                ))
+            },
+            RegisteredTool {
+                exposure: ToolExposure::Hidden,
+                ..mcp_runtime(mcp_tool_info(
+                    "hidden_echo",
+                    /*supports_parallel_tool_calls*/ true,
+                    "mcp__hidden_echo__",
+                    "query_with_delay",
+                ))
+            },
         ],
         Vec::new(),
         &turn.dynamic_tools,
@@ -327,6 +336,17 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             .map(|runtime| runtime.tool_name()),
         Some(different_server_call.tool_name.clone())
     );
+
+    let hidden_call = ToolCall {
+        tool_name: ToolName::namespaced("mcp__hidden_echo__", "query_with_delay"),
+        call_id: "call-hidden".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args: None,
+    };
+    assert!(!router.tool_supports_parallel(&hidden_call));
+    assert!(router.tool_runtime(&hidden_call).is_some());
 
     Ok(())
 }
@@ -435,8 +455,13 @@ fn mcp_tool_info(
     }
 }
 
-fn mcp_runtime(tool_info: codex_mcp::ToolInfo) -> Arc<dyn CoreToolRuntime> {
-    Arc::new(McpHandler::new(tool_info).expect("MCP tool spec should build"))
+fn mcp_runtime(tool_info: codex_mcp::ToolInfo) -> RegisteredTool {
+    let runtime = Arc::new(McpHandler::new(tool_info).expect("MCP tool spec should build"))
+        as Arc<dyn CoreToolRuntime>;
+    RegisteredTool {
+        exposure: runtime.exposure(),
+        runtime,
+    }
 }
 
 #[tokio::test]

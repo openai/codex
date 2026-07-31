@@ -41,18 +41,18 @@ use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::registry::CoreToolRuntime;
-use crate::tools::registry::override_tool_exposure;
+use crate::tools::registry::RegisteredTool;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
-use crate::tools::spec_plan::append_source_tool_runtimes;
-use crate::tools::spec_plan::build_core_tool_runtimes;
+use crate::tools::spec_plan::append_source_tools;
+use crate::tools::spec_plan::build_core_tool_registry;
 
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
 #[derive(Default)]
 struct ToolPlanInputs {
-    tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
+    tool_runtimes: Vec<RegisteredTool>,
     tool_suggest_candidates: Option<ToolSuggestCandidates>,
     extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     wait_for_environment_tool_config: Option<Arc<WaitForEnvironmentToolConfig>>,
@@ -190,23 +190,23 @@ async fn probe_with(
     configure_turn(&mut turn);
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
-    let mut tool_runtimes = build_core_tool_runtimes(
+    let mut registry = build_core_tool_registry(
         step_context.turn.as_ref(),
         &step_context.environments,
         step_context.mcp.as_ref(),
         inputs.tool_suggest_candidates.as_ref(),
         inputs.wait_for_environment_tool_config.as_ref(),
     );
-    let hosted_specs = append_source_tool_runtimes(
+    let hosted_specs = append_source_tools(
         step_context.turn.as_ref(),
-        &mut tool_runtimes,
+        &mut registry,
         inputs.tool_runtimes,
         inputs.extension_tool_executors,
         &inputs.dynamic_tools,
     );
-    let router = ToolRouter::from_tools(
+    let router = ToolRouter::from_registry(
         step_context.turn.as_ref(),
-        tool_runtimes,
+        registry,
         hosted_specs,
         &Default::default(),
     );
@@ -396,11 +396,14 @@ fn mcp_runtime(
     namespace: &str,
     name: &str,
     exposure: ToolExposure,
-) -> Arc<dyn CoreToolRuntime> {
+) -> RegisteredTool {
     let handler: Arc<dyn CoreToolRuntime> = Arc::new(
         McpHandler::new(mcp_tool(server, namespace, name)).expect("MCP tool spec should build"),
     );
-    override_tool_exposure(handler, exposure)
+    RegisteredTool {
+        runtime: handler,
+        exposure,
+    }
 }
 
 fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> DynamicToolSpec {
@@ -914,9 +917,9 @@ async fn environment_tools_follow_the_step_context() {
         &turn.config,
     )));
 
-    let plan = ToolPlanProbe::from_router(ToolRouter::from_tools(
+    let plan = ToolPlanProbe::from_router(ToolRouter::from_registry(
         turn.as_ref(),
-        build_core_tool_runtimes(
+        build_core_tool_registry(
             turn.as_ref(),
             &environments,
             mcp.as_ref(),
@@ -1023,7 +1026,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         &["lookup".to_string()]
     );
 
-    let searchable_mcp = ToolPlanInputs {
+    let searchable_mcp = || ToolPlanInputs {
         tool_runtimes: vec![mcp_runtime(
             "searchable",
             "mcp__searchable",
@@ -1037,10 +1040,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         |turn| {
             turn.model_info.supports_search_tool = false;
         },
-        ToolPlanInputs {
-            tool_runtimes: searchable_mcp.tool_runtimes.clone(),
-            ..ToolPlanInputs::default()
-        },
+        searchable_mcp(),
     )
     .await;
     missing_model_capability.assert_visible_lacks(&["tool_search"]);
@@ -1062,10 +1062,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
             turn.model_info.supports_search_tool = true;
             use_bedrock_provider(turn);
         },
-        ToolPlanInputs {
-            tool_runtimes: searchable_mcp.tool_runtimes.clone(),
-            ..ToolPlanInputs::default()
-        },
+        searchable_mcp(),
     )
     .await;
     bedrock_namespace_capability.assert_visible_contains(&["tool_search"]);
@@ -1074,7 +1071,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         |turn| {
             turn.model_info.supports_search_tool = true;
         },
-        searchable_mcp,
+        searchable_mcp(),
     )
     .await;
     enabled.assert_visible_contains(&["tool_search"]);
@@ -1270,22 +1267,18 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     first_turn.model_info.supports_search_tool = true;
     let first_turn = Arc::new(first_turn);
     let first_step_context = StepContext::for_test(Arc::clone(&first_turn));
-    let mut first_tool_runtimes = build_core_tool_runtimes(
+    let mut first_registry = build_core_tool_registry(
         first_step_context.turn.as_ref(),
         &first_step_context.environments,
         first_step_context.mcp.as_ref(),
         /*tool_suggest_candidates*/ None,
         /*wait_for_environment_tool_config*/ None,
     );
-    first_tool_runtimes.push(mcp_runtime(
-        "first",
-        "mcp__first",
-        "lookup",
-        ToolExposure::Deferred,
-    ));
-    let first_router = ToolRouter::from_tools(
+    let first_tool = mcp_runtime("first", "mcp__first", "lookup", ToolExposure::Deferred);
+    first_registry.register_external_with_exposure(first_tool.runtime, first_tool.exposure);
+    let first_router = ToolRouter::from_registry(
         first_step_context.turn.as_ref(),
-        first_tool_runtimes,
+        first_registry,
         super::hosted_model_tool_specs(first_step_context.turn.as_ref(), &[]),
         &cache,
     );
@@ -1295,22 +1288,18 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     second_turn.model_info.supports_search_tool = true;
     let second_turn = Arc::new(second_turn);
     let second_step_context = StepContext::for_test(Arc::clone(&second_turn));
-    let mut second_tool_runtimes = build_core_tool_runtimes(
+    let mut second_registry = build_core_tool_registry(
         second_step_context.turn.as_ref(),
         &second_step_context.environments,
         second_step_context.mcp.as_ref(),
         /*tool_suggest_candidates*/ None,
         /*wait_for_environment_tool_config*/ None,
     );
-    second_tool_runtimes.push(mcp_runtime(
-        "second",
-        "mcp__second",
-        "lookup",
-        ToolExposure::Deferred,
-    ));
-    let second_router = ToolRouter::from_tools(
+    let second_tool = mcp_runtime("second", "mcp__second", "lookup", ToolExposure::Deferred);
+    second_registry.register_external_with_exposure(second_tool.runtime, second_tool.exposure);
+    let second_router = ToolRouter::from_registry(
         second_step_context.turn.as_ref(),
-        second_tool_runtimes,
+        second_registry,
         super::hosted_model_tool_specs(second_step_context.turn.as_ref(), &[]),
         &cache,
     );
@@ -1351,22 +1340,23 @@ async fn tool_search_cache_rebuilds_when_deferred_world_state_changes() {
         );
         let turn = Arc::new(turn);
         let step_context = StepContext::for_test(Arc::clone(&turn));
-        let mut tool_runtimes = build_core_tool_runtimes(
+        let mut registry = build_core_tool_registry(
             step_context.turn.as_ref(),
             &step_context.environments,
             step_context.mcp.as_ref(),
             /*tool_suggest_candidates*/ None,
             /*wait_for_environment_tool_config*/ None,
         );
-        tool_runtimes.push(mcp_runtime(
+        let tool = mcp_runtime(
             "calendar",
             "mcp__calendar",
             "lookup",
             ToolExposure::Deferred,
-        ));
-        let router = ToolRouter::from_tools(
+        );
+        registry.register_external_with_exposure(tool.runtime, tool.exposure);
+        let router = ToolRouter::from_registry(
             step_context.turn.as_ref(),
-            tool_runtimes,
+            registry,
             super::hosted_model_tool_specs(step_context.turn.as_ref(), &[]),
             &cache,
         );

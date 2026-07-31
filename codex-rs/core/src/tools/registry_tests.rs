@@ -222,8 +222,8 @@ fn registry_preserves_external_winners_and_trusted_synthetic_order() {
 
     assert_eq!(
         registry
-            .runtimes()
-            .map(|runtime| runtime.tool_name())
+            .entries()
+            .map(|tool| tool.runtime.tool_name())
             .collect::<Vec<_>>(),
         vec![synthetic_name, first_name.clone(), second_name],
     );
@@ -243,6 +243,10 @@ fn reserved_shell_command_rejects_external_runtimes_without_a_builtin() {
     let mut registry = ToolRegistry::default();
 
     assert!(!registry.register_external(handler(shell_command_name.clone())));
+    assert!(!registry.register_external_with_exposure(
+        handler(shell_command_name.clone()),
+        ToolExposure::Direct,
+    ));
     assert!(registry.tool(&shell_command_name).is_none());
 
     let namespaced_handler = handler(namespaced_shell_command_name.clone());
@@ -255,7 +259,7 @@ fn reserved_shell_command_rejects_external_runtimes_without_a_builtin() {
 }
 
 #[tokio::test]
-async fn readiness_selects_exact_tool_and_forwards_exposure_overrides() {
+async fn readiness_selects_exact_tool_with_registry_owned_exposure() {
     let (session, _turn) = crate::session::tests::make_session_and_context().await;
     let session = Arc::new(session);
     let plain_name = codex_tools::ToolName::plain("echo");
@@ -275,16 +279,14 @@ async fn readiness_selects_exact_tool_and_forwards_exposure_overrides() {
         },
         readiness_waits: Arc::clone(&plain_readiness_waits),
     }) as Arc<dyn CoreToolRuntime>;
-    let namespaced_handler = override_tool_exposure(
-        Arc::new(ReadinessTestHandler {
-            handler: TestHandler {
-                tool_name: namespaced_name.clone(),
-            },
-            readiness_waits: Arc::clone(&namespaced_readiness_waits),
-        }),
-        ToolExposure::DirectModelOnly,
-    );
-    let registry = ToolRegistry::from_tools([plain_handler, namespaced_handler]);
+    let namespaced_handler = Arc::new(ReadinessTestHandler {
+        handler: TestHandler {
+            tool_name: namespaced_name.clone(),
+        },
+        readiness_waits: Arc::clone(&namespaced_readiness_waits),
+    });
+    let mut registry = ToolRegistry::from_tools([plain_handler]);
+    registry.register_trusted_with_exposure(namespaced_handler, ToolExposure::DirectModelOnly);
 
     registry
         .tool(&plain_name)

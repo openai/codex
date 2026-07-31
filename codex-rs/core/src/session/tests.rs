@@ -16,7 +16,6 @@ use crate::shell::default_user_shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
-use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolRegistry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -780,32 +779,32 @@ async fn preview_session_start_hooks(
     )
 }
 
-pub(crate) fn tool_runtimes_for_test_step(
+pub(crate) fn tool_registry_for_test_step(
     step_context: &StepContext,
-) -> (Vec<Arc<dyn CoreToolRuntime>>, Vec<ToolSpec>) {
-    let mut tool_runtimes = crate::tools::spec_plan::build_core_tool_runtimes(
+) -> (ToolRegistry, Vec<ToolSpec>) {
+    let mut registry = crate::tools::spec_plan::build_core_tool_registry(
         step_context.turn.as_ref(),
         &step_context.environments,
         step_context.mcp.as_ref(),
         /*tool_suggest_candidates*/ None,
         /*wait_for_environment_tool_config*/ None,
     );
-    let hosted_specs = crate::tools::spec_plan::append_source_tool_runtimes(
+    let hosted_specs = crate::tools::spec_plan::append_source_tools(
         step_context.turn.as_ref(),
-        &mut tool_runtimes,
+        &mut registry,
         Vec::new(),
         Vec::new(),
         &step_context.turn.dynamic_tools,
     );
-    (tool_runtimes, hosted_specs)
+    (registry, hosted_specs)
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let (tool_runtimes, hosted_specs) = tool_runtimes_for_test_step(step_context.as_ref());
-    let router = Arc::new(ToolRouter::from_tools(
+    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let router = Arc::new(ToolRouter::from_registry(
         step_context.turn.as_ref(),
-        tool_runtimes,
+        registry,
         hosted_specs,
         &Default::default(),
     ));
@@ -10881,10 +10880,10 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
 async fn fatal_tool_error_stops_turn_and_reports_error() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let (tool_runtimes, hosted_specs) = tool_runtimes_for_test_step(step_context.as_ref());
-    let router = ToolRouter::from_tools(
+    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let router = ToolRouter::from_registry(
         step_context.turn.as_ref(),
-        tool_runtimes,
+        registry,
         hosted_specs,
         &Default::default(),
     );

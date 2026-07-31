@@ -8,7 +8,7 @@ use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
-use crate::session::tests::tool_runtimes_for_test_step;
+use crate::session::tests::tool_registry_for_test_step;
 use crate::tools::ToolRouter;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -278,10 +278,10 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let (tool_runtimes, hosted_specs) = tool_runtimes_for_test_step(step_context.as_ref());
-    let router = Arc::new(ToolRouter::from_tools(
+    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let router = Arc::new(ToolRouter::from_registry(
         step_context.turn.as_ref(),
-        tool_runtimes,
+        registry,
         hosted_specs,
         &Default::default(),
     ));

@@ -60,6 +60,7 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
 
     fn spec(&self) -> ToolSpec;
 
+    /// The preferred exposure before the host applies step-specific policy.
     fn exposure(&self) -> ToolExposure {
         ToolExposure::Direct
     }

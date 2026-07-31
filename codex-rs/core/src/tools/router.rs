@@ -84,15 +84,15 @@ pub(crate) struct ToolSuggestCandidates {
 
 impl ToolRouter {
     #[cfg(test)]
-    pub(crate) fn from_tools(
+    pub(crate) fn from_registry(
         turn_context: &TurnContext,
-        tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
+        registry: ToolRegistry,
         hosted_specs: Vec<ToolSpec>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {
         finalize_tool_router(
             turn_context,
-            ToolRegistry::from_tools(tool_runtimes),
+            registry,
             hosted_specs,
             tool_search_handler_cache,
         )

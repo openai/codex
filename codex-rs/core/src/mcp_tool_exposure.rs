@@ -13,16 +13,16 @@ use tracing::warn;
 use crate::config::Config;
 use crate::connectors;
 use crate::tools::handlers::McpHandler;
-use crate::tools::registry::CoreToolRuntime;
-use crate::tools::registry::override_tool_exposure;
+use crate::tools::registry::ToolRegistry;
 
 #[instrument(level = "trace", skip_all)]
-pub(crate) fn build_mcp_tool_runtimes<'a>(
-    all_mcp_tools: &'a [McpToolInfo],
-    connectors: Option<&'a [connectors::AppInfo]>,
-    config: &'a Config,
+pub(crate) fn append_mcp_tools(
+    all_mcp_tools: &[McpToolInfo],
+    connectors: Option<&[connectors::AppInfo]>,
+    config: &Config,
     search_tool_enabled: bool,
-) -> impl Iterator<Item = Arc<dyn CoreToolRuntime>> + 'a {
+    registry: &mut ToolRegistry,
+) {
     // Keep regular MCP tools first; Apps tools also require connector and policy checks.
     let non_app_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     let app_tools = connectors
@@ -33,19 +33,17 @@ pub(crate) fn build_mcp_tool_runtimes<'a>(
     } else {
         ToolExposure::Direct
     };
-    non_app_tools.chain(app_tools).filter_map(move |tool| {
+    for tool in non_app_tools.chain(app_tools) {
         let tool_name = tool.canonical_tool_name();
         match McpHandler::new(tool.clone()) {
             Ok(handler) => {
-                let handler: Arc<dyn CoreToolRuntime> = Arc::new(handler);
-                Some(override_tool_exposure(handler, exposure))
+                registry.register_external_with_exposure(Arc::new(handler), exposure);
             }
             Err(err) => {
                 warn!("Skipping MCP tool `{tool_name}`: failed to build tool spec: {err}");
-                None
             }
         }
-    })
+    }
 }
 
 fn filter_non_codex_apps_mcp_tools_only(
