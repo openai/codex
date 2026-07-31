@@ -70,6 +70,91 @@ async fn detect_home_lists_config_skills_and_agents_md() {
 }
 
 #[tokio::test]
+async fn detect_cursor_home_lists_user_and_managed_skills() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".cursor");
+    let codex_home = root.path().join(".codex");
+    let user_skills = external_agent_home.join("skills");
+    let managed_skills = external_agent_home.join("skills-cursor");
+    let target_skills = codex_home
+        .parent()
+        .map(|parent| parent.join(".agents").join("skills"))
+        .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
+    fs::create_dir_all(user_skills.join("user-skill")).expect("create user skill");
+    fs::create_dir_all(managed_skills.join("managed-skill")).expect("create managed skill");
+    let mut service = service_for_paths(external_agent_home, codex_home);
+    service.source = ExternalAgentSource::Cur;
+
+    let items = service
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            include_memory: false,
+            cwds: None,
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Skills,
+            description: format!(
+                "Migrate skills from {}, {} to {}",
+                user_skills.display(),
+                managed_skills.display(),
+                target_skills.display()
+            ),
+            cwd: None,
+            details: Some(MigrationDetails {
+                skills: named_migrations(vec![
+                    "managed-skill".to_string(),
+                    "user-skill".to_string()
+                ]),
+                ..Default::default()
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn detect_cursor_repo_lists_skills_from_skills() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    let codex_home = root.path().join(".codex");
+    let source_skills = repo_root.join(".cursor").join("skills");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(source_skills.join("skill-a")).expect("create repo skill");
+    let mut service = service_for_paths(root.path().join(".cursor"), codex_home);
+    service.source = ExternalAgentSource::Cur;
+
+    let items = service
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            include_memory: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Skills,
+            description: format!(
+                "Migrate skills from {} to {}",
+                source_skills.display(),
+                repo_root.join(".agents").join("skills").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                skills: named_migrations(vec!["skill-a".to_string()]),
+                ..Default::default()
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn detect_home_lists_recent_sessions() {
     let (root, external_agent_home, codex_home) = fixture_paths();
     let project_root = root.path().join("repo");

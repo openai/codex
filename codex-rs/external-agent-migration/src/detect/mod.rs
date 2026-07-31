@@ -189,22 +189,33 @@ impl ExternalAgentConfigService {
             );
         }
 
-        let source_skills = repo_root.map_or_else(
-            || self.external_agent_home.join("skills"),
-            |repo_root| repo_root.join(self.source.config_dir()).join("skills"),
-        );
+        let source_skills = self
+            .source
+            .skills_dir_names(scope)
+            .iter()
+            .map(|directory| source_external_agent_dir.join(*directory))
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
         let target_skills = repo_root.map_or_else(
             || self.home_target_skills_dir(),
             |repo_root| repo_root.join(".agents").join("skills"),
         );
-        let skill_names = missing_subdirectory_names(&source_skills, &target_skills)?;
+        let mut skill_names = Vec::new();
+        for source_skills_dir in &source_skills {
+            skill_names.extend(missing_subdirectory_names(
+                source_skills_dir,
+                &target_skills,
+            )?);
+        }
+        skill_names.sort();
+        skill_names.dedup();
         let skills_count = skill_names.len();
         if skills_count > 0 {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
                     "Migrate skills from {} to {}",
-                    source_skills.display(),
+                    display_source_paths(&source_skills),
                     target_skills.display()
                 ),
                 cwd: cwd.clone(),

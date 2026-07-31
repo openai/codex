@@ -682,37 +682,45 @@ impl ExternalAgentConfigService {
         let Some(scope) = MigrationScope::from_cwd(cwd)? else {
             return Ok(Vec::new());
         };
-        let (source_skills, target_skills) = match scope {
+        let source_skills_dir_names = self.source.skills_dir_names(&scope);
+        let (source_config_dir, target_skills) = match scope {
             MigrationScope::Home => (
-                self.external_agent_home.join("skills"),
+                self.external_agent_home.clone(),
                 self.home_target_skills_dir(),
             ),
             MigrationScope::Repository { root } => (
-                root.join(self.source.config_dir()).join("skills"),
+                root.join(self.source.config_dir()),
                 root.join(".agents").join("skills"),
             ),
         };
-        if !source_skills.is_dir() {
+        let source_skills = source_skills_dir_names
+            .iter()
+            .map(|directory| source_config_dir.join(*directory))
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        if source_skills.is_empty() {
             return Ok(Vec::new());
         }
 
         fs::create_dir_all(&target_skills)?;
         let mut copied_names = Vec::new();
 
-        for entry in fs::read_dir(&source_skills)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            if !file_type.is_dir() {
-                continue;
-            }
+        for source_skills_dir in source_skills {
+            for entry in fs::read_dir(&source_skills_dir)? {
+                let entry = entry?;
+                let file_type = entry.file_type()?;
+                if !file_type.is_dir() {
+                    continue;
+                }
 
-            let target = target_skills.join(entry.file_name());
-            if target.exists() {
-                continue;
-            }
+                let target = target_skills.join(entry.file_name());
+                if target.exists() {
+                    continue;
+                }
 
-            copy_dir_recursive(&entry.path(), &target, self.source.rewrite_profile())?;
-            copied_names.push(entry.file_name().to_string_lossy().to_string());
+                copy_dir_recursive(&entry.path(), &target, self.source.rewrite_profile())?;
+                copied_names.push(entry.file_name().to_string_lossy().to_string());
+            }
         }
 
         Ok(copied_names)

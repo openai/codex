@@ -71,6 +71,14 @@ impl ExternalAgentSource {
         }
     }
 
+    pub(super) fn skills_dir_names(self, scope: &MigrationScope) -> &'static [&'static str] {
+        match (self, scope) {
+            // skills-cursor is Cursor-managed and only exists under the home config.
+            (Self::Cur, MigrationScope::Home) => &["skills", "skills-cursor"],
+            _ => &["skills"],
+        }
+    }
+
     pub(super) fn supports_memory(self) -> bool {
         match self {
             Self::Cla => true,

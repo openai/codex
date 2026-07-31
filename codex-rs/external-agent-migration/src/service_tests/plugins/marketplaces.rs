@@ -710,3 +710,43 @@ fn import_skills_returns_only_new_skill_directory_names() {
 
     assert_eq!(copied_names, vec!["skill-b".to_string()]);
 }
+
+#[test]
+fn import_cursor_skills_reads_user_and_managed_directories() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".cursor");
+    let codex_home = root.path().join(".codex");
+    let user_skill = external_agent_home.join("skills").join("user-skill");
+    let managed_skill = external_agent_home
+        .join("skills-cursor")
+        .join("managed-skill");
+    let target_skills = codex_home
+        .parent()
+        .map(|parent| parent.join(".agents").join("skills"))
+        .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
+    fs::create_dir_all(&user_skill).expect("create user skill");
+    fs::create_dir_all(&managed_skill).expect("create managed skill");
+    fs::write(user_skill.join("SKILL.md"), "# Imported user skill").expect("write user skill");
+    fs::write(managed_skill.join("SKILL.md"), "# Imported managed skill")
+        .expect("write managed skill");
+    let mut service = service_for_paths(external_agent_home, codex_home);
+    service.source = ExternalAgentSource::Cur;
+
+    let mut copied_names = service.import_skills(/*cwd*/ None).expect("import skills");
+    copied_names.sort();
+
+    assert_eq!(
+        copied_names,
+        vec!["managed-skill".to_string(), "user-skill".to_string()]
+    );
+    assert_eq!(
+        fs::read_to_string(target_skills.join("user-skill").join("SKILL.md"))
+            .expect("read user skill"),
+        "# Imported user skill"
+    );
+    assert_eq!(
+        fs::read_to_string(target_skills.join("managed-skill").join("SKILL.md"))
+            .expect("read managed skill"),
+        "# Imported managed skill"
+    );
+}
