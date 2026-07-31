@@ -394,10 +394,12 @@ crate.annotation(
     crate_features_select = {
         "aarch64-apple-darwin": ["v8_enable_sandbox"],
         "aarch64-pc-windows-gnullvm": ["v8_enable_sandbox"],
+        "aarch64-pc-windows-msvc": ["v8_enable_sandbox"],
         "aarch64-unknown-linux-gnu": ["v8_enable_sandbox"],
         "aarch64-unknown-linux-musl": ["v8_enable_sandbox"],
         "x86_64-apple-darwin": ["v8_enable_sandbox"],
         "x86_64-pc-windows-gnullvm": ["v8_enable_sandbox"],
+        "x86_64-pc-windows-msvc": ["v8_enable_sandbox"],
         "x86_64-unknown-linux-gnu": ["v8_enable_sandbox"],
         "x86_64-unknown-linux-musl": ["v8_enable_sandbox"],
     },
@@ -518,18 +520,18 @@ git_repository(
 http_file(
     name = "rusty_v8_150_4_0_aarch64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
-    sha256 = "ce9f2e4321e0dd4bc64882b6daefc028863608ed934e387a98ca384f1f7923f8",
+    sha256 = "54722842af36b74248c403ff531254efac6ff65d281198bab0c6350fc1188ad4",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v150.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/rusty_v8_ptrcomp_sandbox_release_aarch64-pc-windows-msvc.lib.gz",
     ],
 )
 
 http_file(
     name = "rusty_v8_150_4_0_x86_64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
-    sha256 = "571bf6a028576ac1413c8a942383f637f91e94b0c964bbeefff8a098637aaa40",
+    sha256 = "732ec5da4243aa166799780c8519a5eea6f32f6e47657a323342794dc3c239d6",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v150.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/rusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.lib.gz",
     ],
 )
 

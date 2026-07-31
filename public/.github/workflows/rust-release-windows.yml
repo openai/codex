@@ -88,6 +88,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
       - name: Configure LLVM linker
         uses: ./.github/actions/setup-msvc-env
         with:

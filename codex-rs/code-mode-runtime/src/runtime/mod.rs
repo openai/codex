@@ -354,6 +354,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn linked_v8_has_sandbox_enabled() {
+        unsafe extern "C" {
+            fn v8__V8__IsSandboxEnabled() -> bool;
+        }
+
+        // `rusty_v8` exposes this symbol for verifying linked sandbox support.
+        assert!(
+            unsafe { v8__V8__IsSandboxEnabled() },
+            "code mode must link against sandbox-enabled V8"
+        );
+    }
+
     #[tokio::test]
     async fn runtime_thread_panic_before_initialization_is_reported_directly() {
         let (event_tx, event_rx) = mpsc::unbounded_channel();

@@ -19,14 +19,25 @@ runs:
         release_tag="rusty-v8-v${version}"
         base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
-        archive_path="${binding_dir}/librusty_v8_release_${TARGET}.a.gz"
-        binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
-        checksums_path="${binding_dir}/rusty_v8_release_${TARGET}.sha256"
+        
+        profile="ptrcomp_sandbox_release"
+
+        if [[ "$TARGET" == *-pc-windows-msvc ]]; then
+          archive_name="rusty_v8_${profile}_${TARGET}.lib.gz"
+        else
+          archive_name="librusty_v8_${profile}_${TARGET}.a.gz"
+        fi
+        binding_name="src_binding_${profile}_${TARGET}.rs"
+        checksums_name="rusty_v8_${profile}_${TARGET}.sha256"
+
+        archive_path="${binding_dir}/${archive_name}"
+        binding_path="${binding_dir}/${binding_name}"
+        checksums_path="${binding_dir}/${checksums_name}"
 
         mkdir -p "${binding_dir}"
-        curl -fsSL "${base_url}/librusty_v8_release_${TARGET}.a.gz" -o "${archive_path}"
-        curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
-        curl -fsSL "${base_url}/rusty_v8_release_${TARGET}.sha256" -o "${checksums_path}"
+        curl -fsSL "${base_url}/${archive_name}" -o "${archive_path}"
+        curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
+        curl -fsSL "${base_url}/${checksums_name}" -o "${checksums_path}"
 
         if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
           echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
