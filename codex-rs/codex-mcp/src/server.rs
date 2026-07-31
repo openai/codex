@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::runtime::McpRuntimeContext;
 use codex_api::SharedAuthProvider;
 use codex_config::AppToolApproval;
+use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
@@ -40,6 +41,36 @@ impl EffectiveMcpServer {
     pub fn required(&self) -> bool {
         self.config.required
     }
+}
+
+pub(crate) fn has_explicit_http_authorization(config: &McpServerConfig) -> bool {
+    let McpServerTransportConfig::StreamableHttp {
+        bearer_token_env_var,
+        http_headers,
+        env_http_headers,
+        ..
+    } = &config.transport
+    else {
+        return false;
+    };
+
+    if bearer_token_env_var.is_some()
+        || env_http_headers
+            .as_ref()
+            .is_some_and(|headers| !headers.is_empty())
+    {
+        return false;
+    }
+
+    http_headers.as_ref().is_some_and(|headers| {
+        headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("authorization")
+                && !value.trim().is_empty()
+                && value
+                    .bytes()
+                    .all(|byte| byte == b'\t' || (byte >= b' ' && byte != 0x7f))
+        })
+    })
 }
 
 /// Inputs that determine the identity of a live MCP connection.
@@ -78,7 +109,9 @@ impl McpServerConnectionIdentity {
         supports_openai_form_elicitation: bool,
     ) -> Self {
         let config = server.config();
-        let stored_oauth_url = if runtime_auth_provider.is_none() {
+        let stored_oauth_url = if runtime_auth_provider.is_none()
+            && (!matches!(config.auth, McpServerAuth::ChatGpt) || config.is_local_environment())
+        {
             match &config.transport {
                 McpServerTransportConfig::StreamableHttp {
                     url,

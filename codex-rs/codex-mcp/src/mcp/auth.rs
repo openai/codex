@@ -20,6 +20,7 @@ use tracing::warn;
 
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
+use crate::server::has_explicit_http_authorization;
 
 #[derive(Debug, Clone)]
 pub struct McpOAuthLoginConfig {
@@ -214,6 +215,14 @@ async fn compute_auth_status(
 ) -> Result<McpAuthState> {
     if !config.enabled {
         return Ok(McpAuthState::Unsupported);
+    }
+
+    if matches!(config.auth, McpServerAuth::ChatGpt) && !config.is_local_environment() {
+        return Ok(if has_explicit_http_authorization(config) {
+            McpAuthState::BearerToken
+        } else {
+            McpAuthState::Unsupported
+        });
     }
 
     if has_runtime_auth {

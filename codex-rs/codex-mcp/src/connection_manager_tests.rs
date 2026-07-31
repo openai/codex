@@ -22,6 +22,7 @@ use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use codex_config::AppToolApproval;
 use codex_config::Constrained;
+use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
 use codex_config::McpServerEnvVar;
 use codex_config::McpServerToolConfig;
@@ -32,6 +33,7 @@ use codex_connectors::ConnectorRuntimeContextKey;
 use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_connectors::ConnectorRuntimeManager;
 use codex_exec_server_test_support::environment_manager_without_environments;
+use codex_login::AuthHeaders;
 use codex_login::CodexAuth;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
@@ -2746,6 +2748,258 @@ fn server_metadata_preserves_tool_approval_policy() {
         metadata.tool_approval_mode("search"),
         AppToolApproval::Approve
     );
+}
+
+#[test]
+fn hosted_actor_credentials_are_only_available_to_host_owned_mcp_servers() {
+    let bootstrap_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let mut actor_headers = Default::default();
+    codex_model_provider::auth_provider_from_auth(&bootstrap_auth)
+        .add_auth_headers(&mut actor_headers);
+    actor_headers.insert(
+        "x-openai-actor-authorization",
+        "hosted-actor-secret"
+            .parse()
+            .expect("valid actor authorization header"),
+    );
+    let hosted_auth = CodexAuth::Headers(AuthHeaders::new(actor_headers));
+    let provider = codex_model_provider::auth_provider_from_auth(&hosted_auth);
+    let mut local_config = crate::codex_apps_mcp_server_config(
+        "https://chatgpt.com",
+        /*apps_mcp_product_sku*/ None,
+        /*originator*/ None,
+    );
+    local_config.auth = McpServerAuth::ChatGpt;
+
+    let local_server = EffectiveMcpServer::configured(local_config.clone());
+    let local_provider =
+        chatgpt_auth_provider_for_server(&local_server, Some(Arc::clone(&provider)))
+            .expect("host-owned Codex Apps must retain hosted authentication");
+    assert_eq!(
+        local_provider
+            .to_auth_headers()
+            .get("x-openai-actor-authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("hosted-actor-secret")
+    );
+
+    let mut remote_config = local_config;
+    remote_config.environment_id = "customer-executor".to_string();
+    let remote_server = EffectiveMcpServer::configured(remote_config);
+    assert!(
+        chatgpt_auth_provider_for_server(&remote_server, Some(provider)).is_none(),
+        "customer-owned executors must never receive hosted actor credentials"
+    );
+}
+
+#[tokio::test]
+async fn executor_owned_chatgpt_mcp_accepts_only_safe_explicit_authorization() -> anyhow::Result<()>
+{
+    let codex_home = tempdir()?;
+    let environment_manager = Arc::new(environment_manager_without_environments());
+    environment_manager.upsert_environment(
+        "customer-executor".to_string(),
+        "ws://127.0.0.1:1".to_string(),
+        /*connect_timeout*/ None,
+    )?;
+    let runtime_context =
+        McpRuntimeContext::new(Arc::clone(&environment_manager), PathBuf::from("/tmp"));
+    let bootstrap_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let mut actor_headers = Default::default();
+    codex_model_provider::auth_provider_from_auth(&bootstrap_auth)
+        .add_auth_headers(&mut actor_headers);
+    actor_headers.insert(
+        "x-openai-actor-authorization",
+        "hosted-actor-secret"
+            .parse()
+            .expect("valid actor authorization header"),
+    );
+    let hosted_auth = CodexAuth::Headers(AuthHeaders::new(actor_headers));
+    let runtime_config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
+    let cases = [
+        ("missing", None, None, None, false),
+        ("empty", Some(("Authorization", "")), None, None, false),
+        (
+            "whitespace",
+            Some(("Authorization", " \t ")),
+            None,
+            None,
+            false,
+        ),
+        (
+            "invalid newline",
+            Some(("Authorization", "Bearer executor\r\nsecret")),
+            None,
+            None,
+            false,
+        ),
+        (
+            "invalid NUL",
+            Some(("Authorization", "Bearer executor\0secret")),
+            None,
+            None,
+            false,
+        ),
+        (
+            "invalid DEL",
+            Some(("Authorization", "Bearer executor\u{007f}secret")),
+            None,
+            None,
+            false,
+        ),
+        (
+            "environment header",
+            Some(("Authorization", "Bearer executor-secret")),
+            None,
+            Some(("aUtHoRiZaTiOn", "CODEX_TEST_HOSTED_SECRET")),
+            false,
+        ),
+        (
+            "environment bearer",
+            Some(("Authorization", "Bearer executor-secret")),
+            Some("CODEX_TEST_HOSTED_SECRET"),
+            None,
+            false,
+        ),
+        (
+            "mixed-case static header",
+            Some(("aUtHoRiZaTiOn", "Bearer executor-secret")),
+            None,
+            None,
+            true,
+        ),
+    ];
+
+    for (case, static_header, bearer_env_var, env_header, allows_executor_auth) in cases {
+        let mut server_json = serde_json::json!({
+            "url": "https://chatgpt.com/backend-api/ps/mcp",
+            "auth": "chatgpt",
+            "environment_id": "customer-executor",
+        });
+        if let Some((name, value)) = static_header {
+            server_json["http_headers"] = serde_json::json!({ name: value });
+        }
+        if let Some(name) = bearer_env_var {
+            server_json["bearer_token_env_var"] = serde_json::json!(name);
+        }
+        if let Some((name, value)) = env_header {
+            server_json["env_http_headers"] = serde_json::json!({ name: value });
+        }
+        let server_config = serde_json::from_value::<McpServerConfig>(server_json)?;
+        let mcp_servers = crate::effective_mcp_servers_from_configured(
+            HashMap::from([("fake-first-party".to_string(), server_config)]),
+            &runtime_config,
+            Some(&hosted_auth),
+        );
+        assert!(matches!(
+            mcp_servers["fake-first-party"].config().auth,
+            McpServerAuth::ChatGpt
+        ));
+        let remote_server = &mcp_servers["fake-first-party"];
+        assert!(
+            chatgpt_auth_provider_for_server(
+                remote_server,
+                Some(codex_model_provider::auth_provider_from_auth(&hosted_auth)),
+            )
+            .is_none(),
+            "{case}: executor-owned servers must never receive hosted actor credentials"
+        );
+        let resolved_environment =
+            runtime_context.resolve_server_environment("fake-first-party", remote_server.config());
+        let connection_identity = |keyring_backend_kind| {
+            McpServerConnectionIdentity::new(
+                "fake-first-party",
+                remote_server,
+                OAuthCredentialsStoreMode::File,
+                keyring_backend_kind,
+                &resolved_environment,
+                &runtime_context,
+                /*runtime_auth_provider*/ None,
+                Some(&hosted_auth),
+                /*codex_apps_cache_identity*/ None,
+                ElicitationCapability::default(),
+                /*supports_openai_form_elicitation*/ false,
+            )
+        };
+        let direct_keyring_identity = connection_identity(AuthKeyringBackendKind::Direct);
+        let secrets_keyring_identity = connection_identity(AuthKeyringBackendKind::Secrets);
+        assert!(
+            direct_keyring_identity.has_same_connection_config(&secrets_keyring_identity),
+            "{case}: executor-owned servers must not inspect orchestrator OAuth stores"
+        );
+        assert!(
+            direct_keyring_identity
+                .oauth_credentials()
+                .expect("executor-owned ChatGPT authentication must skip OAuth lookup")
+                .is_none(),
+            "{case}: executor-owned servers must not retain hosted OAuth credentials"
+        );
+        let auth_statuses = crate::compute_auth_statuses(
+            mcp_servers.iter(),
+            OAuthCredentialsStoreMode::default(),
+            AuthKeyringBackendKind::default(),
+            Some(&hosted_auth),
+            &runtime_context,
+        )
+        .await;
+        let expected_auth_state = if allows_executor_auth {
+            McpAuthState::BearerToken
+        } else {
+            McpAuthState::Unsupported
+        };
+        assert_eq!(
+            auth_statuses["fake-first-party"].auth_state, expected_auth_state,
+            "{case}: auth status must only accept safe executor-owned authorization"
+        );
+
+        let manager = McpConnectionSet::new(
+            /*previous*/ None,
+            McpPublicationGate::already_published(),
+            McpRuntimeInput {
+                config: Arc::new(runtime_config.clone()),
+                plugins_available: false,
+                ready_selected_capability_roots: Vec::new(),
+                mcp_servers,
+                submit_id: "security-test".to_string(),
+                tx_event: None,
+                startup_cancellation_token: CancellationToken::new(),
+                runtime_context: runtime_context.clone(),
+                codex_apps_tools_cache: ConnectorRuntimeManager::default(),
+                tool_catalog_cache: McpToolCatalogCache::default(),
+                codex_apps_tools_cache_key: ConnectorRuntimeContextKey::personal(
+                    /*account_id*/ None, /*chatgpt_user_id*/ None,
+                ),
+                supports_openai_form_elicitation: false,
+                auth: Some(hosted_auth.clone()),
+                codex_apps_auth_manager: None,
+                elicitation_reviewer: None,
+                elicitation_lifecycle: None,
+            },
+            ElicitationRequestRouter::default(),
+        )
+        .await;
+        let error = match manager.test_client("fake-first-party").client().await {
+            Ok(_) => panic!("{case}: the unreachable fake executor must not connect"),
+            Err(error) => error,
+        };
+        let StartupOutcomeError::Failed { error, .. } = error else {
+            panic!("{case}: executor-owned authentication must fail rather than be cancelled");
+        };
+        if allows_executor_auth {
+            assert!(
+                error.contains("127.0.0.1:1"),
+                "{case}: safe explicit credentials should reach the executor: {error}"
+            );
+        } else {
+            assert_eq!(
+                error,
+                "executor-owned MCP server `fake-first-party` cannot use hosted ChatGPT authentication; configure executor-owned credentials instead",
+                "{case}: unsafe credentials must fail before contacting the executor"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
