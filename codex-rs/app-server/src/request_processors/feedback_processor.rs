@@ -7,6 +7,8 @@ use codex_feedback::CODEX_APPS_TOOLS_CACHE_ATTACHMENT_FILENAME;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 use codex_rollout::RolloutRecorder;
+use sha2::Digest;
+use sha2::Sha256;
 
 const MAX_FEEDBACK_TREE_THREADS: usize = 8;
 
@@ -76,21 +78,22 @@ impl FeedbackRequestProcessor {
             None => None,
         };
 
-        if let Some(conversation_id) = conversation_id
+        let auth = self.auth_manager.auth_cached();
+        let turn_metadata = if let Some(conversation_id) = conversation_id
             && let Some(rollout_path) = self
                 .resolve_rollout_path(conversation_id, self.state_db.as_ref())
                 .await
-            && let Some((model, reasoning_effort)) = feedback_model_and_effort_from_rollout(
+        {
+            feedback_turn_metadata_from_rollout(
                 &rollout_path,
                 upload_tags.get("turn_id").map(String::as_str),
             )
             .await
-        {
-            upload_tags.insert("model".to_string(), model);
-            upload_tags.insert("effort".to_string(), format!("{reasoning_effort:?}"));
-        }
+        } else {
+            None
+        };
+        apply_feedback_turn_metadata(&mut upload_tags, turn_metadata);
 
-        let auth = self.auth_manager.auth_cached();
         if let Some(chatgpt_user_id) = auth
             .as_ref()
             .and_then(codex_login::CodexAuth::get_chatgpt_user_id)
@@ -300,22 +303,69 @@ impl FeedbackRequestProcessor {
     }
 }
 
-async fn feedback_model_and_effort_from_rollout(
+#[derive(Debug, PartialEq)]
+struct FeedbackTurnMetadata {
+    model: String,
+    effort: Option<ReasoningEffort>,
+    prompt_hash: Option<String>,
+}
+
+fn apply_feedback_turn_metadata(
+    upload_tags: &mut BTreeMap<String, String>,
+    turn_metadata: Option<FeedbackTurnMetadata>,
+) {
+    // These are reserved tags derived from the persisted rollout rather than
+    // accepted from the feedback request.
+    upload_tags.remove("prompt_hash");
+    upload_tags.remove("prompt_version");
+
+    if let Some(FeedbackTurnMetadata {
+        model,
+        effort,
+        prompt_hash,
+    }) = turn_metadata
+    {
+        upload_tags.insert("model".to_string(), model);
+        upload_tags.insert("effort".to_string(), format!("{effort:?}"));
+        if let Some(prompt_hash) = prompt_hash {
+            upload_tags.insert("prompt_hash".to_string(), prompt_hash);
+        }
+    }
+}
+
+async fn feedback_turn_metadata_from_rollout(
     rollout_path: &Path,
     turn_id: Option<&str>,
-) -> Option<(String, Option<ReasoningEffort>)> {
+) -> Option<FeedbackTurnMetadata> {
     let (items, _, _) = RolloutRecorder::load_rollout_items(rollout_path)
         .await
         .ok()?;
+    let prompt_hash = items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta) => meta
+            .meta
+            .base_instructions
+            .as_ref()
+            .map(|prompt| normalized_prompt_hash(&prompt.text)),
+        _ => None,
+    });
 
     items.into_iter().rev().find_map(|item| match item {
         RolloutItem::TurnContext(context)
             if turn_id.is_none() || context.turn_id.as_deref() == turn_id =>
         {
-            Some((context.model, context.effort))
+            Some(FeedbackTurnMetadata {
+                model: context.model,
+                effort: context.effort,
+                prompt_hash: prompt_hash.clone(),
+            })
         }
         _ => None,
     })
+}
+
+fn normalized_prompt_hash(prompt: &str) -> String {
+    let normalized_prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{:x}", Sha256::digest(normalized_prompt.as_bytes()))
 }
 
 fn tool_cache_feedback_attachments(
@@ -385,52 +435,179 @@ mod tests {
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::TurnContextItem;
     use pretty_assertions::assert_eq;
+    #[test]
+    fn feedback_tags_drop_unverified_client_prompt_tags() {
+        let mut upload_tags = BTreeMap::from([
+            ("custom".to_string(), "preserved".to_string()),
+            (
+                "prompt_hash".to_string(),
+                "unverified-client-hash".to_string(),
+            ),
+            ("prompt_version".to_string(), "client-prompt-v1".to_string()),
+        ]);
+
+        apply_feedback_turn_metadata(&mut upload_tags, /*turn_metadata*/ None);
+
+        assert_eq!(
+            upload_tags,
+            BTreeMap::from([("custom".to_string(), "preserved".to_string())])
+        );
+    }
+
+    #[test]
+    fn feedback_tags_drop_client_prompt_hash_when_rollout_has_no_hash() {
+        let mut upload_tags = BTreeMap::from([(
+            "prompt_hash".to_string(),
+            "unverified-client-hash".to_string(),
+        )]);
+
+        apply_feedback_turn_metadata(
+            &mut upload_tags,
+            Some(FeedbackTurnMetadata {
+                model: "reported-model".to_string(),
+                effort: Some(ReasoningEffort::High),
+                prompt_hash: None,
+            }),
+        );
+
+        assert_eq!(
+            upload_tags,
+            BTreeMap::from([
+                ("effort".to_string(), "Some(High)".to_string()),
+                ("model".to_string(), "reported-model".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn feedback_tags_replace_client_prompt_hash_with_rollout_hash() {
+        let mut upload_tags = BTreeMap::from([(
+            "prompt_hash".to_string(),
+            "unverified-client-hash".to_string(),
+        )]);
+
+        apply_feedback_turn_metadata(
+            &mut upload_tags,
+            Some(FeedbackTurnMetadata {
+                model: "reported-model".to_string(),
+                effort: Some(ReasoningEffort::High),
+                prompt_hash: Some("rollout-prompt-hash".to_string()),
+            }),
+        );
+
+        assert_eq!(
+            upload_tags,
+            BTreeMap::from([
+                ("effort".to_string(), "Some(High)".to_string()),
+                ("model".to_string(), "reported-model".to_string()),
+                ("prompt_hash".to_string(), "rollout-prompt-hash".to_string(),),
+            ])
+        );
+    }
 
     #[tokio::test]
-    async fn feedback_model_and_effort_use_the_reported_turn() {
+    async fn feedback_tags_do_not_trust_the_prompt_version_from_the_reported_rollout() {
+        let (_tempdir, rollout_path) =
+            feedback_rollout(&[("turn-1", "synthetic-model", Some(ReasoningEffort::High))]);
+        let mut upload_tags = BTreeMap::from([(
+            "prompt_version".to_string(),
+            "unverified-client-prompt".to_string(),
+        )]);
+
+        let turn_metadata =
+            feedback_turn_metadata_from_rollout(&rollout_path, Some("turn-1")).await;
+        apply_feedback_turn_metadata(&mut upload_tags, turn_metadata);
+
+        assert_eq!(
+            upload_tags,
+            BTreeMap::from([
+                ("effort".to_string(), "Some(High)".to_string()),
+                ("model".to_string(), "synthetic-model".to_string()),
+                (
+                    "prompt_hash".to_string(),
+                    normalized_prompt_hash("actual developer prompt"),
+                ),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_metadata_uses_the_reported_turn() {
         let (_tempdir, rollout_path) = feedback_rollout(&[
             ("turn-1", "reported-model", Some(ReasoningEffort::High)),
             ("turn-2", "newer-model", Some(ReasoningEffort::Ultra)),
         ]);
 
         assert_eq!(
-            feedback_model_and_effort_from_rollout(&rollout_path, Some("turn-1")).await,
-            Some(("reported-model".to_string(), Some(ReasoningEffort::High)))
+            feedback_turn_metadata_from_rollout(&rollout_path, Some("turn-1")).await,
+            Some(FeedbackTurnMetadata {
+                model: "reported-model".to_string(),
+                effort: Some(ReasoningEffort::High),
+                prompt_hash: Some(normalized_prompt_hash("actual developer prompt")),
+            })
         );
     }
 
     #[tokio::test]
-    async fn feedback_model_and_effort_use_the_latest_turn_when_no_turn_is_reported() {
+    async fn feedback_metadata_uses_the_latest_turn_when_no_turn_is_reported() {
         let (_tempdir, rollout_path) = feedback_rollout(&[
             ("turn-1", "older-model", Some(ReasoningEffort::High)),
             ("turn-2", "latest-model", Some(ReasoningEffort::Ultra)),
         ]);
 
         assert_eq!(
-            feedback_model_and_effort_from_rollout(&rollout_path, /*turn_id*/ None).await,
-            Some(("latest-model".to_string(), Some(ReasoningEffort::Ultra)))
+            feedback_turn_metadata_from_rollout(&rollout_path, /*turn_id*/ None).await,
+            Some(FeedbackTurnMetadata {
+                model: "latest-model".to_string(),
+                effort: Some(ReasoningEffort::Ultra),
+                prompt_hash: Some(normalized_prompt_hash("actual developer prompt")),
+            })
         );
     }
 
     #[tokio::test]
-    async fn feedback_model_and_effort_do_not_substitute_a_different_turn() {
+    async fn feedback_metadata_does_not_substitute_a_different_turn() {
         let (_tempdir, rollout_path) =
             feedback_rollout(&[("turn-1", "different-model", Some(ReasoningEffort::High))]);
 
         assert_eq!(
-            feedback_model_and_effort_from_rollout(&rollout_path, Some("missing-turn")).await,
+            feedback_turn_metadata_from_rollout(&rollout_path, Some("missing-turn")).await,
             None
         );
     }
 
     #[tokio::test]
-    async fn feedback_model_and_effort_preserve_unspecified_effort() {
+    async fn feedback_metadata_preserves_unspecified_effort_and_prompt_hash() {
         let (_tempdir, rollout_path) =
             feedback_rollout(&[("turn-1", "reported-model", /*effort*/ None)]);
 
         assert_eq!(
-            feedback_model_and_effort_from_rollout(&rollout_path, Some("turn-1")).await,
-            Some(("reported-model".to_string(), None))
+            feedback_turn_metadata_from_rollout(&rollout_path, Some("turn-1")).await,
+            Some(FeedbackTurnMetadata {
+                model: "reported-model".to_string(),
+                effort: None,
+                prompt_hash: Some(normalized_prompt_hash("actual developer prompt")),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_hashes_the_actual_developer_prompt_from_session_metadata() {
+        let (_tempdir, rollout_path) = feedback_rollout(&[("turn-1", "reported-model", None)]);
+
+        assert_eq!(
+            feedback_turn_metadata_from_rollout(&rollout_path, Some("turn-1"))
+                .await
+                .and_then(|metadata| metadata.prompt_hash),
+            Some(normalized_prompt_hash("actual developer prompt")),
+        );
+    }
+
+    #[test]
+    fn prompt_hash_normalizes_whitespace() {
+        assert_eq!(
+            normalized_prompt_hash("actual  developer\r\nprompt\t"),
+            "9ae77301cc2a30e729c28661b7a0f9490c80a72e7d23277e7e74f0ac81779541"
         );
     }
 
@@ -445,6 +622,9 @@ mod tests {
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: codex_protocol::protocol::SessionMeta {
                     cwd: tempdir.path().to_path_buf(),
+                    base_instructions: Some(codex_protocol::models::BaseInstructions {
+                        text: "actual developer prompt".to_string(),
+                    }),
                     ..Default::default()
                 },
                 git: None,
