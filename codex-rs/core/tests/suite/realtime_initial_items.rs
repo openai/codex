@@ -150,6 +150,32 @@ async fn initial_items_enforce_aggregate_token_limit() -> Result<()> {
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_start_instructions_enforce_token_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut params = start_params(RealtimeConversationVersion::V3);
+    params.realtime_start_instructions = Some("x".repeat(8_192 * 4 + 1));
+    assert_start_error(
+        params,
+        "realtime start instructions must not exceed 8192 estimated tokens",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_end_instructions_enforce_token_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut params = start_params(RealtimeConversationVersion::V3);
+    params.realtime_end_instructions = Some("x".repeat(8_192 * 4 + 1));
+    assert_start_error(
+        params,
+        "realtime end instructions must not exceed 8192 estimated tokens",
+    )
+    .await
+}
+
 async fn assert_start_error(params: ConversationStartParams, expected_error: &str) -> Result<()> {
     let api_server = start_mock_server().await;
     let test = test_codex().build_with_auto_env(&api_server).await?;
@@ -195,6 +221,8 @@ fn start_params(version: RealtimeConversationVersion) -> ConversationStartParams
                 role: ConversationTextRole::Assistant,
             },
         ],
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
         prompt: Some(Some("backend prompt".to_string())),
         realtime_session_id: None,
         transport: None,

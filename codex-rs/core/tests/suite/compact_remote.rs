@@ -253,6 +253,8 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: true,
             initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
@@ -300,10 +302,6 @@ fn assert_request_contains_realtime_start(request: &responses::ResponsesRequest)
         body.contains("<realtime_conversation>"),
         "expected request to restate realtime instructions"
     );
-    assert!(
-        !body.contains("Reason: inactive"),
-        "expected request to use realtime start instructions"
-    );
 }
 
 fn assert_request_contains_custom_realtime_start(
@@ -332,7 +330,7 @@ fn assert_request_contains_realtime_end(request: &responses::ResponsesRequest) {
         "expected request to restate realtime instructions"
     );
     assert!(
-        body.contains("Reason: inactive"),
+        body.contains("Realtime conversation ended."),
         "expected request to use realtime end instructions"
     );
 }

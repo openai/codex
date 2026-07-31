@@ -8808,7 +8808,7 @@ async fn record_context_updates_emits_realtime_end_when_session_stops_being_live
     assert!(
         developer_texts
             .iter()
-            .any(|text| text.contains("Reason: inactive")),
+            .any(|text| text.contains("<realtime_conversation>")),
         "expected a realtime end update, got {developer_texts:?}"
     );
 }

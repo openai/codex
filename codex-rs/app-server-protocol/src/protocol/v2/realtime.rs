@@ -106,6 +106,12 @@ pub struct ThreadRealtimeStartParams {
     /// limited to 128 items and 8,192 estimated text tokens in total.
     #[ts(optional = nullable)]
     pub initial_items: Option<Vec<ThreadRealtimeInitialItem>>,
+    /// Developer instructions given to the backing Codex model when this realtime session starts.
+    #[ts(optional = nullable)]
+    pub realtime_start_instructions: Option<String>,
+    /// Developer instructions given to the backing Codex model when this realtime session ends.
+    #[ts(optional = nullable)]
+    pub realtime_end_instructions: Option<String>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
