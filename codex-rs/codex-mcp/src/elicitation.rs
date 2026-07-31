@@ -21,6 +21,8 @@ use async_channel::Sender;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
+use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY;
+use codex_protocol::mcp_approval_meta::STRICT_AUTO_REVIEW_KEY;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -32,9 +34,13 @@ use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use rmcp::model::ElicitationAction;
 use rmcp::model::RequestId;
+use serde_json::Value;
 use tokio::sync::oneshot;
 
 static NEXT_ELICITATION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
+
+const STRICT_AUTO_REVIEW_DECLINE_MESSAGE: &str =
+    "Strict automated review failed. Do not proceed or ask the user for approval.";
 
 #[derive(Debug, Clone)]
 pub struct ElicitationReviewRequest {
@@ -220,6 +226,53 @@ impl ElicitationRequestManager {
                     reviewer,
                     lifecycle,
                 } = authority;
+
+                match elicitation
+                    .meta()
+                    .and_then(|meta| meta.get(STRICT_AUTO_REVIEW_KEY))
+                {
+                    Some(Value::Bool(true)) => {
+                        if matches!(
+                            approval_policy,
+                            AskForApproval::Granular(config) if !config.allows_mcp_elicitations()
+                        ) {
+                            return Ok(strict_auto_review_decline());
+                        }
+                        let Some(reviewer) = reviewer.as_ref() else {
+                            return Ok(strict_auto_review_decline());
+                        };
+                        let _active_elicitation =
+                            lifecycle.as_ref().map(ElicitationLifecycle::start);
+                        return Ok(
+                            match reviewer
+                                .review(ElicitationReviewRequest {
+                                    server_name,
+                                    request_id: id,
+                                    elicitation,
+                                })
+                                .await
+                            {
+                                Ok(Some(response))
+                                    if response.action == ElicitationAction::Accept
+                                        && response.content == Some(serde_json::json!({}))
+                                        && response
+                                            .meta
+                                            .as_ref()
+                                            .and_then(Value::as_object)
+                                            .and_then(|meta| meta.get(APPROVALS_REVIEWER_KEY))
+                                            .and_then(Value::as_str)
+                                            == Some("auto_review") =>
+                                {
+                                    response
+                                }
+                                Ok(Some(_)) | Ok(None) | Err(_) => strict_auto_review_decline(),
+                            },
+                        );
+                    }
+                    None | Some(Value::Bool(false)) => {}
+                    Some(_) => return Ok(strict_auto_review_decline()),
+                }
+
                 if mcp_permission_prompt_is_auto_approved(
                     approval_policy,
                     &permission_profile,
@@ -341,6 +394,16 @@ impl ElicitationRequestManager {
     }
 }
 
+fn strict_auto_review_decline() -> ElicitationResponse {
+    ElicitationResponse {
+        action: ElicitationAction::Decline,
+        content: None,
+        meta: Some(serde_json::json!({
+            "message": STRICT_AUTO_REVIEW_DECLINE_MESSAGE,
+        })),
+    }
+}
+
 pub(crate) fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
     match approval_policy {
         AskForApproval::Never => true,
@@ -364,3 +427,7 @@ fn can_auto_accept_elicitation(elicitation: &Elicitation) -> bool {
         Elicitation::Mcp(_) | Elicitation::OpenAiForm { .. } => false,
     }
 }
+
+#[cfg(test)]
+#[path = "elicitation_tests.rs"]
+mod tests;

@@ -391,7 +391,8 @@ async fn forward_events(
                         // runtime after a refresh.
                         let metadata = session
                             .mcp_tool_approval_metadata(&id, &event.call_id)
-                            .await;
+                            .await
+                            .map(|(_, metadata)| metadata);
                         pending_mcp_invocations
                             .lock()
                             .await

@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -14,6 +15,8 @@ use axum::http::StatusCode;
 use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
+use codex_app_server_protocol::ApprovalsReviewer;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
@@ -25,6 +28,7 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -36,6 +40,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
+use codex_protocol::mcp_approval_meta as approval_meta;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
@@ -55,6 +61,7 @@ use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::MetaObject;
 use rmcp::model::PrimitiveSchemaDefinition;
+use rmcp::model::RequestMetaObject;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::ServerRequest as McpServerRequest;
@@ -68,10 +75,12 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
+use self::StrictReviewScenario as Review;
 use super::connection_handling_websocket::WsClient;
 use super::connection_handling_websocket::connect_websocket;
 use super::connection_handling_websocket::read_jsonrpc_message;
@@ -84,11 +93,15 @@ use super::connection_handling_websocket::spawn_websocket_server;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CONNECTOR_ID: &str = "calendar";
 const CONNECTOR_NAME: &str = "Calendar";
+const CONNECTED_ACCOUNT_EMAIL: &str = "calendar-owner@example.com";
 const TOOL_NAMESPACE: &str = "mcp__codex_apps__calendar";
 const CALLABLE_TOOL_NAME: &str = "_confirm_action";
 const TOOL_NAME: &str = "calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
+const NEXT_TURN_TOOL_CALL_ID: &str = "call-calendar-next-turn";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
+const STRICT_DECLINE_MESSAGE: &str =
+    "Strict automated review failed. Do not proceed or ask the user for approval.";
 const OPENAI_FORM_MESSAGE: &str = "Select a template";
 const IMAGE_DATA_URL: &str =
     "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
@@ -98,6 +111,49 @@ enum ElicitationScenario {
     StandardForm,
     LegacySep1034Defaults,
     OpenAiForm,
+    Strict(StrictReviewScenario),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StrictReviewScenario {
+    Approved,
+    ApproveForMe,
+    Never,
+    FullAccess,
+    DeniedBurst,
+    GuardianDisabled,
+    ManagedGuardianDisabled,
+    ManagedReviewerForbidden,
+    AppReviewerUser,
+    AppReviewerNoncanonicalId,
+    AppReviewerSpoofedId,
+    AppReviewerSpoofedAction,
+    AppReviewerMissingCallId,
+    AppDefaultReviewerUser,
+    Persistent,
+}
+
+impl StrictReviewScenario {
+    fn expects_user_confirmation(self) -> bool {
+        matches!(self, Self::Approved | Self::ApproveForMe)
+    }
+
+    fn review_outcomes(self) -> &'static [bool] {
+        match self {
+            Self::Approved | Self::ApproveForMe | Self::Never | Self::FullAccess => &[true],
+            Self::DeniedBurst => &[false, false, false],
+            Self::GuardianDisabled
+            | Self::ManagedGuardianDisabled
+            | Self::ManagedReviewerForbidden
+            | Self::AppReviewerUser
+            | Self::AppReviewerNoncanonicalId
+            | Self::AppReviewerSpoofedId
+            | Self::AppReviewerSpoofedAction
+            | Self::AppReviewerMissingCallId
+            | Self::AppDefaultReviewerUser
+            | Self::Persistent => &[],
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -191,6 +247,40 @@ async fn mcp_server_openai_form_elicitation_round_trip() -> Result<()> {
         .accept(request_id.clone(), json!({ "template": "monthly-review" }))
         .await?;
     fixture.finish(request_id, "accepted monthly-review").await
+}
+
+#[test_case(Review::Approved; "approved")]
+#[test_case(Review::ApproveForMe; "approve_for_me")]
+#[test_case(Review::Never; "never")]
+#[test_case(Review::FullAccess; "full_access")]
+#[test_case(Review::DeniedBurst; "three_denials_interrupt")]
+#[test_case(Review::GuardianDisabled; "guardian_disabled")]
+#[test_case(Review::ManagedGuardianDisabled; "managed_guardian_disabled")]
+#[test_case(Review::ManagedReviewerForbidden; "managed_reviewer_forbidden")]
+#[test_case(Review::AppReviewerUser; "app_reviewer_user")]
+#[test_case(Review::AppReviewerNoncanonicalId; "app_reviewer_noncanonical_id")]
+#[test_case(Review::AppReviewerSpoofedId; "app_reviewer_spoofed_id")]
+#[test_case(Review::AppReviewerSpoofedAction; "app_reviewer_spoofed_action")]
+#[test_case(Review::AppReviewerMissingCallId; "app_reviewer_missing_call_id")]
+#[test_case(Review::AppDefaultReviewerUser; "app_default_reviewer_user")]
+#[test_case(Review::Persistent; "persistent")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mcp_server_strict_auto_review(scenario: Review) -> Result<()> {
+    let mut fixture =
+        ElicitationRoundTripFixture::start(ElicitationScenario::Strict(scenario)).await?;
+    if !scenario.expects_user_confirmation() {
+        return fixture.finish(RequestId::Integer(0), "declined").await;
+    }
+    let (request_id, params) = fixture.read_elicitation().await?;
+    assert!(
+        matches!(params.request, McpServerElicitationRequest::Form { meta: None, message, .. }
+            if message == ELICITATION_MESSAGE),
+        "approved strict review must preserve the ordinary elicitation"
+    );
+    fixture
+        .accept(request_id.clone(), json!({ "confirmed": true }))
+        .await?;
+    fixture.finish(request_id, "accepted").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -389,9 +479,8 @@ async fn start_elicitation_services(
 ) -> Result<(wiremock::MockServer, ResponseMock, String, JoinHandle<()>)> {
     let responses_server = responses::start_mock_server().await;
     let tool_call_arguments = serde_json::to_string(&json!({}))?;
-    let response_mock = responses::mount_sse_sequence(
-        &responses_server,
-        vec![
+    let response_mock = responses::mount_sse_sequence(&responses_server, {
+        let mut streams = vec![
             responses::sse(vec![
                 responses::ev_response_created("resp-0"),
                 responses::ev_assistant_message("msg-0", "Warmup"),
@@ -412,8 +501,40 @@ async fn start_elicitation_services(
                 responses::ev_assistant_message("msg-1", "Done"),
                 responses::ev_completed("resp-2"),
             ]),
-        ],
-    )
+        ];
+        if let ElicitationScenario::Strict(strict) = scenario {
+            let completion = streams.pop().expect("parent model completion");
+            for approved in strict.review_outcomes() {
+                streams.push(responses::sse(vec![
+                    responses::ev_response_created("resp-guardian"),
+                    responses::ev_assistant_message(
+                        "msg-guardian",
+                        &json!({ "outcome": if *approved { "allow" } else { "deny" } }).to_string(),
+                    ),
+                    responses::ev_completed("resp-guardian"),
+                ]));
+            }
+            if strict != Review::DeniedBurst {
+                streams.push(completion.clone());
+            }
+            if strict == Review::Approved {
+                streams.extend([
+                    responses::sse(vec![
+                        responses::ev_response_created("resp-next-turn"),
+                        responses::ev_function_call_with_namespace(
+                            NEXT_TURN_TOOL_CALL_ID,
+                            TOOL_NAMESPACE,
+                            CALLABLE_TOOL_NAME,
+                            &serde_json::to_string(&json!({ "ordinary": true }))?,
+                        ),
+                        responses::ev_completed("resp-next-turn"),
+                    ]),
+                    completion,
+                ]);
+            }
+        }
+        streams
+    })
     .await;
     let (apps_server_url, apps_server_handle) = start_apps_server(scenario).await?;
     Ok((
@@ -428,6 +549,8 @@ struct ElicitationRoundTripFixture {
     mcp: TestAppServer,
     response_mock: ResponseMock,
     _responses_server: wiremock::MockServer,
+    scenario: ElicitationScenario,
+    next_turn: bool,
     thread_id: String,
     turn_id: String,
     apps_server_handle: JoinHandle<()>,
@@ -439,6 +562,19 @@ impl ElicitationRoundTripFixture {
             start_elicitation_services(scenario).await?;
         let codex_home = TempDir::new()?;
         write_config_toml(codex_home.path(), &responses_server.uri(), &apps_server_url)?;
+        let strict = if let ElicitationScenario::Strict(strict) = scenario {
+            Some(strict)
+        } else {
+            None
+        };
+        let requirements = match strict {
+            Some(Review::ManagedReviewerForbidden) => "allowed_approvals_reviewers = [\"user\"]\n",
+            Some(Review::ManagedGuardianDisabled) => "[features]\nauto_review = false\n",
+            _ => "",
+        };
+        if !requirements.is_empty() {
+            std::fs::write(codex_home.path().join("requirements.toml"), requirements)?;
+        }
         write_chatgpt_auth(
             codex_home.path(),
             ChatGptAuthFixture::new("chatgpt-token")
@@ -472,6 +608,39 @@ impl ElicitationRoundTripFixture {
         let thread_start_id = mcp
             .send_thread_start_request_with_auto_env(ThreadStartParams {
                 model: Some("mock-model".to_string()),
+                approval_policy: strict.map(|strict| match strict {
+                    Review::Never | Review::FullAccess => AskForApproval::Never,
+                    _ => AskForApproval::OnRequest,
+                }),
+                approvals_reviewer: strict
+                    .filter(|strict| *strict == Review::ApproveForMe)
+                    .map(|_| ApprovalsReviewer::AutoReview),
+                sandbox: strict
+                    .filter(|strict| *strict == Review::FullAccess)
+                    .map(|_| SandboxMode::DangerFullAccess),
+                config: strict.map(|strict| {
+                    let mut config = HashMap::from([(
+                        "features.guardian_approval".to_string(),
+                        json!(strict != Review::GuardianDisabled),
+                    )]);
+                    if matches!(
+                        strict,
+                        Review::AppReviewerUser
+                            | Review::AppReviewerNoncanonicalId
+                            | Review::AppReviewerSpoofedId
+                    ) {
+                        config.insert(
+                            format!("apps.{CONNECTOR_ID}.approvals_reviewer"),
+                            json!("user"),
+                        );
+                    } else if strict == Review::AppDefaultReviewerUser {
+                        config.insert(
+                            "apps._default.approvals_reviewer".to_string(),
+                            json!("user"),
+                        );
+                    }
+                    config
+                }),
                 ..Default::default()
             })
             .await?;
@@ -537,6 +706,8 @@ impl ElicitationRoundTripFixture {
             mcp,
             response_mock,
             _responses_server: responses_server,
+            scenario,
+            next_turn: false,
             thread_id: thread.id,
             turn_id: turn.id,
             apps_server_handle,
@@ -569,7 +740,17 @@ impl ElicitationRoundTripFixture {
     }
 
     async fn finish(mut self, request_id: RequestId, expected_text: &str) -> Result<()> {
-        let mut resolved = false;
+        let review_outcomes = if let ElicitationScenario::Strict(strict) = self.scenario {
+            strict.review_outcomes()
+        } else {
+            &[]
+        };
+        let denied_burst = review_outcomes.len() == 3;
+        let mut resolved = matches!(
+            self.scenario,
+            ElicitationScenario::Strict(strict) if !strict.expects_user_confirmation()
+        );
+        let mut guardian_review_events = 0;
         loop {
             let message = timeout(DEFAULT_READ_TIMEOUT, self.mcp.read_next_message()).await??;
             let JSONRPCMessage::Notification(notification) = message else {
@@ -587,6 +768,17 @@ impl ElicitationRoundTripFixture {
                     assert_eq!(notification.request_id, request_id);
                     resolved = true;
                 }
+                "item/autoApprovalReview/started" | "item/autoApprovalReview/completed" => {
+                    guardian_review_events += 1;
+                    assert_eq!(
+                        notification
+                            .params
+                            .as_ref()
+                            .and_then(|params| params.get("targetItemId"))
+                            .and_then(Value::as_str),
+                        Some(TOOL_CALL_ID),
+                    );
+                }
                 "turn/completed" => {
                     let notification: TurnCompletedNotification = serde_json::from_value(
                         notification.params.clone().expect("turn/completed params"),
@@ -597,23 +789,77 @@ impl ElicitationRoundTripFixture {
                     );
                     assert_eq!(notification.thread_id, self.thread_id);
                     assert_eq!(notification.turn.id, self.turn_id);
-                    assert_eq!(notification.turn.status, TurnStatus::Completed);
+                    assert_eq!(
+                        notification.turn.status,
+                        if denied_burst {
+                            TurnStatus::Interrupted
+                        } else {
+                            TurnStatus::Completed
+                        }
+                    );
                     break;
                 }
                 _ => {}
             }
         }
+        assert_eq!(
+            guardian_review_events,
+            review_outcomes.len() * 2 * usize::from(!self.next_turn)
+        );
 
         let requests = self.response_mock.requests();
-        assert_eq!(requests.len(), 3);
-        let function_call_output = requests[2].function_call_output(TOOL_CALL_ID);
+        assert_eq!(
+            requests.len(),
+            3 + review_outcomes.len() + usize::from(self.next_turn) * 2 - usize::from(denied_burst)
+        );
+        for guardian_request in requests.iter().skip(2).take(review_outcomes.len()) {
+            let action = guardian_request
+                .message_input_texts("user")
+                .into_iter()
+                .find_map(|text| serde_json::from_str::<Value>(&text).ok())
+                .expect("Guardian prompt must include the reviewed action JSON");
+            assert_eq!(
+                action,
+                json!({
+                    "tool": "mcp_tool_call",
+                    "server": "codex_apps",
+                    "tool_name": TOOL_NAME,
+                    "arguments": {},
+                    "connector_id": CONNECTOR_ID,
+                    "connector_name": CONNECTOR_NAME,
+                    "connected_account_email": CONNECTED_ACCOUNT_EMAIL,
+                    "tool_description": "Confirm a calendar action.",
+                    "annotations": {
+                        "destructive_hint": false,
+                        "open_world_hint": false,
+                        "read_only_hint": true,
+                    },
+                }),
+            );
+        }
+
+        if denied_burst {
+            self.apps_server_handle.abort();
+            let _ = self.apps_server_handle.await;
+            return Ok(());
+        }
+
+        let call_id = if self.next_turn {
+            NEXT_TURN_TOOL_CALL_ID
+        } else {
+            TOOL_CALL_ID
+        };
+        let function_call_output = requests
+            .last()
+            .expect("parent model should receive the MCP tool result")
+            .function_call_output(call_id);
         assert_eq!(
             function_call_output.get("type"),
             Some(&Value::String("function_call_output".to_string()))
         );
         assert_eq!(
             function_call_output.get("call_id"),
-            Some(&Value::String(TOOL_CALL_ID.to_string()))
+            Some(&Value::String(call_id.to_string()))
         );
         let output = function_call_output
             .get("output")
@@ -630,6 +876,28 @@ impl ElicitationRoundTripFixture {
             serde_json::from_str::<Value>(payload)?,
             json!([{ "type": "text", "text": expected_text }])
         );
+
+        if matches!(self.scenario, ElicitationScenario::Strict(Review::Approved)) && !self.next_turn
+        {
+            self.mcp
+                .send_turn_start_request(TurnStartParams {
+                    thread_id: self.thread_id.clone(),
+                    input: vec![V2UserInput::Text {
+                        text: "Run the next ordinary calendar request.".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                })
+                .await?;
+            let (request_id, params) = self.read_elicitation().await?;
+            let turn_id = params.turn_id.expect("ordinary next-turn elicitation");
+            assert_ne!(turn_id, self.turn_id);
+            self.turn_id = turn_id;
+            self.next_turn = true;
+            self.accept(request_id.clone(), json!({ "confirmed": true }))
+                .await?;
+            return Box::pin(self.finish(request_id, "accepted")).await;
+        }
 
         self.apps_server_handle.abort();
         let _ = self.apps_server_handle.await;
@@ -682,7 +950,8 @@ impl ServerHandler for ElicitationAppsMcpServer {
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
         let input_schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
-            "additionalProperties": false
+            "additionalProperties": false,
+            "properties": { "ordinary": { "type": "boolean" } }
         }))
         .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
 
@@ -691,13 +960,22 @@ impl ServerHandler for ElicitationAppsMcpServer {
             Cow::Borrowed("Confirm a calendar action."),
             Arc::new(input_schema),
         );
-        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool.annotations = Some(
+            ToolAnnotations::new()
+                .read_only(true)
+                .destructive(false)
+                .open_world(false),
+        );
 
         let mut meta = MetaObject::new();
         meta.0
             .insert("connector_id".to_string(), json!(CONNECTOR_ID));
         meta.0
             .insert("connector_name".to_string(), json!(CONNECTOR_NAME));
+        meta.0.insert(
+            MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
+            json!({ "connected_account_email": CONNECTED_ACCOUNT_EMAIL }),
+        );
         tool.meta = Some(meta);
 
         Ok(ListToolsResult::with_all_items(vec![tool]))
@@ -705,11 +983,97 @@ impl ServerHandler for ElicitationAppsMcpServer {
 
     async fn call_tool(
         &self,
-        _request: CallToolRequestParams,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
-        match self.scenario {
-            ElicitationScenario::StandardForm => {
+        let scenario = if request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("ordinary"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            ElicitationScenario::StandardForm
+        } else {
+            self.scenario
+        };
+        match scenario {
+            ElicitationScenario::StandardForm | ElicitationScenario::Strict(_) => {
+                if let ElicitationScenario::Strict(strict) = scenario {
+                    let connector_id = match strict {
+                        Review::AppReviewerNoncanonicalId => "calendar ",
+                        Review::AppReviewerSpoofedId => "another-connector",
+                        _ => CONNECTOR_ID,
+                    };
+                    for index in 0..strict.review_outcomes().len().max(1) {
+                        let tool_name = if strict == Review::AppReviewerSpoofedAction {
+                            "calendar_harmless_action"
+                        } else {
+                            TOOL_NAME
+                        };
+                        let apps_meta = context.meta.0.0.get(MCP_TOOL_CODEX_APPS_META_KEY);
+                        let mut meta = MetaObject(
+                            json!({
+                                (approval_meta::REQUEST_TYPE_KEY): approval_meta::REQUEST_TYPE_APPROVAL_REQUEST,
+                                (approval_meta::APPROVAL_KIND_KEY): approval_meta::APPROVAL_KIND_MCP_TOOL_CALL,
+                                (approval_meta::STRICT_AUTO_REVIEW_KEY): true,
+                                (approval_meta::CONNECTOR_ID_KEY): connector_id,
+                                (MCP_TOOL_CODEX_APPS_META_KEY): apps_meta
+                                    .filter(|_| strict != Review::AppReviewerMissingCallId),
+                                (approval_meta::TOOL_NAME_KEY): tool_name,
+                                (approval_meta::TOOL_PARAMS_KEY): {
+                                    "request_nonce": format!("strict-review-{index}"),
+                                },
+                            })
+                            .as_object()
+                            .expect("MCP approval metadata is an object")
+                            .clone(),
+                        );
+                        if strict == Review::Persistent {
+                            meta.0.insert(
+                                approval_meta::PERSIST_KEY.to_string(),
+                                json!(approval_meta::PERSIST_SESSION),
+                            );
+                        }
+                        let requested_schema =
+                            ElicitationSchema::builder().build().map_err(|err| {
+                                rmcp::ErrorData::internal_error(err.to_string(), None)
+                            })?;
+                        let result = context
+                            .peer
+                            .create_elicitation(ElicitRequestParams::FormElicitationParams {
+                                meta: Some(RequestMetaObject::from(meta.0)),
+                                message: format!("Strict automated review #{index}"),
+                                requested_schema,
+                            })
+                            .await
+                            .map_err(|err| {
+                                rmcp::ErrorData::internal_error(err.to_string(), None)
+                            })?;
+                        let expected = if strict.review_outcomes().get(index) == Some(&true) {
+                            json!({
+                                "action": "accept",
+                                "content": {},
+                                "_meta": { "approvals_reviewer": "auto_review" },
+                            })
+                        } else {
+                            json!({
+                                "action": "decline",
+                                "_meta": { "message": STRICT_DECLINE_MESSAGE },
+                            })
+                        };
+                        assert_eq!(
+                            serde_json::to_value(result)
+                                .expect("MCP elicitation response should serialize"),
+                            expected
+                        );
+                    }
+                    if !strict.expects_user_confirmation() {
+                        return Ok(
+                            CallToolResult::success(vec![ContentBlock::text("declined")]).into(),
+                        );
+                    }
+                }
                 let requested_schema = ElicitationSchema::builder()
                     .required_property(
                         "confirmed",

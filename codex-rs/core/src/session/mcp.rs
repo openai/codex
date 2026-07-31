@@ -9,6 +9,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -19,8 +20,10 @@ use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY as MCP_ELICITATION
 use codex_protocol::mcp_approval_meta::CONNECTOR_DESCRIPTION_KEY as MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY as MCP_ELICITATION_CONNECTOR_ID_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_NAME_KEY as MCP_ELICITATION_CONNECTOR_NAME_KEY;
+use codex_protocol::mcp_approval_meta::PERSIST_KEY as MCP_ELICITATION_PERSIST_KEY;
 use codex_protocol::mcp_approval_meta::REQUEST_TYPE_APPROVAL_REQUEST as MCP_ELICITATION_REQUEST_TYPE_APPROVAL_REQUEST;
 use codex_protocol::mcp_approval_meta::REQUEST_TYPE_KEY as MCP_ELICITATION_REQUEST_TYPE_KEY;
+use codex_protocol::mcp_approval_meta::STRICT_AUTO_REVIEW_KEY as MCP_ELICITATION_STRICT_AUTO_REVIEW_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_ELICITATION_TOOL_DESCRIPTION_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_ELICITATION_TOOL_NAME_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_ELICITATION_TOOL_PARAMS_KEY;
@@ -649,7 +652,7 @@ async fn review_guardian_mcp_elicitation(
     session: Arc<Session>,
     request: ElicitationReviewRequest,
 ) -> anyhow::Result<Option<ElicitationResponse>> {
-    let Some((turn_context, _cancellation_token)) =
+    let Some((turn_context, cancellation_token)) =
         session.active_turn_context_and_cancellation_token().await
     else {
         return Ok(None);
@@ -658,6 +661,100 @@ async fn review_guardian_mcp_elicitation(
     let Some(mcp_config) = session.services.mcp_runtime.current_config() else {
         return Ok(None);
     };
+
+    if matches!(
+        request
+            .elicitation
+            .meta()
+            .and_then(|meta| meta.get(MCP_ELICITATION_STRICT_AUTO_REVIEW_KEY)),
+        Some(Value::Bool(true))
+    ) {
+        let connector_id = elicitation_connector_id(&request.elicitation);
+        let trusted_guardian_request = if request.server_name == CODEX_APPS_MCP_SERVER_NAME {
+            let Some(call_id) = request
+                .elicitation
+                .meta()
+                .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+                .and_then(Value::as_object)
+                .and_then(|meta| meta.get("call_id"))
+                .and_then(Value::as_str)
+            else {
+                return Ok(None);
+            };
+            let Some((Some(invocation), metadata)) = session
+                .mcp_tool_approval_metadata(&turn_context.sub_id, call_id)
+                .await
+            else {
+                return Ok(None);
+            };
+            if invocation.server != request.server_name
+                || connector_id != metadata.connector_id.as_deref()
+                || request
+                    .elicitation
+                    .meta()
+                    .and_then(|meta| metadata_str(meta, MCP_ELICITATION_TOOL_NAME_KEY))
+                    != Some(invocation.tool.as_str())
+            {
+                return Ok(None);
+            }
+            Some(
+                crate::mcp_tool_call::build_guardian_mcp_tool_review_request(
+                    call_id,
+                    &invocation,
+                    Some(&metadata),
+                ),
+            )
+        } else {
+            None
+        };
+        if !turn_context
+            .config
+            .features
+            .enabled(Feature::GuardianApproval)
+            || mcp_config
+                .config_layer_stack
+                .requirements()
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::AutoReview)
+                .is_err()
+            || crate::connectors::mcp_approvals_reviewer_from_layers(
+                &mcp_config.config_layer_stack,
+                ApprovalsReviewer::AutoReview,
+                request.server_name.as_str(),
+                connector_id,
+            ) != ApprovalsReviewer::AutoReview
+            || request
+                .elicitation
+                .meta()
+                .is_some_and(|meta| meta.contains_key(MCP_ELICITATION_PERSIST_KEY))
+        {
+            return Ok(None);
+        }
+
+        let GuardianElicitationReview::ApprovalRequest(guardian_request) =
+            guardian_elicitation_review_request(&request)
+        else {
+            return Ok(None);
+        };
+        let guardian_request = trusted_guardian_request.unwrap_or(*guardian_request);
+        let decision = crate::guardian::review_approval_request_with_cancel(
+            &session,
+            &turn_context,
+            crate::guardian::new_guardian_review_id(),
+            guardian_request,
+            /*retry_reason*/ None,
+            crate::guardian::GuardianReviewOptions {
+                plugin_attribution_override: None,
+                approval_request_source: codex_analytics::GuardianApprovalRequestSource::MainTurn,
+                external_cancel: Some(cancellation_token),
+            },
+        )
+        .await;
+
+        return Ok(matches!(decision, ReviewDecision::Approved)
+            .then(|| mcp_elicitation_response_from_guardian_decision(decision)));
+    }
+
     let approval_policy = mcp_config.approval_policy.value();
     match approval_policy {
         AskForApproval::Never => {
@@ -688,6 +785,7 @@ async fn review_guardian_mcp_elicitation(
         AskForApproval::OnRequest | AskForApproval::UnlessTrusted | AskForApproval::Granular(_) => {
         }
     }
+
     let approvals_reviewer = crate::connectors::mcp_approvals_reviewer_from_layers(
         &mcp_config.config_layer_stack,
         mcp_config.approvals_reviewer,
