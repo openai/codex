@@ -285,7 +285,7 @@ async fn default_turn_context_assigns_missing_response_item_ids() {
     let (session, turn_context) = make_session_and_context().await;
     let response_item = user_message("hello");
 
-    let items = session.prepare_conversation_items_for_history(
+    let (items, _) = session.prepare_conversation_items_for_history(
         &turn_context,
         std::slice::from_ref(&response_item),
     );

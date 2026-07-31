@@ -911,6 +911,18 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
         serde_json::Value::Null
     );
     assert_eq!(event["event_params"]["num_input_images"], 1);
+    assert_eq!(
+        event["event_params"]["image_preparations"],
+        json!([{
+            "message_role": "user",
+            "item_id": null,
+            "effective_detail": "high",
+            "source_width": 1,
+            "source_height": 1,
+            "prepared_width": 1,
+            "prepared_height": 1,
+        }])
+    );
     assert_eq!(event["event_params"]["status"], "completed");
     assert!(event["event_params"]["started_at"].as_u64().is_some());
     assert!(event["event_params"]["completed_at"].as_u64().is_some());

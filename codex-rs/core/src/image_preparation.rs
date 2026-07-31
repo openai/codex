@@ -1,3 +1,5 @@
+use codex_analytics::ImageDetailSetting;
+use codex_analytics::ImagePreparationMetadata;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
@@ -24,6 +26,13 @@ const ORIGINAL_DETAIL_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits 
     max_dimension: 6000,
     max_patches: 10_000,
 };
+
+#[derive(Clone, Copy, Debug)]
+struct ImageOrigin<'a> {
+    message_role: Option<&'a str>,
+    item_id: Option<&'a str>,
+}
+
 #[derive(Debug, thiserror::Error)]
 enum ImagePreparationError {
     #[error("remote image URLs are not supported")]
@@ -47,14 +56,35 @@ impl ImagePreparationError {
     }
 }
 
-pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) {
+pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) -> Vec<ImagePreparationMetadata> {
+    let mut metadata = Vec::new();
     for item in items {
         match item {
-            ResponseItem::Message { content, .. } => prepare_message_content(content),
-            ResponseItem::FunctionCallOutput { output, .. }
-            | ResponseItem::CustomToolCallOutput { output, .. } => {
+            ResponseItem::Message { role, content, .. } => {
+                prepare_message_content(
+                    content,
+                    ImageOrigin {
+                        message_role: Some(role),
+                        item_id: None,
+                    },
+                    &mut metadata,
+                );
+            }
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            }
+            | ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            } => {
                 if let Some(content) = output.content_items_mut() {
-                    prepare_tool_output_content(content);
+                    prepare_tool_output_content(
+                        content,
+                        ImageOrigin {
+                            message_role: None,
+                            item_id: Some(call_id),
+                        },
+                        &mut metadata,
+                    );
                 }
             }
             ResponseItem::AdditionalTools { .. }
@@ -73,12 +103,17 @@ pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) {
             | ResponseItem::Other => {}
         }
     }
+    metadata
 }
 
-fn prepare_message_content(items: &mut [ContentItem]) {
+fn prepare_message_content(
+    items: &mut [ContentItem],
+    origin: ImageOrigin<'_>,
+    metadata: &mut Vec<ImagePreparationMetadata>,
+) {
     for item in items {
         if let ContentItem::InputImage { image_url, detail } = item
-            && let Err(error) = prepare_image(image_url, *detail)
+            && let Err(error) = prepare_image(image_url, *detail, origin, metadata)
         {
             warn!(%error, "failed to prepare message image");
             *item = ContentItem::InputText {
@@ -88,10 +123,14 @@ fn prepare_message_content(items: &mut [ContentItem]) {
     }
 }
 
-fn prepare_tool_output_content(items: &mut [FunctionCallOutputContentItem]) {
+fn prepare_tool_output_content(
+    items: &mut [FunctionCallOutputContentItem],
+    origin: ImageOrigin<'_>,
+    metadata: &mut Vec<ImagePreparationMetadata>,
+) {
     for item in items {
         if let FunctionCallOutputContentItem::InputImage { image_url, detail } = item
-            && let Err(error) = prepare_image(image_url, *detail)
+            && let Err(error) = prepare_image(image_url, *detail, origin, metadata)
         {
             warn!(%error, "failed to prepare tool output image");
             *item = FunctionCallOutputContentItem::InputText {
@@ -116,6 +155,8 @@ fn is_data_url(image_url: &str) -> bool {
 fn prepare_image(
     image_url: &mut String,
     detail: Option<ImageDetail>,
+    origin: ImageOrigin<'_>,
+    metadata: &mut Vec<ImagePreparationMetadata>,
 ) -> Result<(), ImagePreparationError> {
     if is_remote_image_url(image_url) {
         return Err(ImagePreparationError::RemoteUrlUnsupported);
@@ -124,12 +165,23 @@ fn prepare_image(
         return Ok(());
     }
 
-    let limits = match detail {
-        None | Some(ImageDetail::Auto | ImageDetail::High) => HIGH_DETAIL_LIMITS,
-        Some(ImageDetail::Original) => ORIGINAL_DETAIL_LIMITS,
+    let (effective_detail, limits) = match detail {
+        None | Some(ImageDetail::Auto | ImageDetail::High) => {
+            (ImageDetailSetting::High, HIGH_DETAIL_LIMITS)
+        }
+        Some(ImageDetail::Original) => (ImageDetailSetting::Original, ORIGINAL_DETAIL_LIMITS),
         Some(ImageDetail::Low) => return Err(ImagePreparationError::UnsupportedLowDetail),
     };
     let image = load_data_url_for_prompt(image_url, PromptImageMode::ResizeWithLimits(limits))?;
+    metadata.push(ImagePreparationMetadata {
+        message_role: origin.message_role.map(str::to_string),
+        item_id: origin.item_id.map(str::to_string),
+        effective_detail,
+        source_width: image.source_width,
+        source_height: image.source_height,
+        prepared_width: image.width,
+        prepared_height: image.height,
+    });
     *image_url = image.into_data_url();
     Ok(())
 }

@@ -60,6 +60,9 @@ use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
+use crate::facts::ImageDetailSetting;
+use crate::facts::ImagePreparationFact;
+use crate::facts::ImagePreparationMetadata;
 use crate::facts::InputError;
 use crate::facts::InvocationType;
 use crate::facts::PluginInstallFailedInput;
@@ -1501,6 +1504,58 @@ fn compaction_event_serializes_expected_shape() {
             }
         })
     );
+}
+
+#[tokio::test]
+async fn image_preparation_fact_is_included_in_turn_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+
+    let metadata = ImagePreparationMetadata {
+        message_role: None,
+        item_id: Some("call-1".to_string()),
+        effective_detail: ImageDetailSetting::High,
+        source_width: 2_048,
+        source_height: 2_048,
+        prepared_width: 1_600,
+        prepared_height: 1_600,
+    };
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ImagePreparation(Box::new(
+                ImagePreparationFact {
+                    turn_id: "turn-2".to_string(),
+                    metadata: metadata.clone(),
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let [TrackEventRequest::TurnEvent(event)] = events.as_slice() else {
+        panic!("expected one turn event");
+    };
+    assert_eq!(event.event_params.image_preparations, vec![metadata]);
 }
 
 #[test]
@@ -4076,6 +4131,15 @@ fn turn_event_serializes_expected_shape() {
             personality: Some("pragmatic".to_string()),
             workspace_kind: Some("projectless".to_string()),
             num_input_images: 2,
+            image_preparations: vec![ImagePreparationMetadata {
+                message_role: Some("user".to_string()),
+                item_id: None,
+                effective_detail: ImageDetailSetting::High,
+                source_width: 2_048,
+                source_height: 2_048,
+                prepared_width: 1_600,
+                prepared_height: 1_600,
+            }],
             is_first_turn: true,
             status: Some(TurnStatus::Completed),
             explicit_client_interrupt_requested_at_ms: None,
@@ -4151,6 +4215,15 @@ fn turn_event_serializes_expected_shape() {
                 "personality": "pragmatic",
                 "workspace_kind": "projectless",
                 "num_input_images": 2,
+                "image_preparations": [{
+                    "message_role": "user",
+                    "item_id": null,
+                    "effective_detail": "high",
+                    "source_width": 2048,
+                    "source_height": 2048,
+                    "prepared_width": 1600,
+                    "prepared_height": 1600
+                }],
                 "is_first_turn": true,
                 "status": "completed",
                 "explicit_client_interrupt_requested_at_ms": null,

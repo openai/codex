@@ -15,6 +15,7 @@ use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
+use crate::facts::ImagePreparationFact;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
@@ -391,6 +392,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Goal(Box::new(
             event,
         ))));
+    }
+
+    pub fn track_image_preparation(&self, fact: ImagePreparationFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ImagePreparation(Box::new(fact)),
+        ));
     }
 
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {

@@ -40,6 +40,9 @@ pub use facts::ExternalAgentConfigImportCompletedInput;
 pub use facts::ExternalAgentConfigImportFailureInput;
 pub use facts::GoalEventKind;
 pub use facts::HookRunFact;
+pub use facts::ImageDetailSetting;
+pub use facts::ImagePreparationFact;
+pub use facts::ImagePreparationMetadata;
 pub use facts::InputError;
 // copybara:strip-for-public begin
 pub use facts::InternalToolHookOutcome;

@@ -69,12 +69,32 @@ fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
 
 #[test]
 fn detail_policies_apply_the_expected_budgets() {
-    for (detail, input_dimensions, expected_dimensions) in [
-        (Some(ImageDetail::High), (2048, 2048), (1600, 1600)),
-        (Some(ImageDetail::Original), (6401, 100), (6000, 94)),
-        (Some(ImageDetail::Original), (3201, 3201), (3200, 3200)),
-        (Some(ImageDetail::Auto), (2048, 2048), (1600, 1600)),
-        (None, (2048, 2048), (1600, 1600)),
+    for (detail, effective_detail, input_dimensions, expected_dimensions) in [
+        (
+            Some(ImageDetail::High),
+            ImageDetailSetting::High,
+            (2048, 2048),
+            (1600, 1600),
+        ),
+        (
+            Some(ImageDetail::Original),
+            ImageDetailSetting::Original,
+            (6401, 100),
+            (6000, 94),
+        ),
+        (
+            Some(ImageDetail::Original),
+            ImageDetailSetting::Original,
+            (3201, 3201),
+            (3200, 3200),
+        ),
+        (
+            Some(ImageDetail::Auto),
+            ImageDetailSetting::High,
+            (2048, 2048),
+            (1600, 1600),
+        ),
+        (None, ImageDetailSetting::High, (2048, 2048), (1600, 1600)),
     ] {
         let (image_url, _) = png_data_url(input_dimensions.0, input_dimensions.1);
         let mut items = vec![ResponseItem::Message {
@@ -85,7 +105,7 @@ fn detail_policies_apply_the_expected_budgets() {
             internal_chat_message_metadata_passthrough: None,
         }];
 
-        prepare_response_items(&mut items);
+        let metadata = prepare_response_items(&mut items);
 
         let ResponseItem::Message { content, .. } = &items[0] else {
             panic!("expected message");
@@ -94,7 +114,50 @@ fn detail_policies_apply_the_expected_budgets() {
             panic!("expected image");
         };
         assert_eq!(decoded_image(image_url).1.dimensions(), expected_dimensions);
+        assert_eq!(
+            metadata,
+            vec![ImagePreparationMetadata {
+                message_role: Some("user".to_string()),
+                item_id: None,
+                effective_detail,
+                source_width: input_dimensions.0,
+                source_height: input_dimensions.1,
+                prepared_width: expected_dimensions.0,
+                prepared_height: expected_dimensions.1,
+            }]
+        );
     }
+}
+
+#[test]
+fn preparation_reports_tool_output_item_id() {
+    let call_id = "call-image";
+    let (image_url, _) = png_data_url(/*width*/ 64, /*height*/ 32);
+    let mut items = vec![ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: Some(ImageDetail::High),
+            },
+        ]),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+    let metadata = prepare_response_items(&mut items);
+
+    assert_eq!(
+        metadata,
+        vec![ImagePreparationMetadata {
+            message_role: None,
+            item_id: Some(call_id.to_string()),
+            effective_detail: ImageDetailSetting::High,
+            source_width: 64,
+            source_height: 32,
+            prepared_width: 64,
+            prepared_height: 32,
+        }]
+    );
 }
 
 #[test]

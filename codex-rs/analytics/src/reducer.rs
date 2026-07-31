@@ -81,6 +81,8 @@ use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunInput;
+use crate::facts::ImagePreparationFact;
+use crate::facts::ImagePreparationMetadata;
 use crate::facts::InternalToolInputLog; // copybara:strip-for-public
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequestedInput;
@@ -382,6 +384,7 @@ struct TurnState {
     connection_id: Option<u64>,
     thread_id: Option<String>,
     num_input_images: Option<usize>,
+    image_preparations: Vec<ImagePreparationMetadata>,
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
@@ -555,6 +558,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnCodexError(input) => {
                     self.ingest_turn_codex_error(*input);
+                }
+                CustomAnalyticsFact::ImagePreparation(input) => {
+                    self.ingest_image_preparation(*input);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -797,6 +803,11 @@ impl AnalyticsReducer {
         let turn_state = self.turns.entry(turn_id).or_default();
         turn_state.thread_id.get_or_insert(thread_id);
         turn_state.codex_error = Some(error);
+    }
+
+    fn ingest_image_preparation(&mut self, input: ImagePreparationFact) {
+        let turn_state = self.turns.entry(input.turn_id).or_default();
+        turn_state.image_preparations.push(input.metadata);
     }
 
     async fn ingest_skill_invoked(
@@ -2792,6 +2803,7 @@ fn codex_turn_event_params(
         personality: personality_mode(personality),
         workspace_kind,
         num_input_images,
+        image_preparations: turn_state.image_preparations.clone(),
         is_first_turn,
         status: completed.status,
         explicit_client_interrupt_requested_at_ms: turn_state
