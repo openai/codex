@@ -1,0 +1,15 @@
+---
+source: tui/src/resume_picker.rs
+expression: "format!(\"---- loading fallback ----\\n{loading_snapshot}\\n---- repaired results ----\\n{repaired_snapshot}\")"
+---
+---- loading fallback ----
+Loading sessions…
+---- repaired results ----
+❯ first store result
+  1d ago        ⌁ no cwd                          no branch
+
+  repaired store result
+  1d ago        ⌁ no cwd                          no branch
+
+  third store result
+  1d ago        ⌁ no cwd                          no branch
