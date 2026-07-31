@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use codex_config::ConfigEditsBuilder;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::load_global_mcp_servers;
@@ -18,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::SkillMetadata;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::skills::model::SkillToolDependency;

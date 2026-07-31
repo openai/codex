@@ -114,7 +114,6 @@ pub use marketplace_edit::RemoveMarketplaceConfigOutcome;
 pub use marketplace_edit::record_user_marketplace;
 pub use marketplace_edit::remove_user_marketplace;
 pub use marketplace_edit::remove_user_marketplace_config;
-pub use mcp_edit::ConfigEditsBuilder;
 pub use mcp_edit::load_global_mcp_servers;
 pub use mcp_requirements::McpServerCommandMatcher;
 pub use mcp_requirements::McpServerIdentity;
