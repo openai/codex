@@ -46,7 +46,6 @@ pub(super) struct HistoryCursor {
 
 #[derive(Clone, Copy)]
 pub(super) struct PhysicalHistoryPosition {
-    pub physical_thread_id: ThreadId,
     pub rollout_ordinal: i64,
 }
 
@@ -60,6 +59,32 @@ pub(super) struct StoredTurnRow {
     pub duration_ms: Option<i64>,
     pub first_user_item_id: Option<String>,
     pub final_agent_item_id: Option<String>,
+    pub summary_items: Vec<StoredThreadItem>,
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct StoredSummaryColumns {
+    summary_first_user_turn_id: Option<String>,
+    summary_first_user_item_id: Option<String>,
+    summary_first_user_rollout_ordinal: Option<i64>,
+    summary_first_user_updated_at_ordinal: Option<i64>,
+    summary_first_user_created_at_ms: Option<i64>,
+    summary_first_user_item_json: Option<String>,
+    summary_final_agent_turn_id: Option<String>,
+    summary_final_agent_item_id: Option<String>,
+    summary_final_agent_rollout_ordinal: Option<i64>,
+    summary_final_agent_updated_at_ordinal: Option<i64>,
+    summary_final_agent_created_at_ms: Option<i64>,
+    summary_final_agent_item_json: Option<String>,
+}
+
+struct StoredSummaryItemColumns {
+    turn_id: Option<String>,
+    item_id: Option<String>,
+    rollout_ordinal: Option<i64>,
+    updated_at_ordinal: Option<i64>,
+    created_at_ms: Option<i64>,
+    item_json: Option<String>,
 }
 
 pub(super) struct StoredThreadItemRow {
@@ -88,13 +113,23 @@ pub(in crate::local) async fn list_turns(
         params.cursor.as_deref(),
         params.page_size,
         params.sort_direction,
+        params.items_view,
     )
     .await?;
     let mut turns = Vec::with_capacity(page.rows.len());
     for turn in page.rows {
         let items = match params.items_view {
             StoredTurnItemsView::NotLoaded => Vec::new(),
-            StoredTurnItemsView::Summary => load_summary_items(pool, &lineage, &turn).await?,
+            StoredTurnItemsView::Summary
+                if matches!(turn.status, StoredTurnStatus::Interrupted)
+                    && turn.first_user_item_id.is_none()
+                    && turn.final_agent_item_id.is_none() =>
+            {
+                // Synthetic fork-boundary rows are interrupted without local summary IDs.
+                // Load their summary from the earliest visible source turn.
+                load_inherited_summary_items(pool, &lineage, &turn).await?
+            }
+            StoredTurnItemsView::Summary => turn.summary_items,
         };
         turns.push(StoredTurn {
             turn_id: turn.turn_id,
@@ -168,33 +203,16 @@ pub(super) async fn validate_thread_for_paginated_reads(
     }
 }
 
-async fn load_summary_items(
+async fn load_inherited_summary_items(
     pool: &sqlx::SqlitePool,
     lineage: &RolloutLineage,
     turn: &StoredTurnRow,
 ) -> ThreadStoreResult<Vec<StoredThreadItem>> {
-    let (item_owner, first_user_item_id, final_agent_item_id) =
-        if matches!(turn.status, StoredTurnStatus::Interrupted)
-            && turn.first_user_item_id.is_none()
-            && turn.final_agent_item_id.is_none()
-        {
-            let source = find_source_turn(pool, lineage, turn.turn_id.as_str()).await?;
-            (
-                source.physical_thread_id,
-                source.first_user_item_id,
-                source.final_agent_item_id,
-            )
-        } else {
-            (
-                turn.position.physical_thread_id,
-                turn.first_user_item_id.clone(),
-                turn.final_agent_item_id.clone(),
-            )
-        };
+    let source = find_source_turn(pool, lineage, turn.turn_id.as_str()).await?;
     let Some(segment) = lineage
         .segments()
         .iter()
-        .find(|segment| segment.thread_id() == item_owner)
+        .find(|segment| segment.thread_id() == source.physical_thread_id)
     else {
         return Ok(Vec::new());
     };
@@ -215,13 +233,13 @@ WHERE thread_id = ?
 ORDER BY rollout_ordinal ASC
         "#,
     )
-    .bind(item_owner.to_string())
+    .bind(source.physical_thread_id.to_string())
     .bind(turn.turn_id.as_str())
     .bind(start_ordinal)
     .bind(end_ordinal)
     .bind(end_ordinal)
-    .bind(first_user_item_id.as_deref())
-    .bind(final_agent_item_id.as_deref())
+    .bind(source.first_user_item_id)
+    .bind(source.final_agent_item_id)
     .fetch_all(pool)
     .await
     .map_err(super::thread_history_error)?;
@@ -261,10 +279,7 @@ pub(super) fn serialize_cursor(
     .map_err(super::thread_history_error)
 }
 
-pub(super) fn stored_turn_row(
-    physical_thread_id: ThreadId,
-    row: sqlx::sqlite::SqliteRow,
-) -> ThreadStoreResult<StoredTurnRow> {
+pub(super) fn stored_turn_row(row: sqlx::sqlite::SqliteRow) -> ThreadStoreResult<StoredTurnRow> {
     let status = match row.try_get::<String, _>("status")?.as_str() {
         "completed" => StoredTurnStatus::Completed,
         "interrupted" => StoredTurnStatus::Interrupted,
@@ -284,7 +299,6 @@ pub(super) fn stored_turn_row(
         .map_err(super::thread_history_error)?;
     Ok(StoredTurnRow {
         position: PhysicalHistoryPosition {
-            physical_thread_id,
             rollout_ordinal: row.try_get("rollout_ordinal")?,
         },
         turn_id: row.try_get("turn_id")?,
@@ -295,11 +309,77 @@ pub(super) fn stored_turn_row(
         duration_ms: row.try_get("duration_ms")?,
         first_user_item_id: row.try_get("first_user_item_id")?,
         final_agent_item_id: row.try_get("final_agent_item_id")?,
+        summary_items: Vec::new(),
     })
 }
 
-pub(super) fn stored_thread_item_row_for_thread(
-    physical_thread_id: ThreadId,
+impl StoredSummaryColumns {
+    pub(super) fn into_stored_items(self) -> ThreadStoreResult<Vec<StoredThreadItem>> {
+        let mut summary_items = [
+            StoredSummaryItemColumns {
+                turn_id: self.summary_first_user_turn_id,
+                item_id: self.summary_first_user_item_id,
+                rollout_ordinal: self.summary_first_user_rollout_ordinal,
+                updated_at_ordinal: self.summary_first_user_updated_at_ordinal,
+                created_at_ms: self.summary_first_user_created_at_ms,
+                item_json: self.summary_first_user_item_json,
+            }
+            .into_stored_item()?,
+            StoredSummaryItemColumns {
+                turn_id: self.summary_final_agent_turn_id,
+                item_id: self.summary_final_agent_item_id,
+                rollout_ordinal: self.summary_final_agent_rollout_ordinal,
+                updated_at_ordinal: self.summary_final_agent_updated_at_ordinal,
+                created_at_ms: self.summary_final_agent_created_at_ms,
+                item_json: self.summary_final_agent_item_json,
+            }
+            .into_stored_item()?,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        summary_items.sort_by_key(|(rollout_ordinal, _)| *rollout_ordinal);
+        Ok(summary_items.into_iter().map(|(_, item)| item).collect())
+    }
+}
+
+impl StoredSummaryItemColumns {
+    fn into_stored_item(self) -> ThreadStoreResult<Option<(i64, StoredThreadItem)>> {
+        let Some(item_id) = self.item_id else {
+            return Ok(None);
+        };
+        let (
+            Some(turn_id),
+            Some(rollout_ordinal),
+            Some(updated_at_ordinal),
+            Some(created_at_ms),
+            Some(item_json),
+        ) = (
+            self.turn_id,
+            self.rollout_ordinal,
+            self.updated_at_ordinal,
+            self.created_at_ms,
+            self.item_json,
+        )
+        else {
+            return Err(ThreadStoreError::Internal {
+                message: "stored summary item is missing joined columns".to_string(),
+            });
+        };
+        Ok(Some((
+            rollout_ordinal,
+            StoredThreadItem {
+                turn_id,
+                item_id,
+                updated_at_ordinal: stored_updated_at_ordinal(updated_at_ordinal)?,
+                created_at_ms,
+                item_json: item_json.into_bytes(),
+            },
+        )))
+    }
+}
+
+pub(super) fn stored_thread_item_row(
     row: sqlx::sqlite::SqliteRow,
 ) -> ThreadStoreResult<StoredThreadItemRow> {
     let rollout_ordinal = row.try_get::<i64, _>("rollout_ordinal")?;
@@ -309,26 +389,25 @@ pub(super) fn stored_thread_item_row_for_thread(
         });
     }
     Ok(StoredThreadItemRow {
-        position: PhysicalHistoryPosition {
-            physical_thread_id,
-            rollout_ordinal,
-        },
+        position: PhysicalHistoryPosition { rollout_ordinal },
         item: stored_thread_item(row)?,
     })
 }
 
 fn stored_thread_item(row: sqlx::sqlite::SqliteRow) -> ThreadStoreResult<StoredThreadItem> {
-    let updated_at_ordinal = row.try_get::<i64, _>("updated_at_ordinal")?;
-    let updated_at_ordinal =
-        u64::try_from(updated_at_ordinal).map_err(|_| ThreadStoreError::Internal {
-            message: format!("invalid stored item updated-at ordinal: {updated_at_ordinal}"),
-        })?;
+    let updated_at_ordinal = stored_updated_at_ordinal(row.try_get("updated_at_ordinal")?)?;
     Ok(StoredThreadItem {
         turn_id: row.try_get("turn_id")?,
         item_id: row.try_get("item_id")?,
         updated_at_ordinal,
         created_at_ms: row.try_get("created_at_ms")?,
         item_json: row.try_get::<String, _>("item_json")?.into_bytes(),
+    })
+}
+
+fn stored_updated_at_ordinal(updated_at_ordinal: i64) -> ThreadStoreResult<u64> {
+    u64::try_from(updated_at_ordinal).map_err(|_| ThreadStoreError::Internal {
+        message: format!("invalid stored item updated-at ordinal: {updated_at_ordinal}"),
     })
 }
 
