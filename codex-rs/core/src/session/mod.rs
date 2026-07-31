@@ -3105,7 +3105,7 @@ impl Session {
         }
         .or_cancel(cancellation_token)
         .await?;
-        let (mcp_tools, tool_router) = turn::built_tools(
+        let tool_router = turn::built_tools(
             self.as_ref(),
             turn_context.as_ref(),
             &environments,
@@ -3121,7 +3121,6 @@ impl Session {
             selected_capability_roots,
             executor_capability_discovery,
             mcp,
-            mcp_tools,
             tool_router,
             loaded_agents_md,
         }))
