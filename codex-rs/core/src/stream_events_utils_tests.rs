@@ -285,8 +285,9 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         hosted_specs,
         &Default::default(),
     ));
+    let step_context = step_context.with_tool_router_for_test(router);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let tool_runtime = ToolCallRuntime::new(router, Arc::clone(&session), step_context, tracker);
+    let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
     let item = assistant_output_text("original assistant text");
     let mut ctx = HandleOutputCtx {
         sess: session,

@@ -30,7 +30,6 @@ use crate::original_image_detail::sanitize_original_image_detail as sanitize_ima
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
@@ -178,7 +177,6 @@ impl CodeModeService {
         &self,
         session: &Arc<Session>,
         step_context: Arc<StepContext>,
-        router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
         let turn = &step_context.turn;
@@ -193,7 +191,7 @@ impl CodeModeService {
         };
         Some(
             self.dispatch_broker
-                .start_turn_worker(exec, router, step_context, tracker),
+                .start_turn_worker(exec, step_context, tracker),
         )
     }
 

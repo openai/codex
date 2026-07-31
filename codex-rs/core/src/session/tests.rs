@@ -225,6 +225,16 @@ impl StepContext {
             loaded_agents_md: None,
         })
     }
+
+    pub(crate) fn with_tool_router_for_test(
+        mut self: Arc<Self>,
+        tool_router: Arc<ToolRouter>,
+    ) -> Arc<Self> {
+        Arc::get_mut(&mut self)
+            .expect("test step context must not be shared before its tool router is set")
+            .tool_router = tool_router;
+        self
+    }
 }
 
 mod guardian_tests;
@@ -845,8 +855,9 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         hosted_specs,
         &Default::default(),
     ));
+    let step_context = step_context.with_tool_router_for_test(router);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    ToolCallRuntime::new(router, session, step_context, tracker)
+    ToolCallRuntime::new(session, step_context, tracker)
 }
 
 fn make_connector(id: &str, name: &str) -> AppInfo {

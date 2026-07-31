@@ -25,7 +25,6 @@ use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
 
@@ -40,7 +39,6 @@ struct ToolCallTimingGuard {
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
-    router: Arc<ToolRouter>,
     session: Arc<Session>,
     // Tool calls may run later, so retain the step whose tool list advertised them.
     step_context: Arc<StepContext>,
@@ -50,13 +48,11 @@ pub(crate) struct ToolCallRuntime {
 
 impl ToolCallRuntime {
     pub(crate) fn new(
-        router: Arc<ToolRouter>,
         session: Arc<Session>,
         step_context: Arc<StepContext>,
         tracker: SharedTurnDiffTracker,
     ) -> Self {
         Self {
-            router,
             session,
             step_context,
             tracker,
@@ -68,7 +64,9 @@ impl ToolCallRuntime {
         &self,
         tool_name: &codex_tools::ToolName,
     ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
-        self.router.create_diff_consumer(tool_name)
+        self.step_context
+            .tool_router
+            .create_diff_consumer(tool_name)
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -111,16 +109,17 @@ impl ToolCallRuntime {
                 super::effective_tool_mode(&self.step_context.turn),
             );
         }
-        let supports_parallel = self.router.tool_supports_parallel(&call);
-        let tool_runtime = self.router.tool_runtime(&call);
-        let router = Arc::clone(&self.router);
+        let router = &self.step_context.tool_router;
+        let supports_parallel = router.tool_supports_parallel(&call);
+        let tool_runtime = router.tool_runtime(&call);
+        let wait_for_runtime_cancellation = router.tool_waits_for_runtime_cancellation(&call);
+        let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
         let step_context = Arc::clone(&self.step_context);
         let turn = Arc::clone(&step_context.turn);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
-        let wait_for_runtime_cancellation = self.router.tool_waits_for_runtime_cancellation(&call);
         let started = Instant::now();
         let tool_call_timing_guard =
             ToolCallTimingGuard::capture(started, &session.thread_id, &turn.sub_id, &call, &source);
@@ -377,6 +376,7 @@ mod tests {
     use crate::tools::registry::CoreToolRuntime;
     use crate::tools::registry::ToolExecutor;
     use crate::tools::registry::ToolRegistry;
+    use crate::tools::router::ToolRouter;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_extension_api::ToolCallOutcome;
     use codex_protocol::models::FunctionCallOutputBody;
@@ -445,8 +445,9 @@ mod tests {
             ToolRegistry::from_tools([handler]),
             Vec::new(),
         ));
+        let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(router, session, step_context, tracker);
+        let runtime = ToolCallRuntime::new(session, step_context, tracker);
         let execution_gate = Arc::clone(&runtime.parallel_execution);
         let execution_gate_guard = execution_gate
             .try_write_owned()
@@ -710,8 +711,9 @@ mod tests {
             ToolRegistry::from_tools([handler]),
             Vec::new(),
         ));
+        let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(router, session, step_context, tracker);
+        let runtime = ToolCallRuntime::new(session, step_context, tracker);
         let cancellation_token = CancellationToken::new();
         let call = ToolCall {
             tool_name,
@@ -784,8 +786,9 @@ mod tests {
             ToolRegistry::from_tools([handler]),
             Vec::new(),
         ));
+        let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(router, session, step_context, tracker);
+        let runtime = ToolCallRuntime::new(session, step_context, tracker);
         let cancellation_token = CancellationToken::new();
         let call = ToolCall {
             tool_name,
