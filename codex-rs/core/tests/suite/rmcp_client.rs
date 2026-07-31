@@ -21,6 +21,7 @@ use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
@@ -3168,9 +3169,14 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     // server so the test does not share credentials with other suite cases.
     let temp_home = Arc::new(tempdir()?);
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
+    let environment_id = remote_aware_environment_id();
+    let credential_config: McpServerConfig = serde_json::from_value(json!({
+        "url": &server_url,
+        "environment_id": &environment_id,
+    }))?;
+    let credential_name = credential_config.oauth_credential_name(server_name);
     write_fallback_oauth_tokens(
-        temp_home.path(),
-        server_name,
+        credential_name.as_ref(),
         &server_url,
         client_id,
         expected_token,
@@ -3196,7 +3202,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                     env_http_headers: None,
                 },
                 TestMcpServerOptions {
-                    environment_id: remote_aware_environment_id(),
+                    environment_id,
                     ..Default::default()
                 },
             );
@@ -3628,7 +3634,6 @@ fn streamable_http_metadata_url(server_url: &str) -> String {
 }
 
 fn write_fallback_oauth_tokens(
-    home: &Path,
     server_name: &str,
     server_url: &str,
     client_id: &str,
@@ -3641,21 +3646,25 @@ fn write_fallback_oauth_tokens(
         .duration_since(UNIX_EPOCH)?
         .as_millis() as u64;
 
-    let store = serde_json::json!({
-        "stub": {
-            "server_name": server_name,
-            "server_url": server_url,
-            "client_id": client_id,
+    let tokens = serde_json::from_value(json!({
+        "server_name": server_name,
+        "url": server_url,
+        "client_id": client_id,
+        "token_response": {
             "access_token": access_token,
-            "expires_at": expires_at,
+            "token_type": "Bearer",
             "refresh_token": refresh_token,
-            "scopes": ["profile"],
-        }
-    });
+            "scope": "profile",
+        },
+        "expires_at": expires_at,
+    }))?;
 
-    let file_path = home.join(".credentials.json");
-    fs::write(&file_path, serde_json::to_vec(&store)?)?;
-    Ok(())
+    codex_rmcp_client::save_oauth_tokens(
+        server_name,
+        &tokens,
+        OAuthCredentialsStoreMode::File,
+        codex_config::types::AuthKeyringBackendKind::default(),
+    )
 }
 
 struct EnvVarGuard {

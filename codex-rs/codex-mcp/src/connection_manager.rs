@@ -419,7 +419,9 @@ impl McpConnectionSet {
                                     env_http_headers,
                                 } => {
                                     match determine_streamable_http_auth_status_from_credentials(
-                                        &server_name,
+                                        configured_config
+                                            .oauth_credential_name(&server_name)
+                                            .as_ref(),
                                         url,
                                         bearer_token_env_var.as_deref(),
                                         http_headers.clone(),

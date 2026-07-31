@@ -1,9 +1,12 @@
 //! MCP server configuration types.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -225,6 +228,21 @@ pub struct McpServerConfig {
 impl McpServerConfig {
     pub fn is_local_environment(&self) -> bool {
         self.environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+    }
+
+    /// Keeps local OAuth credentials compatible while isolating executor-owned servers.
+    pub fn oauth_credential_name<'a>(&self, server_name: &'a str) -> Cow<'a, str> {
+        if self.is_local_environment() {
+            if server_name.starts_with("executor:") || server_name.starts_with("local:") {
+                Cow::Owned(format!("local:{server_name}"))
+            } else {
+                Cow::Borrowed(server_name)
+            }
+        } else {
+            let environment = URL_SAFE_NO_PAD.encode(self.environment_id.as_bytes());
+            let server = URL_SAFE_NO_PAD.encode(server_name.as_bytes());
+            Cow::Owned(format!("executor:{environment}:{server}"))
+        }
     }
 
     pub fn oauth_client_id(&self) -> Option<&str> {

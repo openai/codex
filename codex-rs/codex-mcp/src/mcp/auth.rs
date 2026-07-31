@@ -245,8 +245,9 @@ async fn compute_auth_status(
             } else {
                 OAuthDiscoveryTimeout::Requested
             };
+            let oauth_credential_name = config.oauth_credential_name(server_name);
             determine_streamable_http_auth_status(
-                server_name,
+                oauth_credential_name.as_ref(),
                 url,
                 bearer_token_env_var.as_deref(),
                 http_headers.clone(),

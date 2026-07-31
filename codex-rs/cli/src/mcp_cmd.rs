@@ -517,9 +517,10 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
     };
     let resolved_scopes =
         resolve_oauth_scopes(explicit_scopes, server.scopes.clone(), discovered_scopes);
+    let credential_name = server.oauth_credential_name(&name);
 
     perform_oauth_login_retry_without_scopes(
-        &name,
+        credential_name.as_ref(),
         &url,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
@@ -551,9 +552,10 @@ async fn run_logout(config: &Config, logout_args: LogoutArgs) -> Result<()> {
         McpServerTransportConfig::StreamableHttp { url, .. } => url.clone(),
         _ => bail!("OAuth logout is only supported for streamable_http transports."),
     };
+    let credential_name = server.oauth_credential_name(&name);
 
     match delete_oauth_tokens(
-        &name,
+        credential_name.as_ref(),
         &url,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),

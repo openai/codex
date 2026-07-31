@@ -1923,13 +1923,14 @@ impl PluginRequestProcessor {
             let callback_url = config.mcp_oauth_callback_url.clone();
             let outgoing = Arc::clone(&self.outgoing);
             let notification_name = name.clone();
+            let oauth_credential_name = server.oauth_credential_name(&name).into_owned();
             let thread_manager = Arc::clone(&self.thread_manager);
             let http_client = Arc::clone(&http_client);
 
             tokio::spawn(async move {
                 let oauth_client_id = server.oauth_client_id();
                 let first_attempt = perform_oauth_login_silent(
-                    &name,
+                    &oauth_credential_name,
                     &oauth_config.url,
                     store_mode,
                     keyring_backend_kind,
@@ -1947,7 +1948,7 @@ impl PluginRequestProcessor {
                 let final_result = match first_attempt {
                     Err(err) if should_retry_without_scopes(&resolved_scopes, &err) => {
                         perform_oauth_login_silent(
-                            &name,
+                            &oauth_credential_name,
                             &oauth_config.url,
                             store_mode,
                             keyring_backend_kind,

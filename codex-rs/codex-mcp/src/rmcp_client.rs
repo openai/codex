@@ -1008,6 +1008,7 @@ async fn make_rmcp_client(
     let resolved_environment =
         resolved_environment.map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
     let is_local_environment = config.is_local_environment();
+    let oauth_credential_name = config.oauth_credential_name(server_name);
     let McpServerConfig { transport, .. } = config;
 
     match transport {
@@ -1073,7 +1074,7 @@ async fn make_rmcp_client(
                     Err(error) => return Err(error.into()),
                 };
             RmcpClient::new_streamable_http_client_with_protocol_mode(
-                server_name,
+                oauth_credential_name.as_ref(),
                 &url,
                 resolved_bearer_token,
                 http_headers,

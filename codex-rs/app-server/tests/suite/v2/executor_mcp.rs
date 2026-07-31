@@ -53,6 +53,8 @@ const HTTP_MCP_SERVER_NAME: &str = "executor_http";
 const MCP_SERVER_NAME: &str = "executor_demo";
 const OAUTH_MCP_SERVER_NAME: &str = "executor_oauth";
 const EXECUTOR_OAUTH_MCP_URL: &str = "http://oauth-only.invalid/oauth-mcp";
+const HOST_OAUTH_ACCESS_TOKEN: &str = "host-access-token";
+const EXECUTOR_OAUTH_ACCESS_TOKEN: &str = "executor-access-token";
 const EXECUTOR_ENV_NAME: &str = "MCP_EXECUTOR_MARKER";
 const EXECUTOR_ENV_VALUE: &str = "executor-only";
 const EXECUTOR_ID: &str = "executor-1";
@@ -76,6 +78,24 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
         Arc::new(LocalSessionManager::default()),
         http_server_config,
     );
+    let (oauth_authorization_tx, mut oauth_authorization_rx) = mpsc::unbounded_channel();
+    let oauth_mcp_router = Router::new()
+        .nest_service("/oauth-mcp", oauth_mcp_service)
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let oauth_authorization_tx = oauth_authorization_tx.clone();
+                async move {
+                    if let Some(authorization) = request
+                        .headers()
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                    {
+                        let _ = oauth_authorization_tx.send(authorization.to_string());
+                    }
+                    next.run(request).await
+                }
+            },
+        ));
     let (token_request_tx, mut token_request_rx) = mpsc::unbounded_channel();
     let oauth_metadata = json!({
         "authorization_endpoint": "https://oauth-only.invalid/authorize",
@@ -99,7 +119,7 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
                 async move {
                     let _ = token_request_tx.send(String::from_utf8_lossy(&body).into_owned());
                     Json(json!({
-                        "access_token": "executor-access-token",
+                        "access_token": EXECUTOR_OAUTH_ACCESS_TOKEN,
                         "token_type": "Bearer",
                         "expires_in": 3600,
                         "refresh_token": "executor-refresh-token",
@@ -108,15 +128,35 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
             }),
         )
         .nest_service("/mcp", http_mcp_service)
-        .nest_service("/oauth-mcp", oauth_mcp_service);
+        .merge(oauth_mcp_router);
     let http_server_handle = tokio::spawn(async move {
         let _ = axum::serve(http_listener, http_router).await;
     });
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_server.uri())
-        .with_root_config("compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 1024")
+        .with_root_config(
+            "compact_prompt = \"compact\"\nmodel_auto_compact_token_limit = 1024\nmcp_oauth_credentials_store = \"file\"",
+        )
         .with_provider_config("supports_websockets = false")
         .write(codex_home.path())?;
+    let executor_config: codex_config::types::McpServerConfig = serde_json::from_value(json!({
+        "url": EXECUTOR_OAUTH_MCP_URL,
+        "environment_id": EXECUTOR_ID,
+    }))?;
+    let host_oauth_credential = json!({
+        "server_name": executor_config.oauth_credential_name(OAUTH_MCP_SERVER_NAME),
+        "server_url": EXECUTOR_OAUTH_MCP_URL,
+        "client_id": "host-oauth-client",
+        "access_token": HOST_OAUTH_ACCESS_TOKEN,
+        "expires_at": null,
+        "refresh_token": null,
+        "scopes": [],
+    });
+    let oauth_credentials_path = codex_home.path().join(".credentials.json");
+    std::fs::write(
+        &oauth_credentials_path,
+        serde_json::to_vec(&json!({"host": host_oauth_credential.clone()}))?,
+    )?;
     let codex_bin = toml::Value::String(
         codex_utils_cargo_bin::cargo_bin("codex")?
             .to_string_lossy()
@@ -342,6 +382,51 @@ startup_timeout_sec = 10
     assert_eq!(
         response.structured_content,
         Some(json!({"echo": "ECHOING: hello over executor HTTP"}))
+    );
+
+    let request_id = app_server
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: selected_thread.clone(),
+            server: OAUTH_MCP_SERVER_NAME.to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({"message": "hello over executor OAuth"})),
+            meta: None,
+        })
+        .await?;
+    let response: McpServerToolCallResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    assert_eq!(
+        response.structured_content,
+        Some(json!({"echo": "ECHOING: hello over executor OAuth"}))
+    );
+
+    let authorization_headers =
+        std::iter::from_fn(|| oauth_authorization_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        !authorization_headers
+            .iter()
+            .any(|header| header == &format!("Bearer {HOST_OAUTH_ACCESS_TOKEN}")),
+        "host-owned OAuth credentials must never reach the executor: {authorization_headers:?}"
+    );
+    assert!(
+        authorization_headers
+            .iter()
+            .any(|header| header == &format!("Bearer {EXECUTOR_OAUTH_ACCESS_TOKEN}")),
+        "executor-owned OAuth credentials must authenticate executor requests: {authorization_headers:?}"
+    );
+    let oauth_credentials: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&oauth_credentials_path)?)?;
+    assert_eq!(oauth_credentials.get("host"), Some(&host_oauth_credential));
+    assert!(
+        oauth_credentials
+            .as_object()
+            .expect("OAuth credentials should remain a JSON object")
+            .values()
+            .any(|credential| {
+                credential.get("server_name") != Some(&json!(OAUTH_MCP_SERVER_NAME))
+                    && credential.get("access_token") == Some(&json!(EXECUTOR_OAUTH_ACCESS_TOKEN))
+            }),
+        "executor login must persist credentials separately from the host: {oauth_credentials}"
     );
 
     let request_id = app_server

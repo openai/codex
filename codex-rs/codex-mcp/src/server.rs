@@ -128,12 +128,16 @@ impl McpServerConnectionIdentity {
             None
         };
         let oauth_credentials = stored_oauth_url.map_or(Ok(None), |url| {
-            stored_oauth_credentials(server_name, url, store_mode, keyring_backend_kind).map_err(
-                |error| {
-                    warn!(server_name, %error, "failed to read stored MCP OAuth credentials");
-                    error.to_string()
-                },
+            stored_oauth_credentials(
+                config.oauth_credential_name(server_name).as_ref(),
+                url,
+                store_mode,
+                keyring_backend_kind,
             )
+            .map_err(|error| {
+                warn!(server_name, %error, "failed to read stored MCP OAuth credentials");
+                error.to_string()
+            })
         });
         let local_stdio_fallback_cwd = (config.is_local_environment()
             && matches!(
