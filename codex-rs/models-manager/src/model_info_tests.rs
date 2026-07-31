@@ -3,6 +3,7 @@ use crate::ModelsManagerConfig;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
+use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::PermissionMessages;
 use pretty_assertions::assert_eq;
 
@@ -31,6 +32,7 @@ fn base_instruction_override_preserves_catalog_approval_messages() {
             personality_pragmatic: Some("pragmatic".to_string()),
         }),
         approvals: Some(approvals.clone()),
+        collaboration_modes: None,
         auto_review: None,
         permissions: None,
         token_budget: None,
@@ -48,11 +50,44 @@ fn base_instruction_override_preserves_catalog_approval_messages() {
             instructions_template: None,
             instructions_variables: None,
             approvals: Some(approvals),
+            collaboration_modes: None,
             auto_review: None,
             permissions: None,
             token_budget: None,
         })
     );
+}
+
+#[test]
+fn base_instruction_override_preserves_catalog_collaboration_mode_messages() {
+    let mut model = model_info_from_slug("gpt-5.2-codex");
+    let collaboration_modes = CollaborationModeMessages {
+        default: Some("default instructions".to_string()),
+        plan: Some("plan instructions".to_string()),
+    };
+    if let Some(model_messages) = model.model_messages.as_mut() {
+        model_messages.collaboration_modes = Some(collaboration_modes.clone());
+    }
+    let config = ModelsManagerConfig {
+        base_instructions: Some("override".to_string()),
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model, &config);
+
+    assert_eq!(
+        updated.model_messages,
+        Some(ModelMessages {
+            instructions_template: None,
+            instructions_variables: None,
+            approvals: None,
+            collaboration_modes: Some(collaboration_modes),
+            auto_review: None,
+            permissions: None,
+            token_budget: None,
+        })
+    );
+    assert_eq!(updated.base_instructions, "override");
 }
 
 #[test]
@@ -68,6 +103,7 @@ fn disabled_personality_preserves_catalog_approval_messages() {
         instructions_template: Some("template".to_string()),
         instructions_variables: None,
         approvals: Some(approvals.clone()),
+        collaboration_modes: None,
         auto_review: None,
         permissions: None,
         token_budget: None,
@@ -85,6 +121,7 @@ fn disabled_personality_preserves_catalog_approval_messages() {
             instructions_template: None,
             instructions_variables: None,
             approvals: Some(approvals),
+            collaboration_modes: None,
             auto_review: None,
             permissions: None,
             token_budget: None,
@@ -103,6 +140,7 @@ fn base_instruction_override_preserves_catalog_auto_review_messages() {
         instructions_template: Some("template".to_string()),
         instructions_variables: None,
         approvals: None,
+        collaboration_modes: None,
         auto_review: Some(auto_review.clone()),
         permissions: None,
         token_budget: None,
@@ -120,6 +158,7 @@ fn base_instruction_override_preserves_catalog_auto_review_messages() {
             instructions_template: None,
             instructions_variables: None,
             approvals: None,
+            collaboration_modes: None,
             auto_review: Some(auto_review),
             permissions: None,
             token_budget: None,
@@ -139,6 +178,7 @@ fn base_instruction_override_preserves_catalog_permission_messages() {
         instructions_template: Some("template".to_string()),
         instructions_variables: None,
         approvals: None,
+        collaboration_modes: None,
         auto_review: None,
         permissions: Some(permissions.clone()),
         token_budget: None,
@@ -156,6 +196,7 @@ fn base_instruction_override_preserves_catalog_permission_messages() {
             instructions_template: None,
             instructions_variables: None,
             approvals: None,
+            collaboration_modes: None,
             auto_review: None,
             permissions: Some(permissions),
             token_budget: None,
@@ -193,6 +234,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
             instructions_template: Some(instructions.to_string()),
             instructions_variables: None,
             approvals: None,
+            collaboration_modes: None,
             auto_review: None,
             permissions: None,
             token_budget: None,

@@ -1,7 +1,11 @@
 use anyhow::Result;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::openai_models::CollaborationModeMessages;
+use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
@@ -35,6 +39,43 @@ fn collab_mode_with_mode_and_instructions(
 
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
     collab_mode_with_mode_and_instructions(ModeKind::Default, instructions)
+}
+
+fn collab_mode_for_model(
+    mode: ModeKind,
+    model: &str,
+    instructions: Option<&str>,
+) -> CollaborationMode {
+    CollaborationMode {
+        mode,
+        settings: Settings {
+            model: model.to_string(),
+            reasoning_effort: None,
+            developer_instructions: instructions.map(str::to_string),
+        },
+    }
+}
+
+fn model_with_collaboration_messages(
+    slug: &str,
+    default: Option<&str>,
+    plan: Option<&str>,
+) -> codex_protocol::openai_models::ModelInfo {
+    let mut model = model_info_from_slug(slug);
+    let model_messages = model.model_messages.get_or_insert(ModelMessages {
+        instructions_template: None,
+        instructions_variables: None,
+        approvals: None,
+        collaboration_modes: None,
+        auto_review: None,
+        permissions: None,
+        token_budget: None,
+    });
+    model_messages.collaboration_modes = Some(CollaborationModeMessages {
+        default: default.map(str::to_string),
+        plan: plan.map(str::to_string),
+    });
+    model
 }
 
 fn developer_texts(input: &[Value]) -> Vec<String> {
@@ -96,6 +137,227 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     assert_eq!(
         count_messages_containing(&dev_texts, COLLABORATION_MODE_OPEN_TAG),
         0
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_collaboration_messages_track_mode_changes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let model_slug = "catalog-collaboration-model";
+    let default_text = "catalog default instructions";
+    let plan_text = "catalog plan instructions";
+    let model = model_with_collaboration_messages(model_slug, Some(default_text), Some(plan_text));
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            collaboration_mode: Some(collab_mode_for_model(
+                ModeKind::Default,
+                model_slug,
+                Some("legacy default instructions"),
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("default turn").await?;
+
+    let first_dev_texts = developer_texts(&req1.single_request().input());
+    assert_eq!(
+        count_messages_containing(&first_dev_texts, &collab_xml(default_text)),
+        1
+    );
+    assert_eq!(
+        count_messages_containing(&first_dev_texts, "legacy default instructions"),
+        0
+    );
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            collaboration_mode: Some(collab_mode_for_model(
+                ModeKind::Plan,
+                model_slug,
+                Some("legacy plan instructions"),
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("plan turn").await?;
+
+    let second_dev_texts = developer_texts(&req2.single_request().input());
+    assert_eq!(
+        count_messages_containing(&second_dev_texts, &collab_xml(default_text)),
+        1
+    );
+    assert_eq!(
+        count_messages_containing(&second_dev_texts, &collab_xml(plan_text)),
+        1
+    );
+    assert_eq!(
+        count_messages_containing(&second_dev_texts, "legacy plan instructions"),
+        0
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_catalog_and_legacy_collaboration_message_clears_prior_instructions() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let model_slug = "catalog-collaboration-clear-model";
+    let default_text = "catalog default instructions";
+    let model =
+        model_with_collaboration_messages(model_slug, Some(default_text), /*plan*/ None);
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            collaboration_mode: Some(collab_mode_for_model(
+                ModeKind::Default,
+                model_slug,
+                /*instructions*/ None,
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("default turn").await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            collaboration_mode: Some(collab_mode_for_model(
+                ModeKind::Plan,
+                model_slug,
+                /*instructions*/ None,
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("plan turn").await?;
+
+    let dev_texts = developer_texts(&req2.single_request().input());
+    assert_eq!(
+        count_messages_containing(&dev_texts, &collab_xml(default_text)),
+        1
+    );
+    assert_eq!(count_messages_containing(&dev_texts, &collab_xml("")), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_change_appends_new_catalog_collaboration_message() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let first_slug = "catalog-collaboration-model-a";
+    let second_slug = "catalog-collaboration-model-b";
+    let first_text = "model A collaboration instructions";
+    let second_text = "model B collaboration instructions";
+    let first = model_with_collaboration_messages(first_slug, Some(first_text), /*plan*/ None);
+    let second =
+        model_with_collaboration_messages(second_slug, Some(second_text), /*plan*/ None);
+    let mut builder = test_codex()
+        .with_model(first_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![first, second],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            collaboration_mode: Some(collab_mode_for_model(
+                ModeKind::Default,
+                first_slug,
+                Some("legacy instructions"),
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("first").await?;
+
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            model: Some(second_slug.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("second").await?;
+
+    let dev_texts = developer_texts(&req2.single_request().input());
+    assert_eq!(
+        count_messages_containing(&dev_texts, &collab_xml(first_text)),
+        1
+    );
+    assert_eq!(
+        count_messages_containing(&dev_texts, &collab_xml(second_text)),
+        1
     );
 
     Ok(())

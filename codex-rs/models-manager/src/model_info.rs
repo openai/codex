@@ -113,6 +113,7 @@ fn clear_instruction_messages(model: &mut ModelInfo) {
         model_messages.instructions_template = None;
         model_messages.instructions_variables = None;
         if model_messages.approvals.is_none()
+            && model_messages.collaboration_modes.is_none()
             && model_messages.auto_review.is_none()
             && model_messages.permissions.is_none()
             && model_messages.token_budget.is_none()
@@ -180,6 +181,7 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
                 personality_pragmatic: Some(LOCAL_PRAGMATIC_TEMPLATE.to_string()),
             }),
             approvals: None,
+            collaboration_modes: None,
             auto_review: None,
             permissions: None,
             token_budget: None,
