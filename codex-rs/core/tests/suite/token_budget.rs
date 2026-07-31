@@ -2,7 +2,9 @@ use anyhow::Result;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
 use codex_core::config::TokenBudgetConfig;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_features::FeatureToml;
 use codex_features::TokenBudgetConfigToml;
@@ -22,6 +24,8 @@ use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_skills_extension::SkillsExtensionConfig;
+use codex_skills_extension::install;
 use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::context_snapshot;
@@ -1483,7 +1487,15 @@ async fn new_context_tool_skips_auto_compact_fallback() -> Result<()> {
         ],
     )
     .await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install(&mut extensions, |config: &Config| SkillsExtensionConfig {
+        include_instructions: config.include_skill_instructions,
+        bundled_skills_enabled: config.bundled_skills_enabled(),
+        orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+        shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
+    });
     let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config.model_context_window = Some(10_000);
             config.token_budget = Some(TokenBudgetConfig {

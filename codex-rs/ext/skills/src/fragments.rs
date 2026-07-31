@@ -1,9 +1,10 @@
-use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
-use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ALIASES;
-use codex_core_skills::render_available_skills_body;
 use codex_extension_api::ContextualUserFragment;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
+
+use crate::catalog_prompt::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
+use crate::catalog_prompt::SKILLS_HOW_TO_USE_WITH_ALIASES;
+use crate::catalog_prompt::render_available_skills_body;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AvailableSkillsInstructions {

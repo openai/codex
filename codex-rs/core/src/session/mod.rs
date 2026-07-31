@@ -18,20 +18,17 @@ use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
 use crate::audio_preparation::prepare_response_items as prepare_audio_response_items;
-use crate::build_available_skills;
 use crate::compact;
 use crate::compact::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ApprovedCommandPrefixSaved;
-use crate::context::AvailableSkillsInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::RecommendedPluginsInstructions;
 use crate::context::world_state::WorldState;
 use crate::current_time::TimeProvider;
-use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::BANNED_PREFIX_SUGGESTIONS;
 use crate::exec_policy::ExecPolicyManager;
@@ -42,7 +39,6 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
-use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -55,7 +51,6 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_connectors::connector_runtime_context_key;
-use codex_core_skills::injection::HostSkillsCatalogInWorldState;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::prefix_rule_migration;
@@ -304,8 +299,6 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
-#[cfg(test)]
-use crate::SkillMetadata;
 use crate::SkillsService;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewOptions;
@@ -315,8 +308,6 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
-#[cfg(test)]
-use crate::skills::SkillLoadOutcome;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
@@ -3409,37 +3400,6 @@ impl Session {
             && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
-        }
-        if turn_context.config.include_skill_instructions
-            && turn_context
-                .extension_data
-                .get::<HostSkillsCatalogInWorldState>()
-                .is_none()
-        {
-            let available_skills = build_available_skills(
-                turn_context.turn_skills.snapshot.outcome(),
-                default_skill_metadata_budget(turn_context.model_info.context_window),
-                SkillRenderSideEffects::ThreadStart {
-                    session_telemetry: &self.services.session_telemetry,
-                },
-            );
-            if let Some(available_skills) = available_skills {
-                let warning_message = available_skills.warning_message.clone();
-                let skills_instructions = AvailableSkillsInstructions::from_available_skills(
-                    &available_skills,
-                    turn_context.model_info.include_skills_usage_instructions,
-                );
-                if let Some(warning_message) = warning_message {
-                    self.send_event_raw(Event {
-                        id: String::new(),
-                        msg: EventMsg::Warning(WarningEvent {
-                            message: warning_message,
-                        }),
-                    })
-                    .await;
-                }
-                developer_sections.push(skills_instructions.render());
-            }
         }
         let loaded_plugins = self
             .services

@@ -8,7 +8,6 @@ use crate::provider::SkillProvider;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
-use codex_core_skills::render_available_skills_body;
 use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ContextualUserFragment;
 use codex_protocol::protocol::SkillScope;
@@ -18,6 +17,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::Semaphore;
+
+use crate::catalog_prompt::render_available_skills_body;
 
 fn entry(name: &str, description: &str, short_description: Option<&str>) -> SkillCatalogEntry {
     entry_with_path(

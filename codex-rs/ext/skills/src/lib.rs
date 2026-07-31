@@ -1,4 +1,5 @@
 pub mod catalog;
+mod catalog_prompt;
 mod config;
 mod dynamic_skill_selector;
 mod extension;

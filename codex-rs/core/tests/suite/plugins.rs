@@ -6,7 +6,10 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Result;
+use codex_core::config::Config;
 use codex_core_plugins::store::PluginStore;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -19,6 +22,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_skills_extension::SkillsExtensionConfig;
+use codex_skills_extension::install;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::responses::ResponseMock;
@@ -58,6 +63,17 @@ const SAMPLE_PLUGIN_MCP_NAMESPACE: &str = "mcp__sample";
 const PLUGIN_APP_SEARCH_CALL_ID: &str = "plugin-app-search";
 const PLUGIN_MCP_SEARCH_CALL_ID: &str = "plugin-mcp-search";
 const REMOTE_PLUGIN_CONFIG_NAME: &str = "sample@openai-curated-remote";
+
+fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install(&mut extensions, |config: &Config| SkillsExtensionConfig {
+        include_instructions: config.include_skill_instructions,
+        bundled_skills_enabled: config.bundled_skills_enabled(),
+        orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+        shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
+    });
+    Arc::new(extensions.build())
+}
 
 fn sample_plugin_root(home: &TempDir) -> std::path::PathBuf {
     home.path().join("plugins/cache/test/sample/local")
@@ -408,12 +424,18 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
     let codex_home = Arc::new(TempDir::new()?);
     write_plugin_skill_plugin(codex_home.as_ref());
     write_plugin_app_plugin(codex_home.as_ref());
-    let test_codex = build_apps_enabled_plugin_test_codex(
-        &server,
-        Arc::clone(&codex_home),
-        apps_server.chatgpt_base_url,
-    )
-    .await?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_extensions(skills_extensions())
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+            config.chatgpt_base_url = apps_server.chatgpt_base_url;
+        });
+    let test_codex = builder.build(&server).await?;
     let codex = Arc::clone(&test_codex.codex);
 
     codex
@@ -645,6 +667,7 @@ enabled = true
 
         let mut builder = test_codex()
             .with_home(Arc::clone(&codex_home))
+            .with_extensions(skills_extensions())
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let test_codex = builder.build_with_auto_env(&server).await?;
         let plugins_manager = test_codex.thread_manager.plugins_manager();

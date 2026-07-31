@@ -2919,7 +2919,6 @@ dependencies = [
  "codex-shell-command",
  "codex-skills",
  "codex-utils-absolute-path",
- "codex-utils-output-truncation",
  "codex-utils-path-uri",
  "codex-utils-plugins",
  "dirs",

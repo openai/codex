@@ -5,7 +5,6 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core_skills::render_available_skills_body;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_string::approx_token_count;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -13,6 +12,7 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
+use crate::catalog_prompt::render_available_skills_body;
 use crate::fragments::AvailableSkillsInstructions;
 
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;

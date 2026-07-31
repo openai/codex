@@ -3,7 +3,6 @@
 mod approved_command_prefix_saved;
 mod apps_instructions;
 mod available_plugins_instructions;
-mod available_skills_instructions;
 mod contextual_user_message;
 mod current_time_reminder;
 mod environment_context;
@@ -38,7 +37,6 @@ pub(crate) mod world_state;
 pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
 pub(crate) use apps_instructions::AppsInstructions;
 pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
-pub use available_skills_instructions::AvailableSkillsInstructions;
 pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;
 pub use codex_context_fragments::ContextualUserFragment;
