@@ -45,6 +45,16 @@ pub struct CompletedExternalAgentSessionImport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionImportSourceMapping {
+    None,
+    Unique {
+        source_content_sha256: String,
+        imported_thread_id: ThreadId,
+    },
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedConnectorCandidate {
     pub name: String,
     pub session_count: u32,
@@ -80,6 +90,71 @@ pub(crate) fn record_imported_session(
             title: None,
         }],
     )
+}
+
+pub(crate) fn find_existing_session_import(
+    codex_home: &Path,
+    source_path: &Path,
+) -> io::Result<SessionImportSourceMapping> {
+    let source_path = canonical_source_path(source_path)?;
+    let ledger = load_import_ledger(codex_home)?;
+    let mut matching_records = ledger
+        .records
+        .iter()
+        .filter(|record| record.source_path == source_path);
+    let Some(record) = matching_records.next() else {
+        return Ok(SessionImportSourceMapping::None);
+    };
+    if matching_records.next().is_some() {
+        return Ok(SessionImportSourceMapping::Ambiguous);
+    }
+    Ok(SessionImportSourceMapping::Unique {
+        source_content_sha256: record.content_sha256.clone(),
+        imported_thread_id: record.imported_thread_id,
+    })
+}
+
+pub(super) fn checkpoint_existing_session_import(
+    codex_home: &Path,
+    source_path: &Path,
+    thread_id: ThreadId,
+    expected_source_content_sha256: &str,
+    source_content_sha256: &str,
+) -> io::Result<bool> {
+    if expected_source_content_sha256 == source_content_sha256 {
+        return Ok(false);
+    }
+    let source_path = canonical_source_path(source_path)?;
+    let source_modified_at = session_modified_at(&source_path)?;
+    if session_content_sha256(&source_path)? != source_content_sha256
+        || source_modified_at != session_modified_at(&source_path)?
+    {
+        return Ok(false);
+    }
+
+    let mut ledger = load_import_ledger(codex_home)?;
+    let mut matching_indices = ledger
+        .records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (record.source_path == source_path).then_some(index));
+    let Some(index) = matching_indices.next() else {
+        return Ok(false);
+    };
+    if matching_indices.next().is_some() {
+        return Ok(false);
+    }
+    let record = &mut ledger.records[index];
+    if record.imported_thread_id != thread_id
+        || record.content_sha256 != expected_source_content_sha256
+    {
+        return Ok(false);
+    }
+    record.content_sha256 = source_content_sha256.to_string();
+    record.imported_at = now_unix_seconds();
+    record.source_modified_at = source_modified_at;
+    save_import_ledger(codex_home, &ledger)?;
+    Ok(true)
 }
 
 pub fn record_completed_session_imports(

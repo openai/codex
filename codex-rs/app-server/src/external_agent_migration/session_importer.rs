@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,11 +10,14 @@ use codex_core::config::ConfigOverrides;
 use codex_external_agent_migration::ExternalAgentConfigImportItemResult;
 use codex_external_agent_migration::record_import_error;
 use codex_external_agent_migration::sessions::CompletedExternalAgentSessionImport;
+use codex_external_agent_migration::sessions::ExistingSessionAppend;
 use codex_external_agent_migration::sessions::ExternalAgentSessionMigration;
 use codex_external_agent_migration::sessions::ImportedExternalAgentSession;
 use codex_external_agent_migration::sessions::ImportedSessionConnectorAttribution;
 use codex_external_agent_migration::sessions::PendingSessionImport;
+use codex_external_agent_migration::sessions::SessionImportTarget;
 use codex_external_agent_migration::sessions::SessionMetadataMode;
+use codex_external_agent_migration::sessions::append_existing_session;
 use codex_external_agent_migration::sessions::detect_imported_cla_session_connectors;
 use codex_external_agent_migration::sessions::prepare_validated_session_import_with_metadata_mode;
 use codex_external_agent_migration::sessions::record_completed_session_imports;
@@ -44,11 +48,21 @@ struct CompletedSessionImport {
     connector_attribution: Option<ImportedSessionConnectorAttribution>,
 }
 
+enum SessionImportOutcome {
+    Created(CompletedSessionImport),
+    Appended {
+        source_path: PathBuf,
+        imported_thread_id: ThreadId,
+        title: Option<String>,
+    },
+}
+
 #[derive(Clone)]
 pub(super) struct ExternalAgentSessionImporter {
     codex_home: PathBuf,
     connector_metadata_roots: Vec<PathBuf>,
     permits: Arc<Semaphore>,
+    append_checkpoint_permits: Arc<Semaphore>,
     thread_manager: Arc<ThreadManager>,
     thread_store: Arc<dyn ThreadStore>,
     config_manager: ConfigManager,
@@ -68,6 +82,7 @@ impl ExternalAgentSessionImporter {
             codex_home,
             connector_metadata_roots,
             permits: Arc::new(Semaphore::new(1)),
+            append_checkpoint_permits: Arc::new(Semaphore::new(1)),
             thread_manager,
             thread_store,
             config_manager,
@@ -109,13 +124,24 @@ impl ExternalAgentSessionImporter {
         let mut completed_imports = Vec::new();
         while let Some(result) = import_results.next().await {
             match result {
-                Ok(Some(completed_import)) => {
+                Ok(Some(SessionImportOutcome::Created(completed_import))) => {
                     item_result.record_success(
                         Some(completed_import.import.source_path.display().to_string()),
                         Some(completed_import.import.imported_thread_id.to_string()),
                         completed_import.import.title.clone(),
                     );
                     completed_imports.push(completed_import);
+                }
+                Ok(Some(SessionImportOutcome::Appended {
+                    source_path,
+                    imported_thread_id,
+                    title,
+                })) => {
+                    item_result.record_success(
+                        Some(source_path.display().to_string()),
+                        Some(imported_thread_id.to_string()),
+                        title,
+                    );
                 }
                 Ok(None) => {}
                 Err(failure) => {
@@ -134,6 +160,9 @@ impl ExternalAgentSessionImporter {
                     );
                 }
             }
+        }
+        if completed_imports.is_empty() {
+            return item_result;
         }
         let connector_attributions = completed_imports
             .iter()
@@ -188,7 +217,7 @@ impl ExternalAgentSessionImporter {
         &self,
         session: ExternalAgentSessionMigration,
         metadata_mode: SessionMetadataMode,
-    ) -> Result<Option<CompletedSessionImport>, SessionImportFailure> {
+    ) -> Result<Option<SessionImportOutcome>, SessionImportFailure> {
         let source_path = session.path.clone();
         let Some(pending_import) = self
             .prepare_session_import(session, metadata_mode)
@@ -202,36 +231,88 @@ impl ExternalAgentSessionImporter {
         else {
             return Ok(None);
         };
-        let connector_attribution = pending_import
-            .source_path
+        let PendingSessionImport {
+            source_path,
+            source_content_sha256,
+            target,
+            attributed_mcp_server_ids,
+            session,
+        } = pending_import;
+        match target {
+            SessionImportTarget::New => self
+                .create_session_import(
+                    source_path,
+                    source_content_sha256,
+                    attributed_mcp_server_ids,
+                    session,
+                )
+                .await
+                .map(SessionImportOutcome::Created)
+                .map(Some),
+            SessionImportTarget::Existing {
+                thread_id,
+                expected_source_content_sha256,
+            } => {
+                let title = session.title.clone();
+                let appended = append_existing_session(
+                    &self.codex_home,
+                    self.append_checkpoint_permits.as_ref(),
+                    self.thread_manager.as_ref(),
+                    self.thread_store.as_ref(),
+                    ExistingSessionAppend {
+                        source_path: &source_path,
+                        source_content_sha256: &source_content_sha256,
+                        expected_source_content_sha256: &expected_source_content_sha256,
+                        thread_id,
+                        source_items: &session.rollout_items,
+                    },
+                )
+                .await;
+                Ok(appended.then_some(SessionImportOutcome::Appended {
+                    source_path,
+                    imported_thread_id: thread_id,
+                    title,
+                }))
+            }
+        }
+    }
+
+    async fn create_session_import(
+        &self,
+        source_path: PathBuf,
+        source_content_sha256: String,
+        attributed_mcp_server_ids: BTreeSet<String>,
+        session: ImportedExternalAgentSession,
+    ) -> Result<CompletedSessionImport, SessionImportFailure> {
+        let connector_attribution = source_path
             .file_stem()
             .and_then(|stem| stem.to_str())
             .map(str::trim)
             .filter(|session_id| !session_id.is_empty())
             .map(|session_id| ImportedSessionConnectorAttribution {
                 session_id: session_id.to_string(),
-                server_ids: pending_import.attributed_mcp_server_ids,
+                server_ids: attributed_mcp_server_ids,
             });
-        let title = pending_import.session.title.clone();
+        let title = session.title.clone();
         let imported_thread_id =
-            self.persist_session(pending_import.session)
+            self.persist_session(session)
                 .await
                 .map_err(|failure| SessionImportFailure {
-                    source_path: pending_import.source_path.clone(),
+                    source_path: source_path.clone(),
                     message: failure.message,
                     stage: "session_persist",
                     sub_error_type: failure.sub_error_type,
                 })?;
-        Ok(Some(CompletedSessionImport {
+        Ok(CompletedSessionImport {
             import: CompletedExternalAgentSessionImport {
-                source_path: pending_import.source_path,
-                source_content_sha256: pending_import.source_content_sha256,
+                source_path,
+                source_content_sha256,
                 imported_thread_id,
                 connector_names: Vec::new(),
                 title,
             },
             connector_attribution,
-        }))
+        })
     }
 
     async fn prepare_session_import(
