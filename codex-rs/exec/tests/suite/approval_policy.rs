@@ -4,15 +4,9 @@
 use core_test_support::responses;
 use core_test_support::test_codex_exec::test_codex_exec;
 
-async fn run_exec_with_auto_review_config(extra_args: &[&str]) -> anyhow::Result<String> {
+async fn run_exec_with_config(config_toml: &str, extra_args: &[&str]) -> anyhow::Result<String> {
     let test = test_codex_exec();
-    std::fs::write(
-        test.home_path().join("config.toml"),
-        r#"
-approval_policy = "on-request"
-approvals_reviewer = "auto_review"
-"#,
-    )?;
+    std::fs::write(test.home_path().join("config.toml"), config_toml)?;
 
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
@@ -34,12 +28,38 @@ approvals_reviewer = "auto_review"
     Ok(String::from_utf8(output.stderr)?)
 }
 
+async fn run_exec_with_auto_review_config(extra_args: &[&str]) -> anyhow::Result<String> {
+    run_exec_with_config(
+        r#"
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+"#,
+        extra_args,
+    )
+    .await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_preserves_on_request_for_auto_review_config() -> anyhow::Result<()> {
     let stderr = run_exec_with_auto_review_config(&[]).await?;
     assert!(
         stderr.contains("approval: on-request"),
         "stderr missing preserved auto-review approval mode: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_approve_for_me_flag_sets_approval_mode_and_sandbox() -> anyhow::Result<()> {
+    let stderr = run_exec_with_config("", &["--approve-for-me"]).await?;
+    assert!(
+        stderr.contains("approval: on-request"),
+        "stderr missing --approve-for-me approval mode: {stderr}"
+    );
+    assert!(
+        stderr.contains("sandbox: workspace-write"),
+        "stderr missing --approve-for-me sandbox mode: {stderr}"
     );
 
     Ok(())

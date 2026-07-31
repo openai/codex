@@ -924,6 +924,9 @@ pub async fn run_main(
         )
     };
 
+    cli.shared
+        .take_auto_review_config_overrides(&mut cli.config_overrides);
+
     // Map the legacy --search flag to the canonical web_search mode.
     if cli.web_search {
         cli.config_overrides
