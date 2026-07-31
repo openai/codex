@@ -48,6 +48,7 @@ mod remote_control;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod thread_section_order;
+mod thread_sections;
 mod threads;
 
 pub use external_agent_config_imports::ExternalAgentConfigImportDetailsRecord;

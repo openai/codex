@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Parameters for deleting an independently persisted thread section.",
+  "properties": {
+    "sectionId": {
+      "description": "The stable, server-generated identity of the section to delete.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sectionId"
+  ],
+  "title": "ThreadSectionDeleteParams",
+  "type": "object"
+}

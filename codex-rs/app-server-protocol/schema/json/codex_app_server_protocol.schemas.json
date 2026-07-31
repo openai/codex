@@ -691,6 +691,78 @@
             },
             "method": {
               "enum": [
+                "threadSection/create"
+              ],
+              "title": "ThreadSection/createRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadSectionCreateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ThreadSection/createRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "threadSection/update"
+              ],
+              "title": "ThreadSection/updateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadSectionUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ThreadSection/updateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "threadSection/delete"
+              ],
+              "title": "ThreadSection/deleteRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadSectionDeleteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ThreadSection/deleteRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/loaded/list"
               ],
               "title": "Thread/loaded/listRequestMethod",
@@ -20593,6 +20665,56 @@
         ],
         "type": "object"
       },
+      "ThreadSectionCreateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Parameters for creating an independently persisted thread section.",
+        "properties": {
+          "name": {
+            "description": "The user-visible name of the section.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ThreadSectionCreateParams",
+        "type": "object"
+      },
+      "ThreadSectionCreateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "The independently persisted section created by the server.",
+        "properties": {
+          "section": {
+            "$ref": "#/definitions/v2/ThreadSection"
+          }
+        },
+        "required": [
+          "section"
+        ],
+        "title": "ThreadSectionCreateResponse",
+        "type": "object"
+      },
+      "ThreadSectionDeleteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Parameters for deleting an independently persisted thread section.",
+        "properties": {
+          "sectionId": {
+            "description": "The stable, server-generated identity of the section to delete.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sectionId"
+        ],
+        "title": "ThreadSectionDeleteParams",
+        "type": "object"
+      },
+      "ThreadSectionDeleteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful deletion does not return additional section data.",
+        "title": "ThreadSectionDeleteResponse",
+        "type": "object"
+      },
       "ThreadSectionListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Parameters for listing independently persisted thread sections.",
@@ -20674,6 +20796,40 @@
       "ThreadSectionMoveResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadSectionMoveResponse",
+        "type": "object"
+      },
+      "ThreadSectionUpdateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Parameters for updating an independently persisted thread section.",
+        "properties": {
+          "name": {
+            "description": "The updated user-visible name of the section.",
+            "type": "string"
+          },
+          "sectionId": {
+            "description": "The stable, server-generated identity of the section to update.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sectionId"
+        ],
+        "title": "ThreadSectionUpdateParams",
+        "type": "object"
+      },
+      "ThreadSectionUpdateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "The independently persisted section after its name is updated.",
+        "properties": {
+          "section": {
+            "$ref": "#/definitions/v2/ThreadSection"
+          }
+        },
+        "required": [
+          "section"
+        ],
+        "title": "ThreadSectionUpdateResponse",
         "type": "object"
       },
       "ThreadSetNameParams": {

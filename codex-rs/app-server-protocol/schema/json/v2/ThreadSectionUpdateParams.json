@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Parameters for updating an independently persisted thread section.",
+  "properties": {
+    "name": {
+      "description": "The updated user-visible name of the section.",
+      "type": "string"
+    },
+    "sectionId": {
+      "description": "The stable, server-generated identity of the section to update.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "sectionId"
+  ],
+  "title": "ThreadSectionUpdateParams",
+  "type": "object"
+}

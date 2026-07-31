@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadSection": {
+      "description": "An independently persisted, user-visible thread section.",
+      "properties": {
+        "id": {
+          "description": "Opaque UUIDv7 identity that remains stable when the section is renamed.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The current user-visible section name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "The independently persisted section created by the server.",
+  "properties": {
+    "section": {
+      "$ref": "#/definitions/ThreadSection"
+    }
+  },
+  "required": [
+    "section"
+  ],
+  "title": "ThreadSectionCreateResponse",
+  "type": "object"
+}

@@ -5,8 +5,6 @@ use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadSection;
-use codex_app_server_protocol::ThreadSectionListParams;
-use codex_app_server_protocol::ThreadSectionListResponse;
 use codex_app_server_protocol::ThreadSectionMoveParams;
 use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_extension_api::ExtensionDataInit;
@@ -16,8 +14,8 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::protocol::ThreadHistoryMode;
 
-const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
-const THREAD_LIST_MAX_LIMIT: usize = 100;
+pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
+pub(super) const THREAD_LIST_MAX_LIMIT: usize = 100;
 const CODEX_TUI_CLIENT_NAME: &str = "codex-tui";
 const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
     "thread/rollback is deprecated and will be removed soon";
@@ -741,39 +739,6 @@ impl ThreadRequestProcessor {
         self.thread_list_response_inner(params)
             .await
             .map(|response| Some(response.into()))
-    }
-
-    pub(crate) async fn thread_section_list(
-        &self,
-        params: ThreadSectionListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let limit = params
-            .limit
-            .map(|value| value as usize)
-            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
-            .clamp(1, THREAD_LIST_MAX_LIMIT);
-        let state_db = self.state_db.clone().ok_or_else(|| {
-            method_not_found("threadSection/list is unavailable without sqlite state")
-        })?;
-        let page = state_db
-            .list_thread_sections(params.cursor.as_deref(), limit)
-            .await
-            .map_err(|err| internal_error(format!("failed to list thread sections: {err}")))?;
-
-        Ok(Some(
-            ThreadSectionListResponse {
-                data: page
-                    .sections
-                    .into_iter()
-                    .map(|section| ThreadSection {
-                        id: section.id,
-                        name: section.name,
-                    })
-                    .collect(),
-                next_cursor: page.next_cursor,
-            }
-            .into(),
-        ))
     }
 
     pub(crate) async fn thread_search(

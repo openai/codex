@@ -540,6 +540,7 @@ mod search;
 mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_processor;
+mod thread_sections;
 mod token_usage_replay;
 mod turn_processor;
 mod windows_sandbox_processor;
