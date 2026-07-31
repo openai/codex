@@ -39,7 +39,6 @@ use codex_sandboxing::SandboxType;
 use codex_shell_command::parse_command::parse_command;
 
 use super::SessionTask;
-use super::SessionTaskContext;
 use super::SessionTaskResult;
 use crate::session::session::Session;
 use codex_protocol::models::PermissionProfile;
@@ -78,13 +77,13 @@ impl SessionTask for UserShellCommandTask {
 
     async fn run(
         self: Arc<Self>,
-        session: Arc<SessionTaskContext>,
+        session: Arc<Session>,
         turn_context: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         execute_user_shell_command(
-            session.clone_session(),
+            session,
             turn_context,
             self.command.clone(),
             cancellation_token,
