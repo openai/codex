@@ -24,7 +24,8 @@ fn executed_tool_call_metadata_field_bytes(
         }
 }
 
-fn executed_tool_call_metadata_bytes(item: &ResponseItem) -> usize {
+/// Returns the exact serialized wire size of an item's attempted-tool metadata.
+pub fn executed_tool_call_metadata_bytes(item: &ResponseItem) -> usize {
     let Some(metadata) = item.executed_tool_call_metadata() else {
         return 0;
     };
@@ -46,6 +47,20 @@ fn executed_tool_call_metadata_bytes(item: &ResponseItem) -> usize {
 
 /// Bounds attempted-tool metadata fairly across the complete serialized request.
 pub fn bound_executed_tool_calls_for_prompt(items: &mut [ResponseItem]) {
+    bound_executed_tool_calls_for_prompt_with_priority(items, /*prioritize_recent*/ false);
+}
+
+/// Bounds retained history without letting older calls displace the newest calls.
+pub fn bound_executed_tool_calls_for_prompt_prioritizing_recent(items: &mut [ResponseItem]) {
+    items.reverse();
+    bound_executed_tool_calls_for_prompt_with_priority(items, /*prioritize_recent*/ true);
+    items.reverse();
+}
+
+fn bound_executed_tool_calls_for_prompt_with_priority(
+    items: &mut [ResponseItem],
+    prioritize_recent: bool,
+) {
     let mut remaining_items = 0_usize;
     let mut original_calls = 0_usize;
     let mut original_metadata_bytes = 0_usize;
@@ -118,8 +133,13 @@ pub fn bound_executed_tool_calls_for_prompt(items: &mut [ResponseItem]) {
         }
 
         let metadata_field_bytes = executed_tool_call_metadata_field_bytes(metadata);
+        let item_budget = if prioritize_recent {
+            remaining_bytes
+        } else {
+            remaining_bytes / remaining_items
+        };
         item.bound_executed_tool_calls_with_budget(
-            (remaining_bytes / remaining_items).saturating_sub(metadata_field_bytes),
+            item_budget.saturating_sub(metadata_field_bytes),
         );
         remaining_bytes = remaining_bytes.saturating_sub(executed_tool_call_metadata_bytes(item));
         remaining_items -= 1;
@@ -167,13 +187,12 @@ pub fn bound_executed_tool_calls_for_prompt(items: &mut [ResponseItem]) {
         return;
     }
 
-    if let Some(call) = items
-        .iter_mut()
-        .filter_map(ResponseItem::internal_chat_message_metadata_passthrough_mut)
-        .filter_map(Option::as_mut)
-        .filter_map(|metadata| metadata.executed_tool_calls.as_mut())
-        .find_map(|calls| calls.first_mut())
-    {
+    let omission_call = if prioritize_recent {
+        items.iter_mut().rev().find_map(first_executed_tool_call)
+    } else {
+        items.iter_mut().find_map(first_executed_tool_call)
+    };
+    if let Some(call) = omission_call {
         let original_bytes = call
             .truncation()
             .map(|truncation| truncation.original_bytes)
@@ -198,6 +217,13 @@ pub fn bound_executed_tool_calls_for_prompt(items: &mut [ResponseItem]) {
             ),
         );
     }
+}
+
+fn first_executed_tool_call(item: &mut ResponseItem) -> Option<&mut ExecutedToolCall> {
+    item.internal_chat_message_metadata_passthrough_mut()
+        .and_then(Option::as_mut)
+        .and_then(|metadata| metadata.executed_tool_calls.as_mut())
+        .and_then(|calls| calls.first_mut())
 }
 
 /// Raw model arguments or trusted truncation metadata for an attempted tool call.

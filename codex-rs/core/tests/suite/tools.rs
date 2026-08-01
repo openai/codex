@@ -294,20 +294,28 @@ async fn namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_re
         PermissionProfile::Disabled,
     )
     .await?;
+    let escaped_request = escaped_mock.single_request();
     assert_eq!(
-        escaped_mock
-            .single_request()
-            .custom_tool_call_output(escaped_call_id)["internal_chat_message_metadata_passthrough"]
+        escaped_request.custom_tool_call_output(call_id)["internal_chat_message_metadata_passthrough"]
             ["executed_tool_calls"],
         json!([{
             "name": format!("{namespace}__{tool_name}"),
-            "arguments": {
-                "_codex_executed_tool_call_truncated": {
-                    "original_bytes": serde_json::to_vec(&escaped_input)?.len(),
-                    "max_bytes": 8 * 1024,
-                },
-            },
+            "arguments": input,
         }]),
+    );
+    let expected_escaped_calls = json!([{
+        "name": format!("{namespace}__{tool_name}"),
+        "arguments": {
+            "_codex_executed_tool_call_truncated": {
+                "original_bytes": serde_json::to_vec(&escaped_input)?.len(),
+                "max_bytes": 8 * 1024,
+            },
+        },
+    }]);
+    assert_eq!(
+        escaped_request.custom_tool_call_output(escaped_call_id)["internal_chat_message_metadata_passthrough"]
+            ["executed_tool_calls"],
+        expected_escaped_calls,
     );
 
     let direct_exec_call_id = "custom-direct-exec";
@@ -340,9 +348,21 @@ async fn namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_re
     )
     .await?;
 
-    let direct_exec_output = direct_exec_mock
-        .single_request()
-        .custom_tool_call_output(direct_exec_call_id);
+    let direct_exec_request = direct_exec_mock.single_request();
+    assert_eq!(
+        direct_exec_request.custom_tool_call_output(call_id)["internal_chat_message_metadata_passthrough"]
+            ["executed_tool_calls"],
+        json!([{
+            "name": format!("{namespace}__{tool_name}"),
+            "arguments": input,
+        }]),
+    );
+    assert_eq!(
+        direct_exec_request.custom_tool_call_output(escaped_call_id)["internal_chat_message_metadata_passthrough"]
+            ["executed_tool_calls"],
+        expected_escaped_calls,
+    );
+    let direct_exec_output = direct_exec_request.custom_tool_call_output(direct_exec_call_id);
     assert_eq!(
         direct_exec_output["output"],
         json!("unsupported custom tool call: exec"),
