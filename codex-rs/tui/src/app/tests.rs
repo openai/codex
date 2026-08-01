@@ -5357,7 +5357,8 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
     assert!(app.initial_history_replay_buffer.is_none());
     assert!(app.transcript_reflow.has_pending_reflow());
 
-    app.maybe_run_resize_reflow(&mut tui)?;
+    let screen_size = tui.terminal.last_known_screen_size;
+    app.maybe_run_resize_reflow(&mut tui, screen_size)?;
     assert!(app.transcript_reflow.has_pending_reflow());
 
     app.close_transcript_overlay(&mut tui);
@@ -5420,6 +5421,27 @@ async fn height_shrink_schedules_resize_reflow() {
         &frame_requester,
     ));
     assert!(app.transcript_reflow.has_pending_reflow());
+}
+
+#[tokio::test]
+async fn resizing_empty_transcript_schedules_settled_size_recheck() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("test tui");
+    let frame_requester = crate::tui::FrameRequester::test_dummy();
+    let initial_size = ratatui::layout::Size::new(/*width*/ 80, /*height*/ 24);
+    let resized_size = ratatui::layout::Size::new(/*width*/ 100, /*height*/ 24);
+
+    assert!(!app.handle_draw_size_change(initial_size, initial_size, &frame_requester));
+    tui.screen_size_for_event(&TuiEvent::Resize(resized_size))
+        .expect("resolve resize event");
+    tui.terminal.resize(resized_size).expect("apply event size");
+    assert!(app.handle_draw_size_change(resized_size, initial_size, &frame_requester));
+    tokio::time::sleep(crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE).await;
+    assert_eq!(
+        tui.screen_size_for_event(&TuiEvent::Draw)
+            .expect("resolve settled size"),
+        initial_size
+    );
 }
 
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {

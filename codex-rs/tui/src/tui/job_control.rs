@@ -14,6 +14,7 @@ use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 
 use crate::key_hint;
 
@@ -178,7 +179,7 @@ pub(crate) enum PreparedResumeAction {
 }
 
 impl PreparedResumeAction {
-    pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
+    pub(crate) fn apply(self, terminal: &mut Terminal, screen_size: Size) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
                 terminal.set_viewport_area(area);
@@ -187,10 +188,8 @@ impl PreparedResumeAction {
                 execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                 // Enable "alternate scroll" so terminals may translate wheel to arrows
                 execute!(terminal.backend_mut(), EnableAlternateScroll)?;
-                if let Ok(size) = terminal.size() {
-                    terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    terminal.clear()?;
-                }
+                terminal.set_viewport_area(Rect::from(screen_size));
+                terminal.clear()?;
             }
         }
         Ok(())

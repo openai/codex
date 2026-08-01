@@ -107,6 +107,7 @@ async fn run_startup_hooks_review_app(
         let Some(event) = tui_events.next().await else {
             return Ok(StartupHooksReviewOutcome::Continue);
         };
+        tui.screen_size_for_event(&event)?;
         match event {
             TuiEvent::Key(key_event) => {
                 if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
@@ -167,7 +168,7 @@ async fn run_startup_hooks_review_app(
                 }
             }
             TuiEvent::Paste(_) => {}
-            TuiEvent::Draw | TuiEvent::Resize => draw_view(tui, &view)?,
+            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => draw_view(tui, &view)?,
         }
     }
 }

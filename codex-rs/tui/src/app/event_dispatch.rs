@@ -437,13 +437,14 @@ impl App {
             AppEvent::CodexOp(op) => {
                 let is_user_turn = matches!(&op, AppCommand::UserTurn { .. });
                 if is_user_turn {
-                    self.handle_draw_pre_render(tui)?;
+                    let screen_size = tui.terminal.last_known_screen_size;
+                    self.handle_draw_pre_render(tui, screen_size)?;
                     if self.transcript_reflow.has_pending_reflow() {
                         self.transcript_reflow.schedule_immediate();
-                        self.maybe_run_resize_reflow(tui)?;
+                        self.maybe_run_resize_reflow(tui, screen_size)?;
                     }
                     self.chat_widget.pre_draw_tick();
-                    self.render_chat_widget_frame(tui)?;
+                    self.render_chat_widget_frame(tui, screen_size)?;
                 }
                 self.chat_widget.prepare_local_op_submission(&op);
                 if let Err(err) = self.submit_active_thread_op(app_server, op).await {

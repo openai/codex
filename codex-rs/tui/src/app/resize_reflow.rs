@@ -30,6 +30,16 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 use crate::tui;
 
+/// Full terminal width before transcript-specific layout reservations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TerminalWidth(u16);
+
+impl From<ratatui::layout::Size> for TerminalWidth {
+    fn from(size: ratatui::layout::Size) -> Self {
+        Self(size.width)
+    }
+}
+
 struct ReflowCellDisplay {
     lines: Vec<HyperlinkLine>,
     is_stream_continuation: bool,
@@ -253,7 +263,8 @@ impl App {
     pub(super) fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if self.transcript_reflow.take_stream_finish_reflow_needed() {
             self.schedule_immediate_resize_reflow(tui);
-            self.maybe_run_resize_reflow(tui)?;
+            let screen_size = tui.terminal.last_known_screen_size;
+            self.maybe_run_resize_reflow(tui, screen_size)?;
         } else if self.transcript_reflow.pending_is_due(Instant::now()) {
             tui.frame_requester().schedule_frame();
         }
@@ -285,7 +296,8 @@ impl App {
         }
 
         self.schedule_immediate_resize_reflow(tui);
-        self.maybe_run_resize_reflow(tui)?;
+        let screen_size = tui.terminal.last_known_screen_size;
+        self.maybe_run_resize_reflow(tui, screen_size)?;
         if !self.transcript_reflow.has_pending_reflow() {
             self.transcript_reflow.clear_stream_flags();
         }
@@ -342,8 +354,11 @@ impl App {
         self.reset_history_emission_state();
     }
 
-    pub(super) fn handle_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        let size = tui.terminal.size()?;
+    pub(super) fn handle_draw_pre_render(
+        &mut self,
+        tui: &mut tui::Tui,
+        size: ratatui::layout::Size,
+    ) -> Result<()> {
         let should_rebuild_transcript = self.handle_draw_size_change(
             size,
             tui.terminal.last_known_screen_size,
@@ -355,7 +370,7 @@ impl App {
             // rebuild from transcript cells.
             tui.clear_pending_history_lines();
         }
-        self.maybe_run_resize_reflow(tui)?;
+        self.maybe_run_resize_reflow(tui, size)?;
         Ok(())
     }
 
@@ -365,7 +380,11 @@ impl App {
     /// surface. Callers must keep using `HistoryCell` source as the rebuild input; attempting to
     /// reuse terminal-wrapped output here would preserve exactly the stale wrapping this feature is
     /// meant to remove.
-    pub(super) fn maybe_run_resize_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    pub(super) fn maybe_run_resize_reflow(
+        &mut self,
+        tui: &mut tui::Tui,
+        screen_size: ratatui::layout::Size,
+    ) -> Result<()> {
         let Some(deadline) = self.transcript_reflow.pending_until() else {
             return Ok(());
         };
@@ -390,8 +409,8 @@ impl App {
         let reflow_ran_during_stream =
             !self.transcript_cells.is_empty() && self.should_mark_reflow_as_stream_time();
 
-        let width = self.reflow_transcript_now(tui)?;
-        self.transcript_reflow.mark_reflowed_width(width);
+        let width = self.reflow_transcript_now(tui, screen_size.into())?;
+        self.transcript_reflow.mark_reflowed_width(width.0);
 
         if reflow_ran_during_stream {
             self.transcript_reflow.mark_ran_during_stream();
@@ -399,15 +418,17 @@ impl App {
         // Some terminals settle their final reported width after the repaint that handled the
         // last resize event. Request one cheap follow-up draw so `handle_draw_pre_render` can
         // sample that width and schedule a final reflow if needed.
-        tui.frame_requester()
-            .schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
+        tui.schedule_screen_size_recheck(TRANSCRIPT_REFLOW_DEBOUNCE);
 
         Ok(())
     }
 
-    pub(super) fn reflow_transcript_now(&mut self, tui: &mut tui::Tui) -> Result<u16> {
-        let terminal_width = tui.terminal.size()?.width;
-        let width = self.chat_widget.history_wrap_width(terminal_width);
+    pub(super) fn reflow_transcript_now(
+        &mut self,
+        tui: &mut tui::Tui,
+        terminal_width: TerminalWidth,
+    ) -> Result<TerminalWidth> {
+        let width = self.chat_widget.history_wrap_width(terminal_width.0);
         if self.transcript_cells.is_empty() {
             // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
             tui.clear_pending_history_lines();
@@ -438,9 +459,12 @@ impl App {
     /// Unlike resize reflow, rollback must clear the terminal even when no cells remain. Otherwise
     /// the cancelled user prompt stays visible in scrollback despite being removed from the source
     /// transcript.
-    pub(super) fn rebuild_transcript_after_backtrack(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        let terminal_width = tui.terminal.size()?.width;
-        let width = self.chat_widget.history_wrap_width(terminal_width);
+    pub(super) fn rebuild_transcript_after_backtrack(
+        &mut self,
+        tui: &mut tui::Tui,
+        terminal_width: TerminalWidth,
+    ) -> Result<()> {
+        let width = self.chat_widget.history_wrap_width(terminal_width.0);
         let reflowed_lines = if self.transcript_cells.is_empty() {
             self.reset_history_emission_state();
             Vec::new()

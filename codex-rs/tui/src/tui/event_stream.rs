@@ -263,11 +263,13 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                             "failed to suspend TUI process"
                         );
                     }
-                    return Some(TuiEvent::Draw);
+                    return Some(TuiEvent::Resume);
                 }
                 Some(TuiEvent::Key(key_event))
             }
-            Event::Resize(_, _) => Some(TuiEvent::Resize),
+            Event::Resize(width, height) => {
+                Some(TuiEvent::Resize(ratatui::layout::Size { width, height }))
+            }
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
@@ -513,7 +515,13 @@ mod tests {
         handle.send(Ok(Event::Resize(80, 24)));
 
         let next = stream.next().await;
-        assert!(matches!(next, Some(TuiEvent::Resize)));
+        assert!(matches!(
+            next,
+            Some(TuiEvent::Resize(ratatui::layout::Size {
+                width: 80,
+                height: 24
+            }))
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]

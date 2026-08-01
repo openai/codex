@@ -174,6 +174,7 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -1135,7 +1136,7 @@ See the Codex keymap documentation for supported actions and examples."
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
-        tui.frame_requester().schedule_frame();
+        tui.schedule_screen_size_recheck(Duration::ZERO);
         tracing::info!(
             duration_ms = %(startup_elapsed_before_app + startup_started_at.elapsed()).as_millis(),
             bootstrap_ms = %bootstrap_ms,
@@ -1289,8 +1290,9 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
-            self.handle_draw_pre_render(tui)?;
+        let screen_size = tui.screen_size_for_event(&event)?;
+        if !matches!(&event, TuiEvent::Key(_) | TuiEvent::Paste(_)) {
+            self.handle_draw_pre_render(tui, screen_size)?;
         }
 
         if self.overlay.is_some() {
@@ -1308,9 +1310,9 @@ See the Codex keymap documentation for supported actions and examples."
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
-                TuiEvent::Draw | TuiEvent::Resize => {
+                TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => {
                     if self.backtrack_render_pending {
-                        self.rebuild_transcript_after_backtrack(tui)?;
+                        self.rebuild_transcript_after_backtrack(tui, screen_size.into())?;
                         self.backtrack_render_pending = false;
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
@@ -1318,18 +1320,18 @@ See the Codex keymap documentation for supported actions and examples."
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
+                        tui.defer_screen_size(screen_size);
                         return Ok(AppRunControl::Continue);
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    let rendered_area = self.render_chat_widget_frame(tui)?;
+                    let rendered_area = self.render_chat_widget_frame(tui, screen_size)?;
                     if self.chat_widget.ambient_pet_image_enabled() {
-                        let terminal_size = tui.terminal.size()?;
                         let ambient_pet_area = Rect::new(
                             /*x*/ 0,
                             /*y*/ 0,
-                            terminal_size.width,
-                            terminal_size.height,
+                            screen_size.width,
+                            screen_size.height,
                         );
                         if let Err(err) = tui.draw_ambient_pet_image(
                             self.chat_widget
@@ -1361,17 +1363,17 @@ See the Codex keymap documentation for supported actions and examples."
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
-        self.handle_draw_pre_render(tui)?;
+        let screen_size = tui.terminal.last_known_screen_size;
+        self.handle_draw_pre_render(tui, screen_size)?;
         self.chat_widget.pre_draw_tick();
-        self.render_chat_widget_frame(tui)?;
+        self.render_chat_widget_frame(tui, screen_size)?;
         Ok(())
     }
 
-    fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui) -> Result<Rect> {
-        let width = tui.terminal.size()?.width;
-        self.with_chat_widget_frame(width, |desired_height, chat_widget| {
+    fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
+        self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
             let mut rendered_area = Rect::default();
-            tui.draw_with_resize_reflow(desired_height, |frame| {
+            tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
                 let area = frame.area();
                 rendered_area = area;
                 chat_widget.render(area, frame.buffer);
