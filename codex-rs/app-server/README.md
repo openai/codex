@@ -1614,6 +1614,8 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 ### request_user_input
 
+`item/tool/requestUserInput` includes required `isBlocking`, which indicates whether the client should wait indefinitely for explicit user input. The older `autoResolutionMs` field is deprecated and retained only for compatibility.
+
 When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
 
 ### Attestation generation

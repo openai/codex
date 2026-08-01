@@ -329,6 +329,100 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
 }
 
 #[tokio::test]
+async fn handle_request_user_input_preserves_non_blocking_flag_for_round_trip() {
+    let (parent_session, parent_ctx, rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let io = Arc::new(SessionIo {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session_loop_termination: completed_session_loop_termination(),
+    });
+    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::new()));
+    let cancel_token = CancellationToken::new();
+    let child_event_id = "child-request-1".to_string();
+    let parent_user_input_id = parent_ctx.sub_id.clone();
+    let expected_response = RequestUserInputResponse {
+        answers: HashMap::from([(
+            "q1".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["yes".to_string()],
+            },
+        )]),
+    };
+
+    let handle = tokio::spawn({
+        let io = Arc::clone(&io);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        let pending_mcp_invocations = Arc::clone(&pending_mcp_invocations);
+        let cancel_token = cancel_token.clone();
+        let child_event_id = child_event_id.clone();
+        async move {
+            handle_request_user_input(
+                io.as_ref(),
+                child_event_id,
+                &parent_session,
+                &parent_ctx,
+                &pending_mcp_invocations,
+                RequestUserInputEvent {
+                    call_id: "child-call-1".to_string(),
+                    turn_id: "child-turn-1".to_string(),
+                    questions: vec![RequestUserInputQuestion {
+                        id: "q1".to_string(),
+                        header: "Confirm".to_string(),
+                        question: "Continue?".to_string(),
+                        is_other: false,
+                        is_secret: false,
+                        options: None,
+                    }],
+                    is_blocking: false,
+                    auto_resolution_ms: None,
+                },
+                &cancel_token,
+            )
+            .await;
+        }
+    });
+
+    let request_event = timeout(Duration::from_secs(1), rx_events.recv())
+        .await
+        .expect("request_user_input event timed out")
+        .expect("request_user_input event missing");
+    let EventMsg::RequestUserInput(request) = request_event.msg else {
+        panic!("expected RequestUserInput event");
+    };
+    assert_eq!(request.call_id, parent_user_input_id);
+    assert_eq!(request.is_blocking, false);
+
+    parent_session
+        .notify_user_input_response(&parent_user_input_id, expected_response.clone())
+        .await;
+
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("handle_request_user_input hung")
+        .expect("handle_request_user_input join error");
+
+    let submission = timeout(Duration::from_secs(1), rx_sub.recv())
+        .await
+        .expect("request_user_input response timed out")
+        .expect("request_user_input response missing");
+    assert_eq!(
+        submission.op,
+        Op::UserInputAnswer {
+            id: child_event_id,
+            response: expected_response,
+        }
+    );
+}
+
+#[tokio::test]
 async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_for_reply() {
     let (parent_session, parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
@@ -494,6 +588,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
                 is_secret: false,
                 options: None,
             }],
+            is_blocking: true,
             auto_resolution_ms: None,
         },
         &cancel_token,
@@ -541,6 +636,7 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
             is_secret: false,
             options: None,
         }],
+        is_blocking: true,
         auto_resolution_ms: None,
     };
     let response = maybe_auto_review_mcp_request_user_input(

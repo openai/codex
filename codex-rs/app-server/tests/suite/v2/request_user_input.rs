@@ -22,10 +22,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn create_request_user_input_sse_response_with_auto_resolution(
-    call_id: &str,
-    auto_resolution_ms: u64,
-) -> anyhow::Result<String> {
+fn create_request_user_input_sse_response(call_id: &str) -> anyhow::Result<String> {
     let tool_call_arguments = serde_json::to_string(&json!({
         "questions": [{
             "id": "confirm_path",
@@ -38,8 +35,7 @@ fn create_request_user_input_sse_response_with_auto_resolution(
                 "label": "No",
                 "description": "Stop and revisit the approach."
             }]
-        }],
-        "autoResolutionMs": auto_resolution_ms
+        }]
     }))?;
 
     Ok(responses::sse(vec![
@@ -51,11 +47,32 @@ fn create_request_user_input_sse_response_with_auto_resolution(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_user_input_round_trip() -> Result<()> {
+    request_user_input_round_trip_for_mode(
+        ModeKind::Plan,
+        /*enable_default_mode_feature*/ false,
+        /*expected_is_blocking*/ true,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_user_input_default_mode_forwards_non_blocking() -> Result<()> {
+    request_user_input_round_trip_for_mode(
+        ModeKind::Default,
+        /*enable_default_mode_feature*/ true,
+        /*expected_is_blocking*/ false,
+    )
+    .await
+}
+
+async fn request_user_input_round_trip_for_mode(
+    mode: ModeKind,
+    enable_default_mode_feature: bool,
+    expected_is_blocking: bool,
+) -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
-        create_request_user_input_sse_response_with_auto_resolution(
-            "call1", /*auto_resolution_ms*/ 60_000,
-        )?,
+        create_request_user_input_sse_response("call1")?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -71,6 +88,12 @@ async fn request_user_input_round_trip() -> Result<()> {
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            config: enable_default_mode_feature.then(|| {
+                std::collections::HashMap::from([(
+                    "features.default_mode_request_user_input".to_string(),
+                    json!(true),
+                )])
+            }),
             ..Default::default()
         })
         .await?;
@@ -88,7 +111,7 @@ async fn request_user_input_round_trip() -> Result<()> {
                 model: Some("mock-model".to_string()),
                 effort: Some(ReasoningEffort::Medium),
                 collaboration_mode: Some(CollaborationMode {
-                    mode: ModeKind::Plan,
+                    mode,
                     settings: Settings {
                         model: "mock-model".to_string(),
                         reasoning_effort: Some(ReasoningEffort::Medium),
@@ -113,7 +136,8 @@ async fn request_user_input_round_trip() -> Result<()> {
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
     assert_eq!(params.questions.len(), 1);
-    assert_eq!(params.auto_resolution_ms, Some(60_000));
+    assert_eq!(params.is_blocking, expected_is_blocking);
+    assert_eq!(params.auto_resolution_ms, None);
     let resolved_request_id = request_id.clone();
 
     mcp.send_response(

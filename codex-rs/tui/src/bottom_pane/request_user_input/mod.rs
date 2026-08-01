@@ -273,15 +273,15 @@ impl RequestUserInputOverlay {
     }
 
     fn snooze_auto_resolution(&mut self) {
-        if self.request.auto_resolution_ms.is_some() {
+        if !self.request.is_blocking {
             self.auto_resolution_snoozed = true;
         }
     }
 
     fn auto_resolution_timing_at(&self, now: Instant) -> AutoResolutionTiming {
-        // The TUI currently treats autoResolutionMs as an enable signal. The
-        // model-provided duration value is reserved for future runtime policy.
-        if self.request.auto_resolution_ms.is_none() || self.auto_resolution_snoozed {
+        // autoResolutionMs is deprecated; isBlocking now controls whether the
+        // request can auto-resolve using the TUI's fixed grace/countdown policy.
+        if self.request.is_blocking || self.auto_resolution_snoozed {
             return AutoResolutionTiming::Disabled;
         }
 
@@ -1694,6 +1694,7 @@ mod tests {
             item_id: "call-1".to_string(),
             turn_id: turn_id.to_string(),
             questions,
+            is_blocking: true,
             auto_resolution_ms: None,
         }
     }
@@ -1703,6 +1704,7 @@ mod tests {
         questions: Vec<ToolRequestUserInputQuestion>,
     ) -> ToolRequestUserInputParams {
         let mut request = request_event(turn_id, questions);
+        request.is_blocking = false;
         request.auto_resolution_ms = Some(60_000);
         request
     }
@@ -1770,6 +1772,7 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-2".to_string(),
             questions: vec![question_with_options("q2", "Second")],
+            is_blocking: true,
             auto_resolution_ms: None,
         });
         overlay.try_consume_user_input_request(ToolRequestUserInputParams {
@@ -1777,6 +1780,7 @@ mod tests {
             item_id: "call-3".to_string(),
             turn_id: "turn-3".to_string(),
             questions: vec![question_with_options("q3", "Third")],
+            is_blocking: true,
             auto_resolution_ms: None,
         });
 
@@ -1804,6 +1808,39 @@ mod tests {
         );
         assert_eq!(overlay.auto_resolution_next_frame_delay_at(now), None);
         assert_eq!(overlay.auto_resolution_countdown_text_at(now), None);
+    }
+
+    #[test]
+    fn auto_resolution_uses_is_blocking_without_auto_resolution_ms() {
+        let (tx, mut rx) = test_sender();
+        let mut request = request_event("turn-1", vec![question_with_options("q1", "First")]);
+        request.is_blocking = false;
+        assert_eq!(request.auto_resolution_ms, None);
+        let mut overlay = RequestUserInputOverlay::new(
+            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+        let now = Instant::now();
+        overlay.request_started_at = now;
+
+        assert_eq!(
+            overlay.auto_resolution_timing_at(now),
+            AutoResolutionTiming::HiddenGrace {
+                remaining: AUTO_RESOLUTION_HIDDEN_GRACE
+            }
+        );
+
+        let total_timeout = AUTO_RESOLUTION_HIDDEN_GRACE + AUTO_RESOLUTION_VISIBLE_COUNTDOWN;
+        let due = now + total_timeout;
+        assert!(overlay.pre_draw_tick(due));
+        assert!(overlay.done);
+
+        let event = rx.try_recv().expect("expected UserInputAnswer event");
+        let AppEvent::CodexOp(Op::UserInputAnswer { id, response }) = event else {
+            panic!("expected UserInputAnswer event");
+        };
+        assert_eq!(id, "turn-1");
+        assert_eq!(response.answers, HashMap::new());
     }
 
     #[test]
@@ -2035,6 +2072,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
+                is_blocking: true,
                 auto_resolution_ms: None,
             },
             tx,
@@ -2064,6 +2102,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
+                is_blocking: true,
                 auto_resolution_ms: None,
             },
             tx,
@@ -2076,6 +2115,7 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
+            is_blocking: true,
             auto_resolution_ms: None,
         });
 
@@ -2104,6 +2144,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
+                is_blocking: true,
                 auto_resolution_ms: None,
             },
             tx,
@@ -2116,6 +2157,7 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
+            is_blocking: true,
             auto_resolution_ms: None,
         });
         overlay.try_consume_user_input_request(ToolRequestUserInputParams {
@@ -2123,6 +2165,7 @@ mod tests {
             item_id: "call-3".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q3", "Third")],
+            is_blocking: true,
             auto_resolution_ms: None,
         });
 

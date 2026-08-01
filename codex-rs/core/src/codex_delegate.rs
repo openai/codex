@@ -726,6 +726,7 @@ async fn handle_request_user_input(
 
     let args = RequestUserInputArgs {
         questions: event.questions,
+        is_blocking: event.is_blocking,
         auto_resolution_ms: event.auto_resolution_ms,
     };
     let response_fut =

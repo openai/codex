@@ -2051,6 +2051,7 @@ async fn request_user_input_interrupt_pauses_active_goal_turn() {
             item_id: "call-1".to_string(),
             turn_id: "turn-1".to_string(),
             questions: Vec::new(),
+            is_blocking: true,
             auto_resolution_ms: None,
         });
 

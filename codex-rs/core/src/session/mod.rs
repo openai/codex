@@ -2663,6 +2663,7 @@ impl Session {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             questions: args.questions,
+            is_blocking: args.is_blocking,
             auto_resolution_ms: args.auto_resolution_ms,
         });
         turn_context
