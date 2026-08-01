@@ -29,7 +29,7 @@ use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
-use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
@@ -669,28 +669,37 @@ impl AppLinkView {
     }
 
     fn hint_line(&self) -> Line<'static> {
-        Line::from(vec![
-            "Use ".into(),
-            key_hint::plain(KeyCode::Tab).into(),
-            " / ".into(),
-            key_hint::plain(KeyCode::Up).into(),
-            " ".into(),
-            key_hint::plain(KeyCode::Down).into(),
-            " to move, ".into(),
-            key_hint::plain(KeyCode::Enter).into(),
-            " to select, ".into(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to close".into(),
-        ])
+        let mut spans = vec!["Use ".into(), key_hint::plain(KeyCode::Tab).into()];
+        if let Some(move_up) = self.list_keymap.primary_hint(ListAction::MoveUp) {
+            spans.extend([" / ".into(), move_up.into()]);
+        }
+        if let Some(move_down) = self.list_keymap.primary_hint(ListAction::MoveDown) {
+            spans.extend([" ".into(), move_down.into()]);
+        }
+        spans.push(" to move".into());
+        if let Some(accept) = self.list_keymap.primary_hint(ListAction::Accept) {
+            spans.extend([", ".into(), accept.into(), " to select".into()]);
+        }
+        if let Some(cancel) = self.list_keymap.primary_hint(ListAction::Cancel) {
+            spans.extend([", ".into(), cancel.into(), " to close".into()]);
+        }
+        Line::from(spans)
     }
 }
 
 impl BottomPaneView for AppLinkView {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
+                self.on_ctrl_c();
+            }
+            _ if self.list_keymap.action_for(key_event) == Some(ListAction::Cancel) => {
                 self.on_ctrl_c();
             }
             KeyEvent {
@@ -705,7 +714,13 @@ impl BottomPaneView for AppLinkView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.move_selection_prev(),
-            _ if self.list_keymap.move_left.is_pressed(key_event) => self.move_selection_prev(),
+            _ if matches!(
+                self.list_keymap.action_for(key_event),
+                Some(ListAction::MoveUp | ListAction::MoveLeft)
+            ) =>
+            {
+                self.move_selection_prev()
+            }
             KeyEvent {
                 code: KeyCode::Down,
                 ..
@@ -718,7 +733,16 @@ impl BottomPaneView for AppLinkView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.move_selection_next(),
-            _ if self.list_keymap.move_right.is_pressed(key_event) => self.move_selection_next(),
+            _ if matches!(
+                self.list_keymap.action_for(key_event),
+                Some(ListAction::MoveDown | ListAction::MoveRight)
+            ) =>
+            {
+                self.move_selection_next()
+            }
+            _ if self.list_keymap.action_for(key_event) == Some(ListAction::Accept) => {
+                self.activate_selected_action();
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers: KeyModifiers::NONE,

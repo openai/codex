@@ -2349,9 +2349,15 @@ impl App {
                 context,
                 action,
                 intent,
+                capture_mode,
             } => {
-                self.chat_widget
-                    .open_keymap_capture(context, action, intent, &self.keymap);
+                self.chat_widget.open_keymap_capture(
+                    context,
+                    action,
+                    intent,
+                    capture_mode,
+                    &self.keymap,
+                );
             }
             AppEvent::OpenKeymapDebug => {
                 self.chat_widget.open_keymap_debug(&self.keymap);
@@ -2424,6 +2430,7 @@ impl App {
             .await
         {
             Ok(()) => {
+                self.cancel_pending_key_chord();
                 self.config.tui_keymap = keymap_config.clone();
                 self.keymap = runtime_keymap.clone();
                 self.chat_widget
@@ -2475,6 +2482,7 @@ impl App {
             .await
         {
             Ok(()) => {
+                self.cancel_pending_key_chord();
                 self.config.tui_keymap = keymap_config.clone();
                 self.keymap = runtime_keymap.clone();
                 self.chat_widget

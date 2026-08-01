@@ -1363,7 +1363,7 @@ async fn restore_thread_input_state_applies_running_state_policy() {
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.edit_queued_message = vec![crate::key_hint::alt(KeyCode::Up)];
-    chat.queued_message_edit_hint_binding = Some(crate::key_hint::alt(KeyCode::Up));
+    chat.queued_message_edit_hint_binding = Some(crate::key_hint::alt(KeyCode::Up).into());
     chat.bottom_pane
         .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
 
@@ -1460,6 +1460,42 @@ async fn shift_left_edits_most_recent_queued_message_in_tmux() {
         multiplexer: Some(Multiplexer::Tmux { version: None }),
     })
     .await;
+}
+
+#[test]
+fn queued_message_edit_hint_displays_configured_chords() {
+    use codex_config::types::KeybindingSpec;
+    use codex_config::types::KeybindingsSpec;
+    use codex_config::types::TuiKeymap;
+
+    let terminal_info = || TerminalInfo {
+        name: TerminalName::Iterm2,
+        term_program: None,
+        version: None,
+        term: None,
+        multiplexer: None,
+    };
+    let mut config = TuiKeymap::default();
+    config.chat.edit_queued_message = Some(KeybindingsSpec::One(KeybindingSpec(
+        "ctrl-x up".to_string(),
+    )));
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid queued edit chord");
+
+    assert_eq!(
+        queued_message_edit_hint_binding(&keymap, terminal_info()),
+        Some(crate::key_hint::ShortcutHint::Chord {
+            prefix: crate::key_hint::ctrl(KeyCode::Char('x')),
+            completion: crate::key_hint::plain(KeyCode::Up),
+        })
+    );
+
+    let default_keymap = RuntimeKeymap::defaults();
+    assert_eq!(
+        queued_message_edit_hint_binding(&default_keymap, terminal_info()),
+        Some(crate::key_hint::ShortcutHint::Single(crate::key_hint::alt(
+            KeyCode::Up,
+        )))
+    );
 }
 
 #[test]

@@ -20,13 +20,30 @@
 
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::ShortcutHint;
 use codex_config::types::KeybindingsSpec;
 use codex_config::types::MAX_FUNCTION_KEY;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+mod bindings;
+mod chords;
+
+pub(crate) use bindings::KeymapContext;
+pub(crate) use bindings::bindings_for_action;
+pub(crate) use bindings::keymap_action_id;
+use bindings::runtime_action_bindings;
+pub(crate) use chords::KEY_CHORD_TIMEOUT;
+pub(crate) use chords::KeyChordMatch;
+pub(crate) use chords::KeyChordMatcher;
+pub(crate) use chords::KeymapContextSet;
+pub(crate) use chords::RuntimeChordKeymap;
 
 /// Runtime keymap used by TUI input handlers.
 ///
@@ -43,6 +60,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeKeymap {
     pub(crate) app: AppKeymap,
+    pub(crate) chords: Arc<RuntimeChordKeymap>,
     pub(crate) chat: ChatKeymap,
     pub(crate) composer: ComposerKeymap,
     pub(crate) editor: EditorKeymap,
@@ -224,6 +242,50 @@ pub(crate) struct PagerKeymap {
     pub(crate) jump_bottom: Vec<KeyBinding>,
     pub(crate) close: Vec<KeyBinding>,
     pub(crate) close_transcript: Vec<KeyBinding>,
+    chord_hints: Arc<RuntimeChordKeymap>,
+}
+
+impl PagerKeymap {
+    pub(crate) fn primary_hint(
+        &self,
+        action: &'static str,
+        bindings: &[KeyBinding],
+    ) -> Option<ShortcutHint> {
+        let action = keymap_action_id(KeymapContext::Pager.config_name(), action)?;
+        self.chord_hints.primary_hint(action, bindings)
+    }
+}
+
+/// Semantic navigation and confirmation actions shared by list-like views.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ListAction {
+    MoveUp,
+    MoveDown,
+    MoveLeft,
+    MoveRight,
+    PageUp,
+    PageDown,
+    JumpTop,
+    JumpBottom,
+    Accept,
+    Cancel,
+}
+
+impl ListAction {
+    fn config_name(self) -> &'static str {
+        match self {
+            Self::MoveUp => "move_up",
+            Self::MoveDown => "move_down",
+            Self::MoveLeft => "move_left",
+            Self::MoveRight => "move_right",
+            Self::PageUp => "page_up",
+            Self::PageDown => "page_down",
+            Self::JumpTop => "jump_top",
+            Self::JumpBottom => "jump_bottom",
+            Self::Accept => "accept",
+            Self::Cancel => "cancel",
+        }
+    }
 }
 
 /// Generic list picker keybindings shared across popup list views.
@@ -247,6 +309,47 @@ pub(crate) struct ListKeymap {
     pub(crate) jump_bottom: Vec<KeyBinding>,
     pub(crate) accept: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
+    chord_hints: Arc<RuntimeChordKeymap>,
+}
+
+impl ListKeymap {
+    pub(crate) fn bindings_for(&self, action: ListAction) -> &[KeyBinding] {
+        match action {
+            ListAction::MoveUp => &self.move_up,
+            ListAction::MoveDown => &self.move_down,
+            ListAction::MoveLeft => &self.move_left,
+            ListAction::MoveRight => &self.move_right,
+            ListAction::PageUp => &self.page_up,
+            ListAction::PageDown => &self.page_down,
+            ListAction::JumpTop => &self.jump_top,
+            ListAction::JumpBottom => &self.jump_bottom,
+            ListAction::Accept => &self.accept,
+            ListAction::Cancel => &self.cancel,
+        }
+    }
+
+    pub(crate) fn action_for(&self, event: KeyEvent) -> Option<ListAction> {
+        [
+            ListAction::MoveUp,
+            ListAction::MoveDown,
+            ListAction::MoveLeft,
+            ListAction::MoveRight,
+            ListAction::PageUp,
+            ListAction::PageDown,
+            ListAction::JumpTop,
+            ListAction::JumpBottom,
+            ListAction::Accept,
+            ListAction::Cancel,
+        ]
+        .into_iter()
+        .find(|action| self.bindings_for(*action).is_pressed(event))
+    }
+
+    pub(crate) fn primary_hint(&self, action: ListAction) -> Option<ShortcutHint> {
+        let action_id = keymap_action_id(KeymapContext::List.config_name(), action.config_name())?;
+        self.chord_hints
+            .primary_hint(action_id, self.bindings_for(action))
+    }
 }
 
 /// Approval modal keybindings.
@@ -263,6 +366,38 @@ pub(crate) struct ApprovalKeymap {
     pub(crate) deny: Vec<KeyBinding>,
     pub(crate) decline: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
+    chord_hints: Arc<RuntimeChordKeymap>,
+}
+
+impl ApprovalKeymap {
+    pub(crate) fn primary_hint(
+        &self,
+        action: &'static str,
+        bindings: &[KeyBinding],
+    ) -> Option<ShortcutHint> {
+        let action = keymap_action_id(KeymapContext::Approval.config_name(), action)?;
+        self.chord_hints.primary_hint(action, bindings)
+    }
+
+    pub(crate) fn hint_for_bindings(&self, bindings: &[KeyBinding]) -> Option<ShortcutHint> {
+        [
+            ("open_fullscreen", self.open_fullscreen.as_slice()),
+            ("open_thread", self.open_thread.as_slice()),
+            ("approve", self.approve.as_slice()),
+            ("approve_for_session", self.approve_for_session.as_slice()),
+            ("approve_for_prefix", self.approve_for_prefix.as_slice()),
+            ("deny", self.deny.as_slice()),
+            ("decline", self.decline.as_slice()),
+            ("cancel", self.cancel.as_slice()),
+        ]
+        .into_iter()
+        .find_map(|(action, configured)| {
+            (!bindings.is_empty() && bindings.iter().all(|binding| configured.contains(binding)))
+                .then(|| self.primary_hint(action, configured))
+                .flatten()
+        })
+        .or_else(|| primary_binding(bindings).map(ShortcutHint::from))
+    }
 }
 
 /// Returns the first binding, used as the primary UI hint for an action.
@@ -270,7 +405,19 @@ pub(crate) struct ApprovalKeymap {
 /// Rendering code should prefer this for concise hints while preserving all
 /// bindings for actual input matching.
 pub(crate) fn primary_binding(bindings: &[KeyBinding]) -> Option<KeyBinding> {
-    bindings.first().copied()
+    user_bindings(bindings).first().copied()
+}
+
+/// Remove the trailing internal dispatch token, when present.
+pub(crate) fn user_bindings(bindings: &[KeyBinding]) -> &[KeyBinding] {
+    if bindings
+        .last()
+        .is_some_and(|binding| chords::is_dispatch_token(*binding))
+    {
+        &bindings[..bindings.len() - 1]
+    } else {
+        bindings
+    }
 }
 
 /// Resolve one context-local action binding from config.
@@ -387,6 +534,7 @@ impl RuntimeKeymap {
     /// dispatch, or conflict guarantees from this resolver no longer hold.
     pub(crate) fn from_config(keymap: &TuiKeymap) -> Result<Self, String> {
         let defaults = Self::built_in_defaults();
+        let chords = Arc::new(RuntimeChordKeymap::from_config(keymap)?);
         let side_toggle_default_is_shadowed = keymap.global.toggle_side_conversation.is_none()
             && ["ctrl-/", "ctrl-7"].into_iter().any(|alias| {
                 configured_main_surface_alias_is_used(keymap, alias)
@@ -783,6 +931,7 @@ impl RuntimeKeymap {
             jump_bottom: resolve_local!(keymap, defaults, pager, jump_bottom),
             close: resolve_local!(keymap, defaults, pager, close),
             close_transcript: resolve_local!(keymap, defaults, pager, close_transcript),
+            chord_hints: Arc::clone(&chords),
         };
 
         let approval = ApprovalKeymap {
@@ -794,6 +943,7 @@ impl RuntimeKeymap {
             deny: resolve_local!(keymap, defaults, approval, deny),
             decline: resolve_local!(keymap, defaults, approval, decline),
             cancel: resolve_local!(keymap, defaults, approval, cancel),
+            chord_hints: Arc::clone(&chords),
         };
 
         let list_move_up = resolve_local!(keymap, defaults, list, move_up);
@@ -903,10 +1053,12 @@ impl RuntimeKeymap {
             )?,
             accept: list_accept,
             cancel: list_cancel,
+            chord_hints: Arc::clone(&chords),
         };
 
-        let resolved = Self {
+        let mut resolved = Self {
             app,
+            chords,
             chat,
             composer,
             editor,
@@ -919,7 +1071,20 @@ impl RuntimeKeymap {
         };
 
         resolved.validate_conflicts()?;
+        chords::validate_chord_conflicts(&resolved)?;
+        chords::install_dispatch_bindings(&mut resolved)?;
         Ok(resolved)
+    }
+
+    /// Resolve the visible primary shortcut from configured declaration order.
+    pub(crate) fn primary_hint(
+        &self,
+        context: KeymapContext,
+        action: &'static str,
+    ) -> Option<ShortcutHint> {
+        let action_id = keymap_action_id(context.config_name(), action)?;
+        let bindings = bindings_for_action(self, context.config_name(), action)?;
+        self.chords.primary_hint(action_id, bindings)
     }
 
     /// Built-in keymap defaults.
@@ -939,6 +1104,7 @@ impl RuntimeKeymap {
                 toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
                 toggle_side_conversation: default_bindings![ctrl(KeyCode::Char('/'))],
             },
+            chords: Arc::default(),
             chat: ChatKeymap {
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
                 decrease_reasoning_effort: default_bindings![
@@ -1132,6 +1298,7 @@ impl RuntimeKeymap {
                 jump_bottom: default_bindings![plain(KeyCode::End)],
                 close: default_bindings![plain(KeyCode::Char('q')), ctrl(KeyCode::Char('c'))],
                 close_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
+                chord_hints: Arc::default(),
             },
             list: ListKeymap {
                 move_up: default_bindings![
@@ -1154,6 +1321,7 @@ impl RuntimeKeymap {
                 jump_bottom: default_bindings![plain(KeyCode::End)],
                 accept: default_bindings![plain(KeyCode::Enter)],
                 cancel: default_bindings![plain(KeyCode::Esc)],
+                chord_hints: Arc::default(),
             },
             approval: ApprovalKeymap {
                 open_fullscreen: default_bindings![
@@ -1170,6 +1338,7 @@ impl RuntimeKeymap {
                 deny: default_bindings![plain(KeyCode::Char('d'))],
                 decline: default_bindings![plain(KeyCode::Esc), plain(KeyCode::Char('n'))],
                 cancel: default_bindings![plain(KeyCode::Char('c'))],
+                chord_hints: Arc::default(),
             },
         }
     }
@@ -1983,6 +2152,9 @@ fn resolve_new_default_bindings(
 fn parse_bindings(spec: &KeybindingsSpec, path: &str) -> Result<Vec<KeyBinding>, String> {
     let mut parsed = Vec::new();
     for raw in spec.specs() {
+        if raw.as_str().contains(' ') {
+            continue;
+        }
         let binding = parse_keybinding(raw.as_str()).ok_or_else(|| {
             format!(
                 "Invalid `{path}` = `{}`. Use values like `ctrl-a`, `shift-enter`, or `page-down`. \

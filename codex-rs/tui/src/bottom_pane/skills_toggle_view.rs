@@ -15,9 +15,10 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::ShortcutHint;
 use crate::key_hint::is_plain_text_key_event;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
-use crate::keymap::primary_binding;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
@@ -232,6 +233,10 @@ impl SkillsToggleView {
 }
 
 impl BottomPaneView for SkillsToggleView {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         // Printable characters always feed search. Movement aliases such as
         // plain j/k only apply through non-text events or modified bindings.
@@ -388,8 +393,10 @@ impl Renderable for SkillsToggleView {
 
 fn skills_toggle_hint_line(keymap: &ListKeymap) -> Line<'static> {
     let space = key_hint::plain(KeyCode::Char(' '));
-    let accept = primary_binding(&keymap.accept).filter(|binding| *binding != space);
-    let cancel = primary_binding(&keymap.cancel);
+    let accept = keymap
+        .primary_hint(ListAction::Accept)
+        .filter(|binding| *binding != ShortcutHint::Single(space));
+    let cancel = keymap.primary_hint(ListAction::Cancel);
 
     match (accept, cancel) {
         (Some(accept), Some(cancel)) => Line::from(vec![

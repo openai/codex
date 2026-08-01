@@ -13,6 +13,7 @@
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_altgr;
 use crate::keymap::EditorKeymap;
+use crate::keymap::KeymapContext;
 use crate::keymap::RuntimeKeymap;
 use crate::keymap::VimNormalKeymap;
 use crate::keymap::VimOperatorKeymap;
@@ -278,6 +279,18 @@ impl TextArea {
     /// `d{motion}` or `y{motion}` for higher-level shortcuts.
     pub(crate) fn is_vim_operator_pending(&self) -> bool {
         !matches!(self.vim_pending, VimPending::None)
+    }
+
+    /// Return the keymap context that owns the next editing key.
+    pub(crate) fn keymap_context(&self) -> KeymapContext {
+        if !self.vim_enabled || self.vim_mode == VimMode::Insert {
+            return KeymapContext::Editor;
+        }
+        match self.vim_pending {
+            VimPending::None => KeymapContext::VimNormal,
+            VimPending::Operator(_) => KeymapContext::VimOperator,
+            VimPending::TextObject { .. } => KeymapContext::VimTextObject,
+        }
     }
 
     /// Enter Vim insert mode if modal editing is enabled.

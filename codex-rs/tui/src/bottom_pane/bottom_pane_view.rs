@@ -1,6 +1,7 @@
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
+use crate::keymap::KeymapContextSet;
 use crate::render::renderable::Renderable;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
@@ -20,6 +21,11 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
     fn handle_key_event(&mut self, _key_event: KeyEvent) {}
+
+    /// Return the keymap contexts whose handlers are active in this view.
+    fn keymap_contexts(&self) -> KeymapContextSet {
+        KeymapContextSet::default()
+    }
 
     /// Return `true` if the view has finished and should be removed.
     fn is_complete(&self) -> bool {

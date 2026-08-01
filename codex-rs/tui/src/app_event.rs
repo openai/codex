@@ -176,6 +176,13 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
+/// Number of key strokes recorded by one `/keymap` capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeymapCaptureMode {
+    SingleKey,
+    Chord,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -1116,6 +1123,7 @@ pub(crate) enum AppEvent {
         context: String,
         action: String,
         intent: KeymapEditIntent,
+        capture_mode: KeymapCaptureMode,
     },
 
     /// Open the keymap keypress inspector.

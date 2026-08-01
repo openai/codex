@@ -24,6 +24,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::ShortcutHint;
 use crate::keymap::PagerKeymap;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
@@ -90,12 +91,16 @@ impl Overlay {
     }
 }
 
-fn first_or_empty(bindings: &[KeyBinding]) -> Vec<KeyBinding> {
-    bindings.first().copied().into_iter().collect()
+fn first_or_empty(
+    keymap: &PagerKeymap,
+    action: &'static str,
+    bindings: &[KeyBinding],
+) -> Vec<ShortcutHint> {
+    keymap.primary_hint(action, bindings).into_iter().collect()
 }
 
 // Render a single line of key hints from (key(s), description) pairs.
-fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<KeyBinding>, &str)]) {
+fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<ShortcutHint>, &str)]) {
     let mut spans: Vec<Span<'static>> = vec![" ".into()];
     let mut first = true;
     for (keys, desc) in pairs {
@@ -106,13 +111,38 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<KeyBinding>, &st
             if i > 0 {
                 spans.push("/".into());
             }
-            spans.push(Span::from(key));
+            spans.push(Span::from(*key));
         }
         spans.push(" ".into());
         spans.push(Span::from(desc.to_string()));
         first = false;
     }
     Paragraph::new(vec![Line::from(spans).dim()]).render(area, buf);
+}
+
+fn render_navigation_hints(area: Rect, buf: &mut Buffer, keymap: &PagerKeymap) {
+    let actions = [
+        ("scroll_up", &keymap.scroll_up),
+        ("scroll_down", &keymap.scroll_down),
+        ("page_up", &keymap.page_up),
+        ("page_down", &keymap.page_down),
+        ("jump_top", &keymap.jump_top),
+        ("jump_bottom", &keymap.jump_bottom),
+    ];
+    let hints = actions
+        .chunks_exact(2)
+        .zip(["to scroll", "to page", "to jump"])
+        .map(|(actions, description)| {
+            (
+                actions
+                    .iter()
+                    .filter_map(|(action, bindings)| keymap.primary_hint(action, bindings))
+                    .collect(),
+                description,
+            )
+        })
+        .collect::<Vec<_>>();
+    render_key_hints(area, buf, &hints);
 }
 
 /// Generic widget for rendering a pager view.
@@ -732,48 +762,27 @@ impl TranscriptOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(
-            line1,
-            buf,
-            &[
-                (
-                    first_or_empty(&self.view.keymap.scroll_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.scroll_down))
-                        .collect(),
-                    "to scroll",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.page_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.page_down))
-                        .collect(),
-                    "to page",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.jump_top)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.jump_bottom))
-                        .collect(),
-                    "to jump",
-                ),
-            ],
-        );
+        render_navigation_hints(line1, buf, &self.view.keymap);
 
-        let mut pairs: Vec<(Vec<KeyBinding>, &str)> =
-            vec![(first_or_empty(&self.view.keymap.close), "to quit")];
+        let mut pairs: Vec<(Vec<ShortcutHint>, &str)> = vec![(
+            first_or_empty(&self.view.keymap, "close", &self.view.keymap.close),
+            "to quit",
+        )];
         if self.highlight_cell.is_some() {
             pairs.push((
                 vec![
-                    key_hint::plain(KeyCode::Esc),
-                    key_hint::plain(KeyCode::Left),
+                    key_hint::plain(KeyCode::Esc).into(),
+                    key_hint::plain(KeyCode::Left).into(),
                 ],
                 "to edit prev",
             ));
-            pairs.push((vec![key_hint::plain(KeyCode::Right)], "to edit next"));
-            pairs.push((vec![key_hint::plain(KeyCode::Enter)], "to edit message"));
+            pairs.push((vec![key_hint::plain(KeyCode::Right).into()], "to edit next"));
+            pairs.push((
+                vec![key_hint::plain(KeyCode::Enter).into()],
+                "to edit message",
+            ));
         } else {
-            pairs.push((vec![key_hint::plain(KeyCode::Esc)], "to edit prev"));
+            pairs.push((vec![key_hint::plain(KeyCode::Esc).into()], "to edit prev"));
         }
         render_key_hints(line2, buf, &pairs);
     }
@@ -846,35 +855,11 @@ impl StaticOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(
-            line1,
-            buf,
-            &[
-                (
-                    first_or_empty(&self.view.keymap.scroll_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.scroll_down))
-                        .collect(),
-                    "to scroll",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.page_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.page_down))
-                        .collect(),
-                    "to page",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.jump_top)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.jump_bottom))
-                        .collect(),
-                    "to jump",
-                ),
-            ],
-        );
-        let pairs: Vec<(Vec<KeyBinding>, &str)> =
-            vec![(first_or_empty(&self.view.keymap.close), "to quit")];
+        render_navigation_hints(line1, buf, &self.view.keymap);
+        let pairs: Vec<(Vec<ShortcutHint>, &str)> = vec![(
+            first_or_empty(&self.view.keymap, "close", &self.view.keymap.close),
+            "to quit",
+        )];
         render_key_hints(line2, buf, &pairs);
     }
 
@@ -1033,6 +1018,27 @@ mod tests {
             scroll_offset,
             default_pager_keymap(),
         )
+    }
+
+    #[test]
+    fn footer_hints_display_chords_without_internal_dispatch_keys() {
+        use codex_config::types::KeybindingSpec;
+        use codex_config::types::KeybindingsSpec;
+        use codex_config::types::TuiKeymap;
+
+        let mut config = TuiKeymap::default();
+        config.pager.page_up = Some(KeybindingsSpec::One(KeybindingSpec(
+            "ctrl-x page-up".to_string(),
+        )));
+        let keymap = crate::keymap::RuntimeKeymap::from_config(&config).expect("valid pager chord");
+
+        assert_eq!(
+            first_or_empty(&keymap.pager, "page_up", &keymap.pager.page_up),
+            vec![ShortcutHint::Chord {
+                prefix: key_hint::ctrl(KeyCode::Char('x')),
+                completion: key_hint::plain(KeyCode::PageUp),
+            }]
+        );
     }
 
     #[test]

@@ -3,6 +3,10 @@
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        self.bottom_pane.keymap_contexts()
+    }
+
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.bottom_pane.has_active_view()
             && !matches!(

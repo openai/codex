@@ -33,8 +33,8 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ApprovalKeymap;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
-use crate::keymap::primary_binding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -291,7 +291,7 @@ impl ApprovalOverlay {
             .iter()
             .map(|opt| SelectionItem {
                 name: opt.label.clone(),
-                display_shortcut: opt.shortcuts.first().copied(),
+                display_shortcut: approval_keymap.hint_for_bindings(&opt.shortcuts),
                 dismiss_on_select: false,
                 ..Default::default()
             })
@@ -563,6 +563,11 @@ impl ApprovalOverlay {
 }
 
 impl BottomPaneView for ApprovalOverlay {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::Approval)
+            .with(crate::keymap::KeymapContext::List)
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;
@@ -619,14 +624,15 @@ fn approval_footer_hint(
     list_keymap: &ListKeymap,
 ) -> Line<'static> {
     let mut spans = accept_cancel_hint_line(
-        primary_binding(&list_keymap.accept),
+        list_keymap.primary_hint(ListAction::Accept),
         "to confirm",
-        primary_binding(&list_keymap.cancel),
+        list_keymap.primary_hint(ListAction::Cancel),
         "to cancel",
     )
     .spans;
     if request.thread_label().is_some()
-        && let Some(open_thread) = primary_binding(&approval_keymap.open_thread)
+        && let Some(open_thread) =
+            approval_keymap.primary_hint("open_thread", &approval_keymap.open_thread)
     {
         if !spans.is_empty() {
             spans.push(" or ".into());
@@ -1106,11 +1112,15 @@ fn elicitation_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::keymap::RuntimeKeymap;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::ExecPolicyAmendment;
     use codex_app_server_protocol::NetworkApprovalProtocol;
     use codex_app_server_protocol::NetworkPolicyAmendment;
+    use codex_config::types::KeybindingSpec;
+    use codex_config::types::KeybindingsSpec;
+    use codex_config::types::TuiKeymap;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1240,6 +1250,58 @@ mod tests {
             request_id: RequestId::String("request-1".to_string()),
             message: "Need more information".to_string(),
         })
+    }
+
+    #[test]
+    fn approval_shortcuts_display_chords_in_configured_order() {
+        let chord = crate::key_hint::ShortcutHint::Chord {
+            prefix: key_hint::ctrl(KeyCode::Char('x')),
+            completion: key_hint::plain(KeyCode::Char('y')),
+        };
+        let single = crate::key_hint::ShortcutHint::Single(key_hint::plain(KeyCode::Char('y')));
+        let binding = |spec: &str| KeybindingSpec(spec.to_string());
+        for (specs, expected_shortcut) in [
+            (KeybindingsSpec::One(binding("ctrl-x y")), chord),
+            (
+                KeybindingsSpec::Many(vec![binding("y"), binding("ctrl-x y")]),
+                single,
+            ),
+            (
+                KeybindingsSpec::Many(vec![binding("ctrl-x y"), binding("y")]),
+                chord,
+            ),
+        ] {
+            let mut config = TuiKeymap::default();
+            config.approval.approve = Some(specs);
+            let keymap = RuntimeKeymap::from_config(&config).expect("valid approval keymap");
+            let request = make_exec_request();
+            let (_, params) = ApprovalOverlay::build_options(
+                &request,
+                build_header(&request),
+                &Features::with_defaults(),
+                &keymap.approval,
+                &keymap.list,
+            );
+            let approval = params
+                .items
+                .iter()
+                .find(|item| item.name == "Yes, proceed")
+                .expect("approval selection");
+
+            assert_eq!(approval.display_shortcut, Some(expected_shortcut));
+            if matches!(
+                expected_shortcut,
+                crate::key_hint::ShortcutHint::Chord { .. }
+            ) {
+                let dispatch_token = keymap.approval.approve.last().expect("chord token");
+                assert_eq!(
+                    keymap
+                        .approval
+                        .hint_for_bindings(std::slice::from_ref(dispatch_token)),
+                    Some(expected_shortcut)
+                );
+            }
+        }
     }
 
     #[test]

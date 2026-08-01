@@ -1173,7 +1173,7 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
 ) {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.queued_message_edit_hint_binding =
-        Some(queued_message_edit_binding_for_terminal(terminal_info));
+        Some(queued_message_edit_binding_for_terminal(terminal_info).into());
     chat.bottom_pane
         .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
 

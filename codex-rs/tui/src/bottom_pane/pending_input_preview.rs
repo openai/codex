@@ -26,9 +26,9 @@ pub(crate) struct PendingInputPreview {
     pub queued_messages: Vec<String>,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
-    edit_binding: Option<key_hint::KeyBinding>,
+    edit_binding: Option<key_hint::ShortcutHint>,
     /// Key combination rendered for immediately interrupting and sending steers.
-    interrupt_binding: Option<key_hint::KeyBinding>,
+    interrupt_binding: Option<key_hint::ShortcutHint>,
 }
 
 const PREVIEW_LINE_LIMIT: usize = 3;
@@ -39,19 +39,19 @@ impl PendingInputPreview {
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
-            edit_binding: Some(key_hint::alt(KeyCode::Up)),
-            interrupt_binding: Some(key_hint::plain(KeyCode::Esc)),
+            edit_binding: Some(key_hint::alt(KeyCode::Up).into()),
+            interrupt_binding: Some(key_hint::plain(KeyCode::Esc).into()),
         }
     }
 
     /// Replace the keybinding shown in the hint line at the bottom of the
     /// queued-messages list.  The caller is responsible for also wiring the
     /// corresponding key event handler.
-    pub(crate) fn set_edit_binding(&mut self, binding: Option<key_hint::KeyBinding>) {
+    pub(crate) fn set_edit_binding(&mut self, binding: Option<key_hint::ShortcutHint>) {
         self.edit_binding = binding;
     }
 
-    pub(crate) fn set_interrupt_binding(&mut self, binding: Option<key_hint::KeyBinding>) {
+    pub(crate) fn set_interrupt_binding(&mut self, binding: Option<key_hint::ShortcutHint>) {
         self.interrupt_binding = binding;
     }
 
@@ -216,7 +216,7 @@ mod tests {
     fn render_one_message_with_shift_left_binding() {
         let mut queue = PendingInputPreview::new();
         queue.queued_messages.push("Hello, world!".to_string());
-        queue.set_edit_binding(Some(key_hint::shift(KeyCode::Left)));
+        queue.set_edit_binding(Some(key_hint::shift(KeyCode::Left).into()));
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -337,7 +337,7 @@ mod tests {
     fn render_one_pending_steer_with_remapped_interrupt_binding() {
         let mut queue = PendingInputPreview::new();
         queue.pending_steers.push("Please continue.".to_string());
-        queue.set_interrupt_binding(Some(key_hint::plain(KeyCode::F(12))));
+        queue.set_interrupt_binding(Some(key_hint::plain(KeyCode::F(12)).into()));
         let width = 48;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));

@@ -468,14 +468,14 @@ impl ChatWidget {
         let items = vec![
             SelectionItem {
                 name: "Yes".to_string(),
-                display_shortcut: Some(key_hint::plain(KeyCode::Char('y'))),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('y')).into()),
                 actions: send_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
                 name: "No".to_string(),
-                display_shortcut: Some(key_hint::plain(KeyCode::Char('n'))),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('n')).into()),
                 is_default: true,
                 dismiss_on_select: true,
                 ..Default::default()

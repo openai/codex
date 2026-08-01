@@ -33,6 +33,9 @@ use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::history_cell;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::ShortcutHint;
+use crate::keymap::KeymapContext;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::Renderable;
@@ -170,7 +173,9 @@ pub(crate) struct RequestUserInputOverlay {
     request_started_at: Instant,
     auto_resolution_snoozed: bool,
     composer_submit_keys: Vec<KeyBinding>,
+    composer_submit_hint: Option<ShortcutHint>,
     interrupt_turn_keys: Vec<KeyBinding>,
+    interrupt_turn_hint: Option<ShortcutHint>,
     list_keymap: ListKeymap,
 }
 
@@ -228,7 +233,9 @@ impl RequestUserInputOverlay {
             request_started_at: Instant::now(),
             auto_resolution_snoozed: false,
             composer_submit_keys: keymap.composer.submit.clone(),
+            composer_submit_hint: keymap.primary_hint(KeymapContext::Composer, "submit"),
             interrupt_turn_keys: keymap.chat.interrupt_turn.clone(),
+            interrupt_turn_hint: keymap.primary_hint(KeymapContext::Chat, "interrupt_turn"),
             list_keymap: keymap.list,
         };
         overlay.reset_for_request();
@@ -594,11 +601,11 @@ impl RequestUserInputOverlay {
         let question_count = self.question_count();
         let is_last_question = self.current_index().saturating_add(1) >= question_count;
         let submit_key = if self.focus_is_notes() || !self.has_options() {
-            self.composer_submit_keys
-                .first()
-                .map(KeyBinding::display_label)
+            self.composer_submit_hint.map(ShortcutHint::display_label)
         } else {
-            Some("enter".to_string())
+            self.list_keymap
+                .primary_hint(ListAction::Accept)
+                .map(ShortcutHint::display_label)
         };
         if let Some(submit_key) = submit_key {
             let submit_tip = if question_count == 1 {
@@ -617,10 +624,10 @@ impl RequestUserInputOverlay {
                 tips.push(FooterTip::new("ctrl + p / ctrl + n change question"));
             }
         }
-        if let Some(interrupt_key) = self.interrupt_turn_keys.first()
+        if let Some(interrupt_key) = self.interrupt_turn_hint
             && !(self.has_options()
                 && notes_visible
-                && *interrupt_key == crate::key_hint::plain(KeyCode::Esc))
+                && interrupt_key == ShortcutHint::Single(crate::key_hint::plain(KeyCode::Esc)))
         {
             tips.push(FooterTip::new(format!(
                 "{} to interrupt",
@@ -1179,6 +1186,19 @@ impl RequestUserInputOverlay {
 }
 
 impl BottomPaneView for RequestUserInputOverlay {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        if self.confirm_unanswered_active() {
+            return crate::keymap::KeymapContextSet::default();
+        }
+        if matches!(self.focus, Focus::Options) {
+            return crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
+                .with(crate::keymap::KeymapContext::Chat);
+        }
+        self.composer
+            .keymap_contexts()
+            .with(crate::keymap::KeymapContext::Chat)
+    }
+
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
     }
@@ -1280,7 +1300,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             }
             _ if self.has_options()
                 && matches!(self.focus, Focus::Options)
-                && self.list_keymap.move_left.is_pressed(key_event) =>
+                && self.list_keymap.action_for(key_event) == Some(ListAction::MoveLeft) =>
             {
                 self.move_question(/*next*/ false);
                 return;
@@ -1300,7 +1320,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             }
             _ if self.has_options()
                 && matches!(self.focus, Focus::Options)
-                && self.list_keymap.move_right.is_pressed(key_event) =>
+                && self.list_keymap.action_for(key_event) == Some(ListAction::MoveRight) =>
             {
                 self.move_question(/*next*/ true);
                 return;
@@ -1312,8 +1332,8 @@ impl BottomPaneView for RequestUserInputOverlay {
             Focus::Options => {
                 let options_len = self.options_len();
                 // Keep selection synchronized as the user moves.
-                match key_event.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
+                match (self.list_keymap.action_for(key_event), key_event.code) {
+                    (Some(ListAction::MoveUp), _) | (_, KeyCode::Up | KeyCode::Char('k')) => {
                         let moved = if let Some(answer) = self.current_answer_mut() {
                             answer.options_state.move_up_wrap(options_len);
                             answer.answer_committed = false;
@@ -1325,7 +1345,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                             self.sync_composer_placeholder();
                         }
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
+                    (Some(ListAction::MoveDown), _) | (_, KeyCode::Down | KeyCode::Char('j')) => {
                         let moved = if let Some(answer) = self.current_answer_mut() {
                             answer.options_state.move_down_wrap(options_len);
                             answer.answer_committed = false;
@@ -1337,24 +1357,24 @@ impl BottomPaneView for RequestUserInputOverlay {
                             self.sync_composer_placeholder();
                         }
                     }
-                    KeyCode::Char(' ') => {
+                    (_, KeyCode::Char(' ')) => {
                         self.select_current_option(/*committed*/ true);
                     }
-                    KeyCode::Backspace | KeyCode::Delete => {
+                    (_, KeyCode::Backspace | KeyCode::Delete) => {
                         self.clear_selection();
                     }
-                    KeyCode::Tab if self.selected_option_index().is_some() => {
+                    (_, KeyCode::Tab) if self.selected_option_index().is_some() => {
                         self.focus = Focus::Notes;
                         self.ensure_selected_for_notes();
                     }
-                    KeyCode::Enter => {
+                    (Some(ListAction::Accept), _) | (_, KeyCode::Enter) => {
                         let has_selection = self.selected_option_index().is_some();
                         if has_selection {
                             self.select_current_option(/*committed*/ true);
                         }
                         self.go_next_or_submit();
                     }
-                    KeyCode::Char(ch) => {
+                    (_, KeyCode::Char(ch)) => {
                         if let Some(option_idx) = self.option_index_for_digit(ch) {
                             if let Some(answer) = self.current_answer_mut() {
                                 answer.options_state.selected_idx = Some(option_idx);
@@ -1516,6 +1536,9 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::bottom_pane::selection_popup_common::menu_surface_inset;
     use crate::render::renderable::Renderable;
+    use codex_config::types::KeybindingSpec;
+    use codex_config::types::KeybindingsSpec;
+    use codex_config::types::TuiKeymap;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -2512,6 +2535,49 @@ mod tests {
             tip_texts,
             vec!["ctrl + j to submit answer", "esc to interrupt"]
         );
+    }
+
+    #[test]
+    fn freeform_footer_displays_configured_chords_without_internal_dispatch_keys() {
+        for (specs, expected_tips) in [
+            (
+                KeybindingsSpec::One(KeybindingSpec("ctrl-x enter".to_string())),
+                vec!["ctrl + x enter to submit answer", "esc to interrupt"],
+            ),
+            (
+                KeybindingsSpec::Many(vec![
+                    KeybindingSpec("ctrl-enter".to_string()),
+                    KeybindingSpec("ctrl-x enter".to_string()),
+                ]),
+                vec!["ctrl + enter to submit answer", "esc to interrupt"],
+            ),
+            (
+                KeybindingsSpec::Many(vec![
+                    KeybindingSpec("ctrl-x enter".to_string()),
+                    KeybindingSpec("ctrl-enter".to_string()),
+                ]),
+                vec!["ctrl + x enter to submit answer", "esc to interrupt"],
+            ),
+        ] {
+            let (tx, _rx) = test_sender();
+            let mut config = TuiKeymap::default();
+            config.composer.submit = Some(specs);
+            let keymap = RuntimeKeymap::from_config(&config).expect("valid submit keymap");
+            let overlay = RequestUserInputOverlay::new_with_keymap(
+                request_event("turn-1", vec![question_without_options("q1", "Notes")]),
+                tx,
+                /*has_input_focus*/ true,
+                /*enhanced_keys_supported*/ false,
+                /*disable_paste_burst*/ false,
+                keymap,
+            );
+            let tips = overlay.footer_tips();
+
+            assert_eq!(
+                tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>(),
+                expected_tips
+            );
+        }
     }
 
     #[test]
@@ -3654,6 +3720,44 @@ mod tests {
             "request_user_input_freeform",
             render_snapshot(&overlay, area)
         );
+    }
+
+    #[test]
+    fn request_user_input_freeform_chord_only_submit_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut config = TuiKeymap::default();
+        config.composer.submit = Some(KeybindingsSpec::One(KeybindingSpec(
+            "ctrl-x enter".to_string(),
+        )));
+        let keymap = RuntimeKeymap::from_config(&config).expect("valid submit chord");
+        let overlay = RequestUserInputOverlay::new_with_keymap(
+            request_event("turn-1", vec![question_without_options("q1", "Goal")]),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            keymap,
+        );
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 120, /*height*/ 10,
+        );
+        let snapshot = render_snapshot(&overlay, area)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        insta::assert_snapshot!(snapshot, @r"
+
+          Question 1/1 (1 unanswered)
+          Share details.
+
+          › Type your answer (optional)
+
+
+
+          ctrl + x enter to submit answer | esc to interrupt
+        ");
     }
 
     #[test]

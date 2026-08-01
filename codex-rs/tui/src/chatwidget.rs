@@ -240,14 +240,24 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
 }
 
 fn queued_message_edit_hint_binding(
-    bindings: &[KeyBinding],
+    keymap: &RuntimeKeymap,
     terminal_info: TerminalInfo,
-) -> Option<KeyBinding> {
+) -> Option<crate::key_hint::ShortcutHint> {
+    let configured = keymap.primary_hint(crate::keymap::KeymapContext::Chat, "edit_queued_message");
+    if matches!(
+        configured,
+        Some(crate::key_hint::ShortcutHint::Chord { .. })
+    ) {
+        return configured;
+    }
+
     let terminal_binding = queued_message_edit_binding_for_terminal(terminal_info);
-    bindings
+    keymap
+        .chat
+        .edit_queued_message
         .contains(&terminal_binding)
-        .then_some(terminal_binding)
-        .or_else(|| bindings.first().copied())
+        .then_some(crate::key_hint::ShortcutHint::Single(terminal_binding))
+        .or(configured)
 }
 
 fn normalize_thread_name(name: &str) -> Option<String> {
@@ -681,7 +691,7 @@ pub(crate) struct ChatWidget {
     /// Keybinding to show for popping the most-recently queued message back
     /// into the composer. This may differ from the first configured binding
     /// when the default set includes a terminal-specific fallback.
-    queued_message_edit_hint_binding: Option<KeyBinding>,
+    queued_message_edit_hint_binding: Option<crate::key_hint::ShortcutHint>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press

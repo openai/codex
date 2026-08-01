@@ -49,6 +49,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::hooks_rpc::HookTrustUpdate;
 use crate::key_hint::KeyBindingListExt;
+use crate::keymap::KeyChordMatcher;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
@@ -537,6 +538,7 @@ pub(crate) struct App {
 
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) keymap: RuntimeKeymap,
+    pub(crate) key_chord_matcher: KeyChordMatcher,
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
@@ -1048,6 +1050,7 @@ See the Codex keymap documentation for supported actions and examples."
             file_search,
             enhanced_keys_supported,
             keymap: runtime_keymap,
+            key_chord_matcher: KeyChordMatcher::default(),
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -1292,8 +1295,18 @@ See the Codex keymap documentation for supported actions and examples."
     ) -> Result<AppRunControl> {
         let screen_size = tui.screen_size_for_event(&event)?;
         if !matches!(&event, TuiEvent::Key(_) | TuiEvent::Paste(_)) {
+            self.expire_pending_key_chord();
             self.handle_draw_pre_render(tui, screen_size)?;
         }
+
+        let event = if let TuiEvent::Key(key_event) = event {
+            let Some(key_event) = self.route_key_chord_event(tui, key_event) else {
+                return Ok(AppRunControl::Continue);
+            };
+            TuiEvent::Key(key_event)
+        } else {
+            event
+        };
 
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;

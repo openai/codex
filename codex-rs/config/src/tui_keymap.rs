@@ -26,20 +26,21 @@ use std::collections::BTreeMap;
 /// Highest function key supported by portable TUI keymap configuration.
 pub const MAX_FUNCTION_KEY: u8 = 24;
 
-/// Normalized string representation of a single key event (for example `ctrl-a`).
+/// Maximum number of key events in one configurable TUI binding.
+const MAX_KEY_CHORD_STROKES: usize = 2;
+
+/// Normalized representation of one key event or a two-stroke key chord.
 ///
 /// The parser accepts a small alias set (for example `escape` -> `esc`,
-/// `pageup` -> `page-up`) and stores the canonical form.
-///
-/// This deliberately represents one terminal key event, not a sequence of
-/// events. A value like `ctrl-x ctrl-s` is not a chord in this schema; adding
-/// multi-step chords would require a separate runtime state machine.
+/// `pageup` -> `page-up`) and stores each stroke in its canonical form. Chord
+/// strokes are separated by one space, for example `ctrl-x ctrl-s`. Arrays of
+/// bindings remain alternatives; their entries do not form a chord together.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(transparent)]
 pub struct KeybindingSpec(#[schemars(with = "String")] pub String);
 
 impl KeybindingSpec {
-    /// Returns the canonical key-spec string (for example `ctrl-a`).
+    /// Returns the canonical key-spec string (for example `ctrl-x ctrl-s`).
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
@@ -60,8 +61,8 @@ impl<'de> Deserialize<'de> for KeybindingSpec {
 ///
 /// This accepts either:
 ///
-/// 1. A single key spec string (`"ctrl-a"`).
-/// 2. A list of key spec strings (`["ctrl-a", "alt-a"]`).
+/// 1. A single key or chord string (`"ctrl-a"` or `"ctrl-x ctrl-s"`).
+/// 2. A list of alternative bindings (`["ctrl-a", "ctrl-x ctrl-s"]`).
 ///
 /// An empty list explicitly unbinds the action in that scope. Because an
 /// explicit empty list is still a configured value, runtime resolution must not
@@ -436,6 +437,26 @@ pub struct TuiKeymap {
 /// this function when accepting user-authored key specs, or otherwise equivalent
 /// keys can fail to compare equal in tests, UI hints, and duplicate detection.
 fn normalize_keybinding_spec(raw: &str) -> Result<String, String> {
+    let strokes = raw.split_whitespace().collect::<Vec<_>>();
+    if strokes.is_empty() {
+        return normalize_keybinding_stroke(raw);
+    }
+    if strokes.len() > MAX_KEY_CHORD_STROKES {
+        return Err(format!(
+            "invalid keybinding `{raw}`: key chords may contain at most \
+{MAX_KEY_CHORD_STROKES} strokes (for example `ctrl-x ctrl-s`)."
+        ));
+    }
+
+    strokes
+        .into_iter()
+        .map(normalize_keybinding_stroke)
+        .collect::<Result<Vec<_>, _>>()
+        .map(|normalized| normalized.join(" "))
+}
+
+/// Normalize the key and modifiers for one stroke in a key binding.
+fn normalize_keybinding_stroke(raw: &str) -> Result<String, String> {
     let lower = raw.trim().to_ascii_lowercase();
     if lower.is_empty() {
         return Err(
@@ -687,3 +708,7 @@ mod tests {
         assert!(normalize_keybinding_spec("f25").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "tui_keymap_chord_tests.rs"]
+mod chord_tests;

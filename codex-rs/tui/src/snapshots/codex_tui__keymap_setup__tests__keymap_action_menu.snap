@@ -4,12 +4,15 @@ expression: snapshot
 ---
 unbound:
 Set key | Capture a key for this unbound action. | enabled
+Set key chord | Capture two consecutive keys for this action. | enabled
 Remove custom binding | Restore the default keymap binding. | enabled
 Back to shortcuts | Return to the shortcut list. | enabled
 
 single:
 Replace binding | Capture a replacement key. | enabled
 Add alternate binding | Keep the current binding and add another key. | enabled
+Replace with key chord | Replace current bindings with a two-stroke key chord. | enabled
+Add alternate key chord | Keep current bindings and add a two-stroke key chord. | enabled
 Remove custom binding | Restore the default keymap binding. | enabled
 Back to shortcuts | Return to the shortcut list. | enabled
 
@@ -17,9 +20,13 @@ multi:
 Replace one binding... | Choose which existing binding to replace. | enabled
 Replace all bindings | Replace every current binding with one key. | enabled
 Add alternate binding | Keep current bindings and add another key. | enabled
+Replace with key chord | Replace current bindings with a two-stroke key chord. | enabled
+Add alternate key chord | Keep current bindings and add a two-stroke key chord. | enabled
 Remove custom binding | Restore the default keymap binding. | enabled
 Back to shortcuts | Return to the shortcut list. | enabled
 
 replace picker:
 ctrl-enter | Replace this binding. | enabled
+ctrl-enter (key chord) | Replace this binding with a key chord. | enabled
 alt-shift-enter | Replace this binding. | enabled
+alt-shift-enter (key chord) | Replace this binding with a key chord. | enabled

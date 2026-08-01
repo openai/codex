@@ -3,9 +3,9 @@
 use ratatui::text::Line;
 
 use crate::key_hint;
-use crate::key_hint::KeyBinding;
+use crate::key_hint::ShortcutHint;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
-use crate::keymap::primary_binding;
 use crossterm::event::KeyCode;
 
 /// Maximum number of rows any popup should attempt to display.
@@ -25,17 +25,17 @@ pub(crate) fn standard_popup_hint_line() -> Line<'static> {
 
 pub(crate) fn standard_popup_hint_line_for_keymap(list_keymap: &ListKeymap) -> Line<'static> {
     accept_cancel_hint_line(
-        primary_binding(&list_keymap.accept),
+        list_keymap.primary_hint(ListAction::Accept),
         "to confirm",
-        primary_binding(&list_keymap.cancel),
+        list_keymap.primary_hint(ListAction::Cancel),
         "to go back",
     )
 }
 
 pub(crate) fn accept_cancel_hint_line(
-    accept: Option<KeyBinding>,
+    accept: Option<ShortcutHint>,
     accept_label: &'static str,
-    cancel: Option<KeyBinding>,
+    cancel: Option<ShortcutHint>,
     cancel_label: &'static str,
 ) -> Line<'static> {
     match (accept, cancel) {

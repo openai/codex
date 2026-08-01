@@ -8,20 +8,22 @@
 //! user.
 //!
 //! The flow is intentionally split into three steps: choose an action, choose
-//! whether to replace/add/remove a binding, then capture exactly one terminal
-//! key event. Validation happens after capture by reusing runtime keymap
-//! resolution, so conflict rules stay centralized in `keymap.rs` instead of
-//! being duplicated in the UI.
+//! whether to replace/add/remove a binding, then capture either one terminal
+//! key event or a bounded two-stroke key chord. Validation happens after
+//! capture by reusing runtime keymap resolution, so conflict rules stay
+//! centralized in `keymap.rs` instead of being duplicated in the UI.
 //!
 //! This module does not persist config files directly. It emits app events with
 //! the edited config so the app layer can decide how to save, reload, and
 //! surface errors.
 
 mod actions;
+mod capture;
 mod debug;
 mod picker;
 
 pub(crate) use actions::KeymapActionFilter;
+use capture::KeymapCaptureView;
 pub(crate) use debug::build_keymap_debug_view;
 pub(crate) use picker::KEYMAP_PICKER_VIEW_ID;
 #[cfg(test)]
@@ -37,20 +39,14 @@ use codex_config::types::MAX_FUNCTION_KEY;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
 
 use crate::app_event::AppEvent;
+use crate::app_event::KeymapCaptureMode;
 use crate::app_event::KeymapEditIntent;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionDescriptionLayout;
 use crate::bottom_pane::SelectionItem;
@@ -58,13 +54,13 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
+use crate::keymap::bindings_for_action;
+use crate::keymap::keymap_action_id;
 use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::Renderable;
 use actions::KEYMAP_ACTIONS;
 use actions::action_label;
 use actions::binding_slot;
-use actions::bindings_for_action;
-use actions::format_binding_summary;
+use actions::format_action_binding_summary;
 #[cfg(test)]
 use debug::KeymapDebugView;
 
@@ -105,12 +101,14 @@ fn open_capture_action(
     context: String,
     action: String,
     intent: KeymapEditIntent,
+    capture_mode: KeymapCaptureMode,
 ) -> Box<dyn Fn(&AppEventSender) + Send + Sync> {
     Box::new(move |tx| {
         tx.send(AppEvent::OpenKeymapCapture {
             context: context.clone(),
             action: action.clone(),
             intent: intent.clone(),
+            capture_mode,
         });
     })
 }
@@ -122,6 +120,7 @@ fn action_menu_item(
     context: &str,
     action: &str,
     intent: KeymapEditIntent,
+    capture_mode: KeymapCaptureMode,
 ) -> SelectionItem {
     SelectionItem {
         name: name.to_string(),
@@ -131,6 +130,7 @@ fn action_menu_item(
             context.to_string(),
             action.to_string(),
             intent,
+            capture_mode,
         )],
         ..Default::default()
     }
@@ -208,6 +208,7 @@ pub(crate) fn build_keymap_action_menu_params(
                 &context,
                 &action,
                 KeymapEditIntent::ReplaceAll,
+                KeymapCaptureMode::SingleKey,
             ));
         }
         1 => {
@@ -218,6 +219,7 @@ pub(crate) fn build_keymap_action_menu_params(
                 &context,
                 &action,
                 KeymapEditIntent::ReplaceAll,
+                KeymapCaptureMode::SingleKey,
             ));
             items.push(action_menu_item(
                 "Add alternate binding",
@@ -226,6 +228,7 @@ pub(crate) fn build_keymap_action_menu_params(
                 &context,
                 &action,
                 KeymapEditIntent::AddAlternate,
+                KeymapCaptureMode::SingleKey,
             ));
         }
         _ => {
@@ -252,6 +255,7 @@ pub(crate) fn build_keymap_action_menu_params(
                 &context,
                 &action,
                 KeymapEditIntent::ReplaceAll,
+                KeymapCaptureMode::SingleKey,
             ));
             items.push(action_menu_item(
                 "Add alternate binding",
@@ -260,8 +264,39 @@ pub(crate) fn build_keymap_action_menu_params(
                 &context,
                 &action,
                 KeymapEditIntent::AddAlternate,
+                KeymapCaptureMode::SingleKey,
             ));
         }
+    }
+    if active_binding_count == 0 {
+        items.push(action_menu_item(
+            "Set key chord",
+            "Capture two consecutive keys for this action.",
+            "Capture a two-stroke key chord.".to_string(),
+            &context,
+            &action,
+            KeymapEditIntent::ReplaceAll,
+            KeymapCaptureMode::Chord,
+        ));
+    } else {
+        items.push(action_menu_item(
+            "Replace with key chord",
+            "Replace current bindings with a two-stroke key chord.",
+            format!("Capture two keys and replace `{current_binding}`."),
+            &context,
+            &action,
+            KeymapEditIntent::ReplaceAll,
+            KeymapCaptureMode::Chord,
+        ));
+        items.push(action_menu_item(
+            "Add alternate key chord",
+            "Keep current bindings and add a two-stroke key chord.",
+            format!("Capture two keys and keep `{current_binding}`."),
+            &context,
+            &action,
+            KeymapEditIntent::AddAlternate,
+            KeymapCaptureMode::Chord,
+        ));
     }
     items.push(SelectionItem {
         name: "Remove custom binding".to_string(),
@@ -321,26 +356,39 @@ pub(crate) fn build_keymap_replace_binding_menu_params(
 
     let items = bindings
         .into_iter()
-        .map(|binding| {
-            let capture_context = context.clone();
-            let capture_action = action.clone();
-            let old_key = binding.clone();
-            SelectionItem {
-                name: binding.clone(),
-                description: Some("Replace this binding.".to_string()),
-                selected_description: Some(format!("Capture a new key to replace `{binding}`.")),
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenKeymapCapture {
-                        context: capture_context.clone(),
-                        action: capture_action.clone(),
-                        intent: KeymapEditIntent::ReplaceOne {
-                            old_key: old_key.clone(),
+        .flat_map(|binding| {
+            [
+                SelectionItem {
+                    name: binding.clone(),
+                    description: Some("Replace this binding.".to_string()),
+                    selected_description: Some(format!(
+                        "Capture a new key to replace `{binding}`."
+                    )),
+                    actions: vec![open_capture_action(
+                        context.clone(),
+                        action.clone(),
+                        KeymapEditIntent::ReplaceOne {
+                            old_key: binding.clone(),
                         },
-                    });
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            }
+                        KeymapCaptureMode::SingleKey,
+                    )],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: format!("{binding} (key chord)"),
+                    description: Some("Replace this binding with a key chord.".to_string()),
+                    selected_description: Some(format!("Capture two keys to replace `{binding}`.")),
+                    actions: vec![open_capture_action(
+                        context.clone(),
+                        action.clone(),
+                        KeymapEditIntent::ReplaceOne { old_key: binding },
+                        KeymapCaptureMode::Chord,
+                    )],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ]
         })
         .collect();
 
@@ -361,9 +409,11 @@ pub(crate) fn build_keymap_conflict_params(
     intent: KeymapEditIntent,
     error: String,
 ) -> SelectionViewParams {
-    let retry_context = context.clone();
-    let retry_action = action.clone();
-    let retry_intent = intent;
+    let capture_mode = if key.contains(' ') {
+        KeymapCaptureMode::Chord
+    } else {
+        KeymapCaptureMode::SingleKey
+    };
     SelectionViewParams {
         title: Some("Shortcut Conflict".to_string()),
         subtitle: Some(format!("{context}.{action} cannot use `{key}`.")),
@@ -373,13 +423,7 @@ pub(crate) fn build_keymap_conflict_params(
             SelectionItem {
                 name: "Pick another key".to_string(),
                 description: Some("Return to key capture for this action.".to_string()),
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenKeymapCapture {
-                        context: retry_context.clone(),
-                        action: retry_action.clone(),
-                        intent: retry_intent.clone(),
-                    });
-                })],
+                actions: vec![open_capture_action(context, action, intent, capture_mode)],
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -405,17 +449,17 @@ pub(crate) fn build_keymap_capture_view(
     context: String,
     action: String,
     intent: KeymapEditIntent,
+    capture_mode: KeymapCaptureMode,
     runtime_keymap: &RuntimeKeymap,
     app_event_tx: AppEventSender,
 ) -> KeymapCaptureView {
-    let current_binding = format_binding_summary(
-        bindings_for_action(runtime_keymap, &context, &action).unwrap_or(&[]),
-    );
+    let current_binding = format_action_binding_summary(runtime_keymap, &context, &action);
     let label = action_label(&action);
     KeymapCaptureView::new(
         context,
         action,
         intent,
+        capture_mode,
         label,
         current_binding,
         app_event_tx,
@@ -539,6 +583,12 @@ pub(crate) fn active_binding_specs(
     context: &str,
     action: &str,
 ) -> Result<Vec<String>, String> {
+    if let Some(action_id) = keymap_action_id(context, action)
+        && let Some(specs) = runtime_keymap.chords.configured_specs(action_id)
+    {
+        return Ok(specs.to_vec());
+    }
+
     let bindings = bindings_for_action(runtime_keymap, context, action).ok_or_else(|| {
         format!("Unknown keymap action `{context}.{action}`. Reopen /keymap and choose an action.")
     })?;
@@ -581,125 +631,6 @@ fn has_custom_binding(keymap: &TuiKeymap, context: &str, action: &str) -> Result
         format!("Unknown keymap action `{context}.{action}`. Reopen /keymap and choose an action.")
     })?;
     Ok(slot.is_some())
-}
-
-/// Bottom-pane view that captures a single key event for a pending `/keymap` edit.
-///
-/// The view is deliberately transient: it renders instructions, accepts one
-/// keypress, and emits the captured key to the app layer. It does not mutate
-/// config itself, because mutation needs the latest runtime keymap to detect
-/// conflicts and stale selections.
-pub(crate) struct KeymapCaptureView {
-    context: String,
-    action: String,
-    intent: KeymapEditIntent,
-    label: String,
-    current_binding: String,
-    app_event_tx: AppEventSender,
-    complete: bool,
-    error_message: Option<String>,
-}
-
-impl KeymapCaptureView {
-    fn new(
-        context: String,
-        action: String,
-        intent: KeymapEditIntent,
-        label: String,
-        current_binding: String,
-        app_event_tx: AppEventSender,
-    ) -> Self {
-        Self {
-            context,
-            action,
-            intent,
-            label,
-            current_binding,
-            app_event_tx,
-            complete: false,
-            error_message: None,
-        }
-    }
-
-    fn lines(&self, width: u16) -> Vec<Line<'static>> {
-        let wrap_width = usize::from(width.max(1));
-        let mut lines = vec![
-            Line::from("Remap Shortcut".bold()),
-            Line::from(vec![
-                "Action: ".dim(),
-                self.label.clone().into(),
-                "  ".into(),
-                format!("{}.{}", self.context, self.action).dim(),
-            ]),
-            Line::from(vec!["Current: ".dim(), self.current_binding.clone().cyan()]),
-            Line::from("Press the new key now. Esc cancels.".dim()),
-        ];
-
-        if let Some(error) = &self.error_message {
-            lines.push(Line::from(""));
-            let options = textwrap::Options::new(wrap_width)
-                .initial_indent("Error: ")
-                .subsequent_indent("       ");
-            lines.extend(
-                textwrap::wrap(error, options)
-                    .into_iter()
-                    .map(|line| Line::from(line.into_owned().red())),
-            );
-        }
-
-        lines
-    }
-}
-
-impl Renderable for KeymapCaptureView {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.lines(area.width)).render(area, buf);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.lines(width).len() as u16
-    }
-}
-
-impl BottomPaneView for KeymapCaptureView {
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if key_event.kind == KeyEventKind::Release {
-            return;
-        }
-
-        if key_event.code == KeyCode::Esc {
-            self.complete = true;
-            return;
-        }
-
-        match key_event_to_config_key_spec(key_event) {
-            Ok(key) => {
-                self.app_event_tx.send(AppEvent::KeymapCaptured {
-                    context: self.context.clone(),
-                    action: self.action.clone(),
-                    key,
-                    intent: self.intent.clone(),
-                });
-                self.complete = true;
-            }
-            Err(error) => {
-                self.error_message = Some(error);
-            }
-        }
-    }
-
-    fn is_complete(&self) -> bool {
-        self.complete
-    }
-
-    fn on_ctrl_c(&mut self) -> CancellationEvent {
-        self.complete = true;
-        CancellationEvent::Handled
-    }
-
-    fn prefer_esc_to_handle_key_event(&self) -> bool {
-        true
-    }
 }
 
 fn key_event_to_config_key_spec(key_event: KeyEvent) -> Result<String, String> {
@@ -792,12 +723,15 @@ mod tests {
     use super::*;
     use crate::bottom_pane::BottomPane;
     use crate::bottom_pane::BottomPaneParams;
+    use crate::bottom_pane::BottomPaneView;
     use crate::bottom_pane::ListSelectionView;
     use crate::bottom_pane::SelectionTab;
+    use crate::render::renderable::Renderable;
     use crate::tui::FrameRequester;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1226,6 +1160,45 @@ mod tests {
     }
 
     #[test]
+    fn picker_global_chord_render_snapshot() {
+        let keymap = keymap_with_bindings(
+            &TuiKeymap::default(),
+            "global",
+            "open_transcript",
+            &["ctrl-t".to_string(), "ctrl-x ctrl-t".to_string()],
+        )
+        .expect("global chord binding");
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+        let params = build_keymap_picker_params(&runtime, &keymap);
+
+        assert_snapshot!(
+            "keymap_picker_global_chord",
+            render_picker(params, /*width*/ 120)
+        );
+    }
+
+    #[test]
+    fn configured_global_chord_alternatives_remain_in_order() {
+        let keymap = keymap_with_bindings(
+            &TuiKeymap::default(),
+            "global",
+            "open_transcript",
+            &["ctrl-t".to_string(), "ctrl-x ctrl-t".to_string()],
+        )
+        .expect("global chord bindings");
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+
+        assert_eq!(
+            active_binding_specs(&runtime, "global", "open_transcript"),
+            Ok(vec!["ctrl-t".to_string(), "ctrl-x ctrl-t".to_string()])
+        );
+        assert_eq!(
+            format_action_binding_summary(&runtime, "global", "open_transcript"),
+            "ctrl-t, ctrl-x ctrl-t"
+        );
+    }
+
+    #[test]
     fn picker_narrow_uses_compact_tabs() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
@@ -1365,6 +1338,7 @@ mod tests {
             "composer".to_string(),
             "submit".to_string(),
             KeymapEditIntent::ReplaceAll,
+            KeymapCaptureMode::SingleKey,
             "Submit".to_string(),
             "enter".to_string(),
             app_event_sender(),
@@ -1454,15 +1428,22 @@ mod tests {
             context,
             action,
             intent,
+            capture_mode,
         } = rx.try_recv().expect("open capture event")
         else {
             panic!("expected OpenKeymapCapture event");
         };
         assert_eq!(intent, KeymapEditIntent::ReplaceAll);
+        assert_eq!(capture_mode, KeymapCaptureMode::SingleKey);
         assert_eq!(pane.active_view_id(), Some(KEYMAP_ACTION_MENU_VIEW_ID));
 
         pane.show_view(Box::new(build_keymap_capture_view(
-            context, action, intent, &runtime, tx,
+            context,
+            action,
+            intent,
+            capture_mode,
+            &runtime,
+            tx,
         )));
         pane.handle_key_event(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL));
 
@@ -1519,15 +1500,22 @@ mod tests {
                 .unwrap();
         let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
         pane.show_selection_view(build_keymap_picker_params(&runtime, &keymap));
-        pane.show_selection_view(build_keymap_action_menu_params(
+        let action_menu = build_keymap_action_menu_params(
             "composer".to_string(),
             "submit".to_string(),
             &runtime,
             &keymap,
-        ));
+        );
+        let remove_idx = action_menu
+            .items
+            .iter()
+            .position(|item| item.name == "Remove custom binding")
+            .expect("remove custom binding menu item");
+        pane.show_selection_view(action_menu);
 
-        pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        for _ in 0..remove_idx {
+            pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
         pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         let AppEvent::KeymapCleared { context, action } =

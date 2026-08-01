@@ -14,6 +14,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
@@ -66,7 +67,7 @@ impl ExperimentalFeaturesView {
             complete: false,
             app_event_tx,
             header: Box::new(header),
-            footer_hint: experimental_popup_hint_line(),
+            footer_hint: experimental_popup_hint_line(&keymap),
             keymap,
         };
         view.initialize_selection();
@@ -164,6 +165,10 @@ impl ExperimentalFeaturesView {
 }
 
 impl BottomPaneView for ExperimentalFeaturesView {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             _ if self.keymap.move_up.is_pressed(key_event) => self.move_up(),
@@ -282,12 +287,18 @@ impl Renderable for ExperimentalFeaturesView {
     }
 }
 
-fn experimental_popup_hint_line() -> Line<'static> {
-    Line::from(vec![
+fn experimental_popup_hint_line(keymap: &ListKeymap) -> Line<'static> {
+    let mut spans = vec![
         "Press ".into(),
         key_hint::plain(KeyCode::Char(' ')).into(),
-        " to select or ".into(),
-        key_hint::plain(KeyCode::Enter).into(),
-        " to save for next conversation".into(),
-    ])
+        " to select".into(),
+    ];
+    if let Some(accept) = keymap.primary_hint(ListAction::Accept) {
+        spans.extend([
+            " or ".into(),
+            accept.into(),
+            " to save for next conversation".into(),
+        ]);
+    }
+    Line::from(spans)
 }

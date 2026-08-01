@@ -45,6 +45,37 @@ pub(crate) struct KeyBinding {
     modifiers: KeyModifiers,
 }
 
+/// A user-visible shortcut made from one key or a two-key chord.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ShortcutHint {
+    Single(KeyBinding),
+    Chord {
+        prefix: KeyBinding,
+        completion: KeyBinding,
+    },
+}
+
+impl ShortcutHint {
+    pub(crate) fn display_label(self) -> String {
+        match self {
+            Self::Single(binding) => binding.display_label(),
+            Self::Chord { prefix, completion } => {
+                format!("{} {}", prefix.display_label(), completion.display_label())
+            }
+        }
+    }
+
+    pub(crate) fn is_press(self, event: KeyEvent) -> bool {
+        matches!(self, Self::Single(binding) if binding.is_press(event))
+    }
+}
+
+impl From<KeyBinding> for ShortcutHint {
+    fn from(binding: KeyBinding) -> Self {
+        Self::Single(binding)
+    }
+}
+
 impl KeyBinding {
     pub(crate) const fn new(key: KeyCode, modifiers: KeyModifiers) -> Self {
         Self { key, modifiers }
@@ -190,6 +221,12 @@ impl From<KeyBinding> for Span<'static> {
 impl From<&KeyBinding> for Span<'static> {
     fn from(binding: &KeyBinding) -> Self {
         Span::styled(binding.display_label(), key_hint_style())
+    }
+}
+
+impl From<ShortcutHint> for Span<'static> {
+    fn from(hint: ShortcutHint) -> Self {
+        Span::styled(hint.display_label(), key_hint_style())
     }
 }
 

@@ -2,6 +2,8 @@
 
 #[path = "tests/advanced_reasoning_tests.rs"]
 mod advanced_reasoning_tests;
+#[path = "tests/key_chords.rs"]
+mod key_chords;
 mod model_catalog;
 mod plugin_catalog;
 mod rate_limits;
@@ -4740,6 +4742,7 @@ async fn make_test_app() -> App {
         initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
         keymap: crate::keymap::RuntimeKeymap::defaults(),
+        key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
         commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -4808,6 +4811,7 @@ async fn make_test_app_with_channels() -> (
             initial_history_replay_buffer: None,
             enhanced_keys_supported: false,
             keymap: crate::keymap::RuntimeKeymap::defaults(),
+            key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),

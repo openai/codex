@@ -8,7 +8,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
-use crate::key_hint::KeyBinding;
+use crate::key_hint::ShortcutHint;
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
@@ -32,7 +32,7 @@ use super::selection_row_layout::wrap_stacked_row;
 pub(crate) struct GenericDisplayRow {
     pub name: String,
     pub name_prefix_spans: Vec<Span<'static>>,
-    pub display_shortcut: Option<KeyBinding>,
+    pub display_shortcut: Option<ShortcutHint>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub category_tag: Option<String>,      // optional right-side category label

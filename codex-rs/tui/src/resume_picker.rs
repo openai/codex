@@ -12,8 +12,10 @@ use crate::git_action_directives::parse_assistant_markdown;
 use crate::inline_visualization::InlineVisualizationContext;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::keymap::PagerKeymap;
+use crate::keymap::RuntimeChordKeymap;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
@@ -292,6 +294,7 @@ struct SessionPickerRunOptions {
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
     initial_page_mode: PageLoadMode,
+    chord_keymap: Arc<RuntimeChordKeymap>,
 }
 
 /// Interactive session picker that lists app-server threads with simple search,
@@ -383,6 +386,7 @@ async fn run_resume_picker_with_launch_context(
         } else {
             PageLoadMode::StateDbOnly
         },
+        chord_keymap: runtime_keymap.chords,
     };
     run_session_picker_with_loader(
         tui,
@@ -434,6 +438,7 @@ pub async fn run_fork_picker_with_app_server(
         } else {
             PageLoadMode::StateDbOnly
         },
+        chord_keymap: runtime_keymap.chords,
     };
     run_session_picker_with_loader(
         tui,
@@ -470,6 +475,7 @@ async fn run_session_picker_with_loader(
     state.view_persistence = options.view_persistence;
     state.pager_keymap = options.pager_keymap;
     state.list_keymap = options.list_keymap;
+    state.chord_keymap = options.chord_keymap;
     state.launch_context = options.launch_context;
     state.initial_page_mode = options.initial_page_mode;
     state.start_initial_load();
@@ -482,6 +488,14 @@ async fn run_session_picker_with_loader(
         tokio::select! {
             Some(ev) = tui_events.next() => {
                 let screen_size = alt.tui.screen_size_for_event(&ev)?;
+                let ev = if let TuiEvent::Key(key) = ev {
+                    let Some(key) = state.route_key_chord(key) else {
+                        continue;
+                    };
+                    TuiEvent::Key(key)
+                } else {
+                    ev
+                };
                 if state.overlay.is_some() {
                     state.handle_overlay_event(alt.tui, ev)?;
                     continue;
@@ -697,6 +711,8 @@ struct PickerState {
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
     initial_page_mode: PageLoadMode,
+    chord_keymap: Arc<RuntimeChordKeymap>,
+    chord_matcher: crate::keymap::KeyChordMatcher,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -967,6 +983,28 @@ impl PickerState {
             pager_keymap: RuntimeKeymap::defaults().pager,
             list_keymap: RuntimeKeymap::defaults().list,
             initial_page_mode: PageLoadMode::StoreDefault,
+            chord_keymap: Arc::default(),
+            chord_matcher: crate::keymap::KeyChordMatcher::default(),
+        }
+    }
+
+    fn route_key_chord(&mut self, key: KeyEvent) -> Option<KeyEvent> {
+        let context = if self.overlay.is_some() {
+            crate::keymap::KeymapContext::Pager
+        } else {
+            crate::keymap::KeymapContext::List
+        };
+        match self.chord_matcher.advance(
+            key,
+            &self.chord_keymap,
+            crate::keymap::KeymapContextSet::new(context),
+            tokio::time::Instant::now(),
+        ) {
+            crate::keymap::KeyChordMatch::PassThrough => Some(key),
+            crate::keymap::KeyChordMatch::Completed(dispatch_event) => Some(dispatch_event),
+            crate::keymap::KeyChordMatch::Pending(_)
+            | crate::keymap::KeyChordMatch::Cancelled
+            | crate::keymap::KeyChordMatch::Ignored => None,
         }
     }
 
@@ -2052,7 +2090,7 @@ fn filter_mode_label(filter_mode: SessionFilterMode) -> &'static str {
 }
 
 struct PickerFooterHint {
-    key: &'static str,
+    key: String,
     wide_label: String,
     compact_label: String,
     priority: u8,
@@ -2176,13 +2214,13 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
     if state.is_transcript_loading() {
         let hints = [
             PickerFooterHint {
-                key: "loading",
+                key: "loading".to_string(),
                 wide_label: String::from("transcript"),
                 compact_label: String::from("transcript"),
                 priority: 0,
             },
             PickerFooterHint {
-                key: "ctrl+c",
+                key: "ctrl+c".to_string(),
                 wide_label: String::from("quit"),
                 compact_label: String::from("quit"),
                 priority: 1,
@@ -2216,64 +2254,85 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
         SessionListDensity::Comfortable => "dense",
         SessionListDensity::Dense => "comfy",
     };
-    let first_row_hints = vec![
-        PickerFooterHint {
-            key: "enter",
+    let mut first_row_hints = Vec::new();
+    if let Some(accept) = state.list_keymap.primary_hint(ListAction::Accept) {
+        first_row_hints.push(PickerFooterHint {
+            key: accept.display_label(),
             wide_label: action_label.to_string(),
             compact_label: action_label.to_string(),
             priority: 0,
-        },
-        PickerFooterHint {
-            key: "esc",
+        });
+    }
+    if let Some(cancel) = state.list_keymap.primary_hint(ListAction::Cancel) {
+        first_row_hints.push(PickerFooterHint {
+            key: cancel.display_label(),
             wide_label: esc_label.to_string(),
             compact_label: esc_compact_label.to_string(),
             priority: 1,
-        },
+        });
+    }
+    first_row_hints.extend([
         PickerFooterHint {
-            key: "ctrl+c",
+            key: "ctrl+c".to_string(),
             wide_label: ctrl_c_label.to_string(),
             compact_label: ctrl_c_label.to_string(),
             priority: 2,
         },
         PickerFooterHint {
-            key: "tab",
+            key: "tab".to_string(),
             wide_label: String::from("focus sort/filter"),
             compact_label: String::from("focus"),
             priority: 7,
         },
-        PickerFooterHint {
-            key: "←/→",
+    ]);
+    let option_keys = [ListAction::MoveLeft, ListAction::MoveRight]
+        .into_iter()
+        .filter_map(|action| state.list_keymap.primary_hint(action))
+        .map(super::key_hint::ShortcutHint::display_label)
+        .collect::<Vec<_>>()
+        .join("/");
+    if !option_keys.is_empty() {
+        first_row_hints.push(PickerFooterHint {
+            key: option_keys,
             wide_label: String::from("change option"),
             compact_label: String::from("option"),
             priority: 8,
-        },
-    ];
-    let second_row_hints = vec![
+        });
+    }
+    let mut second_row_hints = vec![
         PickerFooterHint {
-            key: "ctrl+o",
+            key: "ctrl+o".to_string(),
             wide_label: density_label.to_string(),
             compact_label: density_compact_label.to_string(),
             priority: 3,
         },
         PickerFooterHint {
-            key: "ctrl+t",
+            key: "ctrl+t".to_string(),
             wide_label: String::from("transcript"),
             compact_label: String::from("preview"),
             priority: 4,
         },
         PickerFooterHint {
-            key: "ctrl+e",
+            key: "ctrl+e".to_string(),
             wide_label: String::from("expand"),
             compact_label: String::from("exp"),
             priority: 6,
         },
-        PickerFooterHint {
-            key: "↑/↓",
+    ];
+    let browse_keys = [ListAction::MoveUp, ListAction::MoveDown]
+        .into_iter()
+        .filter_map(|action| state.list_keymap.primary_hint(action))
+        .map(super::key_hint::ShortcutHint::display_label)
+        .collect::<Vec<_>>()
+        .join("/");
+    if !browse_keys.is_empty() {
+        second_row_hints.push(PickerFooterHint {
+            key: browse_keys,
             wide_label: String::from("browse"),
             compact_label: String::from("browse"),
             priority: 5,
-        },
-    ];
+        });
+    }
 
     vec![
         hint_line_for_row(&first_row_hints, width),
@@ -2393,7 +2452,7 @@ fn fit_footer_hint_refs(
         if idx > 0 {
             spans.push(" ".repeat(gap_width).set_style(footer_hint_label_style()));
         }
-        spans.push(hint.key.set_style(footer_hint_key_style()));
+        spans.push(hint.key.clone().set_style(footer_hint_key_style()));
         let label = match mode {
             FooterHintLabelMode::Wide => Some(hint.wide_label.as_str()),
             FooterHintLabelMode::Compact => Some(hint.compact_label.as_str()),
@@ -2442,7 +2501,7 @@ fn footer_hints_width(
                     }
                     FooterHintLabelMode::KeyOnly => 0,
                 };
-                let hint_width = UnicodeWidthStr::width(hint.key) + label_width;
+                let hint_width = UnicodeWidthStr::width(hint.key.as_str()) + label_width;
                 if idx == 0 {
                     hint_width
                 } else {
@@ -4033,6 +4092,16 @@ mod tests {
         assert!(footer_lines_text(&state, /*width*/ 220).contains("ctrl+o dense view"));
         assert!(footer_lines_text(&state, /*width*/ 220).contains("ctrl+t transcript"));
         assert!(footer_lines_text(&state, /*width*/ 220).contains("ctrl+e expand"));
+        state.list_keymap.move_left = vec![crate::key_hint::ctrl(KeyCode::Char('h'))];
+        state.list_keymap.move_right = vec![crate::key_hint::ctrl(KeyCode::Char('l'))];
+        let remapped_footer = footer_lines_text(&state, /*width*/ 220);
+        assert!(
+            remapped_footer.contains("ctrl + h/ctrl + l change option"),
+            "{remapped_footer}"
+        );
+        state.list_keymap.move_left.clear();
+        state.list_keymap.move_right.clear();
+        assert!(!footer_lines_text(&state, /*width*/ 220).contains("change option"));
 
         state.density = SessionListDensity::Dense;
 

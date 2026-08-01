@@ -15,9 +15,15 @@ expression: snapshot
   2. Add alternate binding
      Keep the current binding and add another
      key.
+  3. Replace with key chord
+     Replace current bindings with a two-
+     stroke key chord.
+  4. Add alternate key chord
+     Keep current bindings and add a two-
+     stroke key chord.
   –  Remove custom binding (disabled)
      No custom root override to remove.
-  3. Back to shortcuts
+  5. Back to shortcuts
      Return to the shortcut list.
 
   Changes write the root `tui.keymap.*`
@@ -36,9 +42,13 @@ expression: snapshot
      Capture one key and replace `ctrl-t`.
   2. Add alternate binding
      Keep the current binding and add another key.
+  3. Replace with key chord
+     Replace current bindings with a two-stroke key chord.
+  4. Add alternate key chord
+     Keep current bindings and add a two-stroke key chord.
   –  Remove custom binding (disabled)
      No custom root override to remove.
-  3. Back to shortcuts
+  5. Back to shortcuts
      Return to the shortcut list.
 
   Changes write the root `tui.keymap.*` override.
@@ -54,8 +64,10 @@ expression: snapshot
 
 › 1. Replace binding                   Capture one key and replace `ctrl-t`.
   2. Add alternate binding             Keep the current binding and add another key.
+  3. Replace with key chord            Replace current bindings with a two-stroke key chord.
+  4. Add alternate key chord           Keep current bindings and add a two-stroke key chord.
   –  Remove custom binding (disabled)  No custom root override to remove.
-  3. Back to shortcuts                 Return to the shortcut list.
+  5. Back to shortcuts                 Return to the shortcut list.
 
   Changes write the root `tui.keymap.*` override.
   enter select · esc back

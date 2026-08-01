@@ -244,8 +244,10 @@ impl App {
                 .side_threads
                 .values()
                 .any(|state| state.parent_thread_id == active_thread_id)
-                && let Some(binding) =
-                    crate::keymap::primary_binding(&self.keymap.app.toggle_side_conversation)
+                && let Some(binding) = self.keymap.primary_hint(
+                    crate::keymap::KeymapContext::Global,
+                    "toggle_side_conversation",
+                )
             {
                 self.chat_widget
                     .set_side_conversation_context_label(Some(format!(
@@ -273,9 +275,10 @@ impl App {
         if let Some(parent_status) = parent_status {
             label_parts.push(parent_status.label(parent_is_main).to_string());
         }
-        if let Some(binding) =
-            crate::keymap::primary_binding(&self.keymap.app.toggle_side_conversation)
-        {
+        if let Some(binding) = self.keymap.primary_hint(
+            crate::keymap::KeymapContext::Global,
+            "toggle_side_conversation",
+        ) {
             label_parts.push(format!("{} to switch", binding.display_label()));
         }
         label_parts.push("ctrl + c to close".to_string());

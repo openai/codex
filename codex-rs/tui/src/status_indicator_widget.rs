@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
-use crate::key_hint::KeyBinding;
+use crate::key_hint::ShortcutHint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
@@ -50,7 +50,7 @@ pub(crate) struct StatusIndicatorWidget {
     /// Optional suffix rendered after the elapsed/interrupt segment.
     inline_message: Option<String>,
     show_interrupt_hint: bool,
-    interrupt_binding: Option<KeyBinding>,
+    interrupt_binding: Option<ShortcutHint>,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -89,7 +89,7 @@ impl StatusIndicatorWidget {
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             inline_message: None,
             show_interrupt_hint: true,
-            interrupt_binding: Some(key_hint::plain(KeyCode::Esc)),
+            interrupt_binding: Some(key_hint::plain(KeyCode::Esc).into()),
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -152,7 +152,7 @@ impl StatusIndicatorWidget {
         self.show_interrupt_hint = visible;
     }
 
-    pub(crate) fn set_interrupt_binding(&mut self, binding: Option<KeyBinding>) {
+    pub(crate) fn set_interrupt_binding(&mut self, binding: Option<ShortcutHint>) {
         self.interrupt_binding = binding;
     }
 
@@ -422,7 +422,7 @@ mod tests {
             crate::tui::FrameRequester::test_dummy(),
             /*animations_enabled*/ false,
         );
-        w.set_interrupt_binding(Some(key_hint::plain(KeyCode::F(12))));
+        w.set_interrupt_binding(Some(key_hint::plain(KeyCode::F(12)).into()));
         w.is_paused = true;
         w.elapsed_running = Duration::ZERO;
 

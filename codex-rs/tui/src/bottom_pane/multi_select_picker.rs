@@ -63,9 +63,9 @@ use crate::bottom_pane::selection_popup_common::render_rows_single_line;
 use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::keymap::RuntimeKeymap;
-use crate::keymap::primary_binding;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt;
@@ -515,6 +515,10 @@ impl MultiSelectPicker {
 }
 
 impl BottomPaneView for MultiSelectPicker {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
+    }
+
     fn is_complete(&self) -> bool {
         self.complete
     }
@@ -828,8 +832,8 @@ impl MultiSelectPickerBuilder {
             ];
             if self.ordering_enabled
                 && let (Some(move_left), Some(move_right)) = (
-                    primary_binding(&self.keymap.move_left),
-                    primary_binding(&self.keymap.move_right),
+                    self.keymap.primary_hint(ListAction::MoveLeft),
+                    self.keymap.primary_hint(ListAction::MoveRight),
                 )
             {
                 spans.push("; ".into());
@@ -838,12 +842,12 @@ impl MultiSelectPickerBuilder {
                 spans.push(move_right.into());
                 spans.push(" to move".into());
             }
-            if let Some(accept) = primary_binding(&self.keymap.accept) {
+            if let Some(accept) = self.keymap.primary_hint(ListAction::Accept) {
                 spans.push("; ".into());
                 spans.push(accept.into());
                 spans.push(" to confirm and close".into());
             }
-            if let Some(cancel) = primary_binding(&self.keymap.cancel) {
+            if let Some(cancel) = self.keymap.primary_hint(ListAction::Cancel) {
                 spans.push("; ".into());
                 spans.push(cancel.into());
                 spans.push(" to close".into());
