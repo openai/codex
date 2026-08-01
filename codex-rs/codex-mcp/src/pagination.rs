@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use rmcp::model::PaginatedRequestParams;
 
 const MAX_MCP_CATALOG_PAGES: usize = 100;
-const MAX_MCP_CATALOG_ITEMS: usize = 1_024;
+const MAX_MCP_CATALOG_ITEMS: usize = 2_048;
 const MAX_MCP_PAGINATION_CURSOR_BYTES: usize = 64 * 1024;
 const DEFAULT_MCP_PAGINATION_TIMEOUT: Duration = Duration::from_secs(30);
 
