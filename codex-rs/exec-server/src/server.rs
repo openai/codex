@@ -3,6 +3,7 @@ mod handler;
 mod process_handler;
 mod processor;
 mod registry;
+mod request_dispatcher;
 mod session_registry;
 mod transport;
 

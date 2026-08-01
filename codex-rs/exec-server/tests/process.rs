@@ -2,6 +2,7 @@
 
 mod common;
 
+use codex_exec_server::EnvironmentInfo;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
@@ -73,6 +74,110 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
         process_start_response,
         ExecResponse {
             process_id: ProcessId::from("proc-1"),
+            sandbox_type: Some(ProcessSandboxType::None),
+        }
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// Ordinary requests run one at a time when concurrent processing is not enabled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_runs_ordinary_requests_serially_by_default() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let initialize_id = server
+        .send_request(
+            "initialize",
+            serde_json::to_value(InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            })?,
+        )
+        .await?;
+    let _ = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
+            )
+        })
+        .await?;
+    server
+        .send_notification("initialized", serde_json::json!({}))
+        .await?;
+
+    let process_start_id = server
+        .send_request(
+            "process/start",
+            serde_json::json!({
+                "processId": "proc-serial-read",
+                "argv": ["/bin/sh", "-c", "parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done"],
+                "cwd": PathUri::from_host_native_path(std::env::current_dir()?)?,
+                "env": {},
+                "tty": false,
+                "pipeStdin": false,
+                "arg0": null
+            }),
+        )
+        .await?;
+    let _ = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &process_start_id
+            )
+        })
+        .await?;
+
+    let read_id = server
+        .send_request(
+            "process/read",
+            serde_json::json!({
+                "processId": "proc-serial-read",
+                "afterSeq": null,
+                "maxBytes": null,
+                "waitMs": 250
+            }),
+        )
+        .await?;
+    let queued_environment_info_id = server
+        .send_request("environment/info", serde_json::json!({}))
+        .await?;
+    let queued_start_id = server
+        .send_request(
+            "process/start",
+            serde_json::json!({
+                "processId": "proc-serial-queued",
+                "argv": ["/bin/sh", "-c", "parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done"],
+                "cwd": PathUri::from_host_native_path(std::env::current_dir()?)?,
+                "env": {},
+                "tty": false,
+                "pipeStdin": false,
+                "arg0": null
+            }),
+        )
+        .await?;
+
+    let JSONRPCMessage::Response(JSONRPCResponse { id, .. }) = server.next_event().await? else {
+        panic!("expected the blocked process/read to finish before the queued process/start");
+    };
+    assert_eq!(id, read_id);
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = server.next_event().await?
+    else {
+        panic!("expected the queued environment/info response after process/read");
+    };
+    assert_eq!(id, queued_environment_info_id);
+    let _: EnvironmentInfo = serde_json::from_value(result)?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = server.next_event().await?
+    else {
+        panic!("expected the queued process/start response after process/read");
+    };
+    assert_eq!(id, queued_start_id);
+    assert_eq!(
+        serde_json::from_value::<ExecResponse>(result)?,
+        ExecResponse {
+            process_id: ProcessId::from("proc-serial-queued"),
             sandbox_type: Some(ProcessSandboxType::None),
         }
     );
