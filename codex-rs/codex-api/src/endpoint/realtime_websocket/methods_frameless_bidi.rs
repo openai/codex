@@ -36,9 +36,16 @@ pub(super) fn session_update_message(
     instructions: String,
     initial_items: Vec<ConversationTextParams>,
     voice: RealtimeVoice,
+    delegation_ack_filler: Option<bool>,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::FramelessSessionUpdate {
-        session: session_json(/*model*/ None, instructions, initial_items, voice),
+        session: session_json(
+            /*model*/ None,
+            instructions,
+            initial_items,
+            voice,
+            delegation_ack_filler,
+        ),
     }
 }
 
@@ -47,6 +54,7 @@ pub(super) fn session_json(
     instructions: String,
     initial_items: Vec<ConversationTextParams>,
     voice: RealtimeVoice,
+    delegation_ack_filler: Option<bool>,
 ) -> Value {
     let mut session = json!({
         "instructions": instructions,
@@ -61,6 +69,9 @@ pub(super) fn session_json(
     });
     if let Some(model) = model {
         session["model"] = Value::String(model);
+    }
+    if let Some(delegation_ack_filler) = delegation_ack_filler {
+        session["delegation"]["ack_filler"] = Value::Bool(delegation_ack_filler);
     }
     if !initial_items.is_empty() {
         session["initial_items"] = Value::Array(

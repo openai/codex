@@ -199,6 +199,7 @@ async fn assert_start_error(params: ConversationStartParams, expected_error: &st
 fn start_params(version: RealtimeConversationVersion) -> ConversationStartParams {
     ConversationStartParams {
         client_managed_handoffs: false,
+        delegation_ack_filler: None,
         flush_transcript_tail_on_session_end: false,
         codex_responses_as_items: false,
         codex_response_item_prefix: None,

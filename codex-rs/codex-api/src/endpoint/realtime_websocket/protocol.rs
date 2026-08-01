@@ -38,6 +38,7 @@ pub enum RealtimeContextAppendChannel {
 pub struct RealtimeSessionConfig {
     pub instructions: String,
     pub initial_items: Vec<ConversationTextParams>,
+    pub delegation_ack_filler: Option<bool>,
     pub model: Option<String>,
     pub session_id: Option<String>,
     pub event_parser: RealtimeEventParser,

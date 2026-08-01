@@ -4731,7 +4731,6 @@ fn realtime_start_omitted_initial_items_remain_none() {
 
     assert_eq!(params.initial_items, None);
 }
-
 #[test]
 fn realtime_start_deserializes_client_handoff_channel_prefixes() {
     let params = serde_json::from_value::<ThreadRealtimeStartParams>(json!({

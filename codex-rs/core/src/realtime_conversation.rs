@@ -1357,6 +1357,7 @@ pub(crate) async fn build_realtime_session_config(
     Ok(RealtimeSessionConfig {
         instructions: prompt,
         initial_items: params.initial_items.clone(),
+        delegation_ack_filler: params.delegation_ack_filler,
         model,
         session_id: Some(
             params

@@ -1,12 +1,50 @@
 use super::conversation_function_call_output_message;
 use super::conversation_handoff_append_message;
+use super::session_update_message;
 use super::standalone_handoff_message;
 use crate::endpoint::realtime_websocket::protocol::RealtimeContextAppendChannel;
+use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
+use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
+use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::RealtimeWireAdapter;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use serde_json::to_value;
+
+#[test]
+fn frameless_session_update_encodes_explicit_delegation_ack_filler() {
+    for delegation_ack_filler in [false, true] {
+        let message = session_update_message(
+            RealtimeWireAdapter::FramelessBidi,
+            "instructions".to_string(),
+            Vec::new(),
+            RealtimeSessionMode::Conversational,
+            RealtimeOutputModality::Audio,
+            RealtimeVoice::Marin,
+            Some(delegation_ack_filler),
+        );
+
+        assert_eq!(
+            to_value(message).expect("frameless session update should serialize"),
+            json!({
+                "type": "session.update",
+                "session": {
+                    "instructions": "instructions",
+                    "audio": {
+                        "output": {
+                            "voice": "marin",
+                        },
+                    },
+                    "delegation": {
+                        "type": "client",
+                        "ack_filler": delegation_ack_filler,
+                    },
+                },
+            })
+        );
+    }
+}
 
 #[test]
 fn context_append_channel_only_encodes_for_frameless_handoff_output() {

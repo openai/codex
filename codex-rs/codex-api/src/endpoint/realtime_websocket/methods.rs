@@ -384,6 +384,7 @@ impl RealtimeWebsocketWriter {
         session_mode: RealtimeSessionMode,
         output_modality: RealtimeOutputModality,
         voice: RealtimeVoice,
+        delegation_ack_filler: Option<bool>,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
         let message = session_update_message(
@@ -393,6 +394,7 @@ impl RealtimeWebsocketWriter {
             session_mode,
             output_modality,
             voice,
+            delegation_ack_filler,
         );
         self.send_json(&message).await
     }
@@ -868,6 +870,7 @@ impl RealtimeWebsocketClient {
                     config.session_mode,
                     config.output_modality,
                     config.voice,
+                    config.delegation_ack_filler,
                 )
                 .await?;
         }
@@ -2019,6 +2022,7 @@ mod tests {
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
                     initial_items: Vec::new(),
+                    delegation_ack_filler: None,
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
@@ -2344,6 +2348,7 @@ mod tests {
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
                     initial_items: Vec::new(),
+                    delegation_ack_filler: None,
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
@@ -2470,6 +2475,7 @@ mod tests {
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
                     initial_items: Vec::new(),
+                    delegation_ack_filler: None,
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
@@ -2575,6 +2581,7 @@ mod tests {
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
                     initial_items: Vec::new(),
+                    delegation_ack_filler: None,
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
@@ -2666,6 +2673,7 @@ mod tests {
                 RealtimeSessionConfig {
                     instructions: "backend prompt".to_string(),
                     initial_items: Vec::new(),
+                    delegation_ack_filler: None,
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,

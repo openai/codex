@@ -27,6 +27,7 @@ fn session_json_omits_initial_items_when_empty() {
         "instructions".to_string(),
         Vec::new(),
         RealtimeVoice::Marin,
+        /*delegation_ack_filler*/ None,
     );
 
     assert_eq!(
@@ -66,6 +67,7 @@ fn session_json_encodes_role_bearing_initial_items() {
             },
         ],
         RealtimeVoice::Marin,
+        /*delegation_ack_filler*/ None,
     );
 
     assert_eq!(

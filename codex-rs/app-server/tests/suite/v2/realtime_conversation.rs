@@ -329,6 +329,7 @@ impl RealtimeE2eHarness {
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
             /*codex_response_handoff_mode*/ None,
+            /*delegation_ack_filler*/ None,
             RealtimeConversationVersion::V1,
         )
         .await
@@ -343,6 +344,7 @@ impl RealtimeE2eHarness {
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ Some(true),
             /*codex_response_handoff_mode*/ None,
+            /*delegation_ack_filler*/ None,
             RealtimeConversationVersion::V1,
         )
         .await
@@ -354,6 +356,7 @@ impl RealtimeE2eHarness {
         client_managed_handoffs: Option<bool>,
         codex_responses_as_items: Option<bool>,
         codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
+        delegation_ack_filler: Option<bool>,
         version: RealtimeConversationVersion,
     ) -> Result<StartedWebrtcRealtime> {
         // Starts realtime through the public JSON-RPC method, then waits for the same client-visible
@@ -362,6 +365,7 @@ impl RealtimeE2eHarness {
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 client_managed_handoffs,
+                delegation_ack_filler,
                 flush_transcript_tail_on_session_end: None,
                 thread_id: self.thread_id.clone(),
                 codex_response_item_prefix: codex_responses_as_items
@@ -423,6 +427,7 @@ impl RealtimeE2eHarness {
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 thread_id: self.thread_id.clone(),
                 client_managed_handoffs: None,
+                delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
                 codex_response_item_prefix: codex_responses_as_items
                     .unwrap_or(false)
@@ -461,6 +466,7 @@ impl RealtimeE2eHarness {
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 thread_id: self.thread_id.clone(),
                 client_managed_handoffs: None,
+                delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode,
@@ -730,6 +736,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
@@ -1011,6 +1018,7 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
@@ -1108,6 +1116,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
@@ -1286,6 +1295,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
@@ -1359,6 +1369,7 @@ async fn realtime_mode_uses_client_instructions_on_entry_and_exit() -> Result<()
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: harness.thread_id.clone(),
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
@@ -1493,6 +1504,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
@@ -1687,6 +1699,7 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
             /*codex_response_handoff_mode*/ None,
+            /*delegation_ack_filler*/ Some(false),
             RealtimeConversationVersion::V3,
         )
         .await?;
@@ -1708,7 +1721,7 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
     assert_call_create_multipart(
         harness.call_capture.single_request(),
         "v=offer\r\n",
-        r#"{"audio":{"output":{"voice":"cove"}},"delegation":{"type":"client"},"instructions":"backend prompt\n\nstartup context","model":"gpt-live-1-boulder-alpha"}"#,
+        r#"{"audio":{"output":{"voice":"cove"}},"delegation":{"ack_filler":false,"type":"client"},"instructions":"backend prompt\n\nstartup context","model":"gpt-live-1-boulder-alpha"}"#,
         "/v1/live",
     )?;
     assert!(
@@ -1812,6 +1825,7 @@ async fn webrtc_v1_client_managed_handoffs_disable_automatic_output() -> Result<
             /*client_managed_handoffs*/ Some(true),
             /*codex_responses_as_items*/ None,
             /*codex_response_handoff_mode*/ None,
+            /*delegation_ack_filler*/ None,
             RealtimeConversationVersion::V1,
         )
         .await?;
@@ -1902,6 +1916,7 @@ async fn webrtc_v1_ignores_codex_response_handoff_mode() -> Result<()> {
             /*client_managed_handoffs*/ None,
             /*codex_responses_as_items*/ None,
             /*codex_response_handoff_mode*/ Some(CodexResponseHandoffMode::BemTags),
+            /*delegation_ack_filler*/ None,
             RealtimeConversationVersion::V1,
         )
         .await?;
@@ -3130,6 +3145,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
@@ -3195,6 +3211,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
+            delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
             codex_responses_as_items: None,
             codex_response_item_prefix: None,

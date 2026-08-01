@@ -118,15 +118,19 @@ pub(super) fn session_update_message(
     session_mode: RealtimeSessionMode,
     output_modality: RealtimeOutputModality,
     voice: RealtimeVoice,
+    delegation_ack_filler: Option<bool>,
 ) -> RealtimeOutboundMessage {
     let session_mode = normalized_session_mode(wire_adapter, session_mode);
     match wire_adapter {
         RealtimeWireAdapter::V1 => RealtimeOutboundMessage::SessionUpdate {
             session: v1_session_update_session(instructions, voice),
         },
-        RealtimeWireAdapter::FramelessBidi => {
-            frameless_session_update_message(instructions, initial_items, voice)
-        }
+        RealtimeWireAdapter::FramelessBidi => frameless_session_update_message(
+            instructions,
+            initial_items,
+            voice,
+            delegation_ack_filler,
+        ),
         RealtimeWireAdapter::RealtimeV2 => RealtimeOutboundMessage::SessionUpdate {
             session: v2_session_update_session(instructions, session_mode, output_modality, voice),
         },
@@ -157,6 +161,7 @@ pub fn session_update_session_json(config: RealtimeSessionConfig) -> JsonResult<
             config.instructions,
             config.initial_items,
             config.voice,
+            config.delegation_ack_filler,
         )),
     }
 }

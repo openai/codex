@@ -72,6 +72,10 @@ pub struct ThreadRealtimeStartParams {
     /// them automatically. Defaults to false.
     #[ts(optional = nullable)]
     pub client_managed_handoffs: Option<bool>,
+    /// Controls whether a realtime V3 delegation produces an acknowledgement filler.
+    /// Omitted values preserve the Realtime API's default behavior.
+    #[ts(optional = nullable)]
+    pub delegation_ack_filler: Option<bool>,
     /// Routes any transcript tail remaining at session end through Codex. Defaults to false.
     /// TODO: Remove this rollout knob once transcript-tail flushing is always enabled.
     #[ts(optional = nullable)]
