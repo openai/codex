@@ -45,6 +45,11 @@ pub use facts::ImagePreparationFact;
 pub use facts::ImagePreparationMetadata;
 pub use facts::InputError;
 // copybara:strip-for-public begin
+pub use facts::INTERNAL_TOOL_INPUT_COMMAND_NAMES;
+pub use facts::INTERNAL_TOOL_INPUT_FLAG_NAMES;
+pub use facts::INTERNAL_TOOL_INPUT_MAX_COMMANDS;
+pub use facts::INTERNAL_TOOL_INPUT_MAX_FLAGS;
+pub use facts::INTERNAL_TOOL_INPUT_SUBCOMMAND_NAMES;
 pub use facts::InternalToolHookOutcome;
 pub use facts::InternalToolInputLog;
 pub use facts::InternalToolSourceKind;

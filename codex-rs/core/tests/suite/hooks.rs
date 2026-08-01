@@ -71,6 +71,167 @@ const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
+// copybara:strip-for-public begin
+async fn with_tool_analytics(
+    builder: core_test_support::test_codex::TestCodexBuilder,
+    server: &wiremock::MockServer,
+) -> Result<core_test_support::test_codex::TestCodexBuilder> {
+    if !cfg!(debug_assertions) {
+        return Ok(builder);
+    }
+
+    wiremock::Mock::given(wiremock::matchers::path("/codex/analytics-events/events"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .mount(server)
+        .await;
+    let auth = codex_login::CodexAuth::from_external_chatgpt_tokens(
+        "e30.eyJlbWFpbCI6ImFsaWNlQG9wZW5haS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF91c2VyX2lkIjoiZW1wbG95ZWUtYWxpY2UifX0.sig",
+        "account-test",
+        /*chatgpt_plan_type*/ None,
+    )?;
+    let chatgpt_base_url = server.uri();
+    Ok(builder.with_auth(auth).with_config(move |config| {
+        config.chatgpt_base_url = chatgpt_base_url;
+        config.analytics_enabled = Some(true);
+    }))
+}
+async fn assert_internal_tool_input(
+    server: &wiremock::MockServer,
+    tool_call_id: &str,
+    expected: Value,
+) -> Result<()> {
+    if !cfg!(debug_assertions) {
+        return Ok(());
+    }
+
+    timeout(Duration::from_secs(10), async {
+        loop {
+            for request in server.received_requests().await.unwrap_or_default() {
+                if request.url.path() != "/codex/analytics-events/events" {
+                    continue;
+                }
+                let envelope: Value = serde_json::from_slice(&request.body)?;
+                let event = &envelope["events"][0];
+                if event["event_type"] != "codex_internal_structured_log_event" {
+                    continue;
+                }
+                let encoded = event["event_params"]["fields_json"]
+                    .as_str()
+                    .context("encoded tool input")?;
+                let fields: Value = serde_json::from_str(encoded)?;
+                if fields["tool_call_id"] != tool_call_id {
+                    continue;
+                }
+                assert_eq!(envelope["events"], serde_json::json!([event]));
+                assert_eq!(fields["item_id"], tool_call_id);
+                for (key, value) in expected.as_object().context("expected analytics fields")? {
+                    assert_eq!(fields[key], *value, "internal tool field {key}");
+                }
+                let nested = fields["source_kind"] == "code_mode";
+                for key in ["code_mode_cell_id", "code_mode_runtime_tool_call_id"] {
+                    assert_eq!(fields[key].is_string(), nested);
+                }
+                assert_eq!(event["event_params"]["thread_id"], fields["thread_id"]);
+                assert_eq!(event["event_params"]["turn_id"], fields["turn_id"]);
+                return Ok::<_, anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?
+}
+#[tokio::test]
+async fn shell_command_without_hooks_logs_command_metadata() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let call_id = "shell-command-without-hooks";
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&serde_json::json!({ "command": "git version" }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = with_tool_analytics(test_codex(), &server).await?;
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_permission_profile(
+        "run the shell command without hooks",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let metadata =
+        serde_json::json!({"commands": [{"command": "git", "subcommand": "version", "flags": []}]});
+    assert_internal_tool_input(
+        &server,
+        call_id,
+        serde_json::json!({
+            "tool_name": "shell_command",
+            "source_kind": "direct",
+            "arguments_before_hooks": metadata.clone(),
+            "hook_normalized_input": metadata.clone(),
+            "arguments_after_hooks": metadata,
+            "hook_outcome": "unchanged",
+        }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn user_shell_logs_command_metadata() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "user-shell logging requires a host-native shell");
+
+    let server = start_mock_server().await;
+    let mut builder = with_tool_analytics(test_codex(), &server).await?;
+    let test = builder.build(&server).await?;
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: "git version".to_string(),
+        })
+        .await?;
+    let EventMsg::ExecCommandEnd(end) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ExecCommandEnd(_))
+    })
+    .await
+    else {
+        unreachable!("waited for the user-shell command to finish")
+    };
+    assert_eq!(end.exit_code, 0);
+    let metadata = serde_json::json!({
+        "commands": [{"command": "git", "subcommand": "version", "flags": []}],
+    });
+    #[cfg(windows)]
+    let arguments_after_hooks = serde_json::json!({});
+    #[cfg(not(windows))]
+    let arguments_after_hooks = metadata.clone();
+    assert_internal_tool_input(
+        &server,
+        &end.call_id,
+        serde_json::json!({
+            "tool_name": "user_shell",
+            "source_kind": "user_shell",
+            "arguments_before_hooks": metadata.clone(),
+            "arguments_after_hooks": arguments_after_hooks,
+            "hook_normalized_input": null,
+            "hook_outcome": "not_applicable",
+        }),
+    )
+    .await
+}
+// copybara:strip-for-public end
 
 fn restrictive_workspace_write_profile() -> PermissionProfile {
     PermissionProfile::workspace_write_with(
@@ -2984,8 +3145,9 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
 
     let server = start_mock_server().await;
     let call_id = "pretooluse-shell-command";
-    let marker = std::env::temp_dir().join("pretooluse-shell-command-marker");
-    let command = format!("printf blocked > {}", marker.display());
+    let marker_dir = TempDir::new()?;
+    let marker = marker_dir.path().join("pretooluse-shell-command-marker");
+    let command = format!("git init --quiet {}", marker.display());
     let args = serde_json::json!({ "command": command });
     let responses = mount_sse_sequence(
         &server,
@@ -3014,11 +3176,8 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
                 .expect("failed to write pre tool use hook test fixture");
         })
         .with_config(trust_discovered_hooks);
+    builder = with_tool_analytics(builder, &server).await?; // copybara:strip-for-public
     let test = builder.build(&server).await?;
-
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove leftover pre tool use marker")?;
-    }
 
     test.submit_turn_with_permission_profile(
         "run the blocked shell command",
@@ -3042,8 +3201,8 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         "blocked tool output should surface the blocked command",
     );
     assert!(
-        !marker.exists(),
-        "blocked command should not create marker file"
+        !marker.join(".git").is_dir(),
+        "blocked command should not initialize the marker repository"
     );
 
     let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
@@ -3069,6 +3228,24 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
             .is_some_and(|turn_id| !turn_id.is_empty())
     );
 
+    // copybara:strip-for-public begin
+    let metadata = serde_json::json!({
+        "commands": [{"command": "git", "subcommand": "init", "flags": ["--quiet"]}],
+    });
+    assert_internal_tool_input(
+        &server,
+        call_id,
+        serde_json::json!({
+            "tool_name": "shell_command",
+            "source_kind": "direct",
+            "arguments_before_hooks": metadata.clone(),
+            "hook_normalized_input": metadata,
+            "arguments_after_hooks": null,
+            "hook_outcome": "blocked",
+        }),
+    )
+    .await?;
+    // copybara:strip-for-public end
     Ok(())
 }
 
@@ -3239,7 +3416,7 @@ impl BashRewriteSurface {
     fn original_command(self, marker: &Path) -> String {
         match self {
             BashRewriteSurface::ExecCommand | BashRewriteSurface::ShellCommand => {
-                format!("printf original > {}", marker.display())
+                format!("git init --quiet {}", marker.display())
             }
         }
     }
@@ -3247,7 +3424,7 @@ impl BashRewriteSurface {
     fn rewritten_command(self, marker: &Path) -> String {
         match self {
             BashRewriteSurface::ExecCommand | BashRewriteSurface::ShellCommand => {
-                format!("printf rewritten > {}", marker.display())
+                format!("git init {}", marker.display())
             }
         }
     }
@@ -3270,8 +3447,9 @@ async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) 
     let server = start_mock_server().await;
     let slug = surface.slug();
     let call_id = format!("pretooluse-{slug}-rewrite");
-    let original_marker = std::env::temp_dir().join(format!("pretooluse-{slug}-original-marker"));
-    let rewritten_marker = std::env::temp_dir().join(format!("pretooluse-{slug}-rewritten-marker"));
+    let marker_dir = TempDir::new()?;
+    let original_marker = marker_dir.path().join("original");
+    let rewritten_marker = marker_dir.path().join("rewritten");
     let original_command = surface.original_command(&original_marker);
     let rewritten_command = surface.rewritten_command(&rewritten_marker);
     let responses = mount_sse_sequence(
@@ -3298,14 +3476,8 @@ async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) 
                 .expect("failed to write updating pre tool use hook fixture");
         })
         .with_config(move |config| surface.configure(config));
+    builder = with_tool_analytics(builder, &server).await?; // copybara:strip-for-public
     let test = builder.build(&server).await?;
-
-    if original_marker.exists() {
-        fs::remove_file(&original_marker).context("remove stale original pre tool marker")?;
-    }
-    if rewritten_marker.exists() {
-        fs::remove_file(&rewritten_marker).context("remove stale rewritten pre tool marker")?;
-    }
 
     test.submit_turn_with_permission_profile(
         &format!("run the rewritten {slug} command"),
@@ -3317,18 +3489,39 @@ async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) 
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(&call_id);
     assert!(
-        !original_marker.exists(),
+        !original_marker.join(".git").is_dir(),
         "original {slug} command should not execute after rewrite"
     );
-    assert_eq!(
-        fs::read_to_string(&rewritten_marker).context("read rewritten pre tool marker")?,
-        "rewritten"
+    assert!(
+        rewritten_marker.join(".git").is_dir(),
+        "rewritten {slug} command should initialize the marker repository"
     );
 
     let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], original_command);
 
+    // copybara:strip-for-public begin
+    let original_metadata = serde_json::json!({
+        "commands": [{"command": "git", "subcommand": "init", "flags": ["--quiet"]}],
+    });
+    let rewritten_metadata = serde_json::json!({
+        "commands": [{"command": "git", "subcommand": "init", "flags": []}],
+    });
+    assert_internal_tool_input(
+        &server,
+        &call_id,
+        serde_json::json!({
+            "tool_name": surface.slug().replace('-', "_"),
+            "source_kind": "direct",
+            "arguments_before_hooks": original_metadata.clone(),
+            "hook_normalized_input": original_metadata,
+            "arguments_after_hooks": rewritten_metadata,
+            "hook_outcome": "rewritten",
+        }),
+    )
+    .await?;
+    // copybara:strip-for-public end
     Ok(())
 }
 
@@ -3352,13 +3545,10 @@ async fn pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution() 
     let original_marker = marker_dir.path().join("original");
     let rewritten_marker = marker_dir.path().join("rewritten");
     let original_command = format!(
-        "printf original > {}; printf original-result",
+        "git init --quiet {}; git version",
         original_marker.display()
     );
-    let rewritten_command = format!(
-        "printf rewritten > {}; printf rewritten-result",
-        rewritten_marker.display()
-    );
+    let rewritten_command = format!("git init {}; git version", rewritten_marker.display());
     let original_command_json =
         serde_json::to_string(&original_command).context("serialize original command")?;
     let code = format!(
@@ -3395,6 +3585,7 @@ text(output.output);
             let _ = config.features.enable(Feature::CodeMode);
             trust_discovered_hooks(config);
         });
+    builder = with_tool_analytics(builder, &server).await?; // copybara:strip-for-public
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_permission_profile(
@@ -3408,27 +3599,52 @@ text(output.output);
     let output_item = requests[1].custom_tool_call_output(call_id);
     let output = code_mode_custom_tool_output_text(&output_item);
     assert!(
-        output.contains("rewritten-result"),
+        output.contains("git version"),
         "code mode should receive the rewritten command result"
     );
     assert!(
-        !output.contains("original-result"),
-        "code mode should not receive the original command result"
-    );
-    assert!(
-        !original_marker.exists(),
+        !original_marker.join(".git").is_dir(),
         "original nested shell command should not execute after rewrite"
     );
-    assert_eq!(
-        fs::read_to_string(&rewritten_marker)
-            .context("read rewritten code mode pre tool marker")?,
-        "rewritten"
+    assert!(
+        rewritten_marker.join(".git").is_dir(),
+        "rewritten nested command should initialize the marker repository"
     );
 
     let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], original_command);
 
+    // copybara:strip-for-public begin
+    let nested_call_id = hook_inputs[0]["tool_use_id"]
+        .as_str()
+        .context("code-mode hook should retain the nested tool call id")?;
+    let original_metadata = serde_json::json!({
+        "commands": [
+            {"command": "git", "subcommand": "init", "flags": ["--quiet"]},
+            {"command": "git", "subcommand": "version", "flags": []},
+        ],
+    });
+    let rewritten_metadata = serde_json::json!({
+        "commands": [
+            {"command": "git", "subcommand": "init", "flags": []},
+            {"command": "git", "subcommand": "version", "flags": []},
+        ],
+    });
+    assert_internal_tool_input(
+        &server,
+        nested_call_id,
+        serde_json::json!({
+            "tool_name": "exec_command",
+            "source_kind": "code_mode",
+            "arguments_before_hooks": original_metadata.clone(),
+            "hook_normalized_input": original_metadata,
+            "arguments_after_hooks": rewritten_metadata,
+            "hook_outcome": "rewritten",
+        }),
+    )
+    .await?;
+    // copybara:strip-for-public end
     Ok(())
 }
 

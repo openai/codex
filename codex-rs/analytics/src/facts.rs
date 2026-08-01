@@ -46,6 +46,21 @@ pub struct TrackEventsContext {
     pub product_client_id: String,
 }
 // copybara:strip-for-public begin
+pub const INTERNAL_TOOL_INPUT_MAX_COMMANDS: usize = 16;
+pub const INTERNAL_TOOL_INPUT_MAX_FLAGS: usize = 32;
+pub const INTERNAL_TOOL_INPUT_COMMAND_NAMES: &str =
+    "cargo curl docker gh git just kubectl make npm pnpm pytest python python3 rg yarn";
+pub const INTERNAL_TOOL_INPUT_SUBCOMMAND_NAMES: &str = concat!(
+    "add branch build checkout clean clone commit config describe diff exec fetch get init ",
+    "install issue list log login logs merge pr pull push rebase remote reset restore run show ",
+    "stash status switch test version view"
+);
+pub const INTERNAL_TOOL_INPUT_FLAG_NAMES: &str = concat!(
+    "--all --api-key --cookie --data --data-binary --data-raw --dry-run --force --header ",
+    "--help --json --name-only --password --porcelain --quiet --recursive --request --short ",
+    "--stat --token --user --verbose -H -U -X -b -d -f -n -p -q -r -u -v"
+);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InternalToolSourceKind {

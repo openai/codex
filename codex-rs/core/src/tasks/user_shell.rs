@@ -38,6 +38,13 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_sandboxing::SandboxType;
 use codex_shell_command::parse_command::parse_command;
 
+// copybara:strip-for-public begin
+use crate::memory_usage::shell_command_metadata;
+use crate::memory_usage::shell_command_metadata_for_argv;
+use codex_analytics::InternalToolHookOutcome;
+use codex_analytics::InternalToolInputLog;
+use codex_analytics::InternalToolSourceKind;
+// copybara:strip-for-public end
 use super::SessionTask;
 use super::SessionTaskResult;
 use crate::session::session::Session;
@@ -177,6 +184,28 @@ pub(crate) async fn execute_user_shell_command(
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
 
+    // copybara:strip-for-public begin
+    let analytics = &session.services.analytics_events_client;
+    if analytics.is_internal_tool_input_logging_enabled() {
+        let arguments_before_hooks = shell_command_metadata(&raw_command);
+        let arguments_after_hooks = shell_command_metadata_for_argv(&exec_command);
+        analytics.track_internal_tool_input(InternalToolInputLog {
+            thread_id: session.thread_id().to_string(),
+            turn_id: Some(turn_context.sub_id.clone()),
+            tool_call_id: call_id.clone(),
+            item_id: Some(call_id.clone()),
+            tool_name: "user_shell".to_string(),
+            namespace: None,
+            source_kind: InternalToolSourceKind::UserShell,
+            arguments_before_hooks,
+            hook_normalized_input: None,
+            arguments_after_hooks: Some(arguments_after_hooks),
+            hook_outcome: InternalToolHookOutcome::NotApplicable,
+            code_mode_cell_id: None,
+            code_mode_runtime_tool_call_id: None,
+        });
+    }
+    // copybara:strip-for-public end
     let parsed_cmd = parse_command(&display_command);
     session
         .emit_turn_item_started(

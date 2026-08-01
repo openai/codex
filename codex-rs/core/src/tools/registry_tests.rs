@@ -629,3 +629,59 @@ fn test_invocation(
         },
     }
 }
+// copybara:strip-for-public begin
+#[test]
+fn internal_tool_metadata_keeps_only_allowlisted_names() {
+    let metadata = crate::memory_usage::shell_command_metadata(
+        "git status --short /private/customer-path && curl -H 'Authorization: Bearer sk-canary' --data='password=canary' https://customer.example/path",
+    );
+    assert_eq!(
+        metadata,
+        serde_json::json!({
+            "commands": [
+                {"command": "git", "subcommand": "status", "flags": ["--short"]},
+                {"command": "curl", "flags": ["-H", "--data"]},
+            ],
+        })
+    );
+    for script in [
+        "SECRET_KEY=secret git status",
+        "git status > /private/customer-path",
+        "git $(printf secret)",
+        "sk-secret-canary --token secret",
+    ] {
+        assert_eq!(
+            crate::memory_usage::shell_command_metadata(script),
+            serde_json::json!({})
+        );
+    }
+
+    let git_status = serde_json::json!({
+        "commands": [{"command": "git", "subcommand": "status", "flags": []}],
+    });
+    for script in ["git status -- --token secret", "git status --secret-canary"] {
+        let metadata = crate::memory_usage::shell_command_metadata(script);
+        assert_eq!(metadata, git_status.clone());
+    }
+    for script in [
+        "git status;".repeat(17),
+        format!("git status {}", "x".repeat(16 * 1024)),
+    ] {
+        assert_eq!(
+            crate::memory_usage::shell_command_metadata(&script),
+            serde_json::json!({})
+        );
+    }
+
+    let snapshot_wrapped = vec![
+        "/bin/zsh".to_string(),
+        "-c".to_string(),
+        "if . '/private/snapshot' >/dev/null 2>&1; then :; fi; exec '/bin/bash' -c 'git version'"
+            .to_string(),
+    ];
+    assert_eq!(
+        crate::memory_usage::shell_command_metadata_for_argv(&snapshot_wrapped),
+        serde_json::json!({})
+    );
+}
+// copybara:strip-for-public end

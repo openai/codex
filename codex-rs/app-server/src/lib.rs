@@ -875,6 +875,16 @@ pub async fn run_main_with_transport_options(
         let auth_manager = Arc::clone(&auth_manager);
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+        // copybara:strip-for-public begin
+        let analytics_events_client = if config
+            .analytics_enabled
+            .unwrap_or(default_analytics_enabled)
+        {
+            analytics_events_client
+        } else {
+            analytics_events_client.without_internal_tool_input_logging()
+        };
+        // copybara:strip-for-public end
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),

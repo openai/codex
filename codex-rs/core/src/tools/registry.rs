@@ -41,6 +41,14 @@ use indexmap::IndexMap;
 use indexmap::map::Entry;
 use serde_json::Value;
 
+// copybara:strip-for-public begin
+use crate::memory_usage::shell_command_metadata;
+use crate::memory_usage::shell_command_metadata_for_invocation;
+use crate::tools::context::ToolCallSource;
+use codex_analytics::InternalToolHookOutcome;
+use codex_analytics::InternalToolInputLog;
+use codex_analytics::InternalToolSourceKind;
+// copybara:strip-for-public end
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
 pub use codex_tools::ToolExecutor;
@@ -522,9 +530,68 @@ impl ToolRegistry {
             return Err(err);
         }
 
+        // copybara:strip-for-public begin
+        let mut internal_tool_input_log = invocation
+            .session
+            .services
+            .analytics_events_client
+            .is_internal_tool_input_logging_enabled()
+            .then(|| {
+                let (source_kind, code_mode_cell_id, code_mode_runtime_tool_call_id) =
+                    match &invocation.source {
+                        ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
+                            (InternalToolSourceKind::Direct, None, None)
+                        }
+                        ToolCallSource::CodeMode {
+                            cell_id,
+                            runtime_tool_call_id,
+                        } => (
+                            InternalToolSourceKind::CodeMode,
+                            Some(cell_id.clone()),
+                            Some(runtime_tool_call_id.clone()),
+                        ),
+                    };
+
+                InternalToolInputLog {
+                    thread_id: invocation.session.thread_id().to_string(),
+                    turn_id: Some(invocation.turn.sub_id.clone()),
+                    tool_call_id: invocation.call_id.clone(),
+                    item_id: Some(invocation.call_id.clone()),
+                    tool_name: invocation.tool_name.name.clone(),
+                    namespace: invocation.tool_name.namespace.clone(),
+                    source_kind,
+                    arguments_before_hooks: shell_command_metadata_for_invocation(&invocation),
+                    hook_normalized_input: None,
+                    arguments_after_hooks: None,
+                    hook_outcome: InternalToolHookOutcome::NotApplicable,
+                    code_mode_cell_id,
+                    code_mode_runtime_tool_call_id,
+                }
+            });
+        // copybara:strip-for-public end
         notify_tool_start(&invocation).await;
 
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
+            // copybara:strip-for-public begin
+            if let Some(log) = internal_tool_input_log.as_mut() {
+                log.hook_normalized_input = Some(
+                    match (
+                        invocation.tool_name.namespace.as_deref(),
+                        invocation.tool_name.name.as_str(),
+                        pre_tool_use_payload
+                            .tool_input
+                            .get("command")
+                            .and_then(Value::as_str),
+                    ) {
+                        (None, "shell_command" | "exec_command", Some(script)) => {
+                            shell_command_metadata(script)
+                        }
+                        _ => serde_json::json!({}),
+                    },
+                );
+                log.hook_outcome = InternalToolHookOutcome::Unchanged;
+            }
+            // copybara:strip-for-public end
             match run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
@@ -535,6 +602,16 @@ impl ToolRegistry {
             .await
             {
                 PreToolUseHookResult::Blocked(message) => {
+                    // copybara:strip-for-public begin
+                    if let Some(mut log) = internal_tool_input_log.take() {
+                        log.hook_outcome = InternalToolHookOutcome::Blocked;
+                        invocation
+                            .session
+                            .services
+                            .analytics_events_client
+                            .track_internal_tool_input(log);
+                    }
+                    // copybara:strip-for-public end
                     let err = FunctionCallError::RespondToModel(message);
                     dispatch_trace.record_failed(&err);
                     notify_tool_finish_if_unclaimed(
@@ -549,9 +626,24 @@ impl ToolRegistry {
                     updated_input: Some(updated_input),
                 } => match tool.with_updated_hook_input(invocation.clone(), updated_input) {
                     Ok(updated_invocation) => {
+                        // copybara:strip-for-public begin
+                        if let Some(log) = internal_tool_input_log.as_mut() {
+                            log.hook_outcome = InternalToolHookOutcome::Rewritten;
+                        }
+                        // copybara:strip-for-public end
                         invocation = updated_invocation;
                     }
                     Err(err) => {
+                        // copybara:strip-for-public begin
+                        if let Some(mut log) = internal_tool_input_log.take() {
+                            log.hook_outcome = InternalToolHookOutcome::RewriteFailed;
+                            invocation
+                                .session
+                                .services
+                                .analytics_events_client
+                                .track_internal_tool_input(log);
+                        }
+                        // copybara:strip-for-public end
                         dispatch_trace.record_failed(&err);
                         notify_tool_finish_if_unclaimed(
                             &invocation,
@@ -570,6 +662,16 @@ impl ToolRegistry {
             }
         }
 
+        // copybara:strip-for-public begin
+        if let Some(mut log) = internal_tool_input_log {
+            log.arguments_after_hooks = Some(shell_command_metadata_for_invocation(&invocation));
+            invocation
+                .session
+                .services
+                .analytics_events_client
+                .track_internal_tool_input(log);
+        }
+        // copybara:strip-for-public end
         if let Some(command) = shell_script_for_invocation(&invocation) {
             let parsed = parse_shell_script(&command);
             let mut categories = parsed.iter().map(|command| match command {

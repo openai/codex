@@ -415,6 +415,16 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 .await;
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
+        // copybara:strip-for-public begin
+        let analytics_events_client = if args.config.analytics_enabled.unwrap_or(matches!(
+            &args.session_source,
+            SessionSource::Cli | SessionSource::Exec
+        )) {
+            analytics_events_client
+        } else {
+            analytics_events_client.without_internal_tool_input_logging()
+        };
+        // copybara:strip-for-public end
         let analytics_events_flush_client = analytics_events_client.clone();
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,

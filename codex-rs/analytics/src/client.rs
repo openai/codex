@@ -15,6 +15,11 @@ use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
+use crate::facts::INTERNAL_TOOL_INPUT_COMMAND_NAMES; // copybara:strip-for-public
+use crate::facts::INTERNAL_TOOL_INPUT_FLAG_NAMES; // copybara:strip-for-public
+use crate::facts::INTERNAL_TOOL_INPUT_MAX_COMMANDS; // copybara:strip-for-public
+use crate::facts::INTERNAL_TOOL_INPUT_MAX_FLAGS; // copybara:strip-for-public
+use crate::facts::INTERNAL_TOOL_INPUT_SUBCOMMAND_NAMES; // copybara:strip-for-public
 use crate::facts::ImagePreparationFact;
 use crate::facts::InternalToolInputLog; // copybara:strip-for-public
 use crate::facts::PluginInstallFailedInput;
@@ -62,10 +67,6 @@ const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
 // Covers two sequential POSTs plus queue/barrier scheduling; additional queued sends remain best-effort.
 const ANALYTICS_EVENTS_FLUSH_TIMEOUT: Duration = Duration::from_secs(25);
 const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
-// copybara:strip-for-public begin
-const MAX_INTERNAL_TOOL_COMMANDS: usize = 16;
-const MAX_INTERNAL_TOOL_FLAGS: usize = 32;
-// copybara:strip-for-public end
 
 pub(crate) enum AnalyticsEventsQueueMessage {
     Fact(Box<AnalyticsFact>),
@@ -825,10 +826,6 @@ fn internal_tool_input_identity(auth: &CodexAuth) -> Option<(String, String)> {
 }
 
 fn is_valid_internal_tool_input_metadata(value: &Value) -> bool {
-    const COMMANDS: &str =
-        "cargo curl docker gh git just kubectl make npm pnpm pytest python python3 rg yarn";
-    const SUBCOMMANDS: &str = "add branch build checkout clean clone commit config describe diff exec fetch get init install issue list log login logs merge pr pull push rebase remote reset restore run show stash status switch test version view";
-    const FLAGS: &str = "--all --api-key --cookie --data --data-binary --data-raw --dry-run --force --header --help --json --name-only --password --porcelain --quiet --recursive --request --short --stat --token --user --verbose -H -U -X -b -d -f -n -p -q -r -u -v";
     let is_allowlisted = |values: &str, value: &str| {
         values
             .split_ascii_whitespace()
@@ -844,7 +841,9 @@ fn is_valid_internal_tool_input_metadata(value: &Value) -> bool {
     let Some(commands) = metadata
         .get("commands")
         .and_then(Value::as_array)
-        .filter(|commands| metadata.len() == 1 && commands.len() <= MAX_INTERNAL_TOOL_COMMANDS)
+        .filter(|commands| {
+            metadata.len() == 1 && commands.len() <= INTERNAL_TOOL_INPUT_MAX_COMMANDS
+        })
     else {
         return false;
     };
@@ -862,14 +861,14 @@ fn is_valid_internal_tool_input_metadata(value: &Value) -> bool {
         if !command
             .get("command")
             .and_then(Value::as_str)
-            .is_some_and(|name| is_allowlisted(COMMANDS, name))
+            .is_some_and(|name| is_allowlisted(INTERNAL_TOOL_INPUT_COMMAND_NAMES, name))
         {
             return false;
         }
         if !command.get("subcommand").is_none_or(|subcommand| {
-            subcommand
-                .as_str()
-                .is_some_and(|subcommand| is_allowlisted(SUBCOMMANDS, subcommand))
+            subcommand.as_str().is_some_and(|subcommand| {
+                is_allowlisted(INTERNAL_TOOL_INPUT_SUBCOMMAND_NAMES, subcommand)
+            })
         }) {
             return false;
         }
@@ -877,10 +876,11 @@ fn is_valid_internal_tool_input_metadata(value: &Value) -> bool {
             .get("flags")
             .and_then(Value::as_array)
             .is_some_and(|flags| {
-                flags.len() <= MAX_INTERNAL_TOOL_FLAGS
+                flags.len() <= INTERNAL_TOOL_INPUT_MAX_FLAGS
                     && flags.iter().all(|flag| {
-                        flag.as_str()
-                            .is_some_and(|flag| is_allowlisted(FLAGS, flag))
+                        flag.as_str().is_some_and(|flag| {
+                            is_allowlisted(INTERNAL_TOOL_INPUT_FLAG_NAMES, flag)
+                        })
                     })
             })
     })
