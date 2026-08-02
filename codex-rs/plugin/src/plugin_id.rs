@@ -52,13 +52,32 @@ pub fn validate_plugin_segment(segment: &str, kind: &str) -> Result<(), String> 
     if segment.is_empty() {
         return Err(format!("invalid {kind}: must not be empty"));
     }
-    if !segment
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    let allow_dots = kind == "plugin name";
+    if allow_dots && matches!(segment, "." | "..") {
+        return Err(format!("invalid {kind}: path traversal is not allowed"));
+    }
+    if allow_dots && (segment.starts_with('.') || segment.ends_with('.') || segment.contains(".."))
     {
         return Err(format!(
-            "invalid {kind}: only ASCII letters, digits, `_`, and `-` are allowed"
+            "invalid {kind}: dots must separate non-empty name segments"
+        ));
+    }
+    if !segment
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') || allow_dots && ch == '.')
+    {
+        let allowed_characters = if allow_dots {
+            "ASCII letters, digits, `.`, `_`, and `-`"
+        } else {
+            "ASCII letters, digits, `_`, and `-`"
+        };
+        return Err(format!(
+            "invalid {kind}: only {allowed_characters} are allowed"
         ));
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "plugin_id_tests.rs"]
+mod tests;

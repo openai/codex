@@ -8,6 +8,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub const AGENT_PLUGIN_MANIFEST_RELATIVE_PATH: &str = "plugin.json";
+/// Published Agent Plugins v1 manifest schema:
+/// https://github.com/agentplugins/agent-plugins-spec/blob/main/schemas/1.0.0/plugin.schema.json
 pub const AGENT_PLUGIN_SCHEMA_URI: &str =
     "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 pub const SUPPORTED_AGENT_PLUGIN_SCHEMA_URIS: &[&str] = &[AGENT_PLUGIN_SCHEMA_URI];
@@ -37,6 +39,25 @@ pub fn agent_plugin_schema_status(contents: &str) -> AgentPluginSchemaStatus {
 }
 
 pub fn find_plugin_manifest_path(plugin_root: &Path) -> Option<PathBuf> {
+    let agent_manifest_path = plugin_root.join(AGENT_PLUGIN_MANIFEST_RELATIVE_PATH);
+    match std::fs::symlink_metadata(&agent_manifest_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_file() => {
+            return None;
+        }
+        Ok(_) => {
+            if std::fs::read_to_string(&agent_manifest_path)
+                .ok()
+                .is_some_and(|contents| {
+                    agent_plugin_schema_status(&contents) != AgentPluginSchemaStatus::Unrelated
+                })
+            {
+                return Some(agent_manifest_path);
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return None,
+    }
+
     DISCOVERABLE_PLUGIN_MANIFEST_PATHS
         .iter()
         .map(|relative_path| plugin_root.join(relative_path))
@@ -105,6 +126,8 @@ pub async fn plugin_namespace_for_skill_uri(
 
 #[cfg(test)]
 mod tests {
+    use super::AGENT_PLUGIN_MANIFEST_RELATIVE_PATH;
+    use super::AGENT_PLUGIN_SCHEMA_URI;
     use super::find_plugin_manifest_path;
     use super::plugin_namespace_for_skill_path;
     use codex_exec_server::LOCAL_FS;
@@ -177,6 +200,22 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_schema_declared_root_plugin_manifest() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("plugins/portable");
+        let skill_path = plugin_root.join("skills/search/SKILL.md");
+        fs::create_dir_all(skill_path.parent().expect("parent")).expect("mkdir");
+        let manifest_path = plugin_root.join(AGENT_PLUGIN_MANIFEST_RELATIVE_PATH);
+        fs::write(
+            &manifest_path,
+            format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"portable"}}"#),
+        )
+        .expect("write manifest");
+
+        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(manifest_path));
+    }
+
+    #[test]
     fn ignores_unrelated_root_plugin_manifest_before_legacy_fallback() {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("plugins/sample");
@@ -187,6 +226,39 @@ mod tests {
         fs::write(&legacy_path, r#"{"name":"sample"}"#).expect("write legacy");
 
         assert_eq!(find_plugin_manifest_path(&plugin_root), Some(legacy_path));
+    }
+
+    #[test]
+    fn rejects_nonregular_root_plugin_manifest() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("plugins/sample");
+        let legacy_path = plugin_root.join(".codex-plugin/plugin.json");
+        fs::create_dir_all(plugin_root.join("plugin.json")).expect("root manifest directory");
+        fs::create_dir_all(legacy_path.parent().expect("parent")).expect("legacy parent");
+        fs::write(&legacy_path, r#"{"name":"sample"}"#).expect("legacy manifest");
+
+        assert_eq!(find_plugin_manifest_path(&plugin_root), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_root_plugin_manifest() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("plugins/sample");
+        let manifest_target = tmp.path().join("manifest.json");
+        let legacy_path = plugin_root.join(".codex-plugin/plugin.json");
+        fs::create_dir_all(&plugin_root).expect("plugin root");
+        fs::write(
+            &manifest_target,
+            format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"sample"}}"#),
+        )
+        .expect("manifest target");
+        std::os::unix::fs::symlink(&manifest_target, plugin_root.join("plugin.json"))
+            .expect("root manifest symlink");
+        fs::create_dir_all(legacy_path.parent().expect("parent")).expect("legacy parent");
+        fs::write(&legacy_path, r#"{"name":"sample"}"#).expect("legacy manifest");
+
+        assert_eq!(find_plugin_manifest_path(&plugin_root), None);
     }
 
     #[test]

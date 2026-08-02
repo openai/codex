@@ -1668,7 +1668,7 @@ fn list_marketplaces_skips_plugins_with_invalid_names_but_keeps_marketplace() {
       }
     },
     {
-      "name": "invalid.plugin",
+      "name": "invalid/plugin",
       "source": {
         "source": "local",
         "path": "./invalid-plugin"

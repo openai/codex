@@ -351,6 +351,104 @@ fn install_rejects_blank_manifest_version() {
 }
 
 #[test]
+fn agent_plugin_blank_version_uses_default_version() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("agent-plugin");
+    fs::create_dir_all(&plugin_root).unwrap();
+    fs::write(
+        plugin_root.join("plugin.json"),
+        r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-plugin","version":"   "}"#,
+    )
+    .unwrap();
+    let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
+        .expect("install Agent Plugin");
+
+    assert_eq!(result.plugin_version, DEFAULT_AGENT_PLUGIN_VERSION);
+}
+
+#[test]
+fn agent_plugin_install_does_not_migrate_commands() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("agent-plugin");
+    fs::create_dir_all(plugin_root.join("commands")).unwrap();
+    fs::write(
+        plugin_root.join("plugin.json"),
+        r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-plugin","commands":"./commands"}"#,
+    )
+    .unwrap();
+    fs::write(plugin_root.join("commands/demo.md"), "# Demo").unwrap();
+    let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
+        .expect("install Agent Plugin");
+
+    assert!(
+        !result
+            .installed_path
+            .join(".codex-plugin/migrated-command-skills")
+            .exists()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_plugin_install_rejects_symlinked_skill_file() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("agent-plugin");
+    let skill_root = plugin_root.join("skills/greet");
+    fs::create_dir_all(&skill_root).unwrap();
+    fs::write(
+        plugin_root.join("plugin.json"),
+        r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-plugin"}"#,
+    )
+    .unwrap();
+    let outside_skill = tmp.path().join("outside-SKILL.md");
+    fs::write(&outside_skill, "---\nname: greet\n---\n").unwrap();
+    std::os::unix::fs::symlink(&outside_skill, skill_root.join("SKILL.md")).unwrap();
+    let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let err = PluginStore::new(tmp.path().to_path_buf())
+        .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
+        .expect_err("symlinked Agent Plugin skill should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("plugin source contains unsupported symbolic link")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_plugin_install_rejects_symlinked_executable() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("agent-plugin");
+    let bin_root = plugin_root.join("bin");
+    fs::create_dir_all(&bin_root).unwrap();
+    fs::write(
+        plugin_root.join("plugin.json"),
+        r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-plugin"}"#,
+    )
+    .unwrap();
+    let outside_executable = tmp.path().join("outside-tool");
+    fs::write(&outside_executable, "#!/bin/sh\n").unwrap();
+    std::os::unix::fs::symlink(&outside_executable, bin_root.join("tool")).unwrap();
+    let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let err = PluginStore::new(tmp.path().to_path_buf())
+        .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
+        .expect_err("symlinked Agent Plugin executable should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("plugin source contains unsupported symbolic link")
+    );
+}
+
+#[test]
 fn active_plugin_version_reads_version_directory_name() {
     let tmp = tempdir().unwrap();
     write_plugin(
@@ -490,7 +588,7 @@ fn plugin_root_rejects_path_separators_in_key_segments() {
     let err = PluginId::parse("../../etc@debug").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "invalid plugin name: only ASCII letters, digits, `_`, and `-` are allowed in `../../etc@debug`"
+        "invalid plugin name: dots must separate non-empty name segments in `../../etc@debug`"
     );
 
     let err = PluginId::parse("sample@../../etc").unwrap_err();
@@ -514,7 +612,7 @@ fn install_rejects_manifest_names_with_path_separators() {
 
     assert_eq!(
         err.to_string(),
-        "invalid plugin name: only ASCII letters, digits, `_`, and `-` are allowed"
+        "invalid plugin name: dots must separate non-empty name segments"
     );
 }
 

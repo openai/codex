@@ -1,3 +1,4 @@
+use crate::manifest::load_plugin_manifest;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -59,10 +60,12 @@ pub(crate) fn pack_plugin_bundle_tar_gz(
             reason: "expected a plugin directory".to_string(),
         });
     }
-    if !plugin_path.join(".codex-plugin/plugin.json").is_file() {
+    if !plugin_path.join(".codex-plugin/plugin.json").is_file()
+        && load_plugin_manifest(plugin_path).is_none()
+    {
         return Err(PluginBundlePackError::InvalidPluginPath {
             path: plugin_path.to_path_buf(),
-            reason: "missing .codex-plugin/plugin.json".to_string(),
+            reason: "missing .codex-plugin/plugin.json or valid Agent Plugin manifest".to_string(),
         });
     }
 
@@ -313,3 +316,7 @@ impl fmt::Display for ArchiveSizeLimitExceeded {
 }
 
 impl std::error::Error for ArchiveSizeLimitExceeded {}
+
+#[cfg(test)]
+#[path = "plugin_bundle_archive_tests.rs"]
+mod tests;

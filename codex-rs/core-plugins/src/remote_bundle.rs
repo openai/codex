@@ -12,6 +12,9 @@ use codex_http_client::RouteAwareRequestError;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::AGENT_PLUGIN_MANIFEST_RELATIVE_PATH;
+use codex_utils_plugins::AgentPluginSchemaStatus;
+use codex_utils_plugins::agent_plugin_schema_status;
 use codex_utils_plugins::find_plugin_manifest_path;
 use http::Method;
 use http::StatusCode;
@@ -524,6 +527,11 @@ fn overwrite_plugin_manifest_version(
     let contents = fs::read_to_string(&manifest_path).map_err(|source| {
         RemotePluginBundleInstallError::io("failed to read remote plugin manifest", source)
     })?;
+    if manifest_path == plugin_root.join(AGENT_PLUGIN_MANIFEST_RELATIVE_PATH)
+        && agent_plugin_schema_status(&contents) == AgentPluginSchemaStatus::Supported
+    {
+        return Ok(());
+    }
     let mut manifest: JsonValue = serde_json::from_str(&contents).map_err(|err| {
         RemotePluginBundleInstallError::InvalidBundle(format!(
             "failed to parse remote plugin manifest: {err}"
@@ -643,6 +651,22 @@ mod tests {
     use wiremock::matchers::path;
 
     const REMOTE_PLUGIN_ID: &str = "plugins~Plugin_00000000000000000000000000000000";
+
+    #[test]
+    fn remote_version_normalization_preserves_portable_root_manifest() {
+        let temp_dir = tempdir().expect("tempdir");
+        let manifest_path = temp_dir.path().join("plugin.json");
+        let original = r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"portable","version":"release-2026-07"}"#;
+        fs::write(&manifest_path, original).expect("write portable manifest");
+
+        overwrite_plugin_manifest_version(temp_dir.path(), "1.2.3")
+            .expect("prepare portable remote plugin");
+
+        assert_eq!(
+            fs::read_to_string(manifest_path).expect("read portable manifest"),
+            original
+        );
+    }
 
     #[test]
     fn validate_remote_plugin_bundle_uses_detail_name_for_local_plugin_id() {

@@ -314,6 +314,33 @@ async fn standalone_capability_root_is_not_a_plugin() {
 }
 
 #[tokio::test]
+async fn root_agent_plugin_manifest_is_not_an_executor_plugin() {
+    let temp_dir = tempdir().expect("tempdir");
+    let plugin_root = temp_dir.path().join("agent-plugin");
+    write_manifest(
+        &plugin_root,
+        "plugin.json",
+        r#"{
+          "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "name": "agent-plugin",
+          "version": "1.0.0"
+        }"#,
+    );
+    let provider = ExecutorPluginProvider::new(Arc::new(EnvironmentManager::default_for_tests()));
+
+    let resolved = provider
+        .resolve(&selected_root(
+            "agent-plugin",
+            LOCAL_ENVIRONMENT_ID,
+            &plugin_root,
+        ))
+        .await
+        .expect("resolve selected root");
+
+    assert_eq!(resolved, None);
+}
+
+#[tokio::test]
 async fn unavailable_environment_does_not_fall_back_to_host_filesystem() {
     let temp_dir = tempdir().expect("tempdir");
     let plugin_root = temp_dir.path().join("host-plugin");

@@ -1,6 +1,6 @@
 use super::PluginManifest;
 use super::PluginManifestMcpServers;
-use super::parse_resolved_plugin_manifest;
+use super::load_plugin_manifest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::AGENT_PLUGIN_SCHEMA_URI;
 use pretty_assertions::assert_eq;
@@ -23,23 +23,7 @@ fn write_agent_plugin_manifest(plugin_root: &Path, extra_fields: &str) {
 }
 
 fn load_manifest(plugin_root: &Path) -> PluginManifest {
-    try_load_manifest(plugin_root).expect("load plugin manifest")
-}
-
-fn try_load_manifest(plugin_root: &Path) -> Option<PluginManifest> {
-    let manifest_path = plugin_root.join("plugin.json");
-    let contents = fs::read_to_string(&manifest_path).ok()?;
-    let overlay_path = plugin_root.join(".codex-plugin/plugin.json");
-    let overlay_contents = fs::read_to_string(&overlay_path).ok();
-    parse_resolved_plugin_manifest(
-        plugin_root,
-        &manifest_path,
-        &contents,
-        overlay_contents
-            .as_ref()
-            .map(|contents| (overlay_path.as_path(), contents.as_str())),
-    )
-    .ok()
+    load_plugin_manifest(plugin_root).expect("load plugin manifest")
 }
 
 #[test]
@@ -180,21 +164,21 @@ fn rejects_overlong_name_and_wrong_metadata_types() {
         ),
     )
     .expect("write manifest");
-    assert_eq!(try_load_manifest(&plugin_root), None);
+    assert_eq!(load_plugin_manifest(&plugin_root), None);
 
     fs::write(
         plugin_root.join("plugin.json"),
         format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"demo-plugin","homepage":42}}"#),
     )
     .expect("write manifest");
-    assert_eq!(try_load_manifest(&plugin_root), None);
+    assert_eq!(load_plugin_manifest(&plugin_root), None);
 
     fs::write(
         plugin_root.join("plugin.json"),
         format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"demo-plugin","version":null}}"#),
     )
     .expect("write manifest");
-    assert_eq!(try_load_manifest(&plugin_root), None);
+    assert_eq!(load_plugin_manifest(&plugin_root), None);
 
     fs::write(
         plugin_root.join("plugin.json"),
@@ -203,7 +187,7 @@ fn rejects_overlong_name_and_wrong_metadata_types() {
         ),
     )
     .expect("write manifest");
-    assert_eq!(try_load_manifest(&plugin_root), None);
+    assert_eq!(load_plugin_manifest(&plugin_root), None);
 }
 
 #[test]
