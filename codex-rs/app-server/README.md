@@ -2213,9 +2213,11 @@ Field notes:
    page artwork; omitted or `null` values default to `"codex"`.
 3. Wait for notifications:
    ```json
-   { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
+   { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null, "onboardingEntrypoint": "life_sciences" } }
    { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } }
    ```
+   `onboardingEntrypoint` is optional and is only emitted when the OAuth callback carries a
+   recognized onboarding hint.
 
 ### 3) Log in with an Amazon Bedrock API key
 

@@ -4,6 +4,8 @@ use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
+use codex_app_server_protocol::DesktopOnboardingEntrypoint;
+use codex_login::LoginOnboardingEntrypoint;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod rate_limit_resets;
@@ -555,17 +557,25 @@ impl AccountRequestProcessor {
         let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
         tokio::spawn(async move {
-            let (success, error_msg) = match tokio::time::timeout(
+            let (success, error_msg, onboarding_entrypoint) = match tokio::time::timeout(
                 LOGIN_CHATGPT_TIMEOUT,
-                server.block_until_done(),
+                server.block_until_done_with_callback_result(),
             )
             .await
             {
-                Ok(Ok(())) => (true, None),
-                Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                Ok(Ok(result)) => (
+                    true,
+                    None,
+                    result
+                        .onboarding_entrypoint
+                        .map(|LoginOnboardingEntrypoint::LifeSciences| {
+                            DesktopOnboardingEntrypoint::LifeSciences
+                        }),
+                ),
+                Ok(Err(err)) => (false, Some(format!("Login server error: {err}")), None),
                 Err(_elapsed) => {
                     shutdown_handle.shutdown();
-                    (false, Some("Login timed out".to_string()))
+                    (false, Some("Login timed out".to_string()), None)
                 }
             };
 
@@ -574,9 +584,12 @@ impl AccountRequestProcessor {
                 config_manager,
                 thread_manager,
                 config,
-                login_id,
-                success,
-                error_msg,
+                AccountLoginCompletedNotification {
+                    login_id: Some(login_id.to_string()),
+                    success,
+                    error: error_msg,
+                    onboarding_entrypoint,
+                },
             )
             .await;
 
@@ -650,9 +663,12 @@ impl AccountRequestProcessor {
                 config_manager,
                 thread_manager,
                 config,
-                login_id,
-                success,
-                error_msg,
+                AccountLoginCompletedNotification {
+                    login_id: Some(login_id.to_string()),
+                    success,
+                    error: error_msg,
+                    onboarding_entrypoint: None,
+                },
             )
             .await;
 
@@ -785,6 +801,7 @@ impl AccountRequestProcessor {
             login_id: login_id.map(|id| id.to_string()),
             success: true,
             error: None,
+            onboarding_entrypoint: None,
         };
         self.outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(
@@ -804,15 +821,9 @@ impl AccountRequestProcessor {
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
         config: Arc<Config>,
-        login_id: Uuid,
-        success: bool,
-        error_msg: Option<String>,
+        payload_v2: AccountLoginCompletedNotification,
     ) {
-        let payload_v2 = AccountLoginCompletedNotification {
-            login_id: Some(login_id.to_string()),
-            success,
-            error: error_msg,
-        };
+        let success = payload_v2.success;
         outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
             .await;

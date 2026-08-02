@@ -21,6 +21,7 @@ use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
@@ -1115,6 +1116,7 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> R
             login_id: None,
             success: true,
             error: None,
+            onboarding_entrypoint: None,
         }
     );
     assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
@@ -2103,7 +2105,7 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
         .await?;
     let login: LoginAccountResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
-    let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
+    let LoginAccountResponse::Chatgpt { login_id, auth_url } = login else {
         bail!("unexpected login response: {login:?}");
     };
     let auth_url = Url::parse(&auth_url)?;
@@ -2119,15 +2121,49 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
 
-    let response = client
-        .get(format!("{callback_url}?code=test-code&state={state}"))
-        .send()
-        .await?;
+    let token_redirect_uri = callback_url.clone();
+    let mut callback_url = Url::parse(&callback_url)?;
+    let callback_state = format!("{state}.onboarding_entrypoint=life_sciences");
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "test-code")
+        .append_pair("state", &callback_state);
+    let response = client.get(callback_url).send().await?;
 
     assert_eq!(response.status(), 302);
     assert_eq!(
         response.headers()["location"].to_str()?,
         "http://localhost:3000/codex/open-app?source=login&app_brand=chatgpt"
+    );
+    let requests = mock_server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("failed to read OAuth requests"))?;
+    let token_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/oauth/token")
+        .ok_or_else(|| anyhow::anyhow!("missing OAuth token request"))?;
+    let token_form: std::collections::HashMap<_, _> =
+        url::form_urlencoded::parse(&token_request.body)
+            .into_owned()
+            .collect();
+    assert_eq!(token_form.get("redirect_uri"), Some(&token_redirect_uri),);
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let ServerNotification::AccountLoginCompleted(payload) = notification.try_into()? else {
+        bail!("unexpected notification")
+    };
+    assert_eq!(
+        payload,
+        AccountLoginCompletedNotification {
+            login_id: Some(login_id),
+            success: true,
+            error: None,
+            onboarding_entrypoint: Some(DesktopOnboardingEntrypoint::LifeSciences),
+        }
     );
     Ok(())
 }

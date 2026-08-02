@@ -1359,6 +1359,7 @@ mod tests {
             login_id: Some("login-1".to_string()),
             success: true,
             error: None,
+            onboarding_entrypoint: None,
         });
 
         assert!(matches!(

@@ -87,6 +87,16 @@
             "null"
           ]
         },
+        "onboardingEntrypoint": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DesktopOnboardingEntrypoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "success": {
           "type": "boolean"
         }
@@ -5567,6 +5577,12 @@
       ],
       "title": "DeprecationNoticeNotification",
       "type": "object"
+    },
+    "DesktopOnboardingEntrypoint": {
+      "enum": [
+        "life_sciences"
+      ],
+      "type": "string"
     },
     "DynamicToolCallOutputContentItem": {
       "oneOf": [
