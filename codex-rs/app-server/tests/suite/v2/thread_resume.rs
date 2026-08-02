@@ -1013,6 +1013,138 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_goal_mutations_preserve_authoritative_sqlite_metadata() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Rollout preview",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
+    let thread_id = ThreadId::from_string(&thread_id)?;
+    let mut metadata = state_db
+        .get_thread(thread_id)
+        .await?
+        .expect("thread metadata should exist");
+    metadata.preview = Some("SQLite preview before goal set".to_string());
+    state_db.upsert_thread(&metadata).await?;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread_id.to_string(),
+                "objective": "preserve SQLite metadata",
+                "status": "paused",
+            })),
+        )
+        .await?;
+    let _: ThreadGoalSetResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(goal_id)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+
+    let mut metadata = state_db
+        .get_thread(thread_id)
+        .await?
+        .expect("thread metadata should survive goal set");
+    assert_eq!(
+        metadata.preview.as_deref(),
+        Some("SQLite preview before goal set")
+    );
+    metadata.preview = Some("SQLite preview before goal clear".to_string());
+    state_db.upsert_thread(&metadata).await?;
+
+    let clear_id = mcp
+        .send_raw_request(
+            "thread/goal/clear",
+            Some(json!({
+                "threadId": thread_id.to_string(),
+            })),
+        )
+        .await?;
+    let cleared: ThreadGoalClearResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(clear_id)).await??;
+    assert!(cleared.cleared);
+    let metadata = state_db
+        .get_thread(thread_id)
+        .await?
+        .expect("thread metadata should survive goal clear");
+    assert_eq!(
+        metadata.preview.as_deref(),
+        Some("SQLite preview before goal clear")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_goal_set_repairs_missing_sqlite_metadata() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Rollout preview",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
+    let thread_id = ThreadId::from_string(&thread_id)?;
+    state_db.delete_thread(thread_id).await?;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread_id.to_string(),
+                "objective": "repair missing SQLite metadata",
+                "status": "paused",
+            })),
+        )
+        .await?;
+    let _: ThreadGoalSetResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(goal_id)).await??;
+    assert!(state_db.get_thread(thread_id).await?.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn goal_first_live_thread_appears_in_state_db_thread_list() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
