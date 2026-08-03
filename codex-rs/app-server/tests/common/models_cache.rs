@@ -5,6 +5,7 @@ use codex_models_manager::client_version_to_whole;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -32,8 +33,15 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         service_tiers: preset.service_tiers.clone(),
         default_service_tier: preset.default_service_tier.clone(),
         upgrade: preset.upgrade.as_ref().map(Into::into),
-        base_instructions: "base instructions".to_string(),
-        model_messages: None,
+        model_messages: Some(ModelMessages {
+            instructions_template: Some("base instructions".to_string()),
+            instructions_variables: None,
+            approvals: None,
+            collaboration_modes: None,
+            auto_review: None,
+            permissions: None,
+            token_budget: None,
+        }),
         include_skills_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,

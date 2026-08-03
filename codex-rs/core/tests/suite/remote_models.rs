@@ -6,10 +6,12 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
@@ -33,6 +35,7 @@ use core_test_support::responses::mount_models_once_with_delay;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
@@ -49,9 +52,35 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use wiremock::BodyPrintLimit;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const REMOTE_MODEL_SLUG: &str = "codex-test";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_model_sends_builtin_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let mut builder = test_codex().with_model("future-custom-model");
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("use fallback model metadata").await?;
+
+    assert_eq!(
+        response.single_request().instructions_text(),
+        BASE_INSTRUCTIONS
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<()> {
@@ -73,12 +102,28 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
     );
     let specific = ModelInfo {
         display_name: "GPT 5.3 Codex".to_string(),
-        base_instructions: "use specific prefix".to_string(),
+        model_messages: Some(ModelMessages {
+            instructions_template: Some("use specific prefix".to_string()),
+            instructions_variables: None,
+            approvals: None,
+            collaboration_modes: None,
+            auto_review: None,
+            permissions: None,
+            token_budget: None,
+        }),
         ..specific
     };
     let generic = ModelInfo {
         display_name: "GPT 5.3".to_string(),
-        base_instructions: "use generic prefix".to_string(),
+        model_messages: Some(ModelMessages {
+            instructions_template: Some("use generic prefix".to_string()),
+            instructions_variables: None,
+            approvals: None,
+            collaboration_modes: None,
+            auto_review: None,
+            permissions: None,
+            token_budget: None,
+        }),
         ..generic
     };
     mount_models_once(
@@ -115,7 +160,10 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
         .await;
 
     assert_eq!(model_info.slug, "gpt-5.3-codex-test");
-    assert_eq!(model_info.base_instructions, specific.base_instructions);
+    assert_eq!(
+        model_info.get_model_instructions(config.personality),
+        specific.get_model_instructions(config.personality)
+    );
 
     Ok(())
 }
@@ -487,7 +535,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
@@ -705,7 +752,7 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_apply_remote_base_instructions() -> Result<()> {
+async fn remote_models_apply_legacy_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -716,7 +763,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     let model = "test-gpt-5-remote";
 
-    let remote_base = "Use the remote base instructions only.";
+    let remote_instructions = "Use the remote instructions template only.";
     let remote_model = ModelInfo {
         slug: model.to_string(),
         display_name: "Parallel Remote".to_string(),
@@ -741,8 +788,15 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: remote_base.to_string(),
-        model_messages: None,
+        model_messages: Some(ModelMessages {
+            instructions_template: Some(remote_instructions.to_string()),
+            instructions_variables: None,
+            approvals: None,
+            collaboration_modes: None,
+            auto_review: None,
+            permissions: None,
+            token_budget: None,
+        }),
         include_skills_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
@@ -761,21 +815,34 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };
-    mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![remote_model],
-        },
-    )
-    .await;
+    let mut models_response = serde_json::to_value(ModelsResponse {
+        models: vec![remote_model],
+    })?;
+    models_response["models"][0]
+        .as_object_mut()
+        .expect("model should serialize as an object")
+        .remove("model_messages");
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(models_response))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
 
-    let response_mock = mount_sse_once(
+    let response_mock = mount_sse_sequence(
         &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
     )
     .await;
 
@@ -795,6 +862,31 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let models_manager = thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, model).await;
 
+    let cwd_path = cwd.abs();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello base".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(cwd_path.clone())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                summary: Some(ReasoningSummary::Auto),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
@@ -804,7 +896,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     )
     .await?;
 
-    let cwd_path = cwd.abs();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
@@ -832,9 +923,20 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let base_model_info = models_manager
         .get_model_info("gpt-5.2", &config.to_models_manager_config())
         .await;
-    let body = response_mock.single_request().body_json();
-    let instructions = body["instructions"].as_str().unwrap();
-    assert_eq!(instructions, base_model_info.base_instructions);
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+    let request = requests.last().expect("expected second model request");
+    assert_eq!(
+        request.instructions_text(),
+        base_model_info.get_model_instructions(config.personality)
+    );
+    assert!(
+        request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(remote_instructions)),
+        "expected the model switch message to contain the remote instructions template"
+    );
 
     Ok(())
 }
@@ -1268,7 +1370,6 @@ fn test_remote_model_with_policy(
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: None,
         include_skills_usage_instructions: false,
         supports_reasoning_summary_parameter: true,

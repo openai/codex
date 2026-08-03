@@ -50,7 +50,13 @@ fn remote_model_with_visibility(
             "supported_in_api": true,
             "priority": priority,
             "upgrade": null,
-            "base_instructions": "base instructions",
+            "model_messages": {
+                "instructions_template": "base instructions",
+                "instructions_variables": null,
+                "approvals": null,
+                "auto_review": null,
+                "permissions": null
+            },
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,

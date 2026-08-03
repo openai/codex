@@ -457,7 +457,6 @@ mod tests {
             "supported_in_api": true,
             "priority": 0,
             "upgrade": null,
-            "base_instructions": "base instructions",
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,

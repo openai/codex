@@ -18,7 +18,6 @@ fn model_info() -> ModelInfo {
         "priority": 1,
         "availability_nux": null,
         "upgrade": null,
-        "base_instructions": "base",
         "model_messages": null,
         "default_reasoning_summary": "auto",
         "support_verbosity": false,

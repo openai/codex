@@ -168,6 +168,9 @@ pub(crate) struct ModelsCache {
     pub(crate) etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) client_version: Option<String>,
+    #[serde(
+        deserialize_with = "codex_protocol::openai_models::deserialize_model_infos_with_legacy_base"
+    )]
     pub(crate) models: Vec<ModelInfo>,
 }
 

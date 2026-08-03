@@ -1,7 +1,9 @@
 use codex_config::types::Personality;
 use codex_features::Feature;
+use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -18,7 +20,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -31,7 +32,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -86,43 +86,6 @@ fn read_only_text_turn_with_personality(
             ..Default::default()
         },
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn personality_does_not_mutate_base_instructions_without_template() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config
-        .features
-        .enable(Feature::Personality)
-        .expect("test config should allow feature update");
-    config.personality = Some(Personality::Friendly);
-
-    let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.4", &config);
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        model_info.base_instructions
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn base_instructions_override_disables_personality_template() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config
-        .features
-        .enable(Feature::Personality)
-        .expect("test config should allow feature update");
-    config.personality = Some(Personality::Friendly);
-    config.base_instructions = Some("override instructions".to_string());
-
-    let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.4", &config);
-
-    assert_eq!(model_info.base_instructions, "override instructions");
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        "override instructions"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -267,8 +230,10 @@ async fn config_personality_none_strips_baked_personality_section() -> anyhow::R
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
     let mut builder = test_codex()
         .with_model_info_override("gpt-5.4", |model_info| {
-            model_info.base_instructions = "Base instructions\n# Personality\nBaked personality\n## Writing Style\nNested writing style\n# General\nGeneral instructions".to_string();
-            model_info.model_messages = None;
+            if let Some(model_messages) = model_info.model_messages.as_mut() {
+                model_messages.instructions_template = Some("Base instructions\n# Personality\nBaked personality\n## Writing Style\nNested writing style\n# General\nGeneral instructions".to_string());
+                model_messages.instructions_variables = None;
+            }
         })
         .with_config(|config| {
             config
@@ -516,21 +481,53 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config
-        .features
-        .disable(Feature::Personality)
-        .expect("test config should allow feature update");
-    config.personality = Some(Personality::Friendly);
+async fn disabled_personality_sends_remote_default_instructions() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
-    let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.4", &config);
+    let server = MockServer::start().await;
+    let remote_slug = "remote-disabled-personality";
+    let default_personality = "default remote personality";
+    let friendly_personality = "friendly remote personality";
+    let mut remote_model = bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("bundled gpt-5.4 model");
+    remote_model.slug = remote_slug.to_string();
+    if let Some(model_messages) = remote_model.model_messages.as_mut() {
+        model_messages.instructions_template = Some("remote base\n{{ personality }}".to_string());
+        model_messages.instructions_variables = Some(ModelInstructionsVariables {
+            personality_default: Some(default_personality.to_string()),
+            personality_friendly: Some(friendly_personality.to_string()),
+            personality_pragmatic: Some("pragmatic remote personality".to_string()),
+        });
+    }
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+    let response = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let mut builder = test_codex()
+        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config
+                .features
+                .disable(Feature::Personality)
+                .expect("test config should allow feature update");
+            config.model = Some(remote_slug.to_string());
+            config.personality = Some(Personality::Friendly);
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("use the default personality").await?;
+
     assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        model_info.base_instructions
+        response.single_request().instructions_text(),
+        format!("remote base\n{default_personality}")
     );
-
     Ok(())
 }
 
@@ -587,6 +584,11 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
 
     let requests = resp_mock.requests();
     assert_eq!(requests.len(), 2, "expected two requests");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.instructions_text() == BASE_INSTRUCTIONS)
+    );
     let request = requests
         .last()
         .expect("expected personality update request");
@@ -631,7 +633,6 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: Some(ModelMessages {
             instructions_template: Some("Base instructions\n{{ personality }}\n".to_string()),
             instructions_variables: Some(ModelInstructionsVariables {
@@ -752,7 +753,6 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         service_tiers: Vec::new(),
         default_service_tier: None,
         upgrade: None,
-        base_instructions: "base instructions".to_string(),
         model_messages: Some(ModelMessages {
             instructions_template: Some("Base instructions\n{{ personality }}\n".to_string()),
             instructions_variables: Some(ModelInstructionsVariables {

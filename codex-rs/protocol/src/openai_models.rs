@@ -21,7 +21,7 @@ use serde::de::DeserializeOwned;
 use serde::de::Error;
 use strum_macros::Display;
 use strum_macros::EnumIter;
-use tracing::trace;
+use tracing::warn;
 use ts_rs::TS;
 
 use crate::config_types::Personality;
@@ -386,7 +386,6 @@ pub struct ModelInfo {
     pub default_service_tier: Option<String>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
-    pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_messages: Option<ModelMessages>,
     #[serde(default)]
@@ -479,29 +478,27 @@ impl ModelInfo {
         if let Some(model_messages) = &self.model_messages
             && let Some(template) = &model_messages.instructions_template
         {
-            // if we have a template, always use it
+            if model_messages.instructions_variables.is_none() {
+                return template.clone();
+            }
             let personality_message = model_messages
                 .get_personality_message(personality)
                 .unwrap_or_default();
             template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
         } else {
-            match personality {
-                Some(personality @ (Personality::Friendly | Personality::Pragmatic)) => {
-                    trace!(
-                        model = %self.slug,
-                        %personality,
-                        "Model personality requested but model_messages is missing, falling back to base instructions."
-                    );
-                }
-                Some(Personality::None) | None => {}
-            }
-            self.base_instructions.clone()
+            warn!(
+                model = %self.slug,
+                "Model has no instruction template; returning empty instructions."
+            );
+            String::new()
         }
     }
 }
 
-/// A strongly-typed template for assembling model instructions and developer messages. If
-/// instructions_* is populated and valid, it will override base_instructions.
+/// A strongly-typed template for assembling model instructions and developer messages.
+///
+/// When `instructions_variables` is absent, `instructions_template` is treated as literal text.
+/// When variables are present but incomplete, missing values render as empty strings.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelMessages {
     pub instructions_template: Option<String>,
@@ -619,7 +616,98 @@ impl From<&ModelUpgrade> for ModelInfoUpgrade {
 /// Response wrapper for `/models`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {
+    #[serde(
+        serialize_with = "serialize_model_infos_with_legacy_base",
+        deserialize_with = "deserialize_model_infos_with_legacy_base"
+    )]
     pub models: Vec<ModelInfo>,
+}
+
+#[derive(Serialize)]
+struct ModelInfoWithLegacyBaseInstructionsRef<'a> {
+    #[serde(flatten)]
+    model: &'a ModelInfo,
+    base_instructions: String,
+}
+
+#[derive(Deserialize)]
+struct ModelInfoWithLegacyBaseInstructions {
+    #[serde(default)]
+    base_instructions: Option<String>,
+    #[serde(flatten)]
+    model: ModelInfo,
+}
+
+/// Serializes catalog models with the deprecated top-level instruction field required by older
+/// clients.
+#[doc(hidden)]
+pub fn serialize_model_infos_with_legacy_base<S>(
+    models: &[ModelInfo],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    models
+        .iter()
+        .map(|model| ModelInfoWithLegacyBaseInstructionsRef {
+            model,
+            base_instructions: model.get_model_instructions(/*personality*/ None),
+        })
+        .collect::<Vec<_>>()
+        .serialize(serializer)
+}
+
+/// Deserializes catalog models while promoting the legacy top-level instruction field into Model
+/// Messages V2 when no canonical instruction template is present.
+#[doc(hidden)]
+pub fn deserialize_model_infos_with_legacy_base<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ModelInfo>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let models = Vec::<ModelInfoWithLegacyBaseInstructions>::deserialize(deserializer)?;
+    models
+        .into_iter()
+        .map(|legacy_model| {
+            let ModelInfoWithLegacyBaseInstructions {
+                base_instructions,
+                mut model,
+            } = legacy_model;
+            if let Some(base_instructions) = base_instructions
+                && model
+                    .model_messages
+                    .as_ref()
+                    .and_then(|messages| messages.instructions_template.as_ref())
+                    .is_none()
+            {
+                let messages = model.model_messages.get_or_insert(ModelMessages {
+                    instructions_template: None,
+                    instructions_variables: None,
+                    approvals: None,
+                    collaboration_modes: None,
+                    auto_review: None,
+                    permissions: None,
+                    token_budget: None,
+                });
+                messages.instructions_template = Some(base_instructions);
+            }
+            if model
+                .model_messages
+                .as_ref()
+                .and_then(|messages| messages.instructions_template.as_ref())
+                .is_none()
+            {
+                let model_slug = &model.slug;
+                return Err(D::Error::custom(format!(
+                    "model `{model_slug}` is missing both `base_instructions` and \
+                     `model_messages.instructions_template`"
+                )));
+            }
+            Ok(model)
+        })
+        .collect()
 }
 
 // convert ModelInfo to ModelPreset
@@ -733,7 +821,6 @@ mod tests {
             default_service_tier: None,
             availability_nux: None,
             upgrade: None,
-            base_instructions: "base".to_string(),
             model_messages: spec,
             include_skills_usage_instructions: false,
             supports_reasoning_summary_parameter: true,
@@ -991,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn get_model_instructions_always_strips_placeholder() {
+    fn get_model_instructions_strips_placeholder_with_incomplete_variables() {
         let model = test_model(Some(ModelMessages {
             instructions_template: Some("Hello\n{{ personality }}".to_string()),
             instructions_variables: Some(ModelInstructionsVariables {
@@ -1006,15 +1093,7 @@ mod tests {
             token_budget: None,
         }));
         assert_eq!(
-            model.get_model_instructions(Some(Personality::Friendly)),
-            "Hello\nfriendly"
-        );
-        assert_eq!(
             model.get_model_instructions(Some(Personality::Pragmatic)),
-            "Hello\n"
-        );
-        assert_eq!(
-            model.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
         assert_eq!(
@@ -1054,7 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn get_model_instructions_falls_back_when_template_is_missing() {
+    fn get_model_instructions_is_empty_when_template_is_missing() {
         let model = test_model(Some(ModelMessages {
             instructions_template: None,
             instructions_variables: Some(ModelInstructionsVariables {
@@ -1071,7 +1150,158 @@ mod tests {
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
 
-        assert_eq!(instructions, "base");
+        assert_eq!(instructions, "");
+    }
+
+    #[test]
+    fn get_model_instructions_is_empty_when_model_messages_is_missing() {
+        let model = test_model(/*spec*/ None);
+
+        assert_eq!(
+            model.get_model_instructions(Some(Personality::Friendly)),
+            ""
+        );
+    }
+
+    #[test]
+    fn models_response_promotes_legacy_base_instructions() {
+        let mut value = serde_json::to_value(ModelsResponse {
+            models: vec![test_model(/*spec*/ None)],
+        })
+        .expect("serialize models response");
+        value["models"][0]["base_instructions"] = serde_json::json!("legacy instructions");
+
+        let response: ModelsResponse =
+            serde_json::from_value(value).expect("deserialize legacy models response");
+        let model = &response.models[0];
+
+        assert_eq!(
+            model.model_messages,
+            Some(ModelMessages {
+                instructions_template: Some("legacy instructions".to_string()),
+                instructions_variables: None,
+                approvals: None,
+                collaboration_modes: None,
+                auto_review: None,
+                permissions: None,
+                token_budget: None,
+            })
+        );
+        assert_eq!(
+            model.get_model_instructions(/*personality*/ None),
+            "legacy instructions"
+        );
+        let serialized = serde_json::to_value(response).expect("serialize canonical response");
+        assert_eq!(
+            serialized["models"][0]["base_instructions"],
+            "legacy instructions"
+        );
+    }
+
+    #[test]
+    fn models_response_rejects_model_without_instruction_source() {
+        let mut value = serde_json::to_value(ModelsResponse {
+            models: vec![test_model(/*spec*/ None)],
+        })
+        .expect("serialize models response");
+        value["models"][0]
+            .as_object_mut()
+            .expect("model should serialize as an object")
+            .remove("base_instructions")
+            .expect("serialized model should include legacy base instructions");
+
+        let error = serde_json::from_value::<ModelsResponse>(value)
+            .expect_err("model without instructions should be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "model `test-model` is missing both `base_instructions` and \
+             `model_messages.instructions_template`"
+        );
+    }
+
+    #[test]
+    fn models_response_serializes_rendered_legacy_base_instructions() {
+        let response = ModelsResponse {
+            models: vec![test_model(Some(ModelMessages {
+                instructions_template: Some("before {{ personality }} after".to_string()),
+                instructions_variables: Some(ModelInstructionsVariables {
+                    personality_default: Some("default".to_string()),
+                    personality_friendly: Some("friendly".to_string()),
+                    personality_pragmatic: Some("pragmatic".to_string()),
+                }),
+                approvals: None,
+                collaboration_modes: None,
+                auto_review: None,
+                permissions: None,
+                token_budget: None,
+            }))],
+        };
+
+        let serialized = serde_json::to_value(response).expect("serialize models response");
+
+        assert_eq!(
+            serialized["models"][0]["base_instructions"],
+            "before default after"
+        );
+    }
+
+    #[test]
+    fn models_response_prefers_template_and_preserves_message_siblings() {
+        let messages = ModelMessages {
+            instructions_template: None,
+            instructions_variables: None,
+            approvals: Some(ApprovalMessages {
+                on_request: Some("approval".to_string()),
+                on_request_auto_review: None,
+                never: Some("never approval".to_string()),
+                unless_trusted: Some("unless-trusted approval".to_string()),
+            }),
+            collaboration_modes: Some(CollaborationModeMessages {
+                default: Some("default collaboration".to_string()),
+                plan: Some("plan collaboration".to_string()),
+            }),
+            auto_review: Some(AutoReviewMessages {
+                policy: Some("policy".to_string()),
+                policy_template: None,
+            }),
+            permissions: Some(PermissionMessages {
+                danger_full_access: None,
+                workspace_write: Some("workspace".to_string()),
+                read_only: None,
+            }),
+            token_budget: None,
+        };
+        let mut value = serde_json::to_value(ModelsResponse {
+            models: vec![test_model(Some(messages.clone()))],
+        })
+        .expect("serialize models response");
+        value["models"][0]["base_instructions"] = serde_json::json!("legacy instructions");
+
+        let response: ModelsResponse =
+            serde_json::from_value(value).expect("deserialize legacy models response");
+        let mut expected_messages = messages;
+        expected_messages.instructions_template = Some("legacy instructions".to_string());
+        assert_eq!(response.models[0].model_messages, Some(expected_messages));
+
+        let canonical_messages = ModelMessages {
+            instructions_template: Some("canonical instructions".to_string()),
+            instructions_variables: None,
+            approvals: None,
+            collaboration_modes: None,
+            auto_review: None,
+            permissions: None,
+            token_budget: None,
+        };
+        let mut value = serde_json::to_value(ModelsResponse {
+            models: vec![test_model(Some(canonical_messages.clone()))],
+        })
+        .expect("serialize models response");
+        value["models"][0]["base_instructions"] = serde_json::json!("legacy instructions");
+
+        let response: ModelsResponse =
+            serde_json::from_value(value).expect("deserialize mixed models response");
+        assert_eq!(response.models[0].model_messages, Some(canonical_messages));
     }
 
     #[test]
@@ -1160,7 +1390,6 @@ mod tests {
             "supported_in_api": true,
             "priority": 1,
             "upgrade": null,
-            "base_instructions": "base",
             "model_messages": null,
             "default_reasoning_summary": "auto",
             "support_verbosity": false,
