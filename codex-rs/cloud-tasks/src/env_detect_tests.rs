@@ -33,7 +33,7 @@ async fn production_http_forwards_headers_and_decodes_response() {
         .set_nonblocking(true)
         .expect("environment HTTP listener should become nonblocking");
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let (mut stream, _) = loop {
             match listener.accept() {
                 Ok(connection) => break connection,
@@ -48,7 +48,10 @@ async fn production_http_forwards_headers_and_decodes_response() {
             }
         };
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_nonblocking(false)
+            .expect("environment HTTP stream should become blocking");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
             .expect("environment HTTP stream should get a read timeout");
         let mut request = Vec::new();
         let mut buffer = [0_u8; 1024];
@@ -83,7 +86,7 @@ async fn production_http_forwards_headers_and_decodes_response() {
         HeaderMap::from_iter([(AUTHORIZATION, HeaderValue::from_static("Bearer real-token"))]);
 
     let selection = tokio::time::timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         autodetect_environment_id_with_origins(
             &http,
             &base_url,
