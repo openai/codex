@@ -91,14 +91,14 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
         turn_environment: &TurnEnvironment,
         cwd: AbsolutePathBuf,
-        allow_login_shell: bool,
     ) -> Result<ExecParams, FunctionCallError> {
         let session_shell = session.user_shell();
         let shell = turn_environment
             .shell
             .as_ref()
             .unwrap_or(session_shell.as_ref());
-        let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
+        let use_login_shell =
+            Self::resolve_use_login_shell(params.login, turn_environment.config.allow_login_shell)?;
         let command = Self::base_command(shell, &params.command, use_login_shell);
 
         let mut env = create_env(
@@ -214,7 +214,6 @@ impl ShellCommandHandler {
             turn.as_ref(),
             &turn_environment,
             cwd,
-            turn.config.permissions.allow_login_shell,
         )?;
         let shell_type = Some(
             turn_environment

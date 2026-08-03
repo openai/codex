@@ -3,6 +3,7 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::TurnEnvironmentState;
+use crate::session::turn_context::EnvironmentConfig;
 use crate::session::turn_context::TurnEnvironment;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
@@ -337,6 +338,9 @@ fn resolved_local_environments<const N: usize>(
                     PathUri::from_abs_path(&cwd),
                     Vec::new(),
                     /*shell*/ None,
+                    EnvironmentConfig {
+                        allow_login_shell: true,
+                    },
                 ))
             })
             .collect(),

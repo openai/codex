@@ -662,6 +662,70 @@ async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
 }
 
 #[tokio::test]
+async fn login_shell_parameter_follows_selected_environment() {
+    for (tool_name, guardian) in [
+        ("shell_command", false),
+        ("exec_command", false),
+        ("exec_command", true),
+    ] {
+        for allow_login_shell in [false, true] {
+            let plan = probe(|turn| {
+                set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+                set_feature(turn, Feature::UnifiedExec, tool_name == "exec_command");
+                set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
+                turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+                update_config(turn, |config| {
+                    config.permissions.allow_login_shell = !allow_login_shell;
+                });
+                let TurnEnvironmentState::Ready(environment) = turn
+                    .environments
+                    .environments
+                    .first_mut()
+                    .expect("primary environment")
+                else {
+                    panic!("primary environment should be ready");
+                };
+                environment.config.allow_login_shell = allow_login_shell;
+                if guardian {
+                    turn.session_source = codex_protocol::protocol::SessionSource::SubAgent(
+                        codex_protocol::protocol::SubAgentSource::Other(
+                            crate::guardian::GUARDIAN_REVIEWER_NAME.to_string(),
+                        ),
+                    );
+                }
+            })
+            .await;
+
+            assert_eq!(
+                has_parameter(plan.visible_spec(tool_name), "login"),
+                allow_login_shell
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn login_shell_parameter_is_available_when_any_environment_allows_it() {
+    let plan = probe(|turn| {
+        set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+        set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
+        update_config(turn, |config| {
+            config.permissions.allow_login_shell = false;
+        });
+        duplicate_primary_environment(turn);
+        for (index, environment) in turn.environments.environments.iter_mut().enumerate() {
+            let TurnEnvironmentState::Ready(environment) = environment else {
+                panic!("environment should be ready");
+            };
+            environment.config.allow_login_shell = index == 1;
+        }
+    })
+    .await;
+
+    assert!(has_parameter(plan.visible_spec("exec_command"), "login"));
+}
+
+#[tokio::test]
 async fn shell_command_is_not_registered_without_a_single_local_environment() {
     let remote_environment = probe(|turn| {
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
@@ -836,6 +900,9 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                     remote_cwd,
                     Vec::new(),
                     /*shell*/ None,
+                    crate::session::turn_context::EnvironmentConfig {
+                        allow_login_shell: true,
+                    },
                 ),
             ));
     })

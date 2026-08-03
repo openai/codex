@@ -12,6 +12,7 @@ use crate::exec_env::inject_permission_profile_env;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::EnvironmentConfig;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -111,6 +112,9 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         PathUri::from_abs_path(&selected_cwd),
         Vec::new(),
         Some(selected_shell),
+        EnvironmentConfig {
+            allow_login_shell: true,
+        },
     );
     let mut expected_env = create_env(
         &turn_context.config.permissions.shell_environment_policy,
@@ -136,7 +140,6 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         &turn_context,
         &selected_environment,
         expected_cwd.clone(),
-        /*allow_login_shell*/ true,
     )
     .expect("login shells should be allowed");
 
@@ -192,10 +195,12 @@ fn shell_command_handler_respects_explicit_login_flag() {
 #[tokio::test]
 async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
     let (session, turn_context) = make_session_and_context().await;
-    let turn_environment = turn_context
+    let mut turn_environment = turn_context
         .environments
         .primary()
-        .expect("primary environment");
+        .expect("primary environment")
+        .clone();
+    turn_environment.config.allow_login_shell = false;
     let cwd = turn_environment
         .cwd()
         .to_abs_path()
@@ -215,9 +220,8 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         &params,
         &session,
         &turn_context,
-        turn_environment,
+        &turn_environment,
         cwd,
-        /*allow_login_shell*/ false,
     )
     .expect("non-login shells should still be allowed");
 
@@ -257,7 +261,6 @@ async fn shell_command_handler_rejects_justification_without_sandbox_permissions
         &turn_context,
         turn_environment,
         cwd,
-        /*allow_login_shell*/ false,
     )
     .expect_err("justification without sandbox permissions should be rejected");
 

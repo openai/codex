@@ -27,6 +27,12 @@ use tracing::instrument;
 
 pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSnapshotFile>>>>;
 
+/// Effective per-environment config; fields move here as executor config is migrated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EnvironmentConfig {
+    pub(crate) allow_login_shell: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
@@ -34,6 +40,7 @@ pub(crate) struct TurnEnvironment {
     cwd: PathUri,
     workspace_roots: Vec<PathUri>,
     pub(crate) shell: Option<shell::Shell>,
+    pub(crate) config: EnvironmentConfig,
     pub(crate) shell_snapshot: ShellSnapshotTask,
 }
 
@@ -44,6 +51,7 @@ impl TurnEnvironment {
         cwd: PathUri,
         workspace_roots: Vec<PathUri>,
         shell: Option<shell::Shell>,
+        config: EnvironmentConfig,
     ) -> Self {
         Self {
             environment_id,
@@ -51,6 +59,7 @@ impl TurnEnvironment {
             cwd,
             workspace_roots,
             shell,
+            config,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
         }
     }
@@ -90,6 +99,7 @@ impl std::fmt::Debug for TurnEnvironment {
             .field("cwd", &self.cwd)
             .field("workspace_roots", &self.workspace_roots)
             .field("shell", &self.shell)
+            .field("config", &self.config)
             .finish_non_exhaustive()
     }
 }

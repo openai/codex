@@ -6,6 +6,7 @@ use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::tests::mcp_config_for_test;
+use crate::session::turn_context::EnvironmentConfig;
 use crate::session::turn_context::TurnEnvironment;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
@@ -1102,6 +1103,9 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
             secondary_cwd.clone(),
             Vec::new(),
             /*shell*/ None,
+            EnvironmentConfig {
+                allow_login_shell: true,
+            },
         )));
 
     let step_context = StepContext::for_test(Arc::new(turn_context));

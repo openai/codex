@@ -9,6 +9,8 @@ use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
+use crate::environment_selection::TurnEnvironmentState;
+use crate::function_tool::FunctionCallError;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
@@ -17,6 +19,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
 
@@ -166,6 +169,46 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
         "unexpected error: {err}"
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn exec_command_rejects_login_when_selected_environment_disallows_it() {
+    let (session, mut turn) = make_session_and_context().await;
+    assert!(turn.config.permissions.allow_login_shell);
+    let TurnEnvironmentState::Ready(environment) = turn
+        .environments
+        .environments
+        .first_mut()
+        .expect("primary environment")
+    else {
+        panic!("primary environment should be ready");
+    };
+    environment.config.allow_login_shell = false;
+
+    let turn = Arc::new(turn);
+    let invocation = ToolInvocation {
+        session: session.into(),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+        turn,
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "login-disallowed".to_string(),
+        tool_name: codex_tools::ToolName::plain("exec_command"),
+        source: ToolCallSource::Direct,
+        payload: ToolPayload::Function {
+            arguments: serde_json::json!({ "cmd": "echo hello", "login": true }).to_string(),
+        },
+    };
+
+    let Err(FunctionCallError::RespondToModel(message)) =
+        ExecCommandHandler::default().handle(invocation).await
+    else {
+        panic!("expected login-shell rejection");
+    };
+    assert_eq!(
+        message,
+        "login shell is disabled by config; omit `login` or set it to false."
+    );
 }
 
 #[test]

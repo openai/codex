@@ -760,7 +760,7 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
         if environment_mode.has_environment() {
             let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
             registry.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
-                allow_login_shell: turn_context.config.permissions.allow_login_shell,
+                allow_login_shell: any_environment_allows_login_shell(context.environments),
                 exec_permission_approvals_enabled: false,
                 include_environment_id,
                 include_shell_parameter: unified_exec_should_include_shell_parameter(
@@ -800,6 +800,12 @@ fn tool_environment_mode(environments: &TurnEnvironmentSnapshot) -> ToolEnvironm
     ToolEnvironmentMode::from_count(environments.turn_environments().count())
 }
 
+fn any_environment_allows_login_shell(environments: &TurnEnvironmentSnapshot) -> bool {
+    environments
+        .turn_environments()
+        .any(|environment| environment.config.allow_login_shell)
+}
+
 #[instrument(level = "trace", skip_all)]
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistry) {
     let turn_context = context.turn_context;
@@ -809,7 +815,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
         return;
     }
 
-    let allow_login_shell = turn_context.config.permissions.allow_login_shell;
+    let allow_login_shell = any_environment_allows_login_shell(context.environments);
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
     let supports_shell_command = context.environments.single_local_environment().is_some();
