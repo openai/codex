@@ -111,7 +111,15 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
 
     let completed = serde_json::json!({
         "type": "response.completed",
-        "response": { "id": "resp1" }
+        "response": {
+            "id": "resp1",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "codex_rollout_budget_units": 2.5
+            }
+        }
     });
 
     let body = build_responses_body(vec![item1, item2, completed]);
@@ -160,7 +168,17 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
             end_turn,
         } => {
             assert_eq!(response_id, "resp1");
-            assert!(token_usage.is_none());
+            assert_eq!(
+                token_usage.as_ref().map(|usage| usage.total_tokens),
+                Some(15)
+            );
+            assert_eq!(
+                token_usage
+                    .as_ref()
+                    .and_then(|usage| usage.codex_rollout_budget_units.as_ref())
+                    .and_then(serde_json::Number::as_f64),
+                Some(2.5)
+            );
             assert!(end_turn.is_none());
         }
         other => panic!("unexpected third event: {other:?}"),

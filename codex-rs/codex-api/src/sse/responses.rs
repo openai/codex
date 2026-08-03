@@ -126,6 +126,8 @@ struct ResponseCompletedUsage {
     output_tokens: i64,
     output_tokens_details: Option<ResponseCompletedOutputTokensDetails>,
     total_tokens: i64,
+    #[serde(default)]
+    codex_rollout_budget_units: Option<serde_json::Number>,
 }
 
 impl From<ResponseCompletedUsage> for TokenUsage {
@@ -141,6 +143,7 @@ impl From<ResponseCompletedUsage> for TokenUsage {
                 .map(|d| d.reasoning_tokens)
                 .unwrap_or(0),
             total_tokens: val.total_tokens,
+            codex_rollout_budget_units: val.codex_rollout_budget_units,
         }
     }
 }
@@ -816,7 +819,8 @@ mod tests {
             },
             "output_tokens": 10,
             "output_tokens_details": { "reasoning_tokens": 5 },
-            "total_tokens": 110
+            "total_tokens": 110,
+            "codex_rollout_budget_units": 2.5
         }))
         .expect("valid response usage");
 
@@ -829,6 +833,7 @@ mod tests {
                 output_tokens: 10,
                 reasoning_output_tokens: 5,
                 total_tokens: 110,
+                codex_rollout_budget_units: serde_json::Number::from_f64(2.5),
             }
         );
     }

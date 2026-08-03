@@ -2572,6 +2572,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             output_tokens: 20,
             reasoning_output_tokens: 0,
             total_tokens: 30,
+            codex_rollout_budget_units: None,
         },
         last_token_usage: TokenUsage {
             input_tokens: 3,
@@ -2580,6 +2581,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             output_tokens: 4,
             reasoning_output_tokens: 0,
             total_tokens: 7,
+            codex_rollout_budget_units: None,
         },
         model_context_window: Some(1_000),
     };
@@ -2591,6 +2593,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             output_tokens: 200,
             reasoning_output_tokens: 25,
             total_tokens: 375,
+            codex_rollout_budget_units: None,
         },
         last_token_usage: TokenUsage {
             input_tokens: 10,
@@ -2599,6 +2602,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             output_tokens: 20,
             reasoning_output_tokens: 5,
             total_tokens: 35,
+            codex_rollout_budget_units: None,
         },
         model_context_window: Some(2_000),
     };
@@ -2768,6 +2772,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         output_tokens: 20,
         reasoning_output_tokens: 3,
         total_tokens: 33,
+        codex_rollout_budget_units: None,
     };
     let second_usage = TokenUsage {
         input_tokens: 7,
@@ -2776,6 +2781,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         output_tokens: 8,
         reasoning_output_tokens: 5,
         total_tokens: 20,
+        codex_rollout_budget_units: None,
     };
 
     session
@@ -2896,6 +2902,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
         output_tokens: 25,
         reasoning_output_tokens: 5,
         total_tokens: 130,
+        codex_rollout_budget_units: None,
     };
     set_total_token_usage(&session, token_usage_at_turn_start.clone()).await;
 

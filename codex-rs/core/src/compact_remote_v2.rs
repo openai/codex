@@ -852,6 +852,7 @@ mod tests {
                     output_tokens: 42,
                     reasoning_output_tokens: 5,
                     total_tokens: 123_498,
+                    codex_rollout_budget_units: None,
                 }),
                 end_turn: Some(true),
             }),
@@ -872,6 +873,7 @@ mod tests {
                 output_tokens: 42,
                 reasoning_output_tokens: 5,
                 total_tokens: 123_498,
+                codex_rollout_budget_units: None,
             })
         );
     }

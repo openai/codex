@@ -324,6 +324,7 @@ fn token_delta_since_last_accounting(last: &TokenUsage, current: &TokenUsage) ->
             .reasoning_output_tokens
             .saturating_sub(last.reasoning_output_tokens),
         total_tokens: current.total_tokens.saturating_sub(last.total_tokens),
+        codex_rollout_budget_units: None,
     };
     goal_token_delta_for_usage(&delta)
 }

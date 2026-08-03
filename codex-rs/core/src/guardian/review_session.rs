@@ -135,6 +135,7 @@ fn token_usage_delta(start: &TokenUsage, end: &TokenUsage) -> TokenUsage {
         reasoning_output_tokens: (end.reasoning_output_tokens - start.reasoning_output_tokens)
             .max(0),
         total_tokens: (end.total_tokens - start.total_tokens).max(0),
+        codex_rollout_budget_units: None,
     }
 }
 
@@ -1684,6 +1685,7 @@ mod tests {
             output_tokens: 6,
             reasoning_output_tokens: 4,
             total_tokens: 28,
+            codex_rollout_budget_units: None,
         };
         let end = TokenUsage {
             input_tokens: 15,
@@ -1692,6 +1694,7 @@ mod tests {
             output_tokens: 10,
             reasoning_output_tokens: 2,
             total_tokens: 34,
+            codex_rollout_budget_units: None,
         };
 
         assert_eq!(
@@ -1703,6 +1706,7 @@ mod tests {
                 output_tokens: 4,
                 reasoning_output_tokens: 0,
                 total_tokens: 6,
+                codex_rollout_budget_units: None,
             }
         );
     }
