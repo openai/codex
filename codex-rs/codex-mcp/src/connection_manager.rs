@@ -27,10 +27,13 @@ use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::McpServerSource;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::pagination::MAX_CODEX_APPS_TOOL_CATALOG_ITEMS;
+use crate::pagination::MAX_MCP_CATALOG_ITEMS;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_TOOL_TIMEOUT;
 use crate::rmcp_client::ManagedClient;
@@ -124,6 +127,7 @@ struct McpServerView {
     metadata: McpServerMetadata,
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
+    catalog_item_limit: usize,
 }
 
 impl McpServerView {
@@ -236,6 +240,21 @@ impl McpConnectionSet {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
+            let is_host_owned_codex_apps = server_name == CODEX_APPS_MCP_SERVER_NAME
+                && config.mcp_server_catalog.server(&server_name).is_some_and(
+                    |server| match server.source() {
+                        McpServerSource::Compatibility { .. } => true,
+                        McpServerSource::Extension { id } => id == "hosted_plugin_runtime",
+                        McpServerSource::Plugin(_)
+                        | McpServerSource::SelectedPlugin(_)
+                        | McpServerSource::Config => false,
+                    },
+                );
+            let catalog_item_limit = if is_host_owned_codex_apps {
+                MAX_CODEX_APPS_TOOL_CATALOG_ITEMS
+            } else {
+                MAX_MCP_CATALOG_ITEMS
+            };
             let metadata = McpServerMetadata::from(&server);
             let configured_config = server.config().clone();
             let configured_tool_filter = ToolFilter::from_config(&configured_config);
@@ -256,8 +275,8 @@ impl McpConnectionSet {
                 } => bearer_token_env_var.is_some(),
                 McpServerTransportConfig::Stdio { .. } => false,
             };
-            let shares_codex_apps_tools_cache =
-                should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
+            let shares_codex_apps_tools_cache = is_host_owned_codex_apps
+                && should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
                 codex_apps_tools_cache
                     .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
@@ -323,8 +342,9 @@ impl McpConnectionSet {
                     .reusable_client(&connection_identity)
                     .await
                     .is_some_and(|client| {
-                        expected_protocol_mode
-                            .is_some_and(|expected| client.client.protocol_mode() == expected)
+                        previous_view.catalog_item_limit == catalog_item_limit
+                            && expected_protocol_mode
+                                .is_some_and(|expected| client.client.protocol_mode() == expected)
                     })
                 {
                     servers.insert(
@@ -334,6 +354,7 @@ impl McpConnectionSet {
                             metadata,
                             tool_filter: configured_tool_filter,
                             tool_timeout: configured_tool_timeout,
+                            catalog_item_limit,
                         },
                     );
                     reused_ready.push(server_name);
@@ -373,6 +394,7 @@ impl McpConnectionSet {
                 client_elicitation_capability.clone(),
                 supports_openai_form_elicitation,
                 protocol_mode,
+                catalog_item_limit,
             );
             servers.insert(
                 server_name.clone(),
@@ -384,6 +406,7 @@ impl McpConnectionSet {
                     metadata,
                     tool_filter: configured_tool_filter,
                     tool_timeout: configured_tool_timeout,
+                    catalog_item_limit,
                 },
             );
             let tx_event = tx_event.clone();

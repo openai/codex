@@ -347,6 +347,7 @@ impl McpConnectionSet {
             /*codex_apps_refresh_trigger*/ "explicit",
             &managed_client.client,
             view.tool_timeout,
+            view.catalog_item_limit,
             managed_client.server_instructions.as_deref(),
         )
         .await

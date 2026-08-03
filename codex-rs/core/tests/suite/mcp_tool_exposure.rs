@@ -49,7 +49,14 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::Semaphore;
+use wiremock::Mock;
+use wiremock::Request;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_partial_json;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 struct McpResourceClientCapture {
     client: Arc<Mutex<Option<McpResourceClient>>>,
@@ -63,6 +70,7 @@ struct CoalescingMcpContributor {
 }
 
 struct AppsMcpServerContributor {
+    id: &'static str,
     url: String,
 }
 
@@ -116,7 +124,7 @@ impl McpServerContributor<Config> for CoalescingMcpContributor {
 
 impl McpServerContributor<Config> for AppsMcpServerContributor {
     fn id(&self) -> &'static str {
-        "deferred_apps_recovery_test"
+        self.id
     }
 
     fn contribute<'a>(
@@ -327,6 +335,107 @@ startup_timeout_sec = 0.1
         .read_mcp_resource("refreshed", "test://resource")
         .await;
     assert!(resource_client.has_server("refreshed").await);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn elevated_apps_catalog_limit_requires_host_owned_registration() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let codex_home = Arc::new(TempDir::new()?);
+    for extension_id in [None, Some("hosted_plugin_runtime"), Some("test-extension")] {
+        let server = responses::start_mock_server().await;
+        let apps_server = AppsTestServer::mount_searchable(&server).await?;
+        let tools = Arc::new(
+            (0..2_603)
+                .map(|index| {
+                    json!({
+                        "name": format!("calendar_catalog_tool_{index}"),
+                        "description": format!("Read calendar catalog entry {index}."),
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false,
+                        },
+                        "_meta": {
+                            "connector_id": "calendar",
+                            "connector_name": "Calendar",
+                            "connector_description": "Plan events and manage your calendar.",
+                        },
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
+        Mock::given(method("POST"))
+            .and(path_regex("^/api/codex/ps/mcp/?$"))
+            .and(body_partial_json(json!({ "method": "tools/list" })))
+            .respond_with(move |request: &Request| {
+                let body: Value = serde_json::from_slice(&request.body)
+                    .expect("Apps tools/list should be a valid JSON-RPC request");
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id").cloned().unwrap_or(Value::Null),
+                    "result": {
+                        "tools": tools.as_ref(),
+                    },
+                }))
+            })
+            .with_priority(1)
+            .mount(&server)
+            .await;
+
+        let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+            .with_home(Arc::clone(&codex_home));
+        if let Some(id) = extension_id {
+            let mut extensions = ExtensionRegistryBuilder::new();
+            extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
+                id,
+                url: format!("{}/api/codex/ps/mcp", apps_server.chatgpt_base_url),
+            }));
+            builder = builder.with_extensions(Arc::new(extensions.build()));
+        }
+        let test = builder.build_with_auto_env(&server).await?;
+        let startup = wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await;
+
+        if extension_id == Some("test-extension") {
+            let error = startup.expect_err("an extension must retain the standard catalog limit");
+            assert!(
+                error.to_string().contains("catalog limit of 2048 items"),
+                "an extension named codex_apps must not inherit the trusted Apps limit: {error}"
+            );
+            continue;
+        }
+
+        startup?;
+        let response = responses::mount_sse_once(
+            &server,
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ]),
+        )
+        .await;
+        test.submit_turn("inspect the large Apps tool catalog")
+            .await?;
+        let body = response.single_request().body_json();
+        let description = body["tools"]
+            .as_array()
+            .and_then(|tools| {
+                tools.iter().find_map(|tool| {
+                    (tool.get("type").and_then(Value::as_str) == Some("tool_search"))
+                        .then(|| tool.get("description").and_then(Value::as_str))
+                        .flatten()
+                })
+            })
+            .expect("large Apps catalogs should remain discoverable through tool_search");
+        assert!(
+            description.contains("Calendar"),
+            "the accepted Apps catalog should remain model-discoverable: {description}"
+        );
+        test.codex.shutdown_and_wait().await?;
+    }
+
     Ok(())
 }
 
@@ -618,6 +727,7 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
     let release_apps_recovery = startup_control.hold_next_successful_initialize();
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
+        id: "deferred_apps_recovery_test",
         url: format!("{}/api/codex/ps/mcp", gated_apps_server.chatgpt_base_url),
     }));
     let call_id = "pause-for-apps";

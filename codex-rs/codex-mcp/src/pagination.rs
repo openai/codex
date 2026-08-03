@@ -7,13 +7,27 @@ use anyhow::anyhow;
 use rmcp::model::PaginatedRequestParams;
 
 const MAX_MCP_CATALOG_PAGES: usize = 100;
-const MAX_MCP_CATALOG_ITEMS: usize = 2_048;
+pub(crate) const MAX_MCP_CATALOG_ITEMS: usize = 2_048;
+pub(crate) const MAX_CODEX_APPS_TOOL_CATALOG_ITEMS: usize = 8_192;
 const MAX_MCP_PAGINATION_CURSOR_BYTES: usize = 64 * 1024;
 const DEFAULT_MCP_PAGINATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn collect_paginated<T, F, Fut>(
     method: &str,
     overall_timeout: Option<Duration>,
+    fetch: F,
+) -> Result<Vec<T>>
+where
+    F: FnMut(Option<PaginatedRequestParams>) -> Fut,
+    Fut: Future<Output = Result<(Vec<T>, Option<String>)>>,
+{
+    collect_paginated_with_limit(method, overall_timeout, MAX_MCP_CATALOG_ITEMS, fetch).await
+}
+
+pub(crate) async fn collect_paginated_with_limit<T, F, Fut>(
+    method: &str,
+    overall_timeout: Option<Duration>,
+    max_items: usize,
     mut fetch: F,
 ) -> Result<Vec<T>>
 where
@@ -37,9 +51,9 @@ where
                 PaginatedRequestParams::default().with_cursor(Some(next.clone()))
             });
             let (items, next_cursor) = fetch(params).await?;
-            if items.len() > MAX_MCP_CATALOG_ITEMS.saturating_sub(collected.len()) {
+            if items.len() > max_items.saturating_sub(collected.len()) {
                 return Err(anyhow!(
-                    "{method} exceeded the catalog limit of {MAX_MCP_CATALOG_ITEMS} items"
+                    "{method} exceeded the catalog limit of {max_items} items"
                 ));
             }
             collected.extend(items);

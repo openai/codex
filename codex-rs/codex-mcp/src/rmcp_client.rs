@@ -26,7 +26,7 @@ use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::openai_docs_source_attribution::maybe_with_openai_docs_source_attribution;
-use crate::pagination::collect_paginated;
+use crate::pagination::collect_paginated_with_limit;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -285,6 +285,7 @@ struct ManagedClientStartup {
     client_elicitation_capability: ElicitationCapability,
     supports_openai_form_elicitation: bool,
     protocol_mode: McpProtocolMode,
+    catalog_item_limit: usize,
     cancel_token: CancellationToken,
     startup_complete: Arc<AtomicBool>,
 }
@@ -306,6 +307,7 @@ impl ManagedClientStartup {
             client_elicitation_capability,
             supports_openai_form_elicitation,
             protocol_mode,
+            catalog_item_limit,
             cancel_token,
             startup_complete,
         } = self.clone();
@@ -360,6 +362,7 @@ impl ManagedClientStartup {
                         tool_catalog_fetch_ticket,
                         client_elicitation_capability,
                         supports_openai_form_elicitation,
+                        catalog_item_limit,
                     },
                 )
                 .await
@@ -423,6 +426,7 @@ impl AsyncManagedClient {
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
         protocol_mode: McpProtocolMode,
+        catalog_item_limit: usize,
     ) -> Self {
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
         let reconnect_server_name = server_name.clone();
@@ -450,6 +454,7 @@ impl AsyncManagedClient {
             client_elicitation_capability,
             supports_openai_form_elicitation,
             protocol_mode,
+            catalog_item_limit,
             cancel_token: cancel_token.clone(),
             startup_complete: Arc::clone(&startup_complete),
         });
@@ -590,11 +595,12 @@ pub(crate) async fn list_tools_for_client_uncached(
     codex_apps_refresh_trigger: &'static str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
+    catalog_item_limit: usize,
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
     let fetch_start = Instant::now();
     let protocol_mode = client.protocol_mode();
-    let tools = collect_paginated("tools/list", timeout, |params| {
+    let tools = collect_paginated_with_limit("tools/list", timeout, catalog_item_limit, |params| {
         let client = Arc::clone(client);
         async move {
             let response = client
@@ -850,6 +856,7 @@ async fn start_server_task(
         tool_catalog_fetch_ticket,
         client_elicitation_capability,
         supports_openai_form_elicitation,
+        catalog_item_limit,
     } = params;
     let params = mcp_initialize_request_params(
         client_elicitation_capability,
@@ -891,6 +898,7 @@ async fn start_server_task(
         /*codex_apps_refresh_trigger*/ "initial",
         &client,
         startup_timeout,
+        catalog_item_limit,
         initialize_result.instructions.as_deref(),
     )
     .await
@@ -982,6 +990,7 @@ struct StartServerTaskParams {
     tool_catalog_fetch_ticket: Option<McpToolCatalogFetchTicket>,
     client_elicitation_capability: ElicitationCapability,
     supports_openai_form_elicitation: bool,
+    catalog_item_limit: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
