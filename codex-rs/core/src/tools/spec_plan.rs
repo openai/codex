@@ -530,12 +530,21 @@ fn register_code_mode_executors(
         }
 
         let spec = tool.runtime.spec();
-        let Some(code_mode_tool) = codex_tools::tool_spec_to_code_mode_tool_definition(&spec)
-        else {
-            continue;
+        // Derive the name without serializing and augmenting every tool schema.
+        let code_mode_name = match &spec {
+            ToolSpec::Function(_) | ToolSpec::Freeform(_) => {
+                codex_tools::code_mode_name_for_tool_name(&tool_name)
+            }
+            ToolSpec::Namespace(namespace) if !namespace.tools.is_empty() => {
+                codex_tools::code_mode_name_for_tool_name(&tool_name)
+            }
+            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+                continue;
+            }
         };
-
-        let code_mode_name = code_mode_tool.name;
+        if !codex_code_mode::is_code_mode_nested_tool(&code_mode_name) {
+            continue;
+        }
         match code_mode_tool_names.entry(codex_code_mode::normalize_code_mode_identifier(
             &code_mode_name,
         )) {
