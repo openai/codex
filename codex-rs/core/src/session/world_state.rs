@@ -184,8 +184,10 @@ impl Session {
                 false
             };
         world_state.add_section(AppsInstructionsState::new(apps_available));
+        let plugins_usage_instructions_available = step_context.mcp.plugins_available()
+            && turn_context.model_info.include_plugin_usage_instructions;
         world_state.add_section(PluginsInstructionsState::new(
-            step_context.mcp.plugins_available(),
+            plugins_usage_instructions_available,
         ));
         if turn_context
             .config

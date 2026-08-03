@@ -1372,6 +1372,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         upgrade: None,
         model_messages: None,
         include_skills_usage_instructions: false,
+        include_plugin_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,

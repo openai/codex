@@ -270,6 +270,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         upgrade: None,
         model_messages: None,
         include_skills_usage_instructions: false,
+        include_plugin_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,

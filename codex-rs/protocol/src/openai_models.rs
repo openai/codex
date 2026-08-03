@@ -390,6 +390,8 @@ pub struct ModelInfo {
     pub model_messages: Option<ModelMessages>,
     #[serde(default)]
     pub include_skills_usage_instructions: bool,
+    #[serde(default)]
+    pub include_plugin_usage_instructions: bool,
     /// Whether the model accepts the Responses API `reasoning.summary` parameter.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub supports_reasoning_summary_parameter: bool,
@@ -823,6 +825,7 @@ mod tests {
             upgrade: None,
             model_messages: spec,
             include_skills_usage_instructions: false,
+            include_plugin_usage_instructions: false,
             supports_reasoning_summary_parameter: true,
             default_reasoning_summary: ReasoningSummary::Auto,
             support_verbosity: false,
@@ -1414,6 +1417,7 @@ mod tests {
             vec![InputModality::Text, InputModality::Image]
         );
         assert!(!model.include_skills_usage_instructions);
+        assert!(!model.include_plugin_usage_instructions);
         assert!(model.supports_reasoning_summary_parameter);
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
