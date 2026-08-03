@@ -245,14 +245,6 @@ pub struct ConfigLayerStack {
     /// later entries in the Vec override earlier ones.
     layers: Vec<ConfigLayerEntry>,
 
-    /// Index into [layers] of the active user config layer, if any.
-    ///
-    /// When profile config is active, there can be more than one user layer:
-    /// the base `$CODEX_HOME/config.toml` layer followed by the profile override
-    /// layer. This index points at the highest-precedence user layer because that
-    /// is the writable layer for profile-aware edits.
-    user_layer_index: Option<usize>,
-
     /// Constraints that must be enforced when deriving a [Config] from the
     /// layers.
     requirements: ConfigRequirements,
@@ -279,10 +271,9 @@ impl ConfigLayerStack {
         requirements_toml: ConfigRequirementsToml,
     ) -> std::io::Result<Self> {
         validate_enabled_config_layers(&layers)?;
-        let user_layer_index = verify_layer_ordering(&layers)?;
+        verify_layer_ordering(&layers)?;
         Ok(Self {
             layers,
-            user_layer_index,
             requirements,
             requirements_toml,
             ignore_user_and_project_exec_policy_rules: false,
@@ -318,8 +309,10 @@ impl ConfigLayerStack {
     /// the base `$CODEX_HOME/config.toml` layer because the active layer is the
     /// writable target for profile-aware edits.
     pub fn get_active_user_layer(&self) -> Option<&ConfigLayerEntry> {
-        self.user_layer_index
-            .and_then(|index| self.layers.get(index))
+        self.layers
+            .iter()
+            .rev()
+            .find(|layer| matches!(layer.name, ConfigLayerSource::User { .. }))
     }
 
     pub fn get_user_config_file(&self) -> Option<&AbsolutePathBuf> {
@@ -425,16 +418,8 @@ impl ConfigLayerStack {
             Some(index) => layers.insert(index, user_layer),
             None => layers.push(user_layer),
         }
-        let user_layer_index = layers.iter().enumerate().rev().find_map(|(index, layer)| {
-            if matches!(layer.name, ConfigLayerSource::User { .. }) {
-                Some(index)
-            } else {
-                None
-            }
-        });
         Ok(Self {
             layers,
-            user_layer_index,
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
             ignore_user_and_project_exec_policy_rules: self
@@ -467,16 +452,8 @@ impl ConfigLayerStack {
                 None => layers.push(user_layer),
             }
         }
-        let user_layer_index = layers.iter().enumerate().rev().find_map(|(index, layer)| {
-            if matches!(layer.name, ConfigLayerSource::User { .. }) {
-                Some(index)
-            } else {
-                None
-            }
-        });
         Self {
             layers,
-            user_layer_index,
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
             ignore_user_and_project_exec_policy_rules: self
@@ -564,9 +541,8 @@ pub(crate) fn validate_enabled_config_layers(layers: &[ConfigLayerEntry]) -> std
     Ok(())
 }
 
-/// Ensures precedence ordering of config layers is correct. Returns the index
-/// of the active user config layer, if any.
-fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<usize>> {
+/// Ensures precedence ordering of config layers is correct.
+fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<()> {
     if !layers.iter().map(|layer| &layer.name).is_sorted() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -578,13 +554,8 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
     // further verify that project layers are ordered from root to cwd. Multiple
     // user layers are allowed so a profile override can layer on top of the base
     // user config.
-    let mut user_layer_index: Option<usize> = None;
     let mut previous_project_dot_codex_folder: Option<&AbsolutePathBuf> = None;
-    for (index, layer) in layers.iter().enumerate() {
-        if matches!(layer.name, ConfigLayerSource::User { .. }) {
-            user_layer_index = Some(index);
-        }
-
+    for layer in layers {
         if let ConfigLayerSource::Project {
             dot_codex_folder: current_project_dot_codex_folder,
         } = &layer.name
@@ -612,7 +583,7 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
         }
     }
 
-    Ok(user_layer_index)
+    Ok(())
 }
 
 #[cfg(test)]
