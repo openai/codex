@@ -8,13 +8,9 @@ use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
-use rmcp::model::PaginatedRequestParams;
-
-use super::ListResourcesArgs;
+use super::ListResourceArgs;
 use super::ListResourcesPayload;
-use super::ensure_model_can_access_mcp_server;
 use super::model_can_access_mcp_server;
-use super::normalize_optional_string;
 use super::parse_args_with_default;
 use super::parse_arguments;
 use super::run_resource_operation;
@@ -64,23 +60,17 @@ impl ListMcpResourcesHandler {
         };
 
         let arguments = parse_arguments(arguments.as_str())?;
-        let args: ListResourcesArgs = parse_args_with_default(arguments.clone())?;
-        let ListResourcesArgs { server, cursor } = args;
-        let server = normalize_optional_string(server);
-        let cursor = normalize_optional_string(cursor);
+        let args: ListResourceArgs = parse_args_with_default(arguments.clone())?;
+        let args = args.normalized();
 
         let invocation = McpInvocation {
-            server: server.clone().unwrap_or_else(|| "codex".to_string()),
+            server: args.server.clone().unwrap_or_else(|| "codex".to_string()),
             tool: "list_mcp_resources".to_string(),
             arguments: arguments.clone(),
         };
 
         run_resource_operation(&session, turn.as_ref(), &call_id, invocation, async {
-            if let Some(server_name) = server.clone() {
-                ensure_model_can_access_mcp_server(turn.as_ref(), &server_name)?;
-                let params = cursor
-                    .clone()
-                    .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
+            if let Some((server_name, params)) = args.target(turn.as_ref())? {
                 let result = mcp
                     .list_resources(&server_name, params)
                     .await
@@ -92,12 +82,6 @@ impl ListMcpResourcesHandler {
                     result,
                 ))
             } else {
-                if cursor.is_some() {
-                    return Err(FunctionCallError::RespondToModel(
-                        "cursor can only be used when a server is specified".to_string(),
-                    ));
-                }
-
                 let resources = mcp
                     .list_all_resources(|server_name| {
                         model_can_access_mcp_server(turn.as_ref(), server_name)
