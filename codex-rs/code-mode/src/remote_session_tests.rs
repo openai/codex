@@ -7,8 +7,10 @@ use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::RuntimeResponse;
+use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientToHost;
+use codex_code_mode_protocol::host::DUAL_WEBSOCKET_CAPABILITY;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::HostHello;
 use codex_code_mode_protocol::host::HostRequest;
@@ -24,6 +26,8 @@ use codex_http_client::OutboundProxyPolicy;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 use tokio_tungstenite::accept_async;
@@ -222,6 +226,91 @@ async fn websocket_provider_executes_over_shared_connector() {
         .await
         .expect("websocket test host should disconnect promptly")
         .expect("websocket test host task should succeed");
+}
+
+#[tokio::test]
+async fn websocket_provider_fails_when_a_negotiated_bulk_connection_is_unavailable() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("websocket test listener should bind");
+    let websocket_url = format!(
+        "ws://{}/?access_token=shared-token",
+        listener
+            .local_addr()
+            .expect("websocket test listener should have an address")
+    );
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("websocket test host should accept the first connection");
+        let mut control = accept_async(stream)
+            .await
+            .expect("first control websocket should connect");
+        let frame = control
+            .next()
+            .await
+            .expect("first client hello")
+            .expect("first websocket frame")
+            .into_data();
+        let ClientToHost::ClientHello(hello) =
+            EncodedFrame::decode_framed(&frame).expect("decode first client hello")
+        else {
+            panic!("expected first client hello");
+        };
+        let capability =
+            Capability::new(DUAL_WEBSOCKET_CAPABILITY).expect("dual websocket capability");
+        assert!(hello.optional_capabilities().contains(&capability));
+        let hello = HostToClient::HostHello(
+            HostHello::new(
+                ProtocolVersion::V1,
+                CapabilitySet::try_new([capability.clone()]).expect("host capabilities"),
+            )
+            .with_bulk_connection_token("fallback-token".to_string()),
+        );
+        let frame = EncodedFrame::encode(&hello).expect("encode dual host hello");
+        control
+            .send(Message::Binary(frame.into_framed_bytes().into()))
+            .await
+            .expect("send dual host hello");
+
+        let (mut bulk, _) = listener
+            .accept()
+            .await
+            .expect("websocket test host should accept the bulk connection");
+        let mut request = [0_u8; 1024];
+        let request_len = bulk
+            .read(&mut request)
+            .await
+            .expect("read bulk websocket handshake");
+        let request = std::str::from_utf8(&request[..request_len]).expect("bulk HTTP request");
+        assert!(
+            request.starts_with("GET /bulk/fallback-token?access_token=shared-token HTTP/1.1\r\n")
+        );
+        bulk.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("reject unavailable bulk websocket");
+        drop(bulk);
+        drop(control);
+    });
+
+    let provider = WebSocketCodeModeSessionProvider::new(websocket_url);
+    let error = match provider
+        .create_session(Arc::new(NoopCodeModeSessionDelegate))
+        .await
+    {
+        Ok(_) => panic!("provider should reject an unavailable negotiated bulk websocket"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("404"),
+        "unexpected negotiated bulk websocket error: {error}"
+    );
+    drop(provider);
+    timeout(Duration::from_secs(5), server)
+        .await
+        .expect("negotiated bulk websocket test host should disconnect promptly")
+        .expect("negotiated bulk websocket test host task should succeed");
 }
 
 #[tokio::test]

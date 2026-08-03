@@ -56,6 +56,62 @@ impl ConnectionDriver {
     }
 
     pub(super) fn handle_host_message(&mut self, message: HostToClient) -> bool {
+        if self.should_defer_host_message(&message) {
+            if self.deferred_host_messages.len()
+                >= codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS
+            {
+                self.fail(
+                    "code-mode host exceeded deferred cross-socket message limit".to_string(),
+                );
+                return false;
+            }
+            self.deferred_host_messages.push_back(message);
+            return true;
+        }
+        if !self.dispatch_host_message(message) {
+            return false;
+        }
+        for _ in 0..self.deferred_host_messages.len() {
+            let Some(message) = self.deferred_host_messages.pop_front() else {
+                break;
+            };
+            if self.should_defer_host_message(&message) {
+                self.deferred_host_messages.push_back(message);
+            } else if !self.dispatch_host_message(message) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn should_defer_host_message(&self, message: &HostToClient) -> bool {
+        match message {
+            HostToClient::DelegateRequest {
+                session_id,
+                request,
+                ..
+            } => {
+                let cell_id = match request {
+                    codex_code_mode_protocol::host::DelegateRequest::InvokeTool { invocation } => {
+                        &invocation.cell_id
+                    }
+                    codex_code_mode_protocol::host::DelegateRequest::Notify { cell_id, .. } => {
+                        cell_id
+                    }
+                };
+                !self.sessions.contains_cell(session_id, cell_id)
+                    && self.requests.has_pending_execute_for_session(session_id)
+            }
+            HostToClient::Response { .. }
+            | HostToClient::InitialResponse { .. }
+            | HostToClient::CellClosed { .. }
+            | HostToClient::CancelDelegateRequest { .. }
+            | HostToClient::HostHello(_)
+            | HostToClient::HandshakeRejected { .. } => false,
+        }
+    }
+
+    fn dispatch_host_message(&mut self, message: HostToClient) -> bool {
         match message {
             HostToClient::Response { id, result } => {
                 self.complete_request(id, result.into_result())
@@ -69,6 +125,12 @@ impl ConnectionDriver {
                 request,
             } => self.start_delegate(id, session_id, request),
             HostToClient::CancelDelegateRequest { id } => {
+                self.deferred_host_messages.retain(|message| {
+                    !matches!(
+                        message,
+                        HostToClient::DelegateRequest { id: deferred_id, .. } if *deferred_id == id
+                    )
+                });
                 self.delegates.cancel(id);
                 true
             }
@@ -302,7 +364,8 @@ impl ConnectionDriver {
     }
 
     fn send_cancel_request(&mut self, id: RequestId) -> bool {
-        let frame = match EncodedFrame::encode(&ClientToHost::CancelRequest { id }) {
+        let message = ClientToHost::CancelRequest { id };
+        let frame = match EncodedFrame::encode(&message) {
             Ok(frame) => frame,
             Err(err) => {
                 self.fail(format!(
@@ -311,7 +374,8 @@ impl ConnectionDriver {
                 return false;
             }
         };
-        self.queue_frame(frame)
+        let lane = message.transport_lane();
+        self.queue_frame(frame, lane)
     }
 
     fn shutdown_abandoned_session(&mut self, session: RemoteSession) -> bool {

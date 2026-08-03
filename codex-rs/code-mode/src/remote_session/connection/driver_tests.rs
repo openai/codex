@@ -15,6 +15,7 @@ use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::DelegateRequest;
 use codex_code_mode_protocol::host::DelegateRequestId;
+use codex_code_mode_protocol::host::DelegateResponse;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::HostResponse;
 use codex_code_mode_protocol::host::HostToClient;
@@ -193,6 +194,11 @@ struct RecordingDelegate {
 
 struct PanickingDelegate;
 
+struct LargeResultBurstDelegate {
+    started: AtomicUsize,
+    release: CancellationToken,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 enum HeldDelegateEvent {
     Started,
@@ -282,6 +288,35 @@ impl CodeModeSessionDelegate for PanickingDelegate {
     fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
+impl CodeModeSessionDelegate for LargeResultBurstDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        _invocation: CodeModeNestedToolCall,
+        cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        self.started.fetch_add(1, Ordering::Release);
+        let release = self.release.clone();
+        Box::pin(async move {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => Err("cancelled".to_string()),
+                _ = release.cancelled() => Ok("x".repeat(256 * 1024).into()),
+            }
+        })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
 impl CodeModeSessionDelegate for RecordingDelegate {
     fn invoke_tool<'a>(
         &'a self,
@@ -328,6 +363,143 @@ async fn next_held_delegate_event(
         .await
         .expect("delegate event timeout")
         .expect("delegate event stream")
+}
+
+#[tokio::test]
+async fn deferred_delegates_follow_cell_readiness_and_cancellation() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    let delegate = Arc::new(RecordingDelegate::default());
+    harness.open(session.clone(), delegate.clone()).await;
+
+    let (first_response_tx, first_response_rx) = oneshot::channel();
+    let (second_response_tx, second_response_rx) = oneshot::channel();
+    for (tool_call_id, response_tx) in [
+        ("first-cell", first_response_tx),
+        ("second-cell", second_response_tx),
+    ] {
+        harness
+            .command_tx
+            .send(DriverCommand::Execute {
+                session: session.clone(),
+                request: ExecuteRequest {
+                    tool_call_id: tool_call_id.to_string(),
+                    enabled_tools: Vec::new(),
+                    source: "text('done')".to_string(),
+                    yield_time_ms: Some(/*yield_time_ms*/ 1),
+                    max_output_tokens: None,
+                },
+                caller_cancellation: CancellationToken::new(),
+                response_tx,
+            })
+            .await
+            .expect("execute command");
+        harness.outgoing_rx.recv().await.expect("execute frame");
+    }
+
+    let first_cell_id = CellId::new("first-cell".to_string());
+    let second_cell_id = CellId::new("second-cell".to_string());
+    let first_delegate_id = DelegateRequestId::new(/*value*/ 7);
+    let second_delegate_id = DelegateRequestId::new(/*value*/ 8);
+    let cancelled_delegate_id = DelegateRequestId::new(/*value*/ 9);
+    for (delegate_id, cell_id) in [
+        (first_delegate_id, first_cell_id.clone()),
+        (second_delegate_id, second_cell_id.clone()),
+        (cancelled_delegate_id, first_cell_id.clone()),
+    ] {
+        harness
+            .event_tx
+            .send(DriverEvent::HostMessage(HostToClient::DelegateRequest {
+                id: delegate_id,
+                session_id: session.id.clone(),
+                request: DelegateRequest::Notify {
+                    call_id: format!("notify-{}", cell_id.as_str()),
+                    cell_id: (&cell_id).into(),
+                    text: "hello".to_string(),
+                },
+            }))
+            .await
+            .expect("early delegate request");
+    }
+
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(
+            HostToClient::CancelDelegateRequest {
+                id: cancelled_delegate_id,
+            },
+        ))
+        .await
+        .expect("deferred delegate cancellation");
+
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::Response {
+            id: RequestId::new(/*value*/ 3),
+            result: WireResult::Ok {
+                value: HostResponse::ExecutionStarted {
+                    cell_id: (&second_cell_id).into(),
+                },
+            },
+        }))
+        .await
+        .expect("second execution-started response");
+    let _second_started = second_response_rx
+        .await
+        .expect("second execute response")
+        .expect("second started cell");
+    let second_response = tokio::time::timeout(Duration::from_secs(1), harness.outgoing_rx.recv())
+        .await
+        .expect("second delegate response timeout")
+        .expect("second delegate response frame");
+    assert_eq!(
+        EncodedFrame::decode_framed::<ClientToHost>(&second_response.into_framed_bytes())
+            .expect("decode second delegate response"),
+        ClientToHost::DelegateResponse {
+            id: second_delegate_id,
+            result: WireResult::Ok {
+                value: codex_code_mode_protocol::host::DelegateResponse::NotificationDelivered,
+            },
+        }
+    );
+    assert_eq!(delegate.notifications.load(Ordering::Relaxed), 1);
+
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::Response {
+            id: RequestId::new(/*value*/ 2),
+            result: WireResult::Ok {
+                value: HostResponse::ExecutionStarted {
+                    cell_id: (&first_cell_id).into(),
+                },
+            },
+        }))
+        .await
+        .expect("first execution-started response");
+    let _first_started = first_response_rx
+        .await
+        .expect("first execute response")
+        .expect("first started cell");
+    let first_response = tokio::time::timeout(Duration::from_secs(1), harness.outgoing_rx.recv())
+        .await
+        .expect("first delegate response timeout")
+        .expect("first delegate response frame");
+    assert_eq!(
+        EncodedFrame::decode_framed::<ClientToHost>(&first_response.into_framed_bytes())
+            .expect("decode first delegate response"),
+        ClientToHost::DelegateResponse {
+            id: first_delegate_id,
+            result: WireResult::Ok {
+                value: codex_code_mode_protocol::host::DelegateResponse::NotificationDelivered,
+            },
+        }
+    );
+    assert_eq!(delegate.notifications.load(Ordering::Relaxed), 2);
+    assert!(matches!(
+        harness.outgoing_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    assert!(harness.alive.load(Ordering::Relaxed));
 }
 
 #[tokio::test]
@@ -463,6 +635,95 @@ async fn delegate_cancel_is_best_effort_and_sends_no_late_response() {
     assert!(!harness.alive.load(Ordering::Acquire));
     assert_eq!(delegate.invocations.load(Ordering::Relaxed), 1);
     assert_eq!(delegate.notifications.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn concurrent_large_delegate_results_do_not_disconnect_a_backpressured_bulk_lane() {
+    const CONCURRENT_RESULTS: usize = 129;
+
+    let (command_tx, command_rx) = mpsc::channel(/*max_capacity*/ 16);
+    let (event_tx, event_rx) = mpsc::channel(/*max_capacity*/ 16);
+    let (outgoing_tx, outgoing_rx) = mpsc::channel(/*max_capacity*/ 16);
+    let (bulk_tx, mut bulk_rx) = mpsc::channel(MAX_PENDING_DELEGATE_CALLS);
+    let cancellation = CancellationToken::new();
+    let alive = Arc::new(AtomicBool::new(true));
+    let (driver, execute_claim_tx) = ConnectionDriver::new(
+        command_rx,
+        event_rx,
+        event_tx.clone(),
+        outgoing_tx,
+        DriverLifecycle {
+            alive: Arc::clone(&alive),
+            failure: Arc::new(StdMutex::new(None)),
+            cancellation: cancellation.clone(),
+        },
+    );
+    let driver_task = tokio::spawn(driver.with_bulk_sender(bulk_tx).run());
+    let mut harness = DriverHarness {
+        command_tx,
+        event_tx,
+        execute_claim_tx,
+        outgoing_rx,
+        cancellation,
+        alive,
+        driver_task,
+    };
+    let session = remote_session();
+    let delegate = Arc::new(LargeResultBurstDelegate {
+        started: AtomicUsize::new(0),
+        release: CancellationToken::new(),
+    });
+    harness.open(session.clone(), delegate.clone()).await;
+    let _started = harness
+        .start_cell(session.clone(), /*request_id*/ 2, "1")
+        .await;
+
+    for value in 1..=CONCURRENT_RESULTS {
+        harness
+            .start_tool_delegate(&session, DelegateRequestId::new(value as i64))
+            .await;
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while delegate.started.load(Ordering::Acquire) < CONCURRENT_RESULTS {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("concurrent delegate calls should all start");
+
+    delegate.release.cancel();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while bulk_rx.len() < CONCURRENT_RESULTS {
+            assert!(
+                harness.alive.load(Ordering::Acquire),
+                "bulk queue disconnected before accepting all concurrent tool results"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("concurrent large results should queue behind the blocked bulk writer");
+
+    let _unrelated = harness.start_cell(session, /*request_id*/ 3, "2").await;
+    assert!(harness.alive.load(Ordering::Acquire));
+
+    for _ in 0..CONCURRENT_RESULTS {
+        let frame = bulk_rx.recv().await.expect("queued bulk delegate result");
+        let message = EncodedFrame::decode_framed::<ClientToHost>(&frame.into_framed_bytes())
+            .expect("decode queued delegate result");
+        let ClientToHost::DelegateResponse {
+            result:
+                WireResult::Ok {
+                    value: DelegateResponse::ToolResult { result },
+                },
+            ..
+        } = message
+        else {
+            panic!("expected a successful large delegate result");
+        };
+        assert_eq!(result.as_str().map(str::len), Some(256 * 1024));
+    }
+    assert!(harness.alive.load(Ordering::Acquire));
 }
 
 #[tokio::test]
@@ -796,16 +1057,17 @@ async fn delegate_task_panic_becomes_tool_error_without_killing_connection() {
 }
 
 #[tokio::test]
-async fn delegate_for_unknown_cell_fails_connection_without_invocation() {
+async fn delegate_for_unknown_cell_returns_error_without_invocation() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
     let delegate = Arc::new(RecordingDelegate::default());
     harness.open(session.clone(), delegate.clone()).await;
 
+    let id = DelegateRequestId::new(/*value*/ 7);
     harness
         .event_tx
         .send(DriverEvent::HostMessage(HostToClient::DelegateRequest {
-            id: DelegateRequestId::new(/*value*/ 7),
+            id,
             session_id: session.id,
             request: DelegateRequest::InvokeTool {
                 invocation: WireNestedToolCall {
@@ -819,14 +1081,28 @@ async fn delegate_for_unknown_cell_fails_connection_without_invocation() {
         }))
         .await
         .expect("delegate request");
-    tokio::task::yield_now().await;
+    let response = tokio::time::timeout(Duration::from_secs(1), harness.outgoing_rx.recv())
+        .await
+        .expect("delegate response timeout")
+        .expect("delegate response frame");
 
-    assert!(!harness.alive.load(Ordering::Acquire));
+    assert_eq!(
+        EncodedFrame::decode_framed::<ClientToHost>(&response.into_framed_bytes())
+            .expect("decode delegate response"),
+        ClientToHost::DelegateResponse {
+            id,
+            result: WireResult::Err {
+                message: "code-mode host delegated for unknown cell missing in session session-1"
+                    .to_string(),
+            },
+        }
+    );
+    assert!(harness.alive.load(Ordering::Acquire));
     assert_eq!(delegate.invocations.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
-async fn delegate_after_cell_close_fails_connection_without_invocation() {
+async fn delegate_after_cell_close_returns_error_without_invocation() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
     let delegate = Arc::new(RecordingDelegate::default());
@@ -842,10 +1118,11 @@ async fn delegate_after_cell_close_fails_connection_without_invocation() {
         }))
         .await
         .expect("cell close");
+    let id = DelegateRequestId::new(/*value*/ 7);
     harness
         .event_tx
         .send(DriverEvent::HostMessage(HostToClient::DelegateRequest {
-            id: DelegateRequestId::new(/*value*/ 7),
+            id,
             session_id: session.id,
             request: DelegateRequest::Notify {
                 call_id: "notify-1".to_string(),
@@ -855,10 +1132,24 @@ async fn delegate_after_cell_close_fails_connection_without_invocation() {
         }))
         .await
         .expect("delegate request");
-    tokio::task::yield_now().await;
+    let response = tokio::time::timeout(Duration::from_secs(1), harness.outgoing_rx.recv())
+        .await
+        .expect("delegate response timeout")
+        .expect("delegate response frame");
 
-    assert!(!harness.alive.load(Ordering::Acquire));
-    assert_eq!(delegate.invocations.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        EncodedFrame::decode_framed::<ClientToHost>(&response.into_framed_bytes())
+            .expect("decode delegate response"),
+        ClientToHost::DelegateResponse {
+            id,
+            result: WireResult::Err {
+                message: "code-mode host delegated for unknown cell 1 in session session-1"
+                    .to_string(),
+            },
+        }
+    );
+    assert!(harness.alive.load(Ordering::Acquire));
+    assert_eq!(delegate.notifications.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

@@ -22,6 +22,7 @@ use super::ProtocolVersion;
 use super::RequestId;
 use super::SessionId;
 use super::SupportedProtocolVersions;
+use super::TransportLane;
 use super::WireCellId;
 use super::WireContentItem;
 use super::WireExecuteRequest;
@@ -70,6 +71,130 @@ where
         serde_json::from_value::<T>(encoded).expect("deserialize"),
         message
     );
+}
+
+#[test]
+fn dual_websocket_hello_preserves_the_pairing_token() {
+    assert_wire_round_trip(
+        HostToClient::HostHello(
+            HostHello::new(
+                ProtocolVersion::V1,
+                CapabilitySet::try_new([capability("dual-websocket-v1")])
+                    .expect("valid capabilities"),
+            )
+            .with_bulk_connection_token("pairing-token".to_string()),
+        ),
+        json!({
+            "type": "connection/ready",
+            "selectedVersion": 1,
+            "capabilities": ["dual-websocket-v1"],
+            "bulkConnectionToken": "pairing-token",
+        }),
+    );
+}
+
+#[test]
+fn message_families_use_dedicated_transport_lanes() {
+    for (message, lane) in [
+        (
+            ClientToHost::CancelRequest {
+                id: request_id(/*value*/ 1),
+            },
+            TransportLane::Control,
+        ),
+        (
+            ClientToHost::DelegateResponse {
+                id: delegate_request_id(/*value*/ 1),
+                result: WireResult::Ok {
+                    value: DelegateResponse::NotificationDelivered,
+                },
+            },
+            TransportLane::Control,
+        ),
+        (
+            ClientToHost::DelegateResponse {
+                id: delegate_request_id(/*value*/ 2),
+                result: WireResult::Ok {
+                    value: DelegateResponse::ToolResult {
+                        result: json!({ "value": "tool result" }),
+                    },
+                },
+            },
+            TransportLane::Bulk,
+        ),
+        (
+            ClientToHost::DelegateResponse {
+                id: delegate_request_id(/*value*/ 3),
+                result: WireResult::Err {
+                    message: "delegate failed".to_string(),
+                },
+            },
+            TransportLane::Bulk,
+        ),
+    ] {
+        assert_eq!(message.transport_lane(), lane);
+        assert!(message.allows_transport_lane(lane));
+        assert!(!message.allows_transport_lane(match lane {
+            TransportLane::Control => TransportLane::Bulk,
+            TransportLane::Bulk => TransportLane::Control,
+        }));
+    }
+
+    for (message, lane) in [
+        (
+            HostToClient::Response {
+                id: request_id(/*value*/ 1),
+                result: WireResult::Err {
+                    message: "x".repeat(128 * 1024),
+                },
+            },
+            TransportLane::Control,
+        ),
+        (
+            HostToClient::DelegateRequest {
+                id: delegate_request_id(/*value*/ 1),
+                session_id: session_id(),
+                request: DelegateRequest::Notify {
+                    call_id: "call-1".to_string(),
+                    cell_id: cell_id("cell-1"),
+                    text: "important".to_string(),
+                },
+            },
+            TransportLane::Control,
+        ),
+        (
+            HostToClient::DelegateRequest {
+                id: delegate_request_id(/*value*/ 2),
+                session_id: session_id(),
+                request: DelegateRequest::InvokeTool {
+                    invocation: WireNestedToolCall {
+                        cell_id: cell_id("cell-1"),
+                        runtime_tool_call_id: "runtime-call-1".to_string(),
+                        tool_name: WireToolName {
+                            name: "tool".to_string(),
+                            namespace: None,
+                        },
+                        tool_kind: WireToolKind::Function,
+                        input: None,
+                    },
+                },
+            },
+            TransportLane::Bulk,
+        ),
+        (
+            HostToClient::CancelDelegateRequest {
+                id: delegate_request_id(/*value*/ 1),
+            },
+            TransportLane::Bulk,
+        ),
+    ] {
+        assert_eq!(message.transport_lane(), lane);
+        assert!(message.allows_transport_lane(lane));
+        assert!(!message.allows_transport_lane(match lane {
+            TransportLane::Control => TransportLane::Bulk,
+            TransportLane::Bulk => TransportLane::Control,
+        }));
+    }
 }
 
 fn execute_request() -> WireExecuteRequest {

@@ -61,6 +61,12 @@ impl SessionRegistry {
         self.records.contains_key(session_id)
     }
 
+    pub(super) fn contains_cell(&self, session_id: &SessionId, cell_id: &WireCellId) -> bool {
+        self.records
+            .get(session_id)
+            .is_some_and(|session| session.cells.contains_key(cell_id))
+    }
+
     pub(super) fn insert_ready(
         &mut self,
         session: RemoteSession,

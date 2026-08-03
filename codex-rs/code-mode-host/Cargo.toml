@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "p
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 codex-code-mode = { workspace = true }
