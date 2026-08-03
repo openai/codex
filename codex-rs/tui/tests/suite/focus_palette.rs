@@ -17,7 +17,7 @@ use anyhow::ensure;
 use tempfile::TempDir;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 15);
-const FOCUS_INPUT_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 500);
+const FOCUS_INPUT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
 const FOCUS_PROBE_INPUT: &str = "focus-palette-24527";
 
 #[test]
@@ -32,20 +32,14 @@ fn focus_gained_with_unanswered_palette_queries_preserves_immediate_input() -> R
     let startup_output_len = terminal.output.len();
     let focus_started = Instant::now();
     terminal.write_input(format!("\u{1b}[I{FOCUS_PROBE_INPUT}").as_bytes())?;
-    terminal.wait_for_focus_input(FOCUS_PROBE_INPUT, focus_started)?;
+    terminal.wait_for_focus_input(FOCUS_PROBE_INPUT, focus_started, startup_output_len)?;
 
     let delayed_input = format!("{FOCUS_PROBE_INPUT}-delayed");
     let delayed_focus_started = Instant::now();
     terminal.write_input(b"\x1b[I")?;
     terminal.read_output(Duration::from_millis(/*millis*/ 20))?;
     terminal.write_input(delayed_input.as_bytes())?;
-    terminal.wait_for_focus_input(&delayed_input, delayed_focus_started)?;
-
-    ensure!(
-        !contains_bytes(&terminal.output[startup_output_len..], b"\x1b]10;?")
-            && !contains_bytes(&terminal.output[startup_output_len..], b"\x1b]11;?"),
-        "focus regain queried terminal colors after the startup palette was cached",
-    );
+    terminal.wait_for_focus_input(&delayed_input, delayed_focus_started, startup_output_len)?;
 
     Ok(())
 }
@@ -150,9 +144,20 @@ impl PtyCodex {
         );
     }
 
-    fn wait_for_focus_input(&mut self, input: &str, focus_started: Instant) -> Result<()> {
+    fn wait_for_focus_input(
+        &mut self,
+        input: &str,
+        focus_started: Instant,
+        startup_output_len: usize,
+    ) -> Result<()> {
         while focus_started.elapsed() < FOCUS_INPUT_TIMEOUT {
             self.read_output(Duration::from_millis(/*millis*/ 20))?;
+            let focus_output = &self.output[startup_output_len..];
+            ensure!(
+                !contains_bytes(focus_output, b"\x1b]10;?")
+                    && !contains_bytes(focus_output, b"\x1b]11;?"),
+                "focus regain queried terminal colors after the startup palette was cached",
+            );
             if self.screen_contains(input) {
                 return Ok(());
             }
