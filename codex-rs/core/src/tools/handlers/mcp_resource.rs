@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::items::McpToolCallError;
@@ -8,6 +10,7 @@ use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use rmcp::model::ListResourceTemplatesResult;
@@ -24,6 +27,8 @@ use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolOutput;
+use crate::tools::context::boxed_tool_output;
 use codex_protocol::protocol::McpInvocation;
 
 mod list_mcp_resource_templates;
@@ -278,6 +283,52 @@ async fn emit_tool_call_end(
         duration: Some(duration),
     });
     session.emit_turn_item_completed(turn, item).await;
+}
+
+async fn run_resource_operation<T>(
+    session: &Arc<Session>,
+    turn: &TurnContext,
+    call_id: &str,
+    invocation: McpInvocation,
+    operation: impl Future<Output = Result<T, FunctionCallError>>,
+) -> Result<Box<dyn ToolOutput>, FunctionCallError>
+where
+    T: Serialize,
+{
+    emit_tool_call_begin(session, turn, call_id, invocation.clone()).await;
+    let start = Instant::now();
+    let result = operation.await.and_then(|payload| {
+        serialize_function_output(payload, turn.model_info.truncation_policy.into())
+    });
+
+    match result {
+        Ok(output) => {
+            let content =
+                function_call_output_content_items_to_text(&output.body).unwrap_or_default();
+            emit_tool_call_end(
+                session,
+                turn,
+                call_id,
+                invocation,
+                start.elapsed(),
+                Ok(call_tool_result_from_content(&content, output.success)),
+            )
+            .await;
+            Ok(boxed_tool_output(output))
+        }
+        Err(error) => {
+            emit_tool_call_end(
+                session,
+                turn,
+                call_id,
+                invocation,
+                start.elapsed(),
+                Err(error.to_string()),
+            )
+            .await;
+            Err(error)
+        }
+    }
 }
 
 fn normalize_optional_string(input: Option<String>) -> Option<String> {

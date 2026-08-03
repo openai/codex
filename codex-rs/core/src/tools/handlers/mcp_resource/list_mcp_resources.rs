@@ -1,13 +1,9 @@
-use std::time::Instant;
-
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resources_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -16,15 +12,12 @@ use rmcp::model::PaginatedRequestParams;
 
 use super::ListResourcesArgs;
 use super::ListResourcesPayload;
-use super::call_tool_result_from_content;
-use super::emit_tool_call_begin;
-use super::emit_tool_call_end;
 use super::ensure_model_can_access_mcp_server;
 use super::model_can_access_mcp_server;
 use super::normalize_optional_string;
 use super::parse_args_with_default;
 use super::parse_arguments;
-use super::serialize_function_output;
+use super::run_resource_operation;
 
 pub struct ListMcpResourcesHandler;
 
@@ -82,10 +75,7 @@ impl ListMcpResourcesHandler {
             arguments: arguments.clone(),
         };
 
-        emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
-        let start = Instant::now();
-
-        let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
+        run_resource_operation(&session, turn.as_ref(), &call_id, invocation, async {
             if let Some(server_name) = server.clone() {
                 ensure_model_can_access_mcp_server(turn.as_ref(), &server_name)?;
                 let params = cursor
@@ -115,57 +105,8 @@ impl ListMcpResourcesHandler {
                     .await;
                 Ok(ListResourcesPayload::from_all_servers(resources))
             }
-        }
-        .await;
-        let truncation_policy = turn.model_info.truncation_policy.into();
-
-        match payload_result {
-            Ok(payload) => match serialize_function_output(payload, truncation_policy) {
-                Ok(output) => {
-                    let content = function_call_output_content_items_to_text(&output.body)
-                        .unwrap_or_default();
-                    let duration = start.elapsed();
-                    emit_tool_call_end(
-                        &session,
-                        turn.as_ref(),
-                        &call_id,
-                        invocation,
-                        duration,
-                        Ok(call_tool_result_from_content(&content, output.success)),
-                    )
-                    .await;
-                    Ok(boxed_tool_output(output))
-                }
-                Err(err) => {
-                    let duration = start.elapsed();
-                    let message = err.to_string();
-                    emit_tool_call_end(
-                        &session,
-                        turn.as_ref(),
-                        &call_id,
-                        invocation,
-                        duration,
-                        Err(message.clone()),
-                    )
-                    .await;
-                    Err(err)
-                }
-            },
-            Err(err) => {
-                let duration = start.elapsed();
-                let message = err.to_string();
-                emit_tool_call_end(
-                    &session,
-                    turn.as_ref(),
-                    &call_id,
-                    invocation,
-                    duration,
-                    Err(message.clone()),
-                )
-                .await;
-                Err(err)
-            }
-        }
+        })
+        .await
     }
 }
 
