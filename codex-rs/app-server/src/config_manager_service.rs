@@ -16,7 +16,6 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerMetadata;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ShellEnvironmentPolicyFilterRepresentation;
 use codex_config::config_toml::ConfigToml;
@@ -160,11 +159,7 @@ impl ConfigManager {
                 .collect(),
             layers: params.include_layers.then(|| {
                 layers
-                    .get_layers(
-                        ConfigLayerStackOrdering::HighestPrecedenceFirst,
-                        /*include_disabled*/ true,
-                    )
-                    .iter()
+                    .all_layers_high_to_low()
                     .map(|layer| config_layer_to_api(layer.as_layer()))
                     .collect()
             }),

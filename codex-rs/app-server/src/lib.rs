@@ -4,7 +4,6 @@
 use codex_arg0::Arg0DispatchPaths;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::WebSocketCodeModeSessionProvider;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
@@ -355,10 +354,7 @@ fn app_text_range(range: &CoreTextRange) -> AppTextRange {
 fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> {
     let mut disabled_folders = Vec::new();
 
-    for layer in config.config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ true,
-    ) {
+    for layer in config.config_layer_stack.all_layers_low_to_high() {
         let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
             continue;
         };

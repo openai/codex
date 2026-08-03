@@ -233,12 +233,6 @@ impl ConfigLayerEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigLayerStackOrdering {
-    LowestPrecedenceFirst,
-    HighestPrecedenceFirst,
-}
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigLayerStack {
     /// Layers are listed from lowest precedence (base) to highest (top), so
@@ -323,34 +317,16 @@ impl ConfigLayerStack {
         Some(file)
     }
 
-    /// Returns all user config layers in the requested precedence order.
-    ///
-    /// With profile-v2 enabled, `LowestPrecedenceFirst` returns the base user
-    /// config before the profile overlay, while `HighestPrecedenceFirst` returns
-    /// the profile overlay before the base user config.
-    pub fn get_user_layers(
-        &self,
-        ordering: ConfigLayerStackOrdering,
-        include_disabled: bool,
-    ) -> Vec<&ConfigLayerEntry> {
-        self.get_layers(ordering, include_disabled)
-            .into_iter()
-            .filter(|layer| matches!(layer.name, ConfigLayerSource::User { .. }))
-            .collect()
-    }
-
     /// Returns the merged config from enabled user layers only.
     ///
     /// When profile config is active, this includes the base user config followed
     /// by the profile override config.
     pub fn effective_user_config(&self) -> Option<TomlValue> {
-        let user_layers = self.get_user_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        );
-        if user_layers.is_empty() {
-            return None;
-        }
+        let mut user_layers = self
+            .layers_low_to_high()
+            .filter(|layer| matches!(layer.name, ConfigLayerSource::User { .. }))
+            .peekable();
+        user_layers.peek()?;
 
         let mut merged = TomlValue::Table(toml::map::Map::new());
         for layer in user_layers {
@@ -468,10 +444,7 @@ impl ConfigLayerStack {
     /// tracked separately.
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
-        for layer in self.get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        ) {
+        for layer in self.layers_low_to_high() {
             merge_toml_values(&mut merged, &layer.config);
         }
         merged
@@ -484,10 +457,7 @@ impl ConfigLayerStack {
         let mut origins = HashMap::new();
         let mut path = Vec::new();
 
-        for layer in self.get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        ) {
+        for layer in self.layers_low_to_high() {
             let config = normalized_with_key_aliases(&layer.config, &[]);
             record_origins(&config, &layer.metadata(), &mut path, &mut origins);
         }
@@ -495,33 +465,35 @@ impl ConfigLayerStack {
         origins
     }
 
-    /// Returns config layers from highest precedence to lowest precedence.
+    /// Returns enabled config layers from lowest precedence to highest.
     ///
     /// Requirement sources are tracked separately and are not included here.
-    pub fn layers_high_to_low(&self) -> Vec<&ConfigLayerEntry> {
-        self.get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
+    pub fn layers_low_to_high(&self) -> impl DoubleEndedIterator<Item = &ConfigLayerEntry> {
+        self.all_layers_low_to_high()
+            .filter(|layer| !layer.is_disabled())
     }
 
-    /// Returns config layers in the requested precedence order.
+    /// Returns enabled config layers from highest precedence to lowest.
     ///
     /// Requirement sources are tracked separately and are not included here.
-    pub fn get_layers(
-        &self,
-        ordering: ConfigLayerStackOrdering,
-        include_disabled: bool,
-    ) -> Vec<&ConfigLayerEntry> {
-        let mut layers: Vec<&ConfigLayerEntry> = self
-            .layers
-            .iter()
-            .filter(|layer| include_disabled || !layer.is_disabled())
-            .collect();
-        if ordering == ConfigLayerStackOrdering::HighestPrecedenceFirst {
-            layers.reverse();
-        }
-        layers
+    pub fn layers_high_to_low(&self) -> impl DoubleEndedIterator<Item = &ConfigLayerEntry> {
+        self.layers_low_to_high().rev()
+    }
+
+    /// Returns all config layers, including disabled layers, from lowest
+    /// precedence to highest.
+    ///
+    /// Requirement sources are tracked separately and are not included here.
+    pub fn all_layers_low_to_high(&self) -> impl DoubleEndedIterator<Item = &ConfigLayerEntry> {
+        self.layers.iter()
+    }
+
+    /// Returns all config layers, including disabled layers, from highest
+    /// precedence to lowest.
+    ///
+    /// Requirement sources are tracked separately and are not included here.
+    pub fn all_layers_high_to_low(&self) -> impl DoubleEndedIterator<Item = &ConfigLayerEntry> {
+        self.all_layers_low_to_high().rev()
     }
 }
 

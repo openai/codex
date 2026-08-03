@@ -1,6 +1,5 @@
 use super::AgentRoleConfig;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::ConfigToml;
@@ -22,11 +21,8 @@ pub(crate) async fn load_agent_roles(
     config_layer_stack: &ConfigLayerStack,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
-    let layers = config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    );
-    if layers.is_empty() {
+    let mut layers = config_layer_stack.layers_low_to_high().peekable();
+    if layers.peek().is_none() {
         return load_agent_roles_without_layers(fs, cfg).await;
     }
 

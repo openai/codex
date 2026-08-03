@@ -18,7 +18,6 @@ use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use crate::tools::registry::ToolRegistry;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::LoaderOverrides;
 use codex_config::NetworkConstraints;
@@ -1269,11 +1268,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
 
         let layers = config
             .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
+            .all_layers_low_to_high()
             .cloned()
             .collect();
         let mut requirements = config.config_layer_stack.requirements().clone();
@@ -1899,11 +1894,7 @@ async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements() {
     requirements_toml.plugins = Some(plugin_requirements.clone());
     let layers = next_config
         .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_low_to_high()
         .cloned()
         .collect();
     next_config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
@@ -8617,11 +8608,7 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
     ));
     let layers = config
         .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_low_to_high()
         .cloned()
         .collect();
     config.config_layer_stack = ConfigLayerStack::new(

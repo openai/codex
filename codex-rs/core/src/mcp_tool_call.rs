@@ -2136,7 +2136,6 @@ fn project_mcp_tool_approval_config_folder(
     config
         .config_layer_stack
         .layers_high_to_low()
-        .into_iter()
         .find_map(|layer| {
             if !matches!(layer.name, ConfigLayerSource::Project { .. }) {
                 return None;

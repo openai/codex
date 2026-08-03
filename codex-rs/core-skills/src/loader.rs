@@ -19,7 +19,6 @@ use crate::model::SkillToolDependency;
 use crate::system::system_cache_root_dir;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
@@ -296,10 +295,7 @@ fn skill_roots_from_layer_stack_inner(
 ) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
-    for layer in config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::HighestPrecedenceFirst,
-        /*include_disabled*/ true,
-    ) {
+    for layer in config_layer_stack.all_layers_high_to_low() {
         let Some(config_folder) = layer.config_folder() else {
             continue;
         };
@@ -429,10 +425,7 @@ async fn repo_agents_skill_roots(
 
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
     let mut merged = TomlValue::Table(toml::map::Map::new());
-    for layer in config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
+    for layer in config_layer_stack.layers_low_to_high() {
         if matches!(layer.name, ConfigLayerSource::Project { .. }) {
             continue;
         }

@@ -69,10 +69,7 @@ pub(super) fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[
 pub(super) fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
     let mut disabled_folders = Vec::new();
 
-    for layer in config.config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ true,
-    ) {
+    for layer in config.config_layer_stack.all_layers_low_to_high() {
         let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
             continue;
         };

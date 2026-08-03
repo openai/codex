@@ -153,7 +153,6 @@ pub use skills_config::SkillConfig;
 pub use skills_config::SkillsConfig;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
-pub use state::ConfigLayerStackOrdering;
 pub use state::ConfigLoadOptions;
 pub use state::LoaderOverrides;
 pub use strict_config::config_error_from_ignored_toml_fields;

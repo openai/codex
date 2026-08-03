@@ -7,7 +7,6 @@ use arc_swap::ArcSwap;
 
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -181,11 +180,7 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
     fn exec_policy_config_folders(config: &Config) -> Vec<AbsolutePathBuf> {
         config
             .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ false,
-            )
-            .into_iter()
+            .layers_low_to_high()
             .filter_map(codex_config::ConfigLayerEntry::config_folder)
             .collect()
     }
@@ -639,10 +634,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
     let mut policy_paths = Vec::new();
-    for layer in config_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
+    for layer in config_stack.layers_low_to_high() {
         if config_stack.ignore_user_and_project_exec_policy_rules()
             && matches!(
                 layer.name,

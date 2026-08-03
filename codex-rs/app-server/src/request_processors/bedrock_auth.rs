@@ -30,7 +30,6 @@ pub(super) async fn set_user_model_provider_to_bedrock(
     };
     if let Some((overriding_layer, effective_provider)) = layers
         .layers_high_to_low()
-        .into_iter()
         .filter(|layer| layer.name.precedence() > user_precedence)
         .find_map(|layer| {
             layer

@@ -4,7 +4,6 @@
 use crate::ConfigLayerEntry;
 use crate::ConfigLayerSource;
 use crate::ConfigLayerStack;
-use crate::ConfigLayerStackOrdering;
 use crate::format_config_layer_source;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::de::DeserializeOwned;
@@ -175,14 +174,8 @@ pub async fn first_layer_config_error<T: DeserializeOwned>(
     // When the merged config fails schema validation, we surface the first concrete
     // per-file error to point users at a specific file and range rather than an
     // opaque merged-layer failure.
-    first_layer_config_error_for_entries::<T, _>(
-        layers.get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        ),
-        config_toml_file,
-    )
-    .await
+    first_layer_config_error_for_entries::<T, _>(layers.layers_low_to_high(), config_toml_file)
+        .await
 }
 
 pub async fn first_layer_config_error_from_entries<T: DeserializeOwned>(

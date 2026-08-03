@@ -191,7 +191,6 @@ use crate::context_manager::ContextManager;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::McpServerConfig;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
@@ -1740,11 +1739,7 @@ impl Session {
             let config = &state.session_configuration.original_config_do_not_use;
             let user_config_paths = config
                 .config_layer_stack
-                .get_user_layers(
-                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                    /*include_disabled*/ true,
-                )
-                .into_iter()
+                .all_layers_low_to_high()
                 .filter_map(|layer| match &layer.name {
                     ConfigLayerSource::User { file, .. } => Some(file.clone()),
                     _ => None,

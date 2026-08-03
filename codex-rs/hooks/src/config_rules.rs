@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::HookStateToml;
 use codex_config::TomlValue;
 
@@ -21,10 +20,7 @@ pub fn hook_states_from_stack(
     };
 
     let mut states: HashMap<String, HookStateToml> = HashMap::new();
-    for layer in config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ true,
-    ) {
+    for layer in config_layer_stack.all_layers_low_to_high() {
         if !matches!(
             layer.name,
             ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags

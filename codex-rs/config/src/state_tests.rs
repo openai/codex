@@ -251,6 +251,63 @@ approval_policy = "on-request"
 }
 
 #[test]
+fn layer_iterators_preserve_precedence_and_disabled_layers() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let user_source = ConfigLayerSource::User {
+        file: test_user_config_path(&temp_dir, "config.toml"),
+        profile: None,
+    };
+    let project_source = ConfigLayerSource::Project {
+        dot_codex_folder: test_user_config_path(&temp_dir, ".codex"),
+    };
+    let session_source = ConfigLayerSource::SessionFlags;
+    let empty_config = TomlValue::Table(toml::map::Map::new());
+    let stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(user_source.clone(), empty_config.clone()),
+            ConfigLayerEntry::new_disabled(
+                project_source.clone(),
+                empty_config.clone(),
+                "project is untrusted",
+            ),
+            ConfigLayerEntry::new(session_source.clone(), empty_config),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+
+    assert_eq!(
+        stack
+            .layers_low_to_high()
+            .map(|layer| &layer.name)
+            .collect::<Vec<_>>(),
+        vec![&user_source, &session_source]
+    );
+    assert_eq!(
+        stack
+            .layers_high_to_low()
+            .map(|layer| &layer.name)
+            .collect::<Vec<_>>(),
+        vec![&session_source, &user_source]
+    );
+    assert_eq!(
+        stack
+            .all_layers_low_to_high()
+            .map(|layer| &layer.name)
+            .collect::<Vec<_>>(),
+        vec![&user_source, &project_source, &session_source]
+    );
+    assert_eq!(
+        stack
+            .all_layers_high_to_low()
+            .map(|layer| &layer.name)
+            .collect::<Vec<_>>(),
+        vec![&session_source, &project_source, &user_source]
+    );
+}
+
+#[test]
 fn with_user_config_updates_matching_user_layer_without_replacing_active_profile() {
     let temp_dir = TempDir::new().expect("tempdir");
     let base_file = test_user_config_path(&temp_dir, "config.toml");

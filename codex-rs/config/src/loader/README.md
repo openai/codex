@@ -14,7 +14,7 @@ Exported from `codex_config::loader`:
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
-  - `layers_high_to_low() -> Vec<ConfigLayer>`
+  - `layers_high_to_low() -> impl Iterator<Item = &ConfigLayerEntry>`
   - `with_user_config(user_config) -> ConfigLayerStack`
 - `ConfigLayerEntry` (one layer’s `{name, config, version, disabled_reason}`; `name` carries source metadata)
 - `ConfigLoadOptions` (user-facing load behavior such as strict config validation)
@@ -68,7 +68,7 @@ let layers = load_config_layers_state(
 
 let effective = layers.effective_config();
 let origins = layers.origins();
-let layers_for_ui = layers.layers_high_to_low();
+let layers_for_ui = layers.layers_high_to_low().collect::<Vec<_>>();
 ```
 
 ## Internal layout

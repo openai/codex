@@ -2369,11 +2369,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
 
     let layers = config
         .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_low_to_high()
         .cloned()
         .collect();
     let mut requirements = config.config_layer_stack.requirements().clone();

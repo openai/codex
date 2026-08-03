@@ -5,7 +5,6 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::LoaderOverrides;
@@ -130,11 +129,7 @@ async fn child_uses_parent_exec_policy_when_non_exec_policy_layers_differ() {
     let mut child_config = parent_config.clone();
     let mut layers: Vec<_> = child_config
         .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_low_to_high()
         .cloned()
         .collect();
     layers.push(ConfigLayerEntry::new(
@@ -190,11 +185,7 @@ async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_dif
     child_config.config_layer_stack = ConfigLayerStack::new(
         child_config
             .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
+            .all_layers_low_to_high()
             .cloned()
             .collect(),
         requirements,

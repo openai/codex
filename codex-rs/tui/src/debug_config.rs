@@ -6,7 +6,6 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::ManagedHooksRequirementsToml;
 use codex_config::NetworkConstraints;
 use codex_config::NetworkDomainPermissionToml;
@@ -131,14 +130,11 @@ fn render_debug_config_lines(
             .bold()
             .into(),
     );
-    let layers = stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ true,
-    );
-    if layers.is_empty() {
+    let mut layers = stack.all_layers_low_to_high().peekable();
+    if layers.peek().is_none() {
         lines.push("  <none>".dim().into());
     } else {
-        for (index, layer) in layers.iter().enumerate() {
+        for (index, layer) in layers.enumerate() {
             let source = format_config_layer_source(&layer.name, CONFIG_TOML_FILE);
             let status = if layer.is_disabled() {
                 "disabled"

@@ -1,7 +1,6 @@
 use super::*;
 use crate::CONFIG_TOML_FILE;
 use crate::ConfigLayerStack;
-use crate::ConfigLayerStackOrdering;
 use crate::ConfigRequirements;
 use crate::ConfigRequirementsToml;
 use crate::config_toml::ConfigToml;
@@ -121,11 +120,7 @@ review_model = "system-review"
 
     assert_eq!(
         stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ false
-            )
-            .iter()
+            .layers_low_to_high()
             .map(|layer| layer.name.clone())
             .collect::<Vec<_>>(),
         vec![

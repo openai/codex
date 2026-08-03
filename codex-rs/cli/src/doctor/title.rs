@@ -3,7 +3,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_config::ConfigLayerSource;
-use codex_config::ConfigLayerStackOrdering;
 use codex_core::config::Config;
 use codex_git_utils::get_git_repo_root;
 use unicode_segmentation::UnicodeSegmentation;
@@ -171,11 +170,7 @@ fn terminal_title_project_root(config: &Config, cwd: &Path) -> Option<ProjectTit
 
     config
         .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .iter()
+        .all_layers_low_to_high()
         .find_map(|layer| match &layer.name {
             ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
                 .as_path()

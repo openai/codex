@@ -448,11 +448,7 @@ impl ChatWidget {
 
         self.config
             .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .iter()
+            .all_layers_low_to_high()
             .find_map(|layer| match &layer.name {
                 ConfigLayerSource::Project { dot_codex_folder } => {
                     dot_codex_folder.as_path().parent().map(Path::to_path_buf)

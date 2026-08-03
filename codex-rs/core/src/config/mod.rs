@@ -9,7 +9,6 @@ use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
@@ -1769,21 +1768,13 @@ impl Config {
     ) -> std::io::Result<Self> {
         let mut layers = refreshed_config
             .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
+            .all_layers_low_to_high()
             .filter(|layer| !is_session_layer(&layer.name))
             .cloned()
             .collect::<Vec<_>>();
         layers.extend(
             self.config_layer_stack
-                .get_layers(
-                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                    /*include_disabled*/ true,
-                )
-                .into_iter()
+                .all_layers_low_to_high()
                 .filter(|layer| is_session_layer(&layer.name))
                 .cloned(),
         );
@@ -2368,11 +2359,8 @@ fn resolve_tool_suggest_config_from_config(
         }
     };
 
-    let layers = config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    );
-    if layers.is_empty() {
+    let mut layers = config_layer_stack.layers_low_to_high().peekable();
+    if layers.peek().is_none() {
         for disabled_tool in tool_suggest
             .into_iter()
             .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter().cloned())
@@ -2467,11 +2455,7 @@ fn resolve_permission_config_syntax(
     }
 
     let session_flags_select_profiles = config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
-        .into_iter()
+        .layers_high_to_low()
         .find(|layer| matches!(layer.name, ConfigLayerSource::SessionFlags))
         .and_then(|layer| {
             layer
@@ -2486,10 +2470,7 @@ fn resolve_permission_config_syntax(
     }
 
     let mut selection = None;
-    for layer in config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
+    for layer in config_layer_stack.layers_low_to_high() {
         let Ok(layer_selection) = layer.config.clone().try_into::<PermissionSelectionToml>() else {
             continue;
         };

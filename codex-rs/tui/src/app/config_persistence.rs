@@ -30,22 +30,18 @@ pub(super) fn resume_model_settings_for_overrides(
     config: &Config,
     harness_overrides: &ConfigOverrides,
 ) -> crate::app_server_session::ResumeModelSettings {
-    let has_layer_override = config
-        .config_layer_stack
-        .layers_high_to_low()
-        .into_iter()
-        .any(|layer| {
-            matches!(
-                &layer.name,
-                ConfigLayerSource::SessionFlags
-                    | ConfigLayerSource::User {
-                        profile: Some(_),
-                        ..
-                    }
-            ) && ["model", "model_provider", "model_reasoning_effort"]
-                .iter()
-                .any(|key| layer.config.get(*key).is_some())
-        });
+    let has_layer_override = config.config_layer_stack.layers_high_to_low().any(|layer| {
+        matches!(
+            &layer.name,
+            ConfigLayerSource::SessionFlags
+                | ConfigLayerSource::User {
+                    profile: Some(_),
+                    ..
+                }
+        ) && ["model", "model_provider", "model_reasoning_effort"]
+            .iter()
+            .any(|key| layer.config.get(*key).is_some())
+    });
     if harness_overrides.model.is_some()
         || harness_overrides.model_provider.is_some()
         || has_layer_override
