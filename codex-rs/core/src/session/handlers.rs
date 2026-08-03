@@ -381,29 +381,18 @@ pub async fn exec_approval(
     if let ReviewDecision::ApprovedExecpolicyAmendment {
         proposed_execpolicy_amendment,
     } = &decision
-    {
-        match sess
+        && let Err(err) = sess
             .persist_execpolicy_amendment(proposed_execpolicy_amendment)
             .await
-        {
-            Ok(()) => {
-                sess.record_execpolicy_amendment_message(
-                    &event_turn_id,
-                    proposed_execpolicy_amendment,
-                )
-                .await;
-            }
-            Err(err) => {
-                let message = format!("Failed to apply execpolicy amendment: {err}");
-                tracing::warn!("{message}");
-                let warning = EventMsg::Warning(WarningEvent { message });
-                sess.send_event_raw(Event {
-                    id: event_turn_id.clone(),
-                    msg: warning,
-                })
-                .await;
-            }
-        }
+    {
+        let message = format!("Failed to apply execpolicy amendment: {err}");
+        tracing::warn!("{message}");
+        let warning = EventMsg::Warning(WarningEvent { message });
+        sess.send_event_raw(Event {
+            id: event_turn_id.clone(),
+            msg: warning,
+        })
+        .await;
     }
     match decision {
         ReviewDecision::Abort => {

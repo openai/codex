@@ -1,5 +1,8 @@
 use super::ContextualUserFragment;
 
+pub(crate) const APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX: &str =
+    "Approved command prefix saved:";
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ApprovedCommandPrefixSaved {
     prefixes: String,
@@ -27,6 +30,9 @@ impl ContextualUserFragment for ApprovedCommandPrefixSaved {
     }
 
     fn body(&self) -> String {
-        format!("Approved command prefix saved:\n{}", self.prefixes)
+        format!(
+            "{APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX}\n{}",
+            self.prefixes
+        )
     }
 }

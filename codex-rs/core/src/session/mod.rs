@@ -22,7 +22,6 @@ use crate::compact;
 use crate::compact::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
-use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
 use crate::context::NetworkRuleSaved;
@@ -104,7 +103,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -2162,22 +2160,6 @@ impl Session {
             Arc::clone(&task.turn_context),
             task.cancellation_token.child_token(),
         ))
-    }
-
-    pub(crate) async fn record_execpolicy_amendment_message(
-        &self,
-        sub_id: &str,
-        amendment: &ExecPolicyAmendment,
-    ) {
-        let Some(prefixes) = format_allow_prefixes(vec![amendment.command.clone()]) else {
-            warn!("execpolicy amendment for {sub_id} had no command prefix");
-            return;
-        };
-        let message: ResponseItem =
-            ContextualUserFragment::into(ApprovedCommandPrefixSaved::new(prefixes));
-        let turn_context = self.turn_context_for_sub_id(sub_id).await;
-        self.inject_no_new_turn(vec![message], turn_context.as_deref())
-            .await;
     }
 
     pub(crate) async fn persist_network_policy_amendment(

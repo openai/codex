@@ -1,0 +1,16 @@
+---
+source: core/src/context/world_state/permissions_tests.rs
+expression: model_visible_before_and_after
+---
+BEFORE APPROVAL — PERMISSIONS ALREADY IN CONTEXT (CONDENSED)
+<permissions instructions>
+Read only.
+Ask for approval.
+</permissions instructions>
+
+AFTER APPROVAL — WORLD-STATE DIFF APPENDS
+Approved command prefix saved:
+- ["touch", "allow-prefix.txt"]
+
+FULL PERMISSIONS BLOCK APPENDED AFTER APPROVAL
+None
