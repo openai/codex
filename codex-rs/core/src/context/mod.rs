@@ -40,8 +40,6 @@ pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
 pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;
 pub use codex_context_fragments::ContextualUserFragment;
-pub(crate) use codex_context_fragments::FragmentRegistration;
-pub(crate) use codex_context_fragments::FragmentRegistrationProxy;
 pub(crate) use codex_core_skills::SkillInstructions;
 pub(crate) use contextual_user_message::is_contextual_user_fragment;
 pub(crate) use contextual_user_message::parse_visible_hook_prompt_message;
