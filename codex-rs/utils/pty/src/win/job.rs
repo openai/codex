@@ -4,14 +4,25 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::RawHandle;
 use std::sync::Mutex;
+use tokio::process::Child;
+use tokio::process::Command;
+use winapi::shared::ntdef::NT_SUCCESS;
+use winapi::shared::ntdef::NTSTATUS;
 use winapi::um::jobapi2::AssignProcessToJobObject;
 use winapi::um::jobapi2::CreateJobObjectW;
 use winapi::um::jobapi2::SetInformationJobObject;
 use winapi::um::jobapi2::TerminateJobObject;
+use winapi::um::winbase::CREATE_SUSPENDED;
+use winapi::um::winnt::HANDLE;
 use winapi::um::winnt::JOB_OBJECT_LIMIT_BREAKAWAY_OK;
 use winapi::um::winnt::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 use winapi::um::winnt::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 use winapi::um::winnt::JobObjectExtendedLimitInformation;
+
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtResumeProcess(process_handle: HANDLE) -> NTSTATUS;
+}
 
 /// Owns a Windows Job Object used to terminate a spawned process tree.
 #[derive(Debug)]
@@ -72,6 +83,25 @@ impl JobObject {
         } else {
             Ok(())
         }
+    }
+
+    /// Starts a process only after assigning it to this Job Object.
+    pub fn spawn_contained(&self, command: &mut Command) -> io::Result<Child> {
+        command.creation_flags(CREATE_SUSPENDED).kill_on_drop(true);
+        let child = command.spawn()?;
+        let process_handle = child
+            .raw_handle()
+            .ok_or_else(|| io::Error::other("missing child process handle"))?;
+        self.assign_process(process_handle)?;
+
+        let status = unsafe { NtResumeProcess(process_handle.cast()) };
+        if !NT_SUCCESS(status) {
+            return Err(io::Error::other(format!(
+                "failed to resume contained process: NTSTATUS {status:#x}"
+            )));
+        }
+
+        Ok(child)
     }
 
     /// Allows contained descendants to keep running after the root exits normally.

@@ -3,6 +3,7 @@ mod baseline;
 mod branch;
 mod errors;
 mod fsmonitor;
+mod git_process;
 mod info;
 mod operations;
 mod platform;
