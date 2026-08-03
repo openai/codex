@@ -88,10 +88,7 @@ fn external_sandbox_auto_approves_in_on_request() {
             &cwd_uri,
             WindowsSandboxLevel::Disabled
         ),
-        SafetyCheck::AutoApprove {
-            sandbox_type: SandboxType::None,
-            user_explicitly_approved: false,
-        }
+        SafetyCheck::AutoApprove
     );
 }
 

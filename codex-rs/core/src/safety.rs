@@ -8,7 +8,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use codex_utils_path_uri::PathUri;
 
@@ -19,14 +18,9 @@ const PATCH_REJECTED_READ_ONLY_REASON: &str =
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
-    AutoApprove {
-        sandbox_type: SandboxType,
-        user_explicitly_approved: bool,
-    },
+    AutoApprove,
     AskUser,
-    Reject {
-        reason: String,
-    },
+    Reject { reason: String },
 }
 
 pub fn assess_patch_safety(
@@ -70,19 +64,13 @@ pub fn assess_patch_safety(
         ) {
             // Disabled and External profiles intentionally do not apply an
             // outer Codex filesystem sandbox.
-            SafetyCheck::AutoApprove {
-                sandbox_type: SandboxType::None,
-                user_explicitly_approved: false,
-            }
+            SafetyCheck::AutoApprove
         } else {
             // Only auto‑approve when we can actually enforce a sandbox. Otherwise
             // fall back to asking the user because the patch may touch arbitrary
             // paths outside the project.
             match get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled) {
-                Some(sandbox_type) => SafetyCheck::AutoApprove {
-                    sandbox_type,
-                    user_explicitly_approved: false,
-                },
+                Some(_) => SafetyCheck::AutoApprove,
                 None => {
                     if rejects_sandbox_approval {
                         SafetyCheck::Reject {
