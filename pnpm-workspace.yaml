@@ -14,4 +14,6 @@ strictDepBuilds: true
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 10080
 trustPolicyExclude: []
-allowBuilds: {}
+allowBuilds:
+  # Build only the official MCP conformance CLI pinned by the TypeScript SDK.
+  "@modelcontextprotocol/conformance": true

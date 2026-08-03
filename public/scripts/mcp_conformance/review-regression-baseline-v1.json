@@ -1,0 +1,1039 @@
+{
+  "baselineKind": "mcp-review-regression-baseline-v1",
+  "checks": {
+    "failing": [
+      {
+        "check_id": "review/catalog-over-limit/exact-limit-error",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/server-info",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/startup-failed",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/tool-count",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/exact-limit-error",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/server-info",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/startup-failed",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/tool-count",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/exact-limit-error",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/server-info",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/startup-failed",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/tool-count",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/exact-limit-error",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/server-info",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/startup-failed",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/tool-count",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/exact-limit-error",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/server-info",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/startup-failed",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/tool-count",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/exact-large-integer-elicitation-round-trip",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-elicitation-schema",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/mrtr-input-requests-bounded-to-64",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/catalog-over-limit/exact-limit-error",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/server-info",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/startup-failed",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/tool-count",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/exact-large-integer-elicitation-round-trip",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-elicitation-schema",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/mrtr-input-requests-bounded-to-64",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      }
+    ],
+    "passing": [
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/configured-server",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/server-info",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/startup-ready",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/tool-count",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/configured-server",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-06-18",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/configured-server",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/server-info",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/startup-ready",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/tool-count",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/configured-server",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-round-trip",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-schema",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/legacy-reserved-stdio-environment-preserved",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/server-discovery",
+        "mode": "2025-06-18",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/configured-server",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/server-info",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/startup-ready",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/tool-count",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/configured-server",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-11-25",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/configured-server",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/server-info",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/startup-ready",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/tool-count",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/configured-server",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-round-trip",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-schema",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/legacy-reserved-stdio-environment-preserved",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/server-discovery",
+        "mode": "2025-11-25",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/configured-server",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/server-info",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/startup-ready",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/tool-count",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-max"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/configured-server",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:catalog-over-limit"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-mismatched-id"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-mismatched-id"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-mismatched-id"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-mismatched-id"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-mismatched-id"
+      },
+      {
+        "check_id": "review/reject-mismatched-discovery-response-id",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-mismatched-id"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-null-id"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-null-id"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-null-id"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-null-id"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-null-id"
+      },
+      {
+        "check_id": "review/reject-null-discovery-response-id",
+        "mode": "2026-07-28",
+        "transport": "review-http:discovery-null-id"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:repeated-cursor"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:repeated-cursor"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:repeated-cursor"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:repeated-cursor"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:repeated-cursor"
+      },
+      {
+        "check_id": "review/repeated-pagination-cursor-bounded",
+        "mode": "2026-07-28",
+        "transport": "review-http:repeated-cursor"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-round-trip",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-schema",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/modern-paginated-tools-page-two",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/server-discovery",
+        "mode": "2026-07-28",
+        "transport": "review-http:review-regressions"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/sse-comment-flood-excluded-from-event-size-limit",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/sse-cr-discovery",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-comment-flood"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/sse-carriage-return-and-comment-framing",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/sse-cr-discovery",
+        "mode": "2026-07-28",
+        "transport": "review-http:sse-cr-comments"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/configured-server",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/server-info",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/startup-ready",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/catalog-at-limit/tool-count",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-max"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/catalog-over-limit/configured-server",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:catalog-over-limit"
+      },
+      {
+        "check_id": "review/app-server-initialize",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/ephemeral-thread",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-round-trip",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/exact-large-integer-tool-schema",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/isolated-registration-cleanup",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/mcp-registration",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/modern-feature-configuration",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/modern-feature-enablement",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/modern-paginated-tools-page-two",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      },
+      {
+        "check_id": "review/server-discovery",
+        "mode": "2026-07-28",
+        "transport": "review-stdio:review-regressions"
+      }
+    ]
+  },
+  "requiredCases": [
+    {
+      "mode": "2025-06-18",
+      "transport": "review-http:catalog-max"
+    },
+    {
+      "mode": "2025-06-18",
+      "transport": "review-http:catalog-over-limit"
+    },
+    {
+      "mode": "2025-06-18",
+      "transport": "review-stdio:catalog-max"
+    },
+    {
+      "mode": "2025-06-18",
+      "transport": "review-stdio:catalog-over-limit"
+    },
+    {
+      "mode": "2025-06-18",
+      "transport": "review-stdio:review-regressions"
+    },
+    {
+      "mode": "2025-11-25",
+      "transport": "review-http:catalog-max"
+    },
+    {
+      "mode": "2025-11-25",
+      "transport": "review-http:catalog-over-limit"
+    },
+    {
+      "mode": "2025-11-25",
+      "transport": "review-stdio:catalog-max"
+    },
+    {
+      "mode": "2025-11-25",
+      "transport": "review-stdio:catalog-over-limit"
+    },
+    {
+      "mode": "2025-11-25",
+      "transport": "review-stdio:review-regressions"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:catalog-max"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:catalog-over-limit"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:discovery-mismatched-id"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:discovery-null-id"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:repeated-cursor"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:review-regressions"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:sse-comment-flood"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-http:sse-cr-comments"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-stdio:catalog-max"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-stdio:catalog-over-limit"
+    },
+    {
+      "mode": "2026-07-28",
+      "transport": "review-stdio:review-regressions"
+    }
+  ],
+  "requiredModes": [
+    "2025-06-18",
+    "2025-11-25",
+    "2026-07-28"
+  ],
+  "reviewer": "codex-mcp-regression-suite",
+  "schemaVersion": 1,
+  "summary": {
+    "casesPassed": 13,
+    "casesTotal": 21,
+    "failed": 30,
+    "passed": 156,
+    "total": 186
+  }
+}
