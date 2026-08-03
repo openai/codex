@@ -28,7 +28,7 @@ impl Session {
             .services
             .agent_control
             .rollout_budget()
-            .record_usage(usage)
+            .record_usage(usage)?
         {
             return Err(CodexErr::SessionBudgetExceeded);
         }

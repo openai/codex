@@ -1,5 +1,7 @@
 use crate::config::RolloutBudgetConfig;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TokenUsage;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -41,14 +43,25 @@ impl RolloutBudget {
     }
 
     /// Returns true once the configured budget is exhausted, including on later calls.
-    pub(crate) fn record_usage(&self, usage: &TokenUsage) -> bool {
+    pub(crate) fn record_usage(&self, usage: &TokenUsage) -> CodexResult<bool> {
         let Some(mut state) = self.lock() else {
-            return false;
+            return Ok(false);
         };
-        state.weighted_tokens_used += usage.output_tokens.max(0) as f64
-            * state.config.sampling_token_weight
-            + usage.non_cached_input() as f64 * state.config.prefill_token_weight;
-        state.weighted_tokens_used >= state.config.limit_tokens as f64
+        let units = if let Some(units) = usage.codex_rollout_budget_units.as_ref() {
+            let units = units.as_f64().unwrap_or(f64::NAN);
+            if !units.is_finite() || units < 0.0 {
+                return Err(CodexErr::Fatal(
+                    "response.completed usage.codex_rollout_budget_units must be finite and non-negative"
+                        .to_string(),
+                ));
+            }
+            units
+        } else {
+            usage.output_tokens.max(0) as f64 * state.config.sampling_token_weight
+                + usage.non_cached_input() as f64 * state.config.prefill_token_weight
+        };
+        state.weighted_tokens_used += units;
+        Ok(state.weighted_tokens_used >= state.config.limit_tokens as f64)
     }
 
     pub(crate) fn pending_reminder(

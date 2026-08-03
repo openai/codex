@@ -55,7 +55,11 @@ fn wire_request_contains(request: &wiremock::Request, text: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
+#[test_case(None ; "weighted token usage")]
+#[test_case(Some(40.5) ; "provider budget units")]
+async fn adds_weighted_initial_and_threshold_reminders(
+    rollout_budget_units: Option<f64>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -73,7 +77,8 @@ async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
                             "input_tokens_details": { "cached_tokens": 40 },
                             "output_tokens": 15,
                             "output_tokens_details": null,
-                            "total_tokens": 75
+                            "total_tokens": 75,
+                            "codex_rollout_budget_units": rollout_budget_units
                         }
                     }
                 }),
@@ -105,8 +110,67 @@ async fn adds_weighted_initial_and_threshold_reminders() -> Result<()> {
         rollout_budget_texts(&requests[1]),
         vec![
             rollout_budget_message(/*remaining_tokens*/ 100),
-            rollout_budget_message(/*remaining_tokens*/ 60),
+            rollout_budget_message(if rollout_budget_units.is_some() {
+                59
+            } else {
+                60
+            }),
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_provider_rollout_budget_units_fail_without_retry() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut completed = ev_completed_with_tokens("invalid-units", /*total_tokens*/ 11);
+    completed["response"]["usage"]["codex_rollout_budget_units"] = json!(-1.0);
+    let responses = mount_sse_sequence(
+        &server,
+        vec![sse(vec![ev_response_created("invalid-units"), completed])],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.rollout_budget = Some(rollout_budget());
+        })
+        .build(&server)
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "reject invalid provider budget units".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let EventMsg::Error(error) =
+        wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        error.message,
+        "Fatal error: response.completed usage.codex_rollout_budget_units must be finite and non-negative"
+    );
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::Other));
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        responses.requests().len(),
+        1,
+        "invalid units should not retry"
     );
 
     Ok(())
@@ -278,12 +342,24 @@ async fn exhausted_budget_fails_current_and_later_turns() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(false ; "local")]
-#[test_case(true ; "remote_v2")]
-async fn compaction_budget_exhaustion_fails_without_retry(remote_v2: bool) -> Result<()> {
+#[test_case(false, false ; "local token usage")]
+#[test_case(false, true ; "local provider units")]
+#[test_case(true, false ; "remote v2 token usage")]
+#[test_case(true, true ; "remote v2 provider units")]
+async fn compaction_budget_exhaustion_fails_without_retry(
+    remote_v2: bool,
+    provider_units: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    let mut completed = ev_completed_with_tokens(
+        "compact",
+        /*total_tokens*/ if provider_units { 1 } else { 10 },
+    );
+    if provider_units {
+        completed["response"]["usage"]["codex_rollout_budget_units"] = json!(10.0);
+    }
     let compact_response = if remote_v2 {
         sse(vec![
             json!({
@@ -293,13 +369,13 @@ async fn compaction_budget_exhaustion_fails_without_retry(remote_v2: bool) -> Re
                     "encrypted_content": "encrypted-summary",
                 }
             }),
-            ev_completed_with_tokens("compact", /*total_tokens*/ 10),
+            completed,
         ])
     } else {
         sse(vec![
             ev_response_created("compact"),
             ev_assistant_message("compact-summary", "compact summary"),
-            ev_completed_with_tokens("compact", /*total_tokens*/ 10),
+            completed,
         ])
     };
     let responses = mount_sse_sequence(&server, vec![compact_response]).await;
