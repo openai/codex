@@ -962,6 +962,65 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let _responses = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_custom_tool_call("exec-1", "exec", "text('analytics');"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![responses::ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::CodeModeOnly)
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
+        .write(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let params = ThreadStartParams::default();
+    let thread = app_server.start_thread(params).await?;
+    app_server
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.thread.id,
+            input: vec![V2UserInput::Text {
+                text: "run exec".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+
+    let event = wait_for_analytics_event(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "codex_dynamic_tool_call_event",
+    )
+    .await?;
+    assert_eq!(
+        json!({
+            "tool": event["event_params"]["tool_name"],
+            "origin": event["event_params"]["originating_response_id"],
+            "subsequent": event["event_params"]["subsequent_response_id"],
+            "hasCell": event["event_params"]["cell_id"].as_str().is_some(),
+        }),
+        json!({"tool":"exec","origin":"resp-1","subsequent":"resp-2","hasCell":true})
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()> {
     let responses = vec![

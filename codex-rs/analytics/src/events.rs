@@ -576,6 +576,10 @@ pub(crate) struct CodexToolItemEventBase {
     /// App-server ThreadItem.id. For tool-originated items this generally
     /// corresponds to the originating core call_id.
     pub(crate) item_id: String,
+    pub(crate) cell_id: Option<String>,
+    pub(crate) parent_call_id: Option<String>,
+    pub(crate) originating_response_id: Option<String>,
+    pub(crate) subsequent_response_id: Option<String>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) thread_source: Option<ThreadSource>,

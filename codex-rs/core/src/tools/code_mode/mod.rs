@@ -2,6 +2,7 @@ mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
 mod response_adapter;
+mod telemetry;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
@@ -314,7 +315,7 @@ fn truncate_code_mode_result(
 }
 
 async fn call_nested_tool(
-    _exec: ExecContext,
+    exec: ExecContext,
     tool_runtime: ToolCallRuntime,
     invocation: CodeModeNestedToolCall,
     cancellation_token: CancellationToken,
@@ -343,6 +344,15 @@ async fn call_nested_tool(
         payload,
         encrypted_function_args: None,
     };
+    exec.session
+        .services
+        .analytics_events_client
+        .track_code_mode_tool_call(codex_analytics::CodeModeToolCallFact::ChildStarted {
+            thread_id: exec.session.thread_id.to_string(),
+            turn_id: exec.turn.sub_id.clone(),
+            call_id: call.call_id.clone(),
+            cell_id: cell_id.to_string(),
+        });
     let result = tool_runtime
         .handle_tool_call_with_source(
             call,

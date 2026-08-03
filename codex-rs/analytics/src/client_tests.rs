@@ -157,6 +157,10 @@ fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> Track
                 session_id: format!("session-{thread_id}"),
                 turn_id: "turn-1".to_string(),
                 item_id: format!("item-{thread_id}"),
+                cell_id: None,
+                parent_call_id: None,
+                originating_response_id: None,
+                subsequent_response_id: None,
                 app_server_client: CodexAppServerClientMetadata {
                     product_client_id: "codex_desktop".to_string(),
                     client_name: None,

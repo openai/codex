@@ -26,6 +26,8 @@ pub use events::GuardianReviewedAction;
 pub use facts::AcceptedLineFingerprint;
 pub use facts::AnalyticsJsonRpcError;
 pub use facts::AppInvocation;
+pub use facts::CodeModeToolCallFact;
+pub use facts::CodeModeToolCallStatus;
 pub use facts::CodexCompactionEvent;
 pub use facts::CodexErrKind;
 pub use facts::CodexGoalEvent;

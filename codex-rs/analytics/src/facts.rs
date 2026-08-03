@@ -45,6 +45,50 @@ pub struct TrackEventsContext {
     pub turn_id: String,
     pub product_client_id: String,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CodeModeToolCallFact {
+    CellStarted {
+        thread_id: String,
+        turn_id: String,
+        call_id: String,
+        cell_id: String,
+    },
+    ChildStarted {
+        thread_id: String,
+        turn_id: String,
+        call_id: String,
+        cell_id: String,
+    },
+    CellClosed {
+        thread_id: String,
+        turn_id: String,
+        cell_id: String,
+    },
+    SamplingResponseCompleted {
+        thread_id: String,
+        turn_id: String,
+        response_id: String,
+        tool_call_ids: Vec<String>,
+    },
+    Completed {
+        thread_id: String,
+        turn_id: String,
+        call_id: String,
+        cell_id: Option<String>,
+        tool_name: String,
+        started_at_ms: u64,
+        completed_at_ms: u64,
+        status: CodeModeToolCallStatus,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeModeToolCallStatus {
+    Completed,
+    Failed,
+    Interrupted,
+}
 // copybara:strip-for-public begin
 pub const INTERNAL_TOOL_INPUT_MAX_COMMANDS: usize = 16;
 pub const INTERNAL_TOOL_INPUT_MAX_FLAGS: usize = 32;
@@ -504,6 +548,7 @@ impl From<InternalToolInputLog> for AnalyticsFact {
 // copybara:strip-for-public end
 
 pub(crate) enum CustomAnalyticsFact {
+    CodeModeToolCall(CodeModeToolCallFact),
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
     Goal(Box<CodexGoalEvent>),
