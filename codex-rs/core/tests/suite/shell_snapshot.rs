@@ -608,10 +608,6 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         })
         .await?;
 
-    let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
-    assert_posix_snapshot_sections(&snapshot_content);
-
     let mut saw_patch_begin = false;
     let mut patch_end = None;
     wait_for_event(&codex, |ev| match ev {
@@ -627,6 +623,10 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         _ => false,
     })
     .await;
+
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
+    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
+    assert_posix_snapshot_sections(&snapshot_content);
 
     assert!(
         saw_patch_begin,
