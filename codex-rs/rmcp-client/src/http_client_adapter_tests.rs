@@ -1,8 +1,29 @@
 use std::io::ErrorKind;
 
+use http::HeaderMap;
+use http::HeaderValue;
 use pretty_assertions::assert_eq;
 
+use super::HttpHeader;
 use super::SseEventSizeLimit;
+use super::protocol_headers;
+
+#[test]
+fn protocol_headers_preserve_utf8_values() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-plugin-name",
+        HeaderValue::from_str("café").expect("valid HTTP field value"),
+    );
+
+    assert_eq!(
+        protocol_headers(&headers),
+        vec![HttpHeader {
+            name: "x-plugin-name".to_string(),
+            value: "café".to_string(),
+        }]
+    );
+}
 
 #[test]
 fn lf_terminators_reset_the_event_limit() {

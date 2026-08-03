@@ -10,6 +10,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use tracing::warn;
 
+#[path = "agent_plugin_config.rs"]
+mod agent_plugin_config;
+
+pub use agent_plugin_config::parse_agent_plugin_mcp_config;
+
 #[derive(Clone, Copy, Debug)]
 enum PluginMcpSource<'a> {
     Host {
