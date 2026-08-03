@@ -661,6 +661,13 @@ class PipelineProjectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             transport = root / "transport"
+            (transport / "bazel/rules").mkdir(parents=True)
+            (transport / "bazel/rules/retained.bzl").write_text(
+                "retained\n", encoding="utf-8"
+            )
+            (transport / "bazel/rules/overridden.bzl").write_text(
+                "verbatim\n", encoding="utf-8"
+            )
             (transport / "codex-rs").mkdir(parents=True)
             (transport / "codex-rs/retained.rs").write_text(
                 "retained\n", encoding="utf-8"
@@ -668,8 +675,13 @@ class PipelineProjectionTest(unittest.TestCase):
             (transport / "codex-rs/overridden.rs").write_text(
                 "verbatim\n", encoding="utf-8"
             )
+            (transport / "defs.bzl").write_text("verbatim defs\n", encoding="utf-8")
             (transport / pipeline.BAZEL_MODULE).write_text(
                 "verbatim module\n", encoding="utf-8"
+            )
+            (transport / "public/bazel/rules").mkdir(parents=True)
+            (transport / "public/bazel/rules/overridden.bzl").write_text(
+                "overlay\n", encoding="utf-8"
             )
             (transport / "public/codex-rs").mkdir(parents=True)
             (transport / "public/codex-rs/overridden.rs").write_text(
@@ -695,9 +707,12 @@ class PipelineProjectionTest(unittest.TestCase):
                 },
                 {
                     "MODULE.bazel": "overlay module\n",
+                    "bazel/rules/overridden.bzl": "overlay\n",
+                    "bazel/rules/retained.bzl": "retained\n",
                     "codex-rs/added.rs": "added\n",
                     "codex-rs/overridden.rs": "overlay\n",
                     "codex-rs/retained.rs": "retained\n",
+                    "defs.bzl": "verbatim defs\n",
                 },
             )
 

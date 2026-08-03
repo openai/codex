@@ -8,8 +8,10 @@ The specifics of the transformation are defined in [`api/copyberry`](https://git
   - `LICENSE`
   - `MODULE.bazel`
   - `MODULE.bazel.lock`
+  - `bazel/**`
   - `codex-cli/**`
   - `codex-rs/**` except for anything that matches `codex-rs/internal*/**`
+  - `defs.bzl`
   - `sdk/**`
   - `third_party/**`
 - Within `codex-rs/Cargo.toml`, `codex-rs/**/Cargo.toml`, and `codex-rs/**/*.rs`, special comments (with examples linked below) are used to rewrite the source files (e.g., lines that end with `// copybara:strip-for-public` are removed). These comments are not transformed in any other files, and the final export fails if a `copybara:` marker remains anywhere in the public projection.

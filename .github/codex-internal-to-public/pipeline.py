@@ -56,8 +56,10 @@ GENERATED_LOCKFILES = (CARGO_LOCKFILE, BAZEL_LOCKFILE)
 PUBLIC_DIR = Path("public")
 VERBATIM_PUBLIC_PATHS = (
     LICENSE_FILE,
+    Path("bazel"),
     Path("codex-cli"),
     Path("codex-rs"),
+    Path("defs.bzl"),
     Path("sdk"),
     Path("third_party"),
     BAZEL_MODULE,
