@@ -2764,6 +2764,7 @@ dependencies = [
  "codex-thread-store",
  "codex-tools",
  "codex-utils-absolute-path",
+ "codex-utils-audio",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
@@ -2805,7 +2806,6 @@ dependencies = [
  "sha1 0.10.6",
  "shlex",
  "similar",
- "symphonia",
  "tempfile",
  "test-case",
  "test-log",
@@ -4429,6 +4429,20 @@ name = "codex-utils-approval-presets"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
+]
+
+[[package]]
+name = "codex-utils-audio"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-protocol",
+ "codex-utils-cache",
+ "codex-utils-string",
+ "pretty_assertions",
+ "symphonia",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
