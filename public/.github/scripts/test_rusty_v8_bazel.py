@@ -191,6 +191,11 @@ class RustyV8BazelTest(unittest.TestCase):
                 },
                 {path.name for path in Path(output_dir).iterdir()},
             )
+            checksums = (
+                Path(output_dir)
+                / "rusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.sha256"
+            ).read_bytes()
+            self.assertNotIn(b"\r", checksums)
 
     def test_upstream_release_pair_paths(self) -> None:
         self.assertEqual(

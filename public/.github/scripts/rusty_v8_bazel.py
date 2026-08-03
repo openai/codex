@@ -245,7 +245,7 @@ def stage_artifacts(
     shutil.copyfile(binding_path, staged_binding)
 
     staged_checksums = output_dir / staged_checksums_name(target, artifact_profile)
-    with staged_checksums.open("w", encoding="utf-8") as checksums:
+    with staged_checksums.open("w", encoding="utf-8", newline="\n") as checksums:
         for path in [staged_library, staged_binding]:
             digest = hashlib.sha256()
             with path.open("rb") as artifact:

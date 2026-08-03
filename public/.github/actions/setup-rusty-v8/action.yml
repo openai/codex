@@ -44,10 +44,11 @@ runs:
           exit 1
         fi
 
+        # Existing Windows-built release manifests use CRLF line endings.
         if command -v sha256sum >/dev/null 2>&1; then
-          (cd "${binding_dir}" && sha256sum -c "${checksums_path}")
+          (cd "${binding_dir}" && tr -d '\r' < "${checksums_path}" | sha256sum -c -)
         else
-          (cd "${binding_dir}" && shasum -a 256 -c "${checksums_path}")
+          (cd "${binding_dir}" && tr -d '\r' < "${checksums_path}" | shasum -a 256 -c -)
         fi
         echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
         echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"
