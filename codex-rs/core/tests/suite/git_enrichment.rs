@@ -99,15 +99,26 @@ async fn startup_prewarm_skips_git_enrichment_and_user_turn_observes_fresh_state
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
+            ev_function_call(
+                "wait-for-git",
+                "test_sync_tool",
+                r#"{"sleep_after_ms":5000}"#,
+            ),
             ev_completed("resp-1"),
+        ],
+        vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-2"),
         ],
     ]])
     .await;
     let cwd = repo.path().to_path_buf();
-    let mut builder = test_codex().with_config(move |config| {
-        config.cwd = cwd.abs();
-    });
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            config.cwd = cwd.abs();
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     let prewarm = tokio::time::timeout(
@@ -122,8 +133,8 @@ async fn startup_prewarm_skips_git_enrichment_and_user_turn_observes_fresh_state
     test.submit_turn("inspect the workspace").await?;
     let turn = server
         .single_connection()
-        .get(1)
-        .context("turn request")?
+        .get(2)
+        .context("turn follow-up request")?
         .body_json();
     assert_eq!(
         turn_metadata(&turn)?["workspaces"],
