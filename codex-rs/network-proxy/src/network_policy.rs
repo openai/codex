@@ -407,6 +407,7 @@ pub(crate) mod test_support {
     use tracing::Subscriber;
     use tracing::field::Field;
     use tracing::field::Visit;
+    use tracing::instrument::WithSubscriber;
     use tracing::span::Attributes;
     use tracing::span::Record;
     use tracing::subscriber::Interest;
@@ -531,8 +532,15 @@ pub(crate) mod test_support {
         Fut: Future<Output = T>,
     {
         let collector = EventCollector::default();
-        let _guard = tracing::subscriber::set_default(collector.clone());
-        let output = f().await;
+        // Keep tracing out of its single-subscriber fast path: concurrent tests
+        // without a subscriber can otherwise cache this callsite as disabled.
+        let _interest_dispatch = tracing::Dispatch::new(collector.clone());
+        let output = async {
+            tracing::callsite::rebuild_interest_cache();
+            f().await
+        }
+        .with_subscriber(collector.clone())
+        .await;
         let events = collector.events();
         (output, events)
     }
