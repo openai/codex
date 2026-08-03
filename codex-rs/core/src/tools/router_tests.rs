@@ -300,6 +300,15 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "query_with_delay",
                 ))
             },
+            RegisteredTool {
+                exposure: ToolExposure::CodeModeOnly,
+                ..mcp_runtime(mcp_tool_info(
+                    "nested_echo",
+                    /*supports_parallel_tool_calls*/ true,
+                    "mcp__nested_echo__",
+                    "query_with_delay",
+                ))
+            },
         ],
         Vec::new(),
         &turn.dynamic_tools,
@@ -347,6 +356,16 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     };
     assert!(!router.tool_supports_parallel(&hidden_call));
     assert!(router.tool_runtime(&hidden_call).is_some());
+
+    let nested_only_call = ToolCall {
+        tool_name: ToolName::namespaced("mcp__nested_echo__", "query_with_delay"),
+        call_id: "call-nested-only-server".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args: None,
+    };
+    assert!(router.tool_supports_parallel(&nested_only_call));
 
     Ok(())
 }

@@ -46,7 +46,7 @@ fn function_payloads_remain_function_outputs() {
 }
 
 #[test]
-fn mcp_code_mode_result_serializes_full_call_tool_result() {
+fn mcp_code_mode_result_omits_private_metadata() {
     let output = CallToolResult {
         content: vec![serde_json::json!({
             "type": "text",
@@ -78,11 +78,9 @@ fn mcp_code_mode_result_serializes_full_call_tool_result() {
                 "content": "done",
             },
             "isError": false,
-            "_meta": {
-                "source": "mcp",
-            },
         })
     );
+    assert_eq!(output.meta, Some(serde_json::json!({ "source": "mcp" })));
 }
 
 #[test]
@@ -232,7 +230,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
 }
 
 #[test]
-fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
+fn mcp_tool_output_code_mode_result_preserves_content_without_private_metadata() {
     let large_content = "large structured value ".repeat(1_000);
     let output = McpToolOutput {
         result: CallToolResult {
@@ -244,7 +242,9 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
                 "content": large_content,
             })),
             is_error: Some(false),
-            meta: None,
+            meta: Some(serde_json::json!({
+                "hive_dispatch_id": "private-dispatch-id",
+            })),
         },
         tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(1250),
@@ -268,6 +268,10 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
             },
             "isError": false,
         })
+    );
+    assert_eq!(
+        output.result.meta,
+        Some(serde_json::json!({ "hive_dispatch_id": "private-dispatch-id" }))
     );
 }
 

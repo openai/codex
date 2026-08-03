@@ -180,9 +180,14 @@ impl ToolOutput for codex_protocol::mcp::CallToolResult {
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        serde_json::to_value(self).unwrap_or_else(|err| {
+        let mut result = serde_json::to_value(self).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
-        })
+        });
+        // MCP result metadata is private to clients and must not reach Code Mode.
+        if let JsonValue::Object(fields) = &mut result {
+            fields.remove("_meta");
+        }
+        result
     }
 }
 

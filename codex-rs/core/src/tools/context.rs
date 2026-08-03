@@ -100,10 +100,8 @@ impl ToolOutput for McpToolOutput {
         }
     }
 
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        serde_json::to_value(&self.result).unwrap_or_else(|err| {
-            JsonValue::String(format!("failed to serialize mcp result: {err}"))
-        })
+    fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
+        self.result.code_mode_result(payload)
     }
 
     fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {

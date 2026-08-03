@@ -368,7 +368,7 @@ impl ToolRegistry {
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
         let mut namespaces = BTreeMap::<String, String>::new();
         for (name, tool) in &self.tools {
-            if tool.exposure != ToolExposure::Deferred {
+            if !tool.exposure.is_deferred() {
                 continue;
             }
             let Some(namespace) = &name.namespace else {

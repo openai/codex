@@ -2692,6 +2692,13 @@
           "default": null,
           "type": "string"
         },
+        "omit_tools_from": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/ToolExposureSurface"
+          },
+          "type": "array"
+        },
         "required": {
           "default": null,
           "type": "boolean"
@@ -3120,6 +3127,32 @@
         }
       },
       "type": "object"
+    },
+    "ToolExposureSurface": {
+      "description": "A model-facing surface on which a tool can be exposed.",
+      "oneOf": [
+        {
+          "description": "Nested tools available to Code Mode scripts.",
+          "enum": [
+            "code_mode"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Tools discovered later through tool search.",
+          "enum": [
+            "deferred"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Tools present in the model's initial tool list.",
+          "enum": [
+            "direct"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ToolSuggestConfig": {
       "additionalProperties": false,

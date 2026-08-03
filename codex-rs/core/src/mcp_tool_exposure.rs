@@ -7,6 +7,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::tool_is_model_visible;
 use codex_tools::ToolExposure;
+use codex_tools::ToolName;
 use tracing::instrument;
 use tracing::warn;
 
@@ -22,7 +23,7 @@ pub(crate) fn append_mcp_tools(
     config: &Config,
     search_tool_enabled: bool,
     registry: &mut ToolRegistry,
-) {
+) -> HashSet<ToolName> {
     // Keep regular MCP tools first; Apps tools also require connector and policy checks.
     let non_app_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     let app_tools = connectors
@@ -33,17 +34,21 @@ pub(crate) fn append_mcp_tools(
     } else {
         ToolExposure::Direct
     };
+    let mut registered_tools = HashSet::new();
     for tool in non_app_tools.chain(app_tools) {
         let tool_name = tool.canonical_tool_name();
         match McpHandler::new(tool.clone()) {
             Ok(handler) => {
-                registry.register_external_with_exposure(Arc::new(handler), exposure);
+                if registry.register_external_with_exposure(Arc::new(handler), exposure) {
+                    registered_tools.insert(tool_name);
+                }
             }
             Err(err) => {
                 warn!("Skipping MCP tool `{tool_name}`: failed to build tool spec: {err}");
             }
         }
     }
+    registered_tools
 }
 
 fn filter_non_codex_apps_mcp_tools_only(

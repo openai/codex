@@ -78,6 +78,7 @@ use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolExecutor;
+use codex_tools::ToolExposures;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
@@ -91,6 +92,8 @@ use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
 use futures::future::BoxFuture;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::btree_map::Entry;
 use std::sync::Arc;
 use tracing::instrument;
@@ -142,13 +145,14 @@ pub(crate) fn build_tool_router(
     {
         Vec::new()
     } else {
-        append_mcp_tools(
+        let registered_mcp_tools = append_mcp_tools(
             mcp.tools(),
             connectors,
             &turn_context.config,
             search_tool_enabled(turn_context),
             &mut registry,
         );
+        apply_mcp_tool_exposure_policy(turn_context, mcp, &registered_mcp_tools, &mut registry);
         let standalone_web_search_tool = append_extension_tool_executors(
             turn_context,
             extension_tool_executors(session, step_store),
@@ -164,6 +168,78 @@ pub(crate) fn build_tool_router(
         hosted_specs,
         &session.services.tool_search_handler_cache,
     )
+}
+
+fn apply_mcp_tool_exposure_policy(
+    turn_context: &TurnContext,
+    mcp: &codex_mcp::McpBinding,
+    registered_mcp_tools: &HashSet<ToolName>,
+    registry: &mut ToolRegistry,
+) {
+    let mut omitted_exposures_by_tool = HashMap::new();
+    for tool in mcp.tools() {
+        let tool_name = tool.canonical_tool_name();
+        if !registered_mcp_tools.contains(&tool_name) {
+            continue;
+        }
+        let Some(server) = mcp.config().mcp_server_catalog.server(&tool.server_name) else {
+            continue;
+        };
+        omitted_exposures_by_tool
+            .entry(tool_name)
+            .or_insert_with(|| {
+                server
+                    .config()
+                    .omit_tools_from
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .copied()
+                    .collect::<ToolExposures>()
+            });
+    }
+
+    for tool in registry.entries_mut() {
+        let tool_name = tool.runtime.tool_name();
+        let Some(omitted_exposures) = omitted_exposures_by_tool.get(&tool_name) else {
+            continue;
+        };
+
+        let mut exposures = ToolExposures::ALL.difference(*omitted_exposures);
+        if tool_name.namespace.as_ref().is_some_and(|namespace| {
+            turn_context
+                .config
+                .code_mode
+                .direct_only_tool_namespaces
+                .contains(namespace)
+        }) {
+            exposures = exposures.difference(ToolExposures::DEFERRED | ToolExposures::CODE_MODE);
+        }
+
+        exposures = if search_tool_enabled(turn_context)
+            && exposures.contains(ToolExposures::DEFERRED)
+            && (effective_tool_mode(turn_context) != ToolMode::CodeModeOnly
+                || exposures.contains(ToolExposures::CODE_MODE))
+        {
+            exposures.difference(ToolExposures::DIRECT)
+        } else {
+            exposures.difference(ToolExposures::DEFERRED)
+        };
+
+        tool.exposure = match (
+            exposures.contains(ToolExposures::DIRECT),
+            exposures.contains(ToolExposures::DEFERRED),
+            exposures.contains(ToolExposures::CODE_MODE),
+        ) {
+            (false, false, false) => ToolExposure::Hidden,
+            (false, false, true) => ToolExposure::CodeModeOnly,
+            (true, false, false) => ToolExposure::DirectModelOnly,
+            (true, false, true) => ToolExposure::Direct,
+            (false, true, false) => ToolExposure::DeferredModelOnly,
+            (false, true, true) => ToolExposure::Deferred,
+            (true, true, _) => unreachable!("direct and deferred exposure are mutually exclusive"),
+        };
+    }
 }
 
 #[cfg(test)]
@@ -252,7 +328,7 @@ pub(crate) fn finalize_tool_router(
     if search_tool_enabled(turn_context)
         && registry.entries().any(|tool| {
             tool.runtime.tool_name() != tool_search_name
-                && tool.exposure == ToolExposure::Deferred
+                && tool.exposure.is_deferred()
                 && tool.runtime.search_info().is_some()
         })
     {
@@ -1021,7 +1097,7 @@ fn append_tool_search_executor(
 ) {
     let search_infos = registry
         .entries()
-        .filter(|tool| tool.exposure == ToolExposure::Deferred)
+        .filter(|tool| tool.exposure.is_deferred())
         .filter_map(|tool| tool.runtime.search_info())
         .collect::<Vec<_>>();
     let source_listing = if turn_context

@@ -1193,6 +1193,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                     oauth: None,
                     oauth_resource: None,
                     supports_parallel_tool_calls: false,
+                    omit_tools_from: None,
                     tools: HashMap::new(),
                 },
             );
@@ -1320,6 +1321,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                     oauth: None,
                     oauth_resource: None,
                     supports_parallel_tool_calls: false,
+                    omit_tools_from: None,
                     tools: HashMap::new(),
                 },
             );
@@ -1469,6 +1471,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                     oauth: None,
                     oauth_resource: None,
                     supports_parallel_tool_calls: false,
+                    omit_tools_from: None,
                     tools: HashMap::new(),
                 },
             );

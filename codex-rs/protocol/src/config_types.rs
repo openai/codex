@@ -362,6 +362,19 @@ pub enum WebSearchMode {
     Live,
 }
 
+/// A model-facing surface on which a tool can be exposed.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ToolExposureSurface {
+    /// Nested tools available to Code Mode scripts.
+    CodeMode,
+    /// Tools discovered later through tool search.
+    Deferred,
+    /// Tools present in the model's initial tool list.
+    Direct,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]

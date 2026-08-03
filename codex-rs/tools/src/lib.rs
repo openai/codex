@@ -96,6 +96,7 @@ pub use tool_discovery::filter_request_plugin_install_discoverable_tools_for_cli
 pub use tool_executor::ToolExecutor;
 pub use tool_executor::ToolExecutorFuture;
 pub use tool_executor::ToolExposure;
+pub use tool_executor::ToolExposures;
 pub use tool_output::JsonToolOutput;
 pub use tool_output::ToolOutput;
 pub use tool_payload::ToolPayload;
