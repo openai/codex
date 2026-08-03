@@ -86,7 +86,7 @@ pub async fn detached_memory_responses_metadata(
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct TurnMetadataState {
     cwd: AbsolutePathBuf,
     repo_root: Option<String>,
@@ -100,12 +100,12 @@ pub(crate) struct TurnMetadataState {
     thread_source: Option<ThreadSource>,
     turn_id: String,
     sandbox: Option<String>,
-    enriched_workspaces: Arc<RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>>,
-    code_mode_tool_names: Arc<RwLock<Option<BTreeMap<String, ToolName>>>>,
-    turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
-    responsesapi_client_metadata: Arc<RwLock<BTreeMap<String, String>>>,
-    user_input_requested_during_turn: Arc<AtomicBool>,
-    enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    enriched_workspaces: RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>,
+    code_mode_tool_names: RwLock<Option<BTreeMap<String, ToolName>>>,
+    turn_started_at_unix_ms: RwLock<Option<i64>>,
+    responsesapi_client_metadata: RwLock<BTreeMap<String, String>>,
+    user_input_requested_during_turn: AtomicBool,
+    enrichment_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl TurnMetadataState {
@@ -145,12 +145,12 @@ impl TurnMetadataState {
             thread_source,
             turn_id,
             sandbox,
-            enriched_workspaces: Arc::new(RwLock::new(None)),
-            code_mode_tool_names: Arc::new(RwLock::new(None)),
-            turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
-            responsesapi_client_metadata: Arc::new(RwLock::new(BTreeMap::new())),
-            user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
-            enrichment_task: Arc::new(Mutex::new(None)),
+            enriched_workspaces: RwLock::new(None),
+            code_mode_tool_names: RwLock::new(None),
+            turn_started_at_unix_ms: RwLock::new(None),
+            responsesapi_client_metadata: RwLock::new(BTreeMap::new()),
+            user_input_requested_during_turn: AtomicBool::new(false),
+            enrichment_task: Mutex::new(None),
         }
     }
 
@@ -303,7 +303,7 @@ impl TurnMetadataState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(turn_started_at_unix_ms);
     }
 
-    pub(crate) fn spawn_git_enrichment_task(&self) {
+    pub(crate) fn spawn_git_enrichment_task(self: &Arc<Self>) {
         if self.repo_root.is_none() {
             return;
         }
@@ -316,7 +316,7 @@ impl TurnMetadataState {
             return;
         }
 
-        let state = self.clone();
+        let state = Arc::clone(self);
         *task_guard = Some(tokio::spawn(async move {
             let workspace_git_metadata = state.fetch_workspace_git_metadata().await;
             let Some(repo_root) = state.repo_root.clone() else {

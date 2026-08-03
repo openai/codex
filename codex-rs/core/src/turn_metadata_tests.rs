@@ -800,7 +800,7 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
     let permission_profile = PermissionProfile::read_only();
     let parent_thread_id =
         ThreadId::from_string("66666666-6666-4666-8666-666666666666").expect("thread id");
-    let state = TurnMetadataState::new(
+    let state = Arc::new(TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
         Some(parent_thread_id),
@@ -818,7 +818,7 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
-    );
+    ));
 
     state.spawn_git_enrichment_task();
     let json = wait_for_git_enrichment(&state).await;
@@ -901,7 +901,7 @@ async fn turn_metadata_state_coalesces_concurrent_git_enrichment() {
 async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors_stay_empty() {
     let (_temp_dir, repo_path) = create_clean_git_repo("repo").await;
     let permission_profile = PermissionProfile::read_only();
-    let state = TurnMetadataState::new(
+    let state = Arc::new(TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
@@ -913,7 +913,7 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
-    );
+    ));
     state.spawn_git_enrichment_task();
     state.cancel_git_enrichment_task();
     assert!(
@@ -934,7 +934,7 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
 
     let invalid_repo = TempDir::new().expect("invalid repo");
     std::fs::create_dir(invalid_repo.path().join(".git")).expect("invalid git directory");
-    let invalid_state = TurnMetadataState::new(
+    let invalid_state = Arc::new(TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
@@ -946,7 +946,7 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
         &permission_profile,
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
-    );
+    ));
     invalid_state.spawn_git_enrichment_task();
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
