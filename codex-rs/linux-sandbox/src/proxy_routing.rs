@@ -1,3 +1,9 @@
+use crate::proxy_lifecycle::PROXY_SOCKET_DIR_PREFIX;
+use crate::proxy_lifecycle::cleanup_stale_proxy_socket_dirs_in;
+use crate::proxy_lifecycle::close_fd;
+use crate::proxy_lifecycle::create_ready_pipe;
+use crate::proxy_lifecycle::harden_bridge_process;
+use crate::proxy_lifecycle::spawn_proxy_socket_dir_cleanup_worker;
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::write_attribution_frame;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -25,7 +31,6 @@ use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
 use url::Url;
 
 const PROXY_ENV_KEYS: &[&str] = &[
@@ -47,7 +52,6 @@ const PROXY_ENV_KEYS: &[&str] = &[
     "DOCKER_HTTPS_PROXY",
 ];
 
-const PROXY_SOCKET_DIR_PREFIX: &str = "codex-linux-sandbox-proxy-";
 const HOST_BRIDGE_READY: u8 = 1;
 const LOOPBACK_INTERFACE_NAME: &[u8] = b"lo";
 // Linux sockaddr_un.sun_path allows 108 bytes, including the trailing NUL.
@@ -367,101 +371,6 @@ fn ensure_private_proxy_socket_parent_dir(path: &Path) -> io::Result<()> {
     std::fs::set_permissions(path, Permissions::from_mode(0o700))
 }
 
-fn cleanup_stale_proxy_socket_dirs_in(temp_dir: &Path) -> io::Result<()> {
-    for entry in std::fs::read_dir(temp_dir)? {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(_) => continue,
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        let Some(owner_pid) = parse_proxy_socket_dir_owner_pid(file_name.as_ref()) else {
-            continue;
-        };
-        if is_pid_alive(owner_pid) {
-            continue;
-        }
-
-        let _ = cleanup_proxy_socket_dir(entry.path().as_path());
-    }
-
-    Ok(())
-}
-
-fn parse_proxy_socket_dir_owner_pid(file_name: &str) -> Option<u32> {
-    let suffix = file_name.strip_prefix(PROXY_SOCKET_DIR_PREFIX)?;
-    let (pid_raw, _) = suffix.split_once('-')?;
-    pid_raw.parse::<u32>().ok().filter(|pid| *pid != 0)
-}
-
-fn is_pid_alive(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
-    };
-    is_pid_alive_raw(pid)
-}
-
-fn is_pid_alive_raw(pid: libc::pid_t) -> bool {
-    let status = unsafe { libc::kill(pid, 0) };
-    if status == 0 {
-        return true;
-    }
-    let err = io::Error::last_os_error();
-    !matches!(err.raw_os_error(), Some(libc::ESRCH))
-}
-
-fn spawn_proxy_socket_dir_cleanup_worker(
-    socket_dir: PathBuf,
-    host_bridge_pids: Vec<libc::pid_t>,
-) -> io::Result<()> {
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    if pid == 0 {
-        loop {
-            if host_bridge_pids
-                .iter()
-                .copied()
-                .all(|bridge_pid| !is_pid_alive_raw(bridge_pid))
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        let _ = cleanup_proxy_socket_dir(socket_dir.as_path());
-        unsafe { libc::_exit(0) };
-    }
-
-    Ok(())
-}
-
-fn cleanup_proxy_socket_dir(socket_dir: &Path) -> io::Result<()> {
-    for _ in 0..20 {
-        match std::fs::remove_dir_all(socket_dir) {
-            Ok(()) => return Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
-        }
-    }
-
-    match std::fs::remove_dir_all(socket_dir) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
-    }
-}
-
 fn spawn_host_bridge(
     endpoint: SocketAddr,
     uds_path: &Path,
@@ -667,22 +576,6 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
     close_fd(fd)
 }
 
-fn set_parent_death_signal() -> io::Result<()> {
-    let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
-    if res != 0 {
-        Err(io::Error::last_os_error())
-    } else if unsafe { libc::getppid() } == 1 {
-        Err(io::Error::other("parent process already exited"))
-    } else {
-        Ok(())
-    }
-}
-
-fn harden_bridge_process() -> io::Result<()> {
-    set_parent_death_signal()?;
-    codex_process_hardening::disable_process_dumping()
-}
-
 fn proxy_bidirectional(mut tcp_stream: TcpStream, mut unix_stream: UnixStream) -> io::Result<()> {
     let mut tcp_reader = tcp_stream.try_clone()?;
     let mut unix_writer = unix_stream.try_clone()?;
@@ -701,36 +594,15 @@ fn proxy_bidirectional(mut tcp_stream: TcpStream, mut unix_stream: UnixStream) -
     Ok(())
 }
 
-fn create_ready_pipe() -> io::Result<(libc::c_int, libc::c_int)> {
-    let mut pipe_fds = [0; 2];
-    let res = unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) };
-    if res != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok((pipe_fds[0], pipe_fds[1]))
-}
-
-fn close_fd(fd: libc::c_int) -> io::Result<()> {
-    let res = unsafe { libc::close(fd) };
-    if res < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
-    use super::PROXY_SOCKET_DIR_PREFIX;
     use super::ProxyRouteEntry;
     use super::ProxyRouteSpec;
-    use super::cleanup_proxy_socket_dir;
-    use super::cleanup_stale_proxy_socket_dirs_in;
     use super::default_proxy_port;
     use super::extract_attribution_token_and_plan;
     use super::is_proxy_env_key;
     use super::parse_loopback_proxy_endpoint;
-    use super::parse_proxy_socket_dir_owner_pid;
     use super::plan_proxy_routes;
     use super::proxy_socket_paths_fit;
     use super::rewrite_proxy_env_value;
@@ -851,19 +723,6 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_proxy_socket_dir_removes_bridge_artifacts() {
-        let root = tempfile::tempdir().expect("tempdir should create");
-        let socket_dir = root.path().join("codex-linux-sandbox-proxy-test");
-        std::fs::create_dir(&socket_dir).expect("socket dir should create");
-        let marker = socket_dir.join("bridge.sock");
-        std::fs::write(&marker, b"test").expect("marker should write");
-
-        cleanup_proxy_socket_dir(socket_dir.as_path()).expect("cleanup should succeed");
-
-        assert_eq!(socket_dir.exists(), false);
-    }
-
-    #[test]
     fn proxy_route_spec_serialization_omits_proxy_urls() {
         let spec = ProxyRouteSpec {
             routes: vec![ProxyRouteEntry {
@@ -877,45 +736,5 @@ mod tests {
             serialized,
             r#"{"routes":[{"env_key":"HTTP_PROXY","uds_path":"/tmp/proxy-route-0.sock"}]}"#
         );
-    }
-
-    #[test]
-    fn parse_proxy_socket_dir_owner_pid_reads_owner_pid() {
-        assert_eq!(
-            parse_proxy_socket_dir_owner_pid("codex-linux-sandbox-proxy-1234-0"),
-            Some(1234)
-        );
-        assert_eq!(
-            parse_proxy_socket_dir_owner_pid("codex-linux-sandbox-proxy-1234-1000-0"),
-            Some(1234)
-        );
-        assert_eq!(
-            parse_proxy_socket_dir_owner_pid("codex-linux-sandbox-proxy-x"),
-            None
-        );
-        assert_eq!(parse_proxy_socket_dir_owner_pid("not-a-proxy-dir"), None);
-    }
-
-    #[test]
-    fn cleanup_stale_proxy_socket_dirs_removes_dead_pid_directories() {
-        let root = tempfile::tempdir().expect("tempdir should create");
-        let dead_dir = root
-            .path()
-            .join(format!("{PROXY_SOCKET_DIR_PREFIX}{}-0", u32::MAX));
-        std::fs::create_dir(&dead_dir).expect("dead dir should create");
-
-        let alive_dir = root
-            .path()
-            .join(format!("{PROXY_SOCKET_DIR_PREFIX}{}-1", std::process::id()));
-        std::fs::create_dir(&alive_dir).expect("alive dir should create");
-
-        let unrelated_dir = root.path().join("unrelated-proxy-dir");
-        std::fs::create_dir(&unrelated_dir).expect("unrelated dir should create");
-
-        cleanup_stale_proxy_socket_dirs_in(root.path()).expect("stale cleanup should succeed");
-
-        assert_eq!(dead_dir.exists(), false);
-        assert_eq!(alive_dir.exists(), true);
-        assert_eq!(unrelated_dir.exists(), true);
     }
 }

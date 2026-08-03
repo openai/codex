@@ -128,6 +128,20 @@ async fn run_linux_sandbox_direct(
     env: HashMap<String, String>,
     timeout_ms: u64,
 ) -> Output {
+    let mut command =
+        linux_sandbox_command(command, permission_profile, allow_network_for_proxy, env);
+    tokio::time::timeout(Duration::from_millis(timeout_ms), command.output())
+        .await
+        .expect("sandbox command should not time out")
+        .expect("sandbox command should execute")
+}
+
+fn linux_sandbox_command(
+    command: &[&str],
+    permission_profile: &PermissionProfile,
+    allow_network_for_proxy: bool,
+    env: HashMap<String, String>,
+) -> Command {
     let cwd = std::env::current_dir().expect("current directory should exist");
     let permission_profile_json =
         serde_json::to_string(permission_profile).expect("permission profile should serialize");
@@ -152,10 +166,69 @@ async fn run_linux_sandbox_direct(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    tokio::time::timeout(Duration::from_millis(timeout_ms), cmd.output())
+    cmd
+}
+
+#[tokio::test]
+async fn managed_proxy_bridges_release_command_output_after_exit() {
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
+        return;
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+
+    let output = run_linux_sandbox_direct(
+        &["bash", "-c", "printf 'bridge output closed\\n'"],
+        &PermissionProfile::Disabled,
+        /*allow_network_for_proxy*/ true,
+        env,
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(output.status.success(), true);
+    assert_eq!(output.stdout, b"bridge output closed\n");
+}
+
+#[tokio::test]
+async fn managed_proxy_readiness_survives_closed_standard_descriptors() {
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
+        return;
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+
+    let mut command = linux_sandbox_command(
+        &["bash", "-c", "true"],
+        &PermissionProfile::Disabled,
+        /*allow_network_for_proxy*/ true,
+        env,
+    );
+    unsafe {
+        command.pre_exec(|| {
+            libc::close(libc::STDIN_FILENO);
+            libc::close(libc::STDOUT_FILENO);
+            Ok(())
+        });
+    }
+
+    let output = tokio::time::timeout(Duration::from_millis(NETWORK_TIMEOUT_MS), command.output())
         .await
         .expect("sandbox command should not time out")
-        .expect("sandbox command should execute")
+        .expect("sandbox command should execute");
+
+    assert_eq!(
+        output.status.success(),
+        true,
+        "managed proxy readiness should survive closed standard descriptors; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[tokio::test]
