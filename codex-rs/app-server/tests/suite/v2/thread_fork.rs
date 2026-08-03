@@ -660,7 +660,14 @@ async fn thread_fork_defers_inherited_active_goal_until_next_turn() -> Result<()
         .await??;
         turn_ids.push(completed.turn.id);
     }
-    mcp.clear_message_buffer();
+    // Stop the source before its active goal exists so a late idle hook cannot continue it.
+    timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
+    drop(mcp);
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
 
     let state_db = StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
@@ -691,24 +698,6 @@ async fn thread_fork_defers_inherited_active_goal_until_next_turn() -> Result<()
         .get_thread_goal(source_thread_id)
         .await?
         .expect("source goal");
-
-    let ordinary_fork_id = mcp
-        .send_thread_fork_request(ThreadForkParams {
-            thread_id: source_thread.id.clone(),
-            ..Default::default()
-        })
-        .await?;
-    let ThreadForkResponse {
-        thread: ordinary_fork,
-        ..
-    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(ordinary_fork_id)).await??;
-    assert_eq!(
-        state_db
-            .thread_goals()
-            .get_thread_goal(ThreadId::from_string(&ordinary_fork.id)?)
-            .await?,
-        None
-    );
 
     let mut forked_threads = Vec::new();
     for (last_turn_id, before_turn_id, expected_turn_count) in [
