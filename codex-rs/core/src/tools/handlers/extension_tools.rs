@@ -6,6 +6,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ConversationHistory;
 use codex_tools::ExtensionTurnItem;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolEnvironment;
 use codex_tools::ToolName;
@@ -61,7 +62,23 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
 
 impl CoreToolRuntime for ExtensionToolAdapter {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
+        match payload {
+            ToolPayload::Function { .. } => true,
+            ToolPayload::Custom { .. } => match self.0.spec() {
+                ToolSpec::Freeform(_) => true,
+                ToolSpec::Namespace(namespace) => namespace.tools.iter().any(|tool| {
+                    matches!(
+                        tool,
+                        ResponsesApiNamespaceTool::Custom(tool)
+                            if tool.name == self.0.tool_name().name
+                    )
+                }),
+                ToolSpec::Function(_)
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. } => false,
+            },
+            ToolPayload::ToolSearch { .. } => false,
+        }
     }
 }
 
@@ -284,6 +301,18 @@ mod tests {
                     as Box<dyn codex_tools::ToolOutput>,
             )
         }
+    }
+
+    #[test]
+    fn function_extensions_reject_custom_payloads() {
+        let handler = ExtensionToolAdapter::new(Arc::new(StubExtensionExecutor));
+
+        assert!(handler.matches_kind(&ToolPayload::Function {
+            arguments: "{}".to_string(),
+        }));
+        assert!(!handler.matches_kind(&ToolPayload::Custom {
+            input: "raw input".to_string(),
+        }));
     }
 
     #[tokio::test]

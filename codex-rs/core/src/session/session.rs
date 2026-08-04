@@ -5,6 +5,7 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::turn_context::EnvironmentConfig;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
@@ -939,6 +940,10 @@ impl Session {
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
                 default_shell.clone(),
+                // Temporary: preserve thread-level behavior until environments supply config.
+                EnvironmentConfig {
+                    allow_login_shell: config.permissions.allow_login_shell,
+                },
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
                 config.features.enabled(Feature::DeferredExecutor),

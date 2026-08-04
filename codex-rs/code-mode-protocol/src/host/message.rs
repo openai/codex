@@ -12,6 +12,7 @@ use super::ProtocolVersion;
 use super::RequestId;
 use super::SessionId;
 use super::SupportedProtocolVersions;
+use super::TransportLane;
 use super::WireCellId;
 use super::WireExecuteRequest;
 use super::WireNestedToolCall;
@@ -105,6 +106,8 @@ impl std::error::Error for ClientHelloError {}
 pub struct HostHello {
     selected_version: ProtocolVersion,
     capabilities: CapabilitySet,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bulk_connection_token: Option<String>,
 }
 
 impl HostHello {
@@ -112,7 +115,13 @@ impl HostHello {
         Self {
             selected_version,
             capabilities,
+            bulk_connection_token: None,
         }
+    }
+
+    pub fn with_bulk_connection_token(mut self, token: String) -> Self {
+        self.bulk_connection_token = Some(token);
+        self
     }
 
     pub fn selected_version(&self) -> ProtocolVersion {
@@ -121,6 +130,10 @@ impl HostHello {
 
     pub fn capabilities(&self) -> &CapabilitySet {
         &self.capabilities
+    }
+
+    pub fn bulk_connection_token(&self) -> Option<&str> {
+        self.bulk_connection_token.as_deref()
     }
 }
 
@@ -139,6 +152,30 @@ pub enum ClientToHost {
         id: DelegateRequestId,
         result: WireResult<DelegateResponse>,
     },
+}
+
+impl ClientToHost {
+    /// Keeps notification acknowledgments with control traffic and tool results on the bulk lane.
+    pub fn transport_lane(&self) -> TransportLane {
+        match self {
+            Self::DelegateResponse {
+                result:
+                    WireResult::Ok {
+                        value: DelegateResponse::NotificationDelivered,
+                    },
+                ..
+            }
+            | Self::ClientHello(_)
+            | Self::Request { .. }
+            | Self::CancelRequest { .. } => TransportLane::Control,
+            Self::DelegateResponse { .. } => TransportLane::Bulk,
+        }
+    }
+
+    /// Validates the message families accepted by each paired socket.
+    pub fn allows_transport_lane(&self, lane: TransportLane) -> bool {
+        self.transport_lane() == lane
+    }
 }
 
 /// Messages sent from the code-mode host to a client.
@@ -172,6 +209,33 @@ pub enum HostToClient {
         session_id: SessionId,
         cell_id: WireCellId,
     },
+}
+
+impl HostToClient {
+    /// Keeps notifications with control traffic and nested-tool callbacks on the bulk lane.
+    pub fn transport_lane(&self) -> TransportLane {
+        match self {
+            Self::DelegateRequest {
+                request: DelegateRequest::InvokeTool { .. },
+                ..
+            }
+            | Self::CancelDelegateRequest { .. } => TransportLane::Bulk,
+            Self::DelegateRequest {
+                request: DelegateRequest::Notify { .. },
+                ..
+            }
+            | Self::HostHello(_)
+            | Self::HandshakeRejected { .. }
+            | Self::Response { .. }
+            | Self::InitialResponse { .. }
+            | Self::CellClosed { .. } => TransportLane::Control,
+        }
+    }
+
+    /// Rejects messages received on the wrong paired socket.
+    pub fn allows_transport_lane(&self, lane: TransportLane) -> bool {
+        self.transport_lane() == lane
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

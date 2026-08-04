@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use codex_core_skills::loader::load_environment_skills_from_discovery;
-use codex_core_skills::loader::load_environment_skills_from_root;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -20,6 +18,8 @@ use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSearchResult;
 use crate::catalog::SkillSourceKind;
+use crate::loader::load_environment_skills_from_discovery;
+use crate::loader::load_environment_skills_from_root;
 use crate::provider::MAX_SKILL_RESOURCE_CONTENT_BYTES;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillProvider;

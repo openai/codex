@@ -2,8 +2,33 @@ use std::net::SocketAddr;
 
 use pretty_assertions::assert_eq;
 
+use super::BulkConnectionRegistry;
 use super::ListenTransport;
+use super::MAX_PENDING_BULK_CONNECTIONS;
 use super::parse_listen_url;
+
+#[test]
+fn bulk_connection_registration_cleans_up_when_dropped() {
+    let registry = BulkConnectionRegistry::default();
+    let registration = registry.reserve().expect("bulk connection registration");
+    let token = registration.token();
+
+    drop(registration);
+
+    assert!(registry.remove(token).is_none());
+}
+
+#[test]
+fn bulk_connection_registrations_are_bounded_and_released() {
+    let registry = BulkConnectionRegistry::default();
+    let mut registrations = (0..MAX_PENDING_BULK_CONNECTIONS)
+        .map(|_| registry.reserve().expect("bulk connection registration"))
+        .collect::<Vec<_>>();
+
+    assert!(registry.reserve().is_none());
+    drop(registrations.pop());
+    assert!(registry.reserve().is_some());
+}
 
 #[test]
 fn parse_listen_url_accepts_stdio_transports() {

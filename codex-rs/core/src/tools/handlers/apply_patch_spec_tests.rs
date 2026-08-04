@@ -10,6 +10,7 @@ fn create_apply_patch_freeform_tool_matches_expected_spec() {
             description:
                 "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON."
                     .to_string(),
+            defer_loading: None,
             format: FreeformToolFormat {
                 r#type: "grammar".to_string(),
                 syntax: "lark".to_string(),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::turn_context::EnvironmentConfig;
 use codex_exec_server::Environment;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -16,6 +17,9 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
             PathUri::from_abs_path(&cwd),
             Vec::new(),
             /*shell*/ None,
+            EnvironmentConfig {
+                allow_login_shell: true,
+            },
         ),
         shell_type: None,
         hook_command: "echo hello".to_string(),

@@ -17,12 +17,10 @@ use crate::agent::status::is_final;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
-use crate::audio_preparation::prepare_response_items as prepare_audio_response_items;
 use crate::compact;
 use crate::compact::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
-use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
 use crate::context::NetworkRuleSaved;
@@ -104,7 +102,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -154,6 +151,7 @@ use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
+use codex_utils_audio::prepare_response_items as prepare_audio_response_items;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -2164,22 +2162,6 @@ impl Session {
         ))
     }
 
-    pub(crate) async fn record_execpolicy_amendment_message(
-        &self,
-        sub_id: &str,
-        amendment: &ExecPolicyAmendment,
-    ) {
-        let Some(prefixes) = format_allow_prefixes(vec![amendment.command.clone()]) else {
-            warn!("execpolicy amendment for {sub_id} had no command prefix");
-            return;
-        };
-        let message: ResponseItem =
-            ContextualUserFragment::into(ApprovedCommandPrefixSaved::new(prefixes));
-        let turn_context = self.turn_context_for_sub_id(sub_id).await;
-        self.inject_no_new_turn(vec![message], turn_context.as_deref())
-            .await;
-    }
-
     pub(crate) async fn persist_network_policy_amendment(
         &self,
         amendment: &NetworkPolicyAmendment,
@@ -3511,6 +3493,9 @@ impl Session {
             developer_sections.push(
                 crate::context::TokenBudgetContext::new(
                     self.thread_id(),
+                    session_source
+                        .get_agent_path()
+                        .unwrap_or_else(codex_protocol::AgentPath::root),
                     auto_compact_window_ids.first_window_id,
                     auto_compact_window_ids.previous_window_id,
                     auto_compact_window_ids.window_id,

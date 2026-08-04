@@ -1,3 +1,5 @@
+//! Audio preparation and duration-based token estimates for model inputs.
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::ContentItem;
@@ -5,7 +7,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
-use codex_utils_output_truncation::approx_token_count;
+use codex_utils_string::approx_token_count;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::sync::LazyLock;
@@ -58,7 +60,8 @@ impl AudioPreparationError {
     }
 }
 
-pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) {
+/// Canonicalizes audio inputs and replaces unsupported inputs with text placeholders.
+pub fn prepare_response_items(items: &mut [ResponseItem]) {
     for item in items {
         match item {
             ResponseItem::Message { content, .. } => prepare_message_content(content),
@@ -141,7 +144,8 @@ fn canonical_audio_mime(mime: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn estimate_audio_token_count(audio_url: &str) -> usize {
+/// Estimates audio tokens from decoded duration, falling back to the data URL size.
+pub fn estimate_audio_token_count(audio_url: &str) -> usize {
     let key = sha1_digest(audio_url.as_bytes());
     AUDIO_TOKEN_ESTIMATE_CACHE.get_or_insert_with(key, || {
         let Some(duration_seconds) = audio_duration_seconds(audio_url) else {

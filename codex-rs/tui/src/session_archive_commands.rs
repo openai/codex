@@ -5,6 +5,8 @@
 
 use std::io::IsTerminal;
 use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::Cli;
@@ -82,16 +84,25 @@ pub async fn run_session_archive_command(
     target: String,
     options: SessionArchiveCommandOptions,
 ) -> Result<String> {
-    let mut app_server = start_app_server_for_archive_command(options).await?;
-    run_session_archive_action_with_app_server(&mut app_server, action, &target).await
+    let codex_home = find_codex_home().wrap_err("failed to find Codex home")?;
+    let mut app_server =
+        start_app_server_for_archive_command(options, codex_home.to_path_buf()).await?;
+    run_session_archive_action_with_app_server(
+        &mut app_server,
+        codex_home.as_path(),
+        action,
+        &target,
+    )
+    .await
 }
 
 async fn run_session_archive_action_with_app_server(
     app_server: &mut AppServerSession,
+    codex_home: &Path,
     action: SessionArchiveAction,
     target: &str,
 ) -> Result<String> {
-    let resolved = resolve_session_target(app_server, action, target).await?;
+    let resolved = resolve_session_target(app_server, codex_home, action, target).await?;
     let session_name = match action {
         SessionArchiveAction::Archive => {
             app_server.thread_archive(resolved.session_id).await?;
@@ -120,6 +131,7 @@ async fn run_session_archive_action_with_app_server(
 
 async fn resolve_session_target(
     app_server: &mut AppServerSession,
+    codex_home: &Path,
     action: SessionArchiveAction,
     target: &str,
 ) -> Result<ResolvedSessionTarget> {
@@ -151,7 +163,9 @@ async fn resolve_session_target(
         SessionArchiveAction::Unarchive => ("archived", &[true]),
     };
     for &archived in archived_values {
-        if let Some(thread) = lookup_session_by_exact_name(app_server, target, archived).await? {
+        if let Some(thread) =
+            lookup_session_by_exact_name(app_server, codex_home, target, archived).await?
+        {
             return session_target_from_app_server_thread(thread);
         }
     }
@@ -162,48 +176,101 @@ async fn resolve_session_target(
 
 async fn lookup_session_by_exact_name(
     app_server: &mut AppServerSession,
+    codex_home: &Path,
     name: &str,
     archived: bool,
 ) -> Result<Option<AppServerThread>> {
-    // Search is the fast path, but some stores attach renamed titles after applying the filter.
-    for search_term in [Some(name), None] {
-        let mut cursor = None;
-        loop {
-            let response = app_server
-                .thread_list(ThreadListParams {
-                    cursor: cursor.clone(),
-                    limit: Some(100),
-                    sort_key: Some(ThreadSortKey::UpdatedAt),
-                    sort_direction: None,
-                    model_providers: None,
-                    source_kinds: Some(super::resume_source_kinds(
-                        /*include_non_interactive*/ false,
-                    )),
-                    archived: Some(archived),
-                    section_id: None,
-                    parent_thread_id: None,
-                    ancestor_thread_id: None,
-                    cwd: None,
-                    use_state_db_only: false,
-                    search_term: search_term.map(str::to_string),
-                })
-                .await
-                .wrap_err("failed to list sessions while resolving session name")?;
+    let uses_remote_workspace = app_server.uses_remote_workspace();
+    // Remote workspaces stay on their existing server-side path. Local workspaces trust SQLite
+    // names, then scan and repair only after a miss or an unusable rollout path.
+    let lookup_modes = if uses_remote_workspace {
+        &[SessionNameLookupMode::ScanAndRepair][..]
+    } else {
+        &[
+            SessionNameLookupMode::StateDbOnly,
+            SessionNameLookupMode::ScanAndRepair,
+        ][..]
+    };
+    for &lookup_mode in lookup_modes {
+        // Only the embedded server can safely use SQLite's recency cursor. Daemons may predate
+        // that sort key, and filesystem repair must paginate in the scanner's mtime order.
+        let sort_key = if lookup_mode == SessionNameLookupMode::StateDbOnly
+            && app_server.uses_embedded_app_server()
+        {
+            ThreadSortKey::RecencyAt
+        } else {
+            ThreadSortKey::UpdatedAt
+        };
+        // Search is the fast path, but legacy stores attach renamed titles after filtering.
+        for search_term in [Some(name), None] {
+            let mut cursor = None;
+            loop {
+                let response = app_server
+                    .thread_list(ThreadListParams {
+                        cursor: cursor.clone(),
+                        limit: Some(100),
+                        sort_key: Some(sort_key),
+                        sort_direction: None,
+                        model_providers: None,
+                        source_kinds: Some(super::resume_source_kinds(
+                            /*include_non_interactive*/ false,
+                        )),
+                        archived: Some(archived),
+                        section_id: None,
+                        parent_thread_id: None,
+                        ancestor_thread_id: None,
+                        cwd: None,
+                        use_state_db_only: lookup_mode == SessionNameLookupMode::StateDbOnly,
+                        search_term: search_term.map(str::to_string),
+                    })
+                    .await
+                    .wrap_err("failed to list sessions while resolving session name")?;
 
-            if let Some(thread) = response
-                .data
-                .into_iter()
-                .find(|thread| thread.name.as_deref() == Some(name))
-            {
-                return Ok(Some(thread));
+                for thread in response
+                    .data
+                    .into_iter()
+                    .filter(|thread| thread.name.as_deref() == Some(name))
+                {
+                    if !uses_remote_workspace {
+                        // The action still requires a real rollout in the requested collection.
+                        let thread_id = ThreadId::from_string(&thread.id).wrap_err_with(|| {
+                            format!("app server returned invalid session id `{}`", thread.id)
+                        })?;
+                        let expected_root = codex_home.join(if archived {
+                            codex_rollout::ARCHIVED_SESSIONS_SUBDIR
+                        } else {
+                            codex_rollout::SESSIONS_SUBDIR
+                        });
+                        let valid_rollout = if let Some(path) = thread.path.as_deref()
+                            && let Some(path) = codex_rollout::existing_rollout_path(path).await
+                            && path.starts_with(expected_root)
+                            && let Ok(session_meta) =
+                                codex_rollout::read_session_meta_line(path.as_path()).await
+                        {
+                            session_meta.meta.id == thread_id
+                        } else {
+                            false
+                        };
+                        if !valid_rollout {
+                            continue;
+                        }
+                    }
+                    return Ok(Some(thread));
+                }
+                let Some(next_cursor) = response.next_cursor else {
+                    break;
+                };
+                cursor = Some(next_cursor);
             }
-            let Some(next_cursor) = response.next_cursor else {
-                break;
-            };
-            cursor = Some(next_cursor);
         }
     }
     Ok(None)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionNameLookupMode {
+    StateDbOnly,
+    ScanAndRepair,
 }
 
 fn session_target_from_app_server_thread(thread: AppServerThread) -> Result<ResolvedSessionTarget> {
@@ -246,6 +313,7 @@ fn confirm_session_delete(target: &ResolvedSessionTarget) -> Result<bool> {
 
 async fn start_app_server_for_archive_command(
     options: SessionArchiveCommandOptions,
+    codex_home: PathBuf,
 ) -> Result<AppServerSession> {
     let SessionArchiveCommandOptions {
         cli,
@@ -259,8 +327,6 @@ async fn start_app_server_for_archive_command(
     let cli_kv_overrides = overrides_cli
         .parse_overrides()
         .map_err(|err| eyre!("failed to parse -c overrides: {err}"))?;
-    let codex_home = find_codex_home().wrap_err("failed to find Codex home")?;
-
     let mut launch_loader_overrides = loader_overrides.clone();
     if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
         launch_loader_overrides.user_config_path = Some(resolve_profile_v2_config_path(
@@ -413,3 +479,7 @@ async fn start_app_server_for_archive_command(
             .with_remote_cwd_override(remote_cwd_override),
     )
 }
+
+#[cfg(test)]
+#[path = "session_archive_commands_tests.rs"]
+mod tests;

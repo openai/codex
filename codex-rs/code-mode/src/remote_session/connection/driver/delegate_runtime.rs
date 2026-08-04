@@ -261,10 +261,7 @@ impl ConnectionDriver {
         };
         let target = match self.sessions.delegate_target(&session_id, wire_cell_id) {
             Ok(target) => target,
-            Err(err) => {
-                self.fail(err);
-                return false;
-            }
+            Err(err) => return self.send_delegate_response(id, Err(err)),
         };
         match self.delegates.start(id, target, request) {
             Ok(()) => true,
@@ -321,7 +318,8 @@ impl ConnectionDriver {
                 }
             }
         };
-        self.queue_frame(frame)
+        let lane = message.transport_lane();
+        self.queue_frame(frame, lane)
     }
 
     pub(super) fn close_cell(&mut self, session_id: SessionId, cell_id: WireCellId) -> bool {

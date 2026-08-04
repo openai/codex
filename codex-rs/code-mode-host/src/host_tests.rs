@@ -12,6 +12,7 @@ use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientHello;
 use codex_code_mode_protocol::host::ClientToHost;
+use codex_code_mode_protocol::host::DUAL_WEBSOCKET_CAPABILITY;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::FramedReader;
 use codex_code_mode_protocol::host::FramedWriter;
@@ -33,6 +34,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+use uuid::Uuid;
 
 use super::HostState;
 use super::MAX_ACTIVE_CELLS;
@@ -41,8 +43,12 @@ use super::MAX_RECENT_REQUEST_IDS;
 use super::RequestKind;
 use super::RequestRegistry;
 use super::SeenSessionIds;
+use super::negotiate;
 use super::peer::HostPeer;
 use super::run;
+use super::transport::BulkConnectionRegistry;
+use super::transport::ConnectionReader;
+use super::transport::ConnectionWriter;
 
 fn client_hello(
     versions: impl IntoIterator<Item = ProtocolVersion>,
@@ -251,6 +257,107 @@ impl AsyncWrite for BlockingWriter {
 }
 
 #[tokio::test]
+async fn failed_host_hello_removes_the_bulk_pairing_reservation() {
+    let (host_reader, client_writer) = tokio::io::duplex(/*max_buf_size*/ 4096);
+    let capability = Capability::new(DUAL_WEBSOCKET_CAPABILITY).expect("dual websocket capability");
+    let hello = ClientToHost::ClientHello(
+        ClientHello::new(
+            SupportedProtocolVersions::try_new([ProtocolVersion::V1]).expect("supported versions"),
+            CapabilitySet::empty(),
+            CapabilitySet::try_new([capability]).expect("optional capabilities"),
+        )
+        .expect("client hello"),
+    );
+    FramedWriter::new(client_writer)
+        .write(&hello)
+        .await
+        .expect("write client hello");
+
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let registry = BulkConnectionRegistry::default();
+    let mut reader = ConnectionReader::from_reader(host_reader);
+    let mut writer = ConnectionWriter::from_writer(FailingHandshakeWriter {
+        bytes: Arc::clone(&bytes),
+    });
+    let result = negotiate(&mut reader, &mut writer, Some(&registry)).await;
+    assert!(result.is_err());
+
+    let message = EncodedFrame::decode_framed::<HostToClient>(
+        &bytes.lock().unwrap_or_else(PoisonError::into_inner),
+    )
+    .expect("decode failed host hello");
+    let HostToClient::HostHello(hello) = message else {
+        panic!("expected a host hello");
+    };
+    let token = hello
+        .bulk_connection_token()
+        .expect("dual websocket pairing token");
+    let token = Uuid::parse_str(token).expect("UUID pairing token");
+    assert!(registry.remove(token).is_none());
+}
+
+struct FailingHandshakeWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl AsyncWrite for FailingHandshakeWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.bytes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(bytes);
+        Poll::Ready(Ok(bytes.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Err(std::io::Error::other("host hello write failed")))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn optional_dual_websocket_capability_falls_back_to_a_single_connection() {
+    let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 1024);
+    let (host_reader, host_writer) = tokio::io::split(host_stream);
+    let (client_reader, client_writer) = tokio::io::split(client_stream);
+    let host = tokio::spawn(run(host_reader, host_writer));
+    let mut reader = FramedReader::new(client_reader);
+    let mut writer = FramedWriter::new(client_writer);
+    let capability = Capability::new(DUAL_WEBSOCKET_CAPABILITY).expect("dual websocket capability");
+
+    writer
+        .write(&ClientToHost::ClientHello(
+            ClientHello::new(
+                SupportedProtocolVersions::try_new([ProtocolVersion::V1])
+                    .expect("supported versions"),
+                CapabilitySet::empty(),
+                CapabilitySet::try_new([capability]).expect("optional capabilities"),
+            )
+            .expect("client hello"),
+        ))
+        .await
+        .expect("write hello");
+    assert_eq!(
+        reader.read::<HostToClient>().await.expect("host hello"),
+        Some(HostToClient::HostHello(HostHello::new(
+            ProtocolVersion::V1,
+            CapabilitySet::empty(),
+        )))
+    );
+
+    drop(writer);
+    drop(reader);
+    host.await.expect("host task").expect("host connection");
+}
+
+#[tokio::test]
 async fn incompatible_or_invalid_handshake_is_rejected() {
     let (host_stream, client_stream) = tokio::io::duplex(/*max_buf_size*/ 1024);
     let (host_reader, host_writer) = tokio::io::split(host_stream);
@@ -395,7 +502,7 @@ async fn session_id_cannot_be_reused_after_shutdown() {
 }
 
 #[test]
-fn request_cancellation_tombstones_are_bounded() {
+fn request_history_is_bounded() {
     let mut requests = RequestRegistry::default();
     let duplicate = request_id(/*value*/ -1);
     requests
@@ -411,10 +518,6 @@ fn request_cancellation_tombstones_are_bounded() {
         requests.cancel(id);
         requests.finish(id);
     }
-    for value in 10_000..20_000 {
-        requests.cancel(request_id(value));
-    }
-
     assert!(requests.active.is_empty());
     assert_eq!(requests.recent.len(), MAX_RECENT_REQUEST_IDS);
     assert_eq!(requests.recent_order.len(), MAX_RECENT_REQUEST_IDS);

@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
 use crate::context::UserInstructions;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSection;
@@ -1099,6 +1100,33 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
             .expect("serialize retained reference context item"),
         serde_json::to_value(Some(reference_context_item))
             .expect("serialize expected reference context item")
+    );
+}
+
+#[test]
+fn drop_last_n_user_turns_trims_saved_prefix_update_above_rolled_back_turn() {
+    let items = vec![
+        assistant_msg("session prefix item"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg(&format!(
+            "{APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX}\n- [\"touch\"]"
+        )),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    history.drop_last_n_user_turns(/*num_turns*/ 1);
+
+    assert_eq!(
+        history.for_prompt(&modalities),
+        vec![
+            assistant_msg("session prefix item"),
+            user_input_text_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+        ]
     );
 }
 

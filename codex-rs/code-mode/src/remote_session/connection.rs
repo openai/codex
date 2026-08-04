@@ -1,4 +1,5 @@
 use std::fmt;
+use std::future::Future;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -14,17 +15,21 @@ use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
+use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientHello;
 use codex_code_mode_protocol::host::ClientToHost;
+use codex_code_mode_protocol::host::DUAL_WEBSOCKET_CAPABILITY;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::FramedReader;
 use codex_code_mode_protocol::host::FramedWriter;
 use codex_code_mode_protocol::host::HostToClient;
 use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_code_mode_protocol::host::TransportLane;
 use codex_http_client::HttpClientFactory;
 use codex_websocket_client::WebSocketConnector;
 use futures::StreamExt;
@@ -36,6 +41,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -57,6 +63,8 @@ mod transport;
 
 const IPC_CHANNEL_CAPACITY: usize = 128;
 const HOST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+// TODO(anp) make this timeout configurable if 60 seconds is insufficient.
+const DEFAULT_HOST_WAIT_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_WEBSOCKET_FRAME_BYTES: usize = MAX_FRAME_BYTES + std::mem::size_of::<u32>();
 // Host spawn errors become model-visible tool output. Bound configured paths
 // while preserving the executable-bearing suffix needed to diagnose failures.
@@ -68,6 +76,7 @@ pub(super) enum ConnectionError {
         host_program: PathBuf,
         error: io::Error,
     },
+    BulkConnectionUnavailable(String),
     Other(String),
 }
 
@@ -98,7 +107,9 @@ impl fmt::Display for ConnectionError {
                     &host_program[suffix_start..]
                 )
             }
-            Self::Other(message) => formatter.write_str(message),
+            Self::BulkConnectionUnavailable(message) | Self::Other(message) => {
+                formatter.write_str(message)
+            }
         }
     }
 }
@@ -130,6 +141,45 @@ struct ConnectionSupervisor {
 enum ConnectionOwner {
     Process(Box<Child>),
     WebSocket,
+}
+
+struct BulkConnectionOptions {
+    websocket_url: String,
+    http_client_factory: HttpClientFactory,
+}
+
+impl BulkConnectionOptions {
+    async fn connect(
+        &self,
+        token: &str,
+    ) -> Result<(ConnectionReader, ConnectionWriter), ConnectionError> {
+        let control_uri = self.websocket_url.parse::<Uri>().map_err(|error| {
+            ConnectionError::Other(format!(
+                "failed to build code-mode host bulk websocket URL: {error}"
+            ))
+        })?;
+        let bulk_path = format!("{}/bulk/{token}", control_uri.path().trim_end_matches('/'));
+        let bulk_path_and_query = match control_uri.query() {
+            Some(query) => format!("{bulk_path}?{query}"),
+            None => bulk_path,
+        };
+        let mut bulk_uri_parts = control_uri.into_parts();
+        bulk_uri_parts.path_and_query = Some(bulk_path_and_query.parse().map_err(|error| {
+            ConnectionError::Other(format!(
+                "failed to build code-mode host bulk websocket path: {error}"
+            ))
+        })?);
+        let bulk_url = Uri::from_parts(bulk_uri_parts)
+            .map_err(|error| {
+                ConnectionError::Other(format!(
+                    "failed to build code-mode host bulk websocket URL: {error}"
+                ))
+            })?
+            .to_string();
+        connect_websocket_transport(&bulk_url, &self.http_client_factory)
+            .await
+            .map_err(|error| ConnectionError::BulkConnectionUnavailable(error.to_string()))
+    }
 }
 
 impl CallerCancellation {
@@ -202,6 +252,7 @@ impl Connection {
             ConnectionReader::Stdio(FramedReader::new(stdout)),
             ConnectionWriter::Stdio(FramedWriter::new(stdin)),
             ConnectionOwner::Process(Box::new(child)),
+            /*bulk_connection_options*/ None,
         )
         .await
     }
@@ -210,38 +261,17 @@ impl Connection {
         websocket_url: &str,
         http_client_factory: &HttpClientFactory,
     ) -> Result<Self, ConnectionError> {
-        let request = websocket_url.into_client_request().map_err(|error| {
-            ConnectionError::Other(format!(
-                "failed to build code-mode host websocket request: {error}"
-            ))
-        })?;
-        let connector = WebSocketConnector::new(http_client_factory).map_err(|error| {
-            ConnectionError::Other(format!(
-                "failed to configure code-mode host websocket TLS: {error}"
-            ))
-        })?;
-        let websocket_config = WebSocketConfig::default()
-            .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
-            .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
-        let (websocket, _) = tokio::time::timeout(
-            HOST_HANDSHAKE_TIMEOUT,
-            connector.connect(request, websocket_config),
-        )
-        .await
-        .map_err(|_| {
-            ConnectionError::Other("timed out connecting to the code-mode host websocket".into())
-        })?
-        .map_err(|error| {
-            ConnectionError::Other(format!(
-                "failed to connect to the code-mode host websocket: {error}"
-            ))
-        })?;
-        let (writer, reader) = websocket.split();
+        let (reader, writer) =
+            connect_websocket_transport(websocket_url, http_client_factory).await?;
 
         Self::establish(
-            ConnectionReader::WebSocket(reader),
-            ConnectionWriter::WebSocket(writer),
+            reader,
+            writer,
             ConnectionOwner::WebSocket,
+            Some(BulkConnectionOptions {
+                websocket_url: websocket_url.to_string(),
+                http_client_factory: http_client_factory.clone(),
+            }),
         )
         .await
     }
@@ -250,13 +280,22 @@ impl Connection {
         mut reader: ConnectionReader,
         mut writer: ConnectionWriter,
         mut owner: ConnectionOwner,
+        bulk_connection_options: Option<BulkConnectionOptions>,
     ) -> Result<Self, ConnectionError> {
         let handshake = async {
+            let dual_capability =
+                Capability::new(DUAL_WEBSOCKET_CAPABILITY).map_err(|error| error.to_string())?;
+            let optional_capabilities = if bulk_connection_options.is_some() {
+                CapabilitySet::try_new([dual_capability.clone()])
+                    .map_err(|error| error.to_string())?
+            } else {
+                CapabilitySet::empty()
+            };
             let hello = ClientHello::new(
                 SupportedProtocolVersions::try_new([ProtocolVersion::V1])
                     .map_err(|err| err.to_string())?,
                 CapabilitySet::empty(),
-                CapabilitySet::empty(),
+                optional_capabilities,
             )
             .map_err(|err| err.to_string())?;
             writer
@@ -271,7 +310,20 @@ impl Connection {
                 Some(HostToClient::HostHello(hello))
                     if hello.selected_version() == ProtocolVersion::V1 =>
                 {
-                    Ok(())
+                    if hello.capabilities().contains(&dual_capability) {
+                        hello
+                            .bulk_connection_token()
+                            .map(str::to_string)
+                            .ok_or_else(|| {
+                                "code-mode host advertised dual websockets without a pairing token"
+                                    .to_string()
+                            })
+                            .map(Some)
+                    } else if hello.bulk_connection_token().is_some() {
+                        Err("code-mode host returned an unexpected bulk pairing token".to_string())
+                    } else {
+                        Ok(None)
+                    }
                 }
                 Some(HostToClient::HandshakeRejected { reason }) => {
                     Err(format!("code-mode host rejected the handshake: {reason:?}"))
@@ -292,51 +344,85 @@ impl Connection {
                 ));
             }
         };
-        if let Err(err) = handshake_result {
-            let _ = writer.close().await;
-            owner.close().await;
-            return Err(ConnectionError::Other(err));
-        }
+        let bulk_token = match handshake_result {
+            Ok(token) => token,
+            Err(err) => {
+                let _ = writer.close().await;
+                owner.close().await;
+                return Err(ConnectionError::Other(err));
+            }
+        };
+        let (bulk_reader, bulk_writer) = if let Some(token) = bulk_token {
+            let Some(options) = bulk_connection_options else {
+                let _ = writer.close().await;
+                owner.close().await;
+                return Err(ConnectionError::Other(
+                    "code-mode host negotiated an unsupported bulk websocket".to_string(),
+                ));
+            };
+            match options.connect(&token).await {
+                Ok((reader, writer)) => (Some(reader), Some(writer)),
+                Err(error) => {
+                    let _ = writer.close().await;
+                    owner.close().await;
+                    return Err(error);
+                }
+            }
+        } else {
+            (None, None)
+        };
 
         let (command_tx, command_rx) = mpsc::channel(IPC_CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel(IPC_CHANNEL_CAPACITY);
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<EncodedFrame>(IPC_CHANNEL_CAPACITY);
+        let (outgoing_tx, outgoing_rx) = mpsc::channel::<EncodedFrame>(IPC_CHANNEL_CAPACITY);
+        let (bulk_tx, bulk_rx) = if bulk_writer.is_some() {
+            let (sender, receiver) = mpsc::channel::<EncodedFrame>(MAX_PENDING_DELEGATE_CALLS);
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
+        let dual_websocket = bulk_writer.is_some();
         let cancellation = CancellationToken::new();
         let alive = Arc::new(AtomicBool::new(true));
         let failure = Arc::new(std::sync::Mutex::new(None));
 
         let writer_cancellation = cancellation.clone();
         let writer_task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = writer_cancellation.cancelled() => {
-                        return writer
-                            .close()
-                            .await
-                            .map_err(|error| format!("failed to close code-mode host connection: {error}"));
-                    }
-                    frame = outgoing_rx.recv() => {
-                        let Some(frame) = frame else {
-                            return Err("code-mode host outgoing stream closed".to_string());
-                        };
-                        let result = tokio::select! {
-                            _ = writer_cancellation.cancelled() => return Ok(()),
-                            result = writer.write_frame(frame) => result,
-                        };
-                        if let Err(err) = result {
-                            return Err(format!("failed to write code-mode host message: {err}"));
-                        }
-                    }
-                }
+            if let (Some(bulk_writer), Some(bulk_rx)) = (bulk_writer, bulk_rx) {
+                tokio::try_join!(
+                    drive_writer(writer, outgoing_rx, writer_cancellation.clone()),
+                    drive_writer(bulk_writer, bulk_rx, writer_cancellation)
+                )?;
+                Ok(())
+            } else {
+                drive_writer(writer, outgoing_rx, writer_cancellation).await
             }
         });
 
         let reader_events = event_tx.clone();
         let reader_cancellation = cancellation.clone();
-        let reader_task =
-            tokio::spawn(
-                async move { drive_reader(reader, reader_events, reader_cancellation).await },
-            );
+        let reader_task = tokio::spawn(async move {
+            let lane = dual_websocket.then_some(TransportLane::Control);
+            if let Some(bulk_reader) = bulk_reader {
+                tokio::try_join!(
+                    drive_reader(
+                        reader,
+                        reader_events.clone(),
+                        reader_cancellation.clone(),
+                        lane,
+                    ),
+                    drive_reader(
+                        bulk_reader,
+                        reader_events,
+                        reader_cancellation,
+                        Some(TransportLane::Bulk),
+                    )
+                )?;
+                Ok(())
+            } else {
+                drive_reader(reader, reader_events, reader_cancellation, lane).await
+            }
+        });
 
         let (driver, execute_claim_tx) = ConnectionDriver::new(
             command_rx,
@@ -349,6 +435,10 @@ impl Connection {
                 cancellation: cancellation.clone(),
             },
         );
+        let driver = match bulk_tx {
+            Some(sender) => driver.with_bulk_sender(sender),
+            None => driver,
+        };
         let driver_task = tokio::spawn(driver.run());
         tokio::spawn(
             ConnectionSupervisor {
@@ -439,16 +529,23 @@ impl Connection {
         session: RemoteSession,
         request: WaitRequest,
     ) -> Result<WaitOutcome, String> {
+        // Account for the runtime's one-second yield grace separately from transport.
+        let runtime_timeout =
+            Duration::from_millis(request.yield_time_ms).saturating_add(Duration::from_secs(1));
         let cancellation = CallerCancellation::new();
         let (response_tx, response_rx) = oneshot::channel();
-        self.send(DriverCommand::Wait {
-            session,
-            request,
-            caller_cancellation: cancellation.token(),
-            response_tx,
-        })
-        .await?;
-        let result = self.receive(response_rx).await;
+        let result = self
+            .with_transport_deadline(runtime_timeout, "wait", async {
+                self.send(DriverCommand::Wait {
+                    session,
+                    request,
+                    caller_cancellation: cancellation.token(),
+                    response_tx,
+                })
+                .await?;
+                self.receive(response_rx).await
+            })
+            .await;
         cancellation.disarm();
         result
     }
@@ -459,13 +556,16 @@ impl Connection {
         cell_id: CellId,
     ) -> Result<WaitOutcome, String> {
         let (response_tx, response_rx) = oneshot::channel();
-        self.send(DriverCommand::Terminate {
-            session,
-            cell_id,
-            response_tx,
+        self.with_transport_deadline(Duration::ZERO, "terminate", async {
+            self.send(DriverCommand::Terminate {
+                session,
+                cell_id,
+                response_tx,
+            })
+            .await?;
+            self.receive(response_rx).await
         })
-        .await?;
-        self.receive(response_rx).await
+        .await
     }
 
     pub(super) async fn shutdown_session(&self, session: RemoteSession) -> Result<(), String> {
@@ -476,6 +576,26 @@ impl Connection {
         })
         .await?;
         self.receive(response_rx).await
+    }
+
+    async fn with_transport_deadline<T>(
+        &self,
+        runtime_timeout: Duration,
+        request_type: &str,
+        request: impl Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        let deadline = runtime_timeout.saturating_add(DEFAULT_HOST_WAIT_TRANSPORT_TIMEOUT);
+        match tokio::time::timeout(deadline, request).await {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(request_type, "code-mode host request exceeded its deadline");
+                let reason =
+                    format!("code-mode host timed out waiting for {request_type} response");
+                mark_connection_dead(&self.alive, &self.failure, reason.clone());
+                self.cancellation.cancel();
+                Err(reason)
+            }
+        }
     }
 
     async fn send(&self, command: DriverCommand) -> Result<(), String> {
@@ -501,6 +621,73 @@ impl Connection {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .unwrap_or_else(|| "code-mode host connection closed".to_string())
+    }
+}
+
+async fn connect_websocket_transport(
+    websocket_url: &str,
+    http_client_factory: &HttpClientFactory,
+) -> Result<(ConnectionReader, ConnectionWriter), ConnectionError> {
+    let request = websocket_url.into_client_request().map_err(|error| {
+        ConnectionError::Other(format!(
+            "failed to build code-mode host websocket request: {error}"
+        ))
+    })?;
+    let connector = WebSocketConnector::new(http_client_factory).map_err(|error| {
+        ConnectionError::Other(format!(
+            "failed to configure code-mode host websocket TLS: {error}"
+        ))
+    })?;
+    let websocket_config = WebSocketConfig::default()
+        .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
+        .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
+    let (websocket, _) = tokio::time::timeout(
+        HOST_HANDSHAKE_TIMEOUT,
+        connector.connect(request, websocket_config),
+    )
+    .await
+    .map_err(|_| {
+        ConnectionError::Other("timed out connecting to the code-mode host websocket".into())
+    })?
+    .map_err(|error| {
+        ConnectionError::Other(format!(
+            "failed to connect to the code-mode host websocket: {error}"
+        ))
+    })?;
+    let (writer, reader) = websocket.split();
+    Ok((
+        ConnectionReader::WebSocket(reader),
+        ConnectionWriter::WebSocket(writer),
+    ))
+}
+
+async fn drive_writer(
+    mut writer: ConnectionWriter,
+    mut outgoing: mpsc::Receiver<EncodedFrame>,
+    cancellation: CancellationToken,
+) -> Result<(), String> {
+    loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                return writer
+                    .close()
+                    .await
+                    .map_err(|error| format!("failed to close code-mode host connection: {error}"));
+            }
+            frame = outgoing.recv() => {
+                let Some(frame) = frame else {
+                    return Err("code-mode host outgoing stream closed".to_string());
+                };
+                tokio::select! {
+                    _ = cancellation.cancelled() => return Ok(()),
+                    result = writer.write_frame(frame) => {
+                        result.map_err(|error| {
+                            format!("failed to write code-mode host message: {error}")
+                        })?;
+                    }
+                }
+            }
+        }
     }
 }
 

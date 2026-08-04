@@ -49,7 +49,7 @@ fn recognizes_context_window_as_contextual_developer_content() {
     let content = vec![ContentItem::InputText {
         text: format!(
             r#"{CONTEXT_WINDOW_OPEN_TAG}
-Thread id: 00000000-0000-0000-0000-000000000000
+Agent name: /root
 {CONTEXT_WINDOW_CLOSE_TAG}"#
         ),
     }];

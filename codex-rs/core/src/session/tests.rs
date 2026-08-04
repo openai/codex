@@ -1,4 +1,5 @@
 use super::mcp_refresh::McpRefresh;
+use super::turn_context::EnvironmentConfig;
 use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
@@ -4869,6 +4870,12 @@ async fn resolved_environments_for_configuration(
     let turn_environments = ThreadEnvironments::new(
         Arc::clone(&environment_manager),
         default_user_shell(),
+        EnvironmentConfig {
+            allow_login_shell: session_configuration
+                .original_config_do_not_use
+                .permissions
+                .allow_login_shell,
+        },
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
@@ -5667,6 +5674,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
+        EnvironmentConfig {
+            allow_login_shell: config.permissions.allow_login_shell,
+        },
         ShellSnapshot::disabled(),
         resolved_environments,
         /*non_blocking_snapshots*/ false,
@@ -6470,6 +6480,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
             PathUri::from_abs_path(&environment_cwd),
             Vec::new(),
             current_environment.shell,
+            current_environment.config,
         ));
 
     let call_id = "call-1".to_string();
@@ -7131,6 +7142,7 @@ async fn primary_environment_uses_first_turn_environment() {
             second_cwd_uri.clone(),
             Vec::new(),
             /*shell*/ None,
+            first_environment.config.clone(),
         )));
 
     assert_eq!(
@@ -7856,6 +7868,9 @@ where
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
+        EnvironmentConfig {
+            allow_login_shell: config.permissions.allow_login_shell,
+        },
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
         /*non_blocking_snapshots*/ false,
@@ -8446,6 +8461,7 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
             local_environment.cwd().clone(),
             local_environment.workspace_roots().to_vec(),
             local_environment.shell.clone(),
+            local_environment.config.clone(),
         ));
     }
     let environments = TurnEnvironmentSnapshot {
@@ -8656,6 +8672,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
             PathUri::from_abs_path(&cwd),
             Vec::new(),
             environment.shell,
+            environment.config,
         ));
 
     let update_items =
@@ -8721,6 +8738,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
             PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
             Vec::new(),
             environment.shell,
+            environment.config,
         ));
 
     let update_items =
@@ -9048,13 +9066,24 @@ async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_develo
         .await
         .session_configuration
         .session_source = session_source.clone();
-    Arc::get_mut(&mut turn_context)
-        .expect("thread settings should not be shared")
-        .session_source = session_source;
+    let turn_context_mut =
+        Arc::get_mut(&mut turn_context).expect("thread settings should not be shared");
+    turn_context_mut.session_source = session_source;
+    Arc::make_mut(&mut turn_context_mut.config)
+        .features
+        .enable(Feature::TokenBudget)
+        .expect("test config should allow token budget");
 
     let initial_context = build_initial_context(&session, &turn_context).await;
 
     let developer_messages = developer_message_texts(&initial_context);
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| text.contains("<context_window>\nAgent name: /root/worker\n")),
+        "expected subagent context window to include its canonical name, got {developer_messages:?}"
+    );
     assert!(
         developer_messages
             .iter()
@@ -9172,6 +9201,7 @@ async fn turn_context_item_stores_local_cwd() {
         cwd,
         Vec::new(),
         environment.shell,
+        environment.config,
     ));
 
     #[allow(deprecated)]

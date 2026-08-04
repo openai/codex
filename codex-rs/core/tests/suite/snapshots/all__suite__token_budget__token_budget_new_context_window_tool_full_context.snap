@@ -6,7 +6,7 @@ Scenario: New context window tool installs fresh full context before the next fo
 
 ## Final Follow-Up Request
 00:message/developer[3]:
-    [01] <context_window>\nThread id: <THREAD_ID>\nFirst context window id: <FIRST_WINDOW_ID>\nCurrent context window id: <WINDOW_ID>\nPrevious context window id: <FIRST_WINDOW_ID>\n</context_window>
+    [01] <context_window>\nAgent name: /root\nFirst context window id: <FIRST_WINDOW_ID>\nCurrent context window id: <WINDOW_ID>\nPrevious context window id: <FIRST_WINDOW_ID>\n</context_window>
     [02] <SKILLS_INSTRUCTIONS>
     [03] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>

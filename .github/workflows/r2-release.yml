@@ -12,6 +12,9 @@ on:
       prerelease:
         required: true
         type: boolean
+      stage:
+        required: true
+        type: string
 
 permissions: {}
 
@@ -40,9 +43,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_MAKE_LATEST: ${{ inputs.make_latest }}
           RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_STAGE: ${{ inputs.stage }}
         run: |
           set -euo pipefail
           python3 .github/scripts/publish_r2_release.py \
             --tag "${RELEASE_TAG}" \
             --make-latest "${RELEASE_MAKE_LATEST}" \
-            --prerelease "${RELEASE_PRERELEASE}"
+            --prerelease "${RELEASE_PRERELEASE}" \
+            --stage "${RELEASE_STAGE}"

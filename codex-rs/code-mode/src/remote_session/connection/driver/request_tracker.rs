@@ -52,6 +52,15 @@ impl RequestTracker {
         })
     }
 
+    pub(super) fn has_pending_execute_for_session(&self, session_id: &SessionId) -> bool {
+        self.pending.values().any(|request| {
+            matches!(
+                request,
+                PendingRequest::Execute { session, .. } if session.id == *session_id
+            )
+        })
+    }
+
     pub(super) fn allocate_id(&mut self) -> Result<RequestId, String> {
         let id = self.next_request_id;
         self.next_request_id = self

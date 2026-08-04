@@ -1,12 +1,27 @@
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_code_mode::CellId;
+use codex_code_mode::CodeModeNestedToolCall;
+use codex_code_mode::CodeModeSessionDelegate;
+use codex_code_mode::CodeModeSessionProvider;
+use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::ExecuteRequest;
+use codex_code_mode::FunctionCallOutputContentItem;
+use codex_code_mode::NoopCodeModeSessionDelegate;
+use codex_code_mode::NotificationFuture;
+use codex_code_mode::RuntimeResponse;
+use codex_code_mode::ToolDefinition;
+use codex_code_mode::ToolInvocationFuture;
+use codex_code_mode::WebSocketCodeModeSessionProvider;
 use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientHello;
 use codex_code_mode_protocol::host::ClientToHost;
+use codex_code_mode_protocol::host::DUAL_WEBSOCKET_CAPABILITY;
 use codex_code_mode_protocol::host::DelegateRequest;
 use codex_code_mode_protocol::host::DelegateResponse;
 use codex_code_mode_protocol::host::EncodedFrame;
@@ -26,6 +41,8 @@ use codex_code_mode_protocol::host::WireRuntimeResponse;
 use codex_code_mode_protocol::host::WireToolDefinition;
 use codex_code_mode_protocol::host::WireToolKind;
 use codex_code_mode_protocol::host::WireToolName;
+use codex_code_mode_protocol::host::WireWaitRequest;
+use codex_protocol::ToolName;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -37,6 +54,7 @@ use tokio::io::BufReader;
 use tokio::net::TcpStream;
 use tokio::process::Child;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
@@ -49,6 +67,8 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_WEBSOCKET_FRAME_BYTES: usize = MAX_FRAME_BYTES + std::mem::size_of::<u32>();
@@ -60,6 +80,43 @@ struct HostHarness {
 
 struct HostClient {
     websocket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+}
+
+struct LargeToolResultDelegate {
+    started: Semaphore,
+    release: Semaphore,
+}
+
+impl CodeModeSessionDelegate for LargeToolResultDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        invocation: CodeModeNestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        Box::pin(async move {
+            assert_eq!(invocation.tool_name, ToolName::plain("large"));
+            self.started.add_permits(1);
+            let permit = self
+                .release
+                .acquire()
+                .await
+                .map_err(|_| "large tool release closed".to_string())?;
+            permit.forget();
+            Ok(json!({ "value": "x".repeat(8 * 1024 * 1024) }))
+        })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 impl HostHarness {
@@ -164,6 +221,34 @@ impl HostClient {
             HostToClient::HostHello(HostHello::new(ProtocolVersion::V1, CapabilitySet::empty()))
         );
         Ok(())
+    }
+
+    async fn negotiate_dual(&mut self, websocket_url: &str) -> Result<HostClient> {
+        let capability = Capability::new(DUAL_WEBSOCKET_CAPABILITY)?;
+        let hello = ClientHello::new(
+            SupportedProtocolVersions::try_new([ProtocolVersion::V1])?,
+            CapabilitySet::empty(),
+            CapabilitySet::try_new([capability.clone()])?,
+        )?;
+        self.send(&ClientToHost::ClientHello(hello)).await?;
+        let HostToClient::HostHello(hello) = self.read().await? else {
+            anyhow::bail!("expected code-mode host hello");
+        };
+        assert!(hello.capabilities().contains(&capability));
+        let token = hello
+            .bulk_connection_token()
+            .context("dual websocket handshake omitted its pairing token")?;
+        let bulk_url = format!("{}/bulk/{token}", websocket_url.trim_end_matches('/'));
+        let config = WebSocketConfig::default()
+            .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
+            .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
+        let (websocket, _) = timeout(
+            TEST_TIMEOUT,
+            connect_async_with_config(bulk_url, Some(config), /*disable_nagle*/ false),
+        )
+        .await
+        .context("timed out connecting to code-mode host bulk websocket")??;
+        Ok(HostClient { websocket })
     }
 
     async fn open_session(&mut self, session_id: SessionId) -> Result<()> {
@@ -314,6 +399,418 @@ async fn websocket_listener_executes_cells_and_forwards_tool_callbacks() -> Resu
             },
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_websocket_client_runs_nested_tools_while_other_sessions_progress() -> Result<()>
+{
+    let host = HostHarness::start().await?;
+    let provider = WebSocketCodeModeSessionProvider::new(host.websocket_url.clone());
+    let delegate = Arc::new(LargeToolResultDelegate {
+        started: Semaphore::new(/*permits*/ 0),
+        release: Semaphore::new(/*permits*/ 0),
+    });
+    let slow_session = provider
+        .create_session(delegate.clone())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let fast_session = provider
+        .create_session(Arc::new(NoopCodeModeSessionDelegate))
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let slow_cell = slow_session
+        .execute(ExecuteRequest {
+            tool_call_id: "large-tool".to_string(),
+            enabled_tools: vec![ToolDefinition {
+                name: "large".to_string(),
+                tool_name: ToolName::plain("large"),
+                description: String::new(),
+                kind: CodeModeToolKind::Function,
+                input_schema: None,
+                output_schema: None,
+            }],
+            source: r#"const result = await tools.large({ value: "request" }); text(String(result.value.length));"#
+                .to_string(),
+            yield_time_ms: Some(20_000),
+            max_output_tokens: Some(1_000),
+        })
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let started = timeout(TEST_TIMEOUT, delegate.started.acquire())
+        .await
+        .context("large tool callback did not start")??;
+    started.forget();
+
+    let fast_response = timeout(TEST_TIMEOUT, async {
+        fast_session
+            .execute(ExecuteRequest {
+                tool_call_id: "fast-before-transfer".to_string(),
+                enabled_tools: Vec::new(),
+                source: r#"text("fast-before");"#.to_string(),
+                yield_time_ms: Some(5_000),
+                max_output_tokens: Some(1_000),
+            })
+            .await
+            .map_err(anyhow::Error::msg)?
+            .initial_response()
+            .await
+            .map_err(anyhow::Error::msg)
+    })
+    .await
+    .context("unrelated execution was blocked by the pending tool callback")??;
+    assert_eq!(
+        fast_response,
+        RuntimeResponse::Result {
+            cell_id: CellId::new("1".to_string()),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "fast-before".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+
+    delegate.release.add_permits(1);
+    let slow_response = async {
+        timeout(TEST_TIMEOUT, slow_cell.initial_response())
+            .await
+            .context("large tool result did not finish")?
+            .map_err(anyhow::Error::msg)
+    };
+    let concurrent_response = async {
+        timeout(TEST_TIMEOUT, async {
+            fast_session
+                .execute(ExecuteRequest {
+                    tool_call_id: "fast-during-transfer".to_string(),
+                    enabled_tools: Vec::new(),
+                    source: r#"text("fast-during");"#.to_string(),
+                    yield_time_ms: Some(5_000),
+                    max_output_tokens: Some(1_000),
+                })
+                .await
+                .map_err(anyhow::Error::msg)?
+                .initial_response()
+                .await
+                .map_err(anyhow::Error::msg)
+        })
+        .await
+        .context("unrelated execution was blocked by the large tool transfer")?
+    };
+    tokio::pin!(slow_response);
+    tokio::pin!(concurrent_response);
+    let concurrent_response = tokio::select! {
+        response = &mut concurrent_response => response?,
+        response = &mut slow_response => {
+            response?;
+            anyhow::bail!("large tool result completed before the unrelated control response");
+        }
+    };
+    let slow_response = slow_response.await?;
+    assert_eq!(
+        slow_response,
+        RuntimeResponse::Result {
+            cell_id: CellId::new("1".to_string()),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "8388608".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    assert_eq!(
+        concurrent_response,
+        RuntimeResponse::Result {
+            cell_id: CellId::new("2".to_string()),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "fast-during".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+
+    slow_session.shutdown().await.map_err(anyhow::Error::msg)?;
+    fast_session.shutdown().await.map_err(anyhow::Error::msg)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_dual_connections_route_notifications_and_tool_callbacks_to_separate_lanes()
+-> Result<()> {
+    let host = HostHarness::start().await?;
+    let mut control = host.connect().await?;
+    let mut bulk = control.negotiate_dual(&host.websocket_url).await?;
+    let session_id = SessionId::new("dual-websocket-session")?;
+    control.open_session(session_id.clone()).await?;
+
+    let execute_id = RequestId::new(/*value*/ 2);
+    control
+        .send(&ClientToHost::Request {
+            id: execute_id,
+            request: HostRequest::Execute {
+                session_id: session_id.clone(),
+                request: WireExecuteRequest {
+                    tool_call_id: "dual-websocket-call".to_string(),
+                    enabled_tools: vec![WireToolDefinition {
+                        name: "echo".to_string(),
+                        tool_name: WireToolName {
+                            name: "echo".to_string(),
+                            namespace: None,
+                        },
+                        description: String::new(),
+                        kind: WireToolKind::Function,
+                        input_schema: None,
+                        output_schema: None,
+                    }],
+                    source: r#"notify("important"); const result = await tools.echo({ value: "ping" }); text(result.value);"#
+                        .to_string(),
+                    yield_time_ms: Some(5_000),
+                    max_output_tokens: Some(1_000),
+                },
+            },
+        })
+        .await?;
+
+    let started = control.read().await?;
+    let HostToClient::Response {
+        id,
+        result:
+            WireResult::Ok {
+                value: HostResponse::ExecutionStarted { cell_id },
+            },
+    } = started
+    else {
+        anyhow::bail!("expected execution-started response on control lane, got {started:?}");
+    };
+    assert_eq!(id, execute_id);
+
+    let notification = control.read().await?;
+    let HostToClient::DelegateRequest {
+        id: notification_id,
+        ..
+    } = &notification
+    else {
+        anyhow::bail!("expected notification on control lane, got {notification:?}");
+    };
+    let notification_id = *notification_id;
+    assert_eq!(
+        notification,
+        HostToClient::DelegateRequest {
+            id: notification_id,
+            session_id: session_id.clone(),
+            request: DelegateRequest::Notify {
+                call_id: "dual-websocket-call".to_string(),
+                cell_id: cell_id.clone(),
+                text: "important".to_string(),
+            },
+        }
+    );
+    control
+        .send(&ClientToHost::DelegateResponse {
+            id: notification_id,
+            result: WireResult::Ok {
+                value: DelegateResponse::NotificationDelivered,
+            },
+        })
+        .await?;
+
+    let callback = bulk.read().await?;
+    let HostToClient::DelegateRequest {
+        id: delegate_id,
+        session_id: callback_session_id,
+        request: DelegateRequest::InvokeTool { invocation },
+    } = callback
+    else {
+        anyhow::bail!("expected tool callback on bulk lane, got {callback:?}");
+    };
+    assert_eq!(callback_session_id, session_id);
+    assert_eq!(invocation.input, Some(json!({ "value": "ping" })));
+
+    bulk.send(&ClientToHost::DelegateResponse {
+        id: delegate_id,
+        result: WireResult::Ok {
+            value: DelegateResponse::ToolResult {
+                result: json!({ "value": "pong" }),
+            },
+        },
+    })
+    .await?;
+
+    assert_eq!(
+        control.read().await?,
+        HostToClient::InitialResponse {
+            id: execute_id,
+            result: WireResult::Ok {
+                value: WireRuntimeResponse::Result {
+                    cell_id: cell_id.clone(),
+                    content_items: vec![WireContentItem::InputText {
+                        text: "pong".to_string(),
+                    }],
+                    error_text: None,
+                },
+            },
+        }
+    );
+
+    assert_eq!(
+        control.read().await?,
+        HostToClient::CellClosed {
+            session_id: session_id.clone(),
+            cell_id,
+        }
+    );
+
+    let shutdown_id = RequestId::new(/*value*/ 3);
+    control
+        .send(&ClientToHost::Request {
+            id: shutdown_id,
+            request: HostRequest::ShutdownSession {
+                session_id: session_id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        control.read().await?,
+        HostToClient::Response {
+            id: shutdown_id,
+            result: WireResult::Ok {
+                value: HostResponse::SessionClosed { session_id },
+            },
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_control_operations_bypass_an_incomplete_bulk_frame() -> Result<()> {
+    let host = HostHarness::start().await?;
+    let mut control = host.connect().await?;
+    let mut bulk = control.negotiate_dual(&host.websocket_url).await?;
+    let session_id = SessionId::new("bulk-priority-session")?;
+    control.open_session(session_id.clone()).await?;
+
+    let bulk_message = ClientToHost::DelegateResponse {
+        id: codex_code_mode_protocol::host::DelegateRequestId::new(/*value*/ 999),
+        result: WireResult::Ok {
+            value: DelegateResponse::ToolResult {
+                result: json!({ "image": "x".repeat(1024 * 1024) }),
+            },
+        },
+    };
+    let payload = EncodedFrame::encode(&bulk_message)?.into_framed_bytes();
+    let mask = [0x13_u8, 0x37, 0xc0, 0xde];
+    let mut partial_frame = vec![0x82_u8, 0xff];
+    partial_frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    partial_frame.extend_from_slice(&mask);
+    partial_frame.extend(
+        payload[..64 * 1024]
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| byte ^ mask[index % mask.len()]),
+    );
+    bulk.websocket
+        .get_mut()
+        .write_all(&partial_frame)
+        .await
+        .context("failed to start the intentionally incomplete bulk frame")?;
+
+    let request_id = RequestId::new(/*value*/ 42);
+    control
+        .send(&ClientToHost::Request {
+            id: request_id,
+            request: HostRequest::Wait {
+                session_id: session_id.clone(),
+                request: WireWaitRequest {
+                    cell_id: codex_code_mode_protocol::host::WireCellId::new("missing-cell"),
+                    yield_time_ms: 10,
+                },
+            },
+        })
+        .await?;
+    let response = timeout(TEST_TIMEOUT, control.read())
+        .await
+        .context("control wait was blocked behind the incomplete bulk frame")??;
+    assert!(matches!(
+        response,
+        HostToClient::Response {
+            id,
+            result: WireResult::Ok {
+                value: HostResponse::WaitCompleted { .. },
+            },
+        } if id == request_id
+    ));
+
+    let execute_id = RequestId::new(/*value*/ 43);
+    control
+        .send(&ClientToHost::Request {
+            id: execute_id,
+            request: HostRequest::Execute {
+                session_id,
+                request: WireExecuteRequest {
+                    tool_call_id: "control-execute".to_string(),
+                    enabled_tools: Vec::new(),
+                    source: r#"text("fast");"#.to_string(),
+                    yield_time_ms: Some(5_000),
+                    max_output_tokens: Some(1_000),
+                },
+            },
+        })
+        .await?;
+    for _ in 0..2 {
+        let response = timeout(TEST_TIMEOUT, control.read())
+            .await
+            .context("control execute was blocked behind the incomplete bulk frame")??;
+        assert!(matches!(
+            response,
+            HostToClient::Response { id, .. } | HostToClient::InitialResponse { id, .. }
+                if id == execute_id
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_bulk_lane_rejects_control_messages() -> Result<()> {
+    let host = HostHarness::start().await?;
+    let mut control = host.connect().await?;
+    let mut bulk = control.negotiate_dual(&host.websocket_url).await?;
+    let session_id = SessionId::new("wrong-lane-session")?;
+    control.open_session(session_id.clone()).await?;
+
+    bulk.send(&ClientToHost::Request {
+        id: RequestId::new(/*value*/ 42),
+        request: HostRequest::Wait {
+            session_id,
+            request: WireWaitRequest {
+                cell_id: codex_code_mode_protocol::host::WireCellId::new("missing-cell"),
+                yield_time_ms: 10,
+            },
+        },
+    })
+    .await?;
+
+    let result = timeout(TEST_TIMEOUT, control.websocket.next())
+        .await
+        .context("wrong-lane control message did not disconnect the paired sockets")?;
+    assert!(
+        matches!(result, None | Some(Ok(Message::Close(_))) | Some(Err(_))),
+        "wrong-lane message unexpectedly returned {result:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_bulk_pairing_rejects_unknown_tokens() -> Result<()> {
+    let host = HostHarness::start().await?;
+    let unknown_token = Uuid::new_v4();
+    let url = format!("{}/bulk/{unknown_token}", host.websocket_url);
+    let error = match connect_async(url).await {
+        Ok(_) => anyhow::bail!("unknown bulk pairing token should be rejected"),
+        Err(error) => error,
+    };
+    let WebSocketError::Http(response) = error else {
+        anyhow::bail!("bulk pairing failed unexpectedly: {error}");
+    };
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     Ok(())
 }
 

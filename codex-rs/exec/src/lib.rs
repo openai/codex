@@ -72,6 +72,7 @@ use codex_core::config::resolve_profile_v2_config_path;
 use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
+use codex_core::read_session_meta_line;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthConfig;
@@ -1466,6 +1467,7 @@ async fn resolve_resume_thread_id(
     let model_providers = resume_lookup_model_providers(config, args);
 
     if args.last {
+        let mut use_state_db_only = state_db.is_some();
         let mut cursor = None;
         loop {
             let response: ThreadListResponse = send_request_with_response(
@@ -1484,7 +1486,7 @@ async fn resolve_resume_thread_id(
                         parent_thread_id: None,
                         ancestor_thread_id: None,
                         cwd: None,
-                        use_state_db_only: false,
+                        use_state_db_only,
                         search_term: None,
                     },
                 },
@@ -1493,12 +1495,28 @@ async fn resolve_resume_thread_id(
             .await
             .map_err(anyhow::Error::msg)?;
             for thread in response.data {
+                if use_state_db_only && let Some(path) = thread.path.as_deref() {
+                    let Ok(session_meta) = read_session_meta_line(path).await else {
+                        continue;
+                    };
+                    if session_meta.meta.id.to_string() != thread.id {
+                        continue;
+                    }
+                }
                 let latest_cwd = latest_thread_cwd(&thread).await;
                 if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
+                    // A usable SQLite candidate is authoritative. Scanning is reserved for a
+                    // complete miss so successful `--last` lookups avoid auditing every rollout.
                     return Ok(Some(thread.id));
                 }
             }
             let Some(next_cursor) = response.next_cursor else {
+                if use_state_db_only {
+                    // Repair from rollouts before giving up on a missing SQLite match.
+                    use_state_db_only = false;
+                    cursor = None;
+                    continue;
+                }
                 return Ok(None);
             };
             cursor = Some(next_cursor);

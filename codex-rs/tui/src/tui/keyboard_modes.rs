@@ -156,10 +156,12 @@ fn keyboard_enhancement_flags(
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
 
-    // iTerm can leak the release of an exit shortcut into the parent shell.
+    // iTerm and Ghostty can leak shortcut release events that the terminal consumes.
     // tmux's xterm key format also loses Shift-Enter when event types are
     // reported. Preserve repeat classification on transports that support it.
-    if terminal_name == TerminalName::Iterm2 || matches!(tmux_extended_keys_format, Some("xterm")) {
+    if matches!(terminal_name, TerminalName::Ghostty | TerminalName::Iterm2)
+        || matches!(tmux_extended_keys_format, Some("xterm"))
+    {
         flags
     } else {
         flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -325,6 +327,17 @@ mod tests {
         assert_eq!(
             ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
                 TerminalName::Iterm2,
+                /*tmux_extended_keys_format*/ None
+            ))),
+            "\x1b[>5u"
+        );
+    }
+
+    #[test]
+    fn keyboard_enhancement_suppresses_release_reporting_for_ghostty() {
+        assert_eq!(
+            ansi_for(PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
+                TerminalName::Ghostty,
                 /*tmux_extended_keys_format*/ None
             ))),
             "\x1b[>5u"

@@ -45,6 +45,7 @@
     "prepare": "pnpm run build"
   },
   "devDependencies": {
+    "@modelcontextprotocol/conformance": "github:modelcontextprotocol/conformance#49103de6ed70804e940637bf3e9e29e4a3f54e64",
     "@modelcontextprotocol/sdk": "^1.24.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.19.18",

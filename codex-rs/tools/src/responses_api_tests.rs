@@ -1,3 +1,4 @@
+use super::FreeformTool;
 use super::LoadableToolSpec;
 use super::ResponsesApiNamespace;
 use super::ResponsesApiNamespaceTool;
@@ -12,6 +13,35 @@ use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
+
+#[test]
+fn freeform_tool_deferral_matches_function_tool_wire_shape() {
+    let mut expected_wire_shape = json!({
+        "name": "apply_patch",
+        "description": "Apply a patch",
+        "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "start: \"patch\"",
+        },
+    });
+
+    let mut tool: FreeformTool = serde_json::from_value(expected_wire_shape.clone())
+        .expect("deserialize legacy freeform tool");
+
+    assert_eq!(tool.defer_loading, None);
+    assert_eq!(
+        serde_json::to_value(&tool).expect("serialize eager freeform tool"),
+        expected_wire_shape
+    );
+
+    tool.defer_loading = Some(true);
+    expected_wire_shape["defer_loading"] = json!(true);
+    assert_eq!(
+        serde_json::to_value(tool).expect("serialize deferred freeform tool"),
+        expected_wire_shape
+    );
+}
 
 #[test]
 fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {

@@ -7,7 +7,7 @@ retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
 use super::approvals::ApprovalReviewer;
-use super::approvals::resolve_tool_apporval;
+use super::approvals::resolve_tool_approval;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
@@ -171,17 +171,16 @@ impl ToolOrchestrator {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        tool_name: &tool_ctx.tool_name,
                         retry_reason: None,
                         network_approval_context: None,
                     };
-                    resolve_tool_apporval(
+                    resolve_tool_approval(
                         tool,
                         req,
                         tool_ctx.call_id.as_str(),
                         approval_ctx,
-                        tool_ctx,
                         ApprovalReviewer::Guardian,
-                        &otel,
                     )
                     .await?;
                     already_approved = true;
@@ -202,21 +201,20 @@ impl ToolOrchestrator {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
+                    tool_name: &tool_ctx.tool_name,
                     retry_reason: reason.clone(),
                     network_approval_context: None,
                 };
-                resolve_tool_apporval(
+                resolve_tool_approval(
                     tool,
                     req,
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
-                    tool_ctx,
                     if strict_auto_review {
                         ApprovalReviewer::Guardian
                     } else {
                         ApprovalReviewer::for_turn(turn_ctx)
                     },
-                    &otel,
                 )
                 .await?;
                 already_approved = true;
@@ -397,23 +395,22 @@ impl ToolOrchestrator {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        tool_name: &tool_ctx.tool_name,
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
 
                     let permission_request_run_id = format!("{}:retry", tool_ctx.call_id);
-                    resolve_tool_apporval(
+                    resolve_tool_approval(
                         tool,
                         req,
                         &permission_request_run_id,
                         approval_ctx,
-                        tool_ctx,
                         if strict_auto_review {
                             ApprovalReviewer::Guardian
                         } else {
                             ApprovalReviewer::for_turn(turn_ctx)
                         },
-                        &otel,
                     )
                     .await?;
                 }

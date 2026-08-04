@@ -7,7 +7,6 @@
 
 mod apply_patch;
 mod apps;
-mod audio_preparation;
 mod client;
 mod client_common;
 mod realtime_context;

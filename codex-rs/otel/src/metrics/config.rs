@@ -1,5 +1,7 @@
 use crate::config::OtelExporter;
 use crate::metrics::Result;
+use crate::metrics::names::API_CALL_COUNT_METRIC;
+use crate::metrics::names::API_CALL_DURATION_METRIC;
 use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
 use crate::metrics::names::TOOL_CALL_DURATION_METRIC;
 use crate::metrics::validation::validate_tag_key;
@@ -8,7 +10,12 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-const RUNTIME_ONLY_METRICS: &[&str] = &[TOOL_CALL_COUNT_METRIC, TOOL_CALL_DURATION_METRIC];
+const RUNTIME_ONLY_METRICS: &[&str] = &[
+    API_CALL_COUNT_METRIC,
+    API_CALL_DURATION_METRIC,
+    TOOL_CALL_COUNT_METRIC,
+    TOOL_CALL_DURATION_METRIC,
+];
 
 #[derive(Clone, Debug)]
 pub enum MetricsExporter {

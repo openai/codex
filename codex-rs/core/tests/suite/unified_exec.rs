@@ -243,6 +243,58 @@ async fn create_workspace_directory(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_hides_and_rejects_login_when_disabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.permissions.allow_login_shell = false;
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let call_id = "exec-command-login-disabled";
+    let arguments = json!({
+        "cmd": "echo should not run",
+        "login": true,
+    });
+    let responses = mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&arguments)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness.submit("run the command with login").await?;
+
+    assert_eq!(
+        harness.function_call_stdout(call_id).await,
+        "login shell is disabled by config; omit `login` or set it to false."
+    );
+    let request = responses.requests()[0].body_json();
+    let exec_tool = request["tools"]
+        .as_array()
+        .expect("tools should be an array")
+        .iter()
+        .find(|tool| tool["name"] == "exec_command")
+        .expect("exec_command should be available");
+    assert!(exec_tool["parameters"]["properties"].get("login").is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));

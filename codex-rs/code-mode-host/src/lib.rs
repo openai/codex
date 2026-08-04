@@ -10,18 +10,22 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientToHost;
+use codex_code_mode_protocol::host::DUAL_WEBSOCKET_CAPABILITY;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::HandshakeRejectReason;
 use codex_code_mode_protocol::host::HostHello;
 use codex_code_mode_protocol::host::HostRequest;
 use codex_code_mode_protocol::host::HostResponse;
 use codex_code_mode_protocol::host::HostToClient;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_code_mode_protocol::host::TransportLane;
 use codex_code_mode_runtime::InProcessCodeModeSession;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
@@ -32,6 +36,8 @@ use tokio_util::task::TaskTracker;
 
 use self::delegate::RemoteDelegate;
 use self::peer::HostPeer;
+use self::transport::BulkConnectionRegistration;
+use self::transport::BulkConnectionRegistry;
 use self::transport::ConnectionReader;
 use self::transport::ConnectionWriter;
 
@@ -46,6 +52,14 @@ const MAX_ACTIVE_CELLS: usize = 128;
 const MAX_RECENT_REQUEST_IDS: usize = 4096;
 const MAX_RECENT_SESSION_IDS: usize = 4096;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const OUTGOING_CHANNEL_CAPACITY: usize = 128;
+const BULK_PAIRING_TIMEOUT: Duration = Duration::from_secs(10);
+
+enum NegotiatedConnection {
+    Rejected,
+    Single,
+    Dual(BulkConnectionRegistration),
+}
 
 struct HostLimits {
     request_permits: Arc<Semaphore>,
@@ -81,6 +95,7 @@ where
         ConnectionReader::from_reader(reader),
         ConnectionWriter::from_writer(writer),
         Arc::new(HostLimits::new()),
+        /*bulk_connections*/ None,
     )
     .await
 }
@@ -89,13 +104,39 @@ async fn run_connection(
     mut reader: ConnectionReader,
     mut writer: ConnectionWriter,
     limits: Arc<HostLimits>,
+    bulk_connections: Option<BulkConnectionRegistry>,
 ) -> Result<()> {
-    if !negotiate(&mut reader, &mut writer).await? {
-        return Ok(());
-    }
-
-    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<EncodedFrame>(/*max_capacity*/ 128);
-    let peer = Arc::new(HostPeer::new(outgoing_tx));
+    let negotiated = negotiate(&mut reader, &mut writer, bulk_connections.as_ref()).await?;
+    let bulk_connection = match negotiated {
+        NegotiatedConnection::Rejected => return Ok(()),
+        NegotiatedConnection::Single => None,
+        NegotiatedConnection::Dual(mut registration) => {
+            match tokio::time::timeout(BULK_PAIRING_TIMEOUT, registration.receive()).await {
+                Ok(Ok(connection)) => Some(connection),
+                Ok(Err(_)) => {
+                    anyhow::bail!("code-mode host bulk websocket pairing was abandoned");
+                }
+                Err(_) => {
+                    anyhow::bail!("timed out pairing code-mode host bulk websocket");
+                }
+            }
+        }
+    };
+    let (mut bulk_reader, bulk_writer) = match bulk_connection {
+        Some(connection) => (Some(connection.reader), Some(connection.writer)),
+        None => (None, None),
+    };
+    let (outgoing_tx, outgoing_rx) = mpsc::channel::<EncodedFrame>(OUTGOING_CHANNEL_CAPACITY);
+    let (bulk_tx, bulk_rx) = if bulk_writer.is_some() {
+        let (sender, receiver) = mpsc::channel::<EncodedFrame>(MAX_PENDING_DELEGATE_CALLS);
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+    let peer = match bulk_tx {
+        Some(sender) => Arc::new(HostPeer::new(outgoing_tx).with_bulk_sender(sender)),
+        None => Arc::new(HostPeer::new(outgoing_tx)),
+    };
     let state = Arc::new(HostState {
         sessions: Mutex::new(HashMap::new()),
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
@@ -108,25 +149,14 @@ async fn run_connection(
     });
     let writer_disconnected = peer.disconnection_token();
     let writer_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = writer_disconnected.cancelled() => return Ok::<(), anyhow::Error>(()),
-                frame = outgoing_rx.recv() => {
-                    let Some(frame) = frame else {
-                        return Ok(());
-                    };
-                    let result = tokio::select! {
-                        _ = writer_disconnected.cancelled() => return Ok(()),
-                        result = writer.write_frame(frame) => result,
-                    };
-                    if let Err(err) = result {
-                        return Err(
-                            anyhow::Error::new(err)
-                                .context("failed to write code-mode host message")
-                        );
-                    }
-                }
-            }
+        if let (Some(bulk_writer), Some(bulk_rx)) = (bulk_writer, bulk_rx) {
+            tokio::try_join!(
+                drive_writer(writer, outgoing_rx, writer_disconnected.clone()),
+                drive_writer(bulk_writer, bulk_rx, writer_disconnected)
+            )?;
+            Ok(())
+        } else {
+            drive_writer(writer, outgoing_rx, writer_disconnected).await
         }
     });
     let writer_peer = Arc::clone(&peer);
@@ -147,14 +177,30 @@ async fn run_connection(
 
     let input_result = async {
         loop {
-            let message = tokio::select! {
+            let (message, lane) = tokio::select! {
+                // Session operations and shutdown must make progress even when bulk callbacks are ready.
+                biased;
                 _ = peer.disconnected() => break,
-                message = reader.read() => message
-                    .context("failed to read code-mode client message")?,
+                message = reader.read() => (
+                    message.context("failed to read code-mode client control message")?,
+                    TransportLane::Control,
+                ),
+                message = async {
+                    match &mut bulk_reader {
+                        Some(reader) => reader.read().await,
+                        None => Ok(None),
+                    }
+                }, if bulk_reader.is_some() => (
+                    message.context("failed to read code-mode client bulk message")?,
+                    TransportLane::Bulk,
+                ),
             };
             let Some(message) = message else {
                 break;
             };
+            if bulk_reader.is_some() && !message.allows_transport_lane(lane) {
+                anyhow::bail!("code-mode client sent a message on the wrong websocket lane");
+            }
             match message {
                 ClientToHost::ClientHello(_) => {
                     anyhow::bail!("received a second code-mode client hello");
@@ -195,13 +241,40 @@ async fn run_connection(
     Ok(())
 }
 
-async fn negotiate(reader: &mut ConnectionReader, writer: &mut ConnectionWriter) -> Result<bool> {
+async fn drive_writer(
+    mut writer: ConnectionWriter,
+    mut outgoing: mpsc::Receiver<EncodedFrame>,
+    disconnected: CancellationToken,
+) -> Result<()> {
+    loop {
+        tokio::select! {
+            _ = disconnected.cancelled() => return Ok(()),
+            frame = outgoing.recv() => {
+                let Some(frame) = frame else {
+                    return Ok(());
+                };
+                tokio::select! {
+                    _ = disconnected.cancelled() => return Ok(()),
+                    result = writer.write_frame(frame) => {
+                        result.context("failed to write code-mode host message")?;
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn negotiate(
+    reader: &mut ConnectionReader,
+    writer: &mut ConnectionWriter,
+    bulk_connections: Option<&BulkConnectionRegistry>,
+) -> Result<NegotiatedConnection> {
     let Some(first_message) = reader
         .read()
         .await
         .context("failed to read code-mode client hello")?
     else {
-        return Ok(false);
+        return Ok(NegotiatedConnection::Rejected);
     };
     let ClientToHost::ClientHello(client_hello) = first_message else {
         writer
@@ -212,7 +285,7 @@ async fn negotiate(reader: &mut ConnectionReader, writer: &mut ConnectionWriter)
             })
             .await
             .context("failed to reject invalid code-mode client hello")?;
-        return Ok(false);
+        return Ok(NegotiatedConnection::Rejected);
     };
 
     let supported_versions = SupportedProtocolVersions::try_new([ProtocolVersion::V1])?;
@@ -226,10 +299,26 @@ async fn negotiate(reader: &mut ConnectionReader, writer: &mut ConnectionWriter)
             })
             .await
             .context("failed to reject incompatible code-mode client")?;
-        return Ok(false);
+        return Ok(NegotiatedConnection::Rejected);
     }
 
-    let host_capabilities = CapabilitySet::empty();
+    let dual_capability = Capability::new(DUAL_WEBSOCKET_CAPABILITY)?;
+    let dual_requested = client_hello
+        .required_capabilities()
+        .contains(&dual_capability)
+        || client_hello
+            .optional_capabilities()
+            .contains(&dual_capability);
+    let registration = if dual_requested {
+        bulk_connections.and_then(BulkConnectionRegistry::reserve)
+    } else {
+        None
+    };
+    let host_capabilities = if registration.is_some() {
+        CapabilitySet::try_new([dual_capability])?
+    } else {
+        CapabilitySet::empty()
+    };
     if let Some(capability) = client_hello
         .required_capabilities()
         .iter()
@@ -243,17 +332,26 @@ async fn negotiate(reader: &mut ConnectionReader, writer: &mut ConnectionWriter)
             })
             .await
             .context("failed to reject unsupported code-mode capability")?;
-        return Ok(false);
+        return Ok(NegotiatedConnection::Rejected);
     }
 
+    let (hello, negotiated) = if let Some(registration) = registration {
+        (
+            HostHello::new(ProtocolVersion::V1, host_capabilities)
+                .with_bulk_connection_token(registration.token().to_string()),
+            NegotiatedConnection::Dual(registration),
+        )
+    } else {
+        (
+            HostHello::new(ProtocolVersion::V1, host_capabilities),
+            NegotiatedConnection::Single,
+        )
+    };
     writer
-        .write(&HostToClient::HostHello(HostHello::new(
-            ProtocolVersion::V1,
-            host_capabilities,
-        )))
+        .write(&HostToClient::HostHello(hello))
         .await
         .context("failed to write code-mode host hello")?;
-    Ok(true)
+    Ok(negotiated)
 }
 
 struct HostState {
@@ -584,7 +682,7 @@ impl RequestRegistry {
         Ok(cancellation)
     }
 
-    fn cancel(&self, request_id: RequestId) {
+    fn cancel(&mut self, request_id: RequestId) {
         if let Some(request) = self.active.get(&request_id)
             && request.kind.is_cancellable()
         {

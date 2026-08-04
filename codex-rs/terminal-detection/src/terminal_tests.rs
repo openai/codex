@@ -239,6 +239,25 @@ fn detects_ghostty() {
         "Ghostty",
         "ghostty_term_program_user_agent"
     );
+
+    let env = FakeEnvironment::new().with_var("TERM", "xterm-ghostty");
+    let terminal = detect_terminal_info_from_env(&env);
+    assert_eq!(
+        terminal,
+        terminal_info(
+            TerminalName::Ghostty,
+            /*term_program*/ None,
+            /*version*/ None,
+            Some("xterm-ghostty"),
+            /*multiplexer*/ None
+        ),
+        "ghostty_term_info"
+    );
+    assert_eq!(
+        terminal.user_agent_token(),
+        "xterm-ghostty",
+        "ghostty_term_user_agent"
+    );
 }
 
 #[test]

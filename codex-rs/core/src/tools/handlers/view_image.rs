@@ -273,6 +273,7 @@ mod tests {
             PathUri::from_abs_path(&cwd),
             Vec::new(),
             current.shell,
+            current.config,
         ));
     }
 

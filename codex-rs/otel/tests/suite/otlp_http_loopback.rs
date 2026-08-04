@@ -186,6 +186,12 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     ))?;
 
     metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
+    metrics.counter("codex.api_request", /*inc*/ 1, &[("status", "200")])?;
+    metrics.record_duration(
+        "codex.api_request.duration_ms",
+        Duration::from_millis(100),
+        &[("status", "200")],
+    )?;
     metrics.counter("codex.tool.call", /*inc*/ 1, &[("tool", "test")])?;
     metrics.record_duration(
         "codex.tool.call.duration_ms",
@@ -225,6 +231,16 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         body.contains("codex.active"),
         "expected gauge not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("\"codex.api_request\""),
+        "expected API-request counter not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("\"codex.api_request.duration_ms\""),
+        "expected API-request duration not found; body prefix: {}",
         &body.chars().take(2000).collect::<String>()
     );
     assert!(

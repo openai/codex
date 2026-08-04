@@ -582,6 +582,7 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
                     .iter()
                     .map(|tool| match tool {
                         ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
+                        ResponsesApiNamespaceTool::Custom(tool) => tool.name.clone(),
                     })
                     .collect(),
             ),
