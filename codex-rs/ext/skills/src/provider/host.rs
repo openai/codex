@@ -22,7 +22,7 @@ const HOST_AUTHORITY_ID: &str = "host";
 
 /// Host-owned skill provider backed by an immutable service snapshot.
 ///
-/// Discovery and caching belong to `SkillsService`; this provider only maps a
+/// Discovery and caching belong to `HostSkillsService`; this provider only maps a
 /// snapshot into the authority-aware catalog/read contract.
 #[derive(Clone, Default)]
 pub struct HostSkillProvider;

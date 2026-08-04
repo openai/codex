@@ -138,12 +138,12 @@ enabled = {enabled}
 }
 
 async fn skills_for_config_with_stack(
-    skills_service: &SkillsService,
+    skills_service: &HostSkillsService,
     cwd: &TempDir,
     config_layer_stack: &ConfigLayerStack,
     effective_skill_roots: &[PluginSkillRoot],
 ) -> SkillLoadOutcome {
-    let skills_input = SkillsLoadInput::new(
+    let skills_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
         effective_skill_roots.to_vec(),
         config_layer_stack.clone(),
@@ -164,7 +164,7 @@ fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
     fs::write(stale_system_skill_dir.join("SKILL.md"), "# stale\n")
         .expect("write stale system skill");
 
-    let _skills_service = SkillsService::new(
+    let _skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
     );
@@ -180,7 +180,7 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
@@ -217,7 +217,7 @@ async fn skills_for_config_refreshes_cache_when_remote_plugin_id_changes() {
     let config_layer_stack = config_stack(&codex_home, "");
     let mut plugin_skill_root =
         plugin_skill_root_for_skill_path(&skill_path, "sample@test", "sample");
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
@@ -255,12 +255,12 @@ async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
     let cwd = tempfile::tempdir().expect("tempdir");
     let extra_root = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
 
-    let skills_input = SkillsLoadInput::new(
+    let skills_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
@@ -330,7 +330,7 @@ async fn set_extra_roots_applies_to_config_loads_and_empty_clears() {
     let cwd = tempfile::tempdir().expect("tempdir");
     let extra_root = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
@@ -392,7 +392,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
     );
     let plugin_skill_root =
         plugin_skill_root_for_skill_path(&skill_path, "test-plugin@test", "sample");
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
@@ -453,13 +453,13 @@ async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
         ConfigRequirementsToml::default(),
     )
     .expect("valid config layer stack");
-    let skills_input = SkillsLoadInput::new(
+    let skills_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(&config_layer_stack),
     );
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
@@ -517,13 +517,13 @@ async fn skills_for_cwd_without_fs_skips_repo_roots() {
         ConfigRequirementsToml::default(),
     )
     .expect("valid config layer stack");
-    let skills_input = SkillsLoadInput::new(
+    let skills_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(&config_layer_stack),
     );
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
@@ -559,7 +559,7 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
     )
     .expect("write bundled skill");
     let config_layer_stack = config_stack(&codex_home, "[skills.bundled]\nenabled = false\n");
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
     );
@@ -594,12 +594,12 @@ async fn skills_for_cwd_uses_cached_result_until_force_reload() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
     let _ = skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
-    let base_input = SkillsLoadInput::new(
+    let base_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
@@ -671,11 +671,11 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
     let parent_stack = config_stack(&codex_home, &disabled_skill_config);
     let child_stack =
         config_stack_with_session_flags(&codex_home, &disabled_skill_config, &enabled_skill_config);
-    let skills_service = SkillsService::new(
+    let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
-    let parent_input = SkillsLoadInput::new(
+    let parent_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
         parent_stack.clone(),

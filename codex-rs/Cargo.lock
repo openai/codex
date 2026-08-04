@@ -2876,6 +2876,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-skills",
+ "codex-skills-extension",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-path",
@@ -4152,6 +4153,7 @@ dependencies = [
 name = "codex-skills-extension"
 version = "0.0.0"
 dependencies = [
+ "codex-config",
  "codex-core-skills",
  "codex-exec-server",
  "codex-extension-api",
@@ -4166,6 +4168,7 @@ dependencies = [
  "codex-utils-path-uri",
  "codex-utils-plugins",
  "codex-utils-string",
+ "dunce",
  "futures",
  "insta",
  "opentelemetry_sdk",
@@ -4176,6 +4179,7 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "tokio",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "url",
 ]

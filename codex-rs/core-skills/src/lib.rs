@@ -6,7 +6,6 @@ mod mention_counts;
 pub mod model;
 pub mod remote;
 mod root_loader;
-pub mod service;
 mod skill_instructions;
 pub mod system;
 
@@ -20,6 +19,4 @@ pub use model::SkillMetadata;
 pub use model::SkillPolicy;
 pub use model::filter_skill_load_outcome_for_product;
 pub use root_loader::PluginSkillSnapshots;
-pub use service::SkillsLoadInput;
-pub use service::SkillsService;
 pub use skill_instructions::SkillInstructions;

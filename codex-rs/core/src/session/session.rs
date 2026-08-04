@@ -462,7 +462,7 @@ pub(crate) struct AppServerClientMetadata {
 async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
     plugins_manager: Arc<PluginsManager>,
-    skills_service: Arc<SkillsService>,
+    skills_service: Arc<HostSkillsService>,
     turn_environments: &TurnEnvironmentSnapshot,
 ) -> Vec<SkillError> {
     let fs = turn_environments.primary_filesystem();
@@ -511,7 +511,7 @@ impl Session {
         mut initial_history: InitialHistory,
         fork_persistence: ForkPersistence,
         session_source: SessionSource,
-        skills_service: Arc<SkillsService>,
+        skills_service: Arc<HostSkillsService>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         code_mode_session_provider: Arc<dyn codex_code_mode::CodeModeSessionProvider>,

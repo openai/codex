@@ -7,8 +7,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::skills::SkillsLoadInput;
-use codex_core::skills::SkillsService;
+use codex_core::skills::HostSkillsLoadInput;
+use codex_core::skills::HostSkillsService;
 use codex_file_watcher::FileWatcher;
 use codex_file_watcher::FileWatcherSubscriber;
 use codex_file_watcher::Receiver;
@@ -37,7 +37,7 @@ pub(crate) struct SkillsWatcher {
 
 impl SkillsWatcher {
     pub(crate) fn new(
-        skills_service: Arc<SkillsService>,
+        skills_service: Arc<HostSkillsService>,
         codex_home: &AbsolutePathBuf,
         outgoing: Arc<OutgoingMessageSender>,
     ) -> Arc<Self> {
@@ -113,7 +113,7 @@ impl SkillsWatcher {
         let plugins_input = config.plugins_config_input();
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-        let skills_input = SkillsLoadInput::new(
+        let skills_input = HostSkillsLoadInput::new(
             config.cwd.clone(),
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
@@ -137,7 +137,7 @@ impl SkillsWatcher {
 
     fn spawn_event_loop(
         rx: Receiver,
-        skills_service: Arc<SkillsService>,
+        skills_service: Arc<HostSkillsService>,
         system_skills_root: AbsolutePathBuf,
         outgoing: Arc<OutgoingMessageSender>,
         shutdown_token: CancellationToken,

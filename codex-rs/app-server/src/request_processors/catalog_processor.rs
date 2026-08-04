@@ -546,7 +546,7 @@ impl CatalogRequestProcessor {
                     } else {
                         Vec::new()
                     };
-                    let skills_input = codex_core::skills::SkillsLoadInput::new(
+                    let skills_input = codex_core::skills::HostSkillsLoadInput::new(
                         cwd_abs.clone(),
                         effective_skill_roots,
                         config_layer_stack,

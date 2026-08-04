@@ -4355,7 +4355,7 @@ impl Config {
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {
-        crate::skills::service::bundled_skills_enabled_from_stack(&self.config_layer_stack)
+        crate::skills::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
 
     /// Returns whether effective requirements allow selecting a concrete profile.

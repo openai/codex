@@ -1,5 +1,5 @@
 use super::*;
-use crate::SkillsService;
+use crate::HostSkillsService;
 use crate::config::ConfigBuilder;
 use crate::skills_load_input_from_config;
 use codex_core_plugins::PluginsManager;
@@ -398,7 +398,7 @@ enabled = false
 
     let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
     let skills_service =
-        SkillsService::new(home.path().abs(), /*bundled_skills_enabled*/ true);
+        HostSkillsService::new(home.path().abs(), /*bundled_skills_enabled*/ true);
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
