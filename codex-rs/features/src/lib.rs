@@ -87,6 +87,8 @@ pub enum Feature {
     // Stable.
     /// Enable the default shell tool.
     ShellTool,
+    /// Enable the built-in local image viewer.
+    ViewImage,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
     /// Store CLI auth in the encrypted local secrets backend when keyring storage is selected.
@@ -850,6 +852,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellTool,
         key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ViewImage,
+        key: "view_image",
         stage: Stage::Stable,
         default_enabled: true,
     },

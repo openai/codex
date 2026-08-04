@@ -776,12 +776,14 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
                 ),
             }));
             registry.add(WriteStdinHandler);
-            registry.add(ViewImageHandler::new(ViewImageToolOptions {
-                can_request_original_image_detail: can_request_original_image_detail(
-                    &turn_context.model_info,
-                ),
-                include_environment_id,
-            }));
+            if turn_context.config.features.enabled(Feature::ViewImage) {
+                registry.add(ViewImageHandler::new(ViewImageToolOptions {
+                    can_request_original_image_detail: can_request_original_image_detail(
+                        &turn_context.model_info,
+                    ),
+                    include_environment_id,
+                }));
+            }
         }
         return;
     }
@@ -969,7 +971,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add(TestSyncHandler);
     }
 
-    if environment_mode.has_environment() {
+    if environment_mode.has_environment() && features.enabled(Feature::ViewImage) {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         registry.add(ViewImageHandler::new(ViewImageToolOptions {
             can_request_original_image_detail: can_request_original_image_detail(
