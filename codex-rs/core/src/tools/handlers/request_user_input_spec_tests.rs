@@ -171,17 +171,6 @@ fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
         ),
         None
     );
-    assert_eq!(
-        request_user_input_unavailable_message(ModeKind::Execute, &default_available_modes()),
-        Some("request_user_input is unavailable in Execute mode".to_string())
-    );
-    assert_eq!(
-        request_user_input_unavailable_message(
-            ModeKind::PairProgramming,
-            &default_available_modes()
-        ),
-        Some("request_user_input is unavailable in Pair Programming mode".to_string())
-    );
 }
 
 #[test]
