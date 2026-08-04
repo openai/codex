@@ -740,8 +740,12 @@ enabled = true
     Ok(())
 }
 
+#[test_case(true; "enabled app")]
+#[test_case(false; "disabled app")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() -> Result<()> {
+async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins(
+    app_enabled: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount_with_connector_name(&server, "Google Calendar").await?;
@@ -758,6 +762,12 @@ async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() ->
     write_plugin_skill_plugin(codex_home.as_ref());
     write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
     write_plugin_app_plugin(codex_home.as_ref());
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!("{config}\n[apps.calendar]\nenabled = {app_enabled}\n"),
+    )?;
 
     let test_codex =
         build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
@@ -794,11 +804,12 @@ async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() ->
             .any(|text| text.contains("MCP servers from this plugin")),
         "expected plugin MCP guidance to be suppressed for ChatGPT auth: {developer_messages:?}"
     );
-    assert!(
+    assert_eq!(
         developer_messages
             .iter()
             .any(|text| text.contains("Apps from this plugin")),
-        "expected visible plugin app guidance: {developer_messages:?}"
+        app_enabled,
+        "plugin app guidance should match app enablement: {developer_messages:?}"
     );
     assert!(
         request
@@ -807,8 +818,14 @@ async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() ->
         "plugin MCP tool should not leak into the request for ChatGPT auth"
     );
     let (calendar_tool, echo_tool) = searched_plugin_tools(&requests[1]);
-    let calendar_tool = calendar_tool.expect("plugin app tool should be searchable");
-    assert_plugin_provenance(&calendar_tool);
+    assert_eq!(
+        calendar_tool.is_some(),
+        app_enabled,
+        "plugin app tool search should match app enablement"
+    );
+    if let Some(calendar_tool) = calendar_tool {
+        assert_plugin_provenance(&calendar_tool);
+    }
     assert!(
         echo_tool.is_none(),
         "plugin MCP tool should be suppressed for ChatGPT auth"
