@@ -186,6 +186,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(100);
     let thread_id = create_fake_paginated_rollout(
         codex_home.path(),
         "2026-01-02T00-00-00",

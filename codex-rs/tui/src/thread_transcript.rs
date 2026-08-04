@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::HistoryHydrationScope;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::HistoryCell;
@@ -35,8 +36,18 @@ pub(crate) async fn load_session_transcript(
     raw_reasoning_visibility: RawReasoningVisibility,
     codex_home: Option<&std::path::Path>,
 ) -> std::io::Result<TranscriptCells> {
-    let thread = app_server
-        .thread_read(thread_id, /*include_turns*/ true)
+    let mut thread = app_server
+        .thread_read(thread_id, /*include_turns*/ false)
+        .await
+        .map_err(std::io::Error::other)?;
+    app_server
+        .hydrate_initial_thread_history(
+            &mut thread,
+            /*turn_cursor*/ None,
+            /*item_cursor*/ None,
+            /*config*/ None,
+            HistoryHydrationScope::Complete,
+        )
         .await
         .map_err(std::io::Error::other)?;
     Ok(thread_to_transcript_cells(

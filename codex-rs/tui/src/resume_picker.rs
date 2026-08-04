@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
+use crate::app_server_session::HISTORY_ITEM_SCAN_LIMIT;
 use crate::clipboard_paste::normalize_pasted_search_query;
 use crate::color::blend;
 use crate::color::is_light;
@@ -37,6 +39,7 @@ use crate::wrapping::adaptive_wrap_lines;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
@@ -62,6 +65,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
@@ -159,8 +163,13 @@ struct PageLoadRequest {
 
 enum PickerLoadRequest {
     Page(PageLoadRequest),
-    Preview { thread_id: ThreadId },
-    Transcript { thread_id: ThreadId },
+    Preview {
+        thread_id: ThreadId,
+    },
+    Transcript {
+        thread_id: ThreadId,
+        cancellation: oneshot::Receiver<()>,
+    },
 }
 
 #[derive(Clone)]
@@ -620,18 +629,24 @@ fn spawn_app_server_page_loader(
                             .await;
                     let _ = bg_tx.send(BackgroundEvent::Preview { thread_id, preview });
                 }
-                PickerLoadRequest::Transcript { thread_id } => {
-                    let transcript = load_session_transcript(
-                        &mut app_server,
-                        thread_id,
-                        raw_reasoning_visibility,
-                        codex_home.as_deref(),
-                    )
-                    .await;
-                    let _ = bg_tx.send(BackgroundEvent::Transcript {
-                        thread_id,
-                        transcript,
-                    });
+                PickerLoadRequest::Transcript {
+                    thread_id,
+                    cancellation,
+                } => {
+                    tokio::select! {
+                        transcript = load_session_transcript(
+                            &mut app_server,
+                            thread_id,
+                            raw_reasoning_visibility,
+                            codex_home.as_deref(),
+                        ) => {
+                            let _ = bg_tx.send(BackgroundEvent::Transcript {
+                                thread_id,
+                                transcript,
+                            });
+                        }
+                        _ = cancellation => {}
+                    }
                 }
             }
         }
@@ -706,6 +721,7 @@ struct PickerState {
     transcript_previews: HashMap<ThreadId, TranscriptPreviewState>,
     transcript_cells: HashMap<ThreadId, SessionTranscriptState>,
     pending_transcript_open: Option<ThreadId>,
+    pending_transcript_cancellation: Option<oneshot::Sender<()>>,
     transcript_loading_frame_shown: bool,
     overlay: Option<Overlay>,
     pager_keymap: PagerKeymap,
@@ -735,7 +751,7 @@ enum SessionTranscriptState {
 }
 
 #[derive(Clone)]
-struct TranscriptPreviewLine {
+pub(crate) struct TranscriptPreviewLine {
     speaker: TranscriptPreviewSpeaker,
     text: String,
 }
@@ -785,79 +801,143 @@ async fn load_app_server_page(
     })
 }
 
-async fn load_transcript_preview(
+pub(crate) async fn load_transcript_preview(
     app_server: &mut AppServerSession,
     thread_id: ThreadId,
     codex_home: Option<&Path>,
 ) -> std::io::Result<Vec<TranscriptPreviewLine>> {
     const MAX_PREVIEW_LINES: usize = 6;
 
-    let thread = app_server
-        .thread_read(thread_id, /*include_turns*/ true)
+    let mut thread = app_server
+        .thread_read(thread_id, /*include_turns*/ false)
         .await
         .map_err(std::io::Error::other)?;
+    if thread.history_mode == ThreadHistoryMode::Legacy {
+        app_server
+            .hydrate_initial_thread_history(
+                &mut thread,
+                /*turn_cursor*/ None,
+                /*item_cursor*/ None,
+                /*config*/ None,
+                crate::app_server_session::HistoryHydrationScope::Initial,
+            )
+            .await
+            .map_err(std::io::Error::other)?;
+    }
     let cwd = thread.cwd.as_path();
     let inline_visualization_context = codex_home.and_then(|codex_home| {
         ThreadId::from_string(&thread.id)
             .ok()
             .and_then(|thread_id| InlineVisualizationContext::new(codex_home, thread_id))
     });
-    let mut lines = thread
-        .turns
-        .iter()
-        .flat_map(|turn| turn.items.iter())
-        .filter_map(|item| match item {
-            ThreadItem::UserMessage { content, .. } => Some(TranscriptPreviewLine {
-                speaker: TranscriptPreviewSpeaker::User,
-                text: content
-                    .iter()
-                    .filter_map(|input| match input {
-                        codex_app_server_protocol::UserInput::Text { text, .. } => {
-                            Some(text.as_str())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            }),
-            ThreadItem::AgentMessage { text, .. } => {
-                let visible_markdown = parse_assistant_markdown(text, cwd).visible_markdown;
-                let rewritten = crate::inline_visualization::rewrite_inline_visualizations(
-                    &visible_markdown,
+    let mut lines = if thread.history_mode == ThreadHistoryMode::Paginated {
+        let mut groups = Vec::new();
+        let mut visible_lines = 0_usize;
+        let mut scanned_items = 0_usize;
+        let mut cursor = None;
+        let mut seen_cursors = HashSet::new();
+        loop {
+            let page = app_server
+                .thread_items_page(
+                    thread_id,
+                    /*turn_id*/ None,
+                    cursor.clone(),
+                    HISTORY_ITEM_PAGE_LIMIT,
+                )
+                .await
+                .map_err(std::io::Error::other)?;
+            scanned_items = scanned_items.saturating_add(page.data.len());
+            for entry in page.data {
+                let item_lines = transcript_preview_lines_for_item(
+                    &entry.item,
+                    cwd,
                     inline_visualization_context.as_ref(),
                 );
-                let mut text = rewritten.markdown.into_owned();
-                for (placeholder, link) in &rewritten.trusted_file_links {
-                    text = text.replace(
-                        &format!(
-                            "{}  \n[{}]({placeholder})",
-                            link.markdown_label, link.markdown_destination_label
-                        ),
-                        &format!("{}  \n{}", link.display_label, link.destination),
-                    );
+                visible_lines = visible_lines.saturating_add(item_lines.len());
+                if !item_lines.is_empty() {
+                    groups.push(item_lines);
                 }
-                Some(TranscriptPreviewLine {
-                    speaker: TranscriptPreviewSpeaker::Assistant,
-                    text,
-                })
+                if visible_lines >= MAX_PREVIEW_LINES {
+                    break;
+                }
             }
-            _ => None,
-        })
-        .flat_map(|line| {
-            line.text
-                .lines()
-                .filter(|text| !text.trim().is_empty())
-                .map(move |text| TranscriptPreviewLine {
-                    speaker: line.speaker,
-                    text: text.trim().to_string(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+            if visible_lines >= MAX_PREVIEW_LINES || scanned_items >= HISTORY_ITEM_SCAN_LIMIT {
+                break;
+            }
+            let Some(next_cursor) = page
+                .next_cursor
+                .filter(|next| seen_cursors.insert(next.clone()))
+            else {
+                break;
+            };
+            cursor = Some(next_cursor);
+        }
+        groups.into_iter().rev().flatten().collect::<Vec<_>>()
+    } else {
+        thread
+            .turns
+            .iter()
+            .flat_map(|turn| turn.items.iter())
+            .flat_map(|item| {
+                transcript_preview_lines_for_item(item, cwd, inline_visualization_context.as_ref())
+            })
+            .collect::<Vec<_>>()
+    };
     if lines.len() > MAX_PREVIEW_LINES {
         lines.drain(..lines.len() - MAX_PREVIEW_LINES);
     }
     Ok(lines)
+}
+
+fn transcript_preview_lines_for_item(
+    item: &ThreadItem,
+    cwd: &Path,
+    inline_visualization_context: Option<&InlineVisualizationContext>,
+) -> Vec<TranscriptPreviewLine> {
+    let line = match item {
+        ThreadItem::UserMessage { content, .. } => TranscriptPreviewLine {
+            speaker: TranscriptPreviewSpeaker::User,
+            text: content
+                .iter()
+                .filter_map(|input| match input {
+                    codex_app_server_protocol::UserInput::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        },
+        ThreadItem::AgentMessage { text, .. } => {
+            let visible_markdown = parse_assistant_markdown(text, cwd).visible_markdown;
+            let rewritten = crate::inline_visualization::rewrite_inline_visualizations(
+                &visible_markdown,
+                inline_visualization_context,
+            );
+            let mut text = rewritten.markdown.into_owned();
+            for (placeholder, link) in &rewritten.trusted_file_links {
+                text = text.replace(
+                    &format!(
+                        "{}  \n[{}]({placeholder})",
+                        link.markdown_label, link.markdown_destination_label
+                    ),
+                    &format!("{}  \n{}", link.display_label, link.destination),
+                );
+            }
+            TranscriptPreviewLine {
+                speaker: TranscriptPreviewSpeaker::Assistant,
+                text,
+            }
+        }
+        _ => return Vec::new(),
+    };
+
+    line.text
+        .lines()
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| TranscriptPreviewLine {
+            speaker: line.speaker,
+            text: text.trim().to_string(),
+        })
+        .collect()
 }
 
 impl SearchState {
@@ -978,6 +1058,7 @@ impl PickerState {
             transcript_previews: HashMap::new(),
             transcript_cells: HashMap::new(),
             pending_transcript_open: None,
+            pending_transcript_cancellation: None,
             transcript_loading_frame_shown: false,
             overlay: None,
             pager_keymap: RuntimeKeymap::defaults().pager,
@@ -1084,7 +1165,12 @@ impl PickerState {
                 self.transcript_cells
                     .insert(thread_id, SessionTranscriptState::Loading);
                 self.begin_transcript_loading(thread_id);
-                (self.picker_loader)(PickerLoadRequest::Transcript { thread_id });
+                let (cancellation_tx, cancellation) = oneshot::channel();
+                self.pending_transcript_cancellation = Some(cancellation_tx);
+                (self.picker_loader)(PickerLoadRequest::Transcript {
+                    thread_id,
+                    cancellation,
+                });
             }
         }
     }
@@ -1096,6 +1182,22 @@ impl PickerState {
                 modifiers,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) => Some(SessionSelection::Exit),
+            key if self.list_keymap.cancel.is_pressed(key) => {
+                if let Some(thread_id) = self.pending_transcript_open.take()
+                    && matches!(
+                        self.transcript_cells.get(&thread_id),
+                        Some(SessionTranscriptState::Loading)
+                    )
+                {
+                    self.transcript_cells.remove(&thread_id);
+                }
+                if let Some(cancellation) = self.pending_transcript_cancellation.take() {
+                    let _ = cancellation.send(());
+                }
+                self.transcript_loading_frame_shown = false;
+                self.request_frame();
+                None
+            }
             _ => None,
         }
     }
@@ -1404,6 +1506,7 @@ impl PickerState {
                     self.transcript_cells
                         .insert(thread_id, SessionTranscriptState::Loaded(cells.clone()));
                     if should_open {
+                        self.pending_transcript_cancellation = None;
                         self.open_pending_transcript_if_ready();
                     }
                     self.request_frame();
@@ -1412,6 +1515,7 @@ impl PickerState {
                     self.transcript_cells
                         .insert(thread_id, SessionTranscriptState::Failed);
                     if self.pending_transcript_open == Some(thread_id) {
+                        self.pending_transcript_cancellation = None;
                         self.pending_transcript_open = None;
                         self.transcript_loading_frame_shown = false;
                         self.inline_error = Some("Could not load transcript preview".to_string());
@@ -4389,7 +4493,7 @@ mod tests {
         let recorded_requests: Arc<Mutex<Vec<ThreadId>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
         let loader: PickerLoader = Arc::new(move |request| {
-            if let PickerLoadRequest::Transcript { thread_id } = request {
+            if let PickerLoadRequest::Transcript { thread_id, .. } = request {
                 request_sink.lock().unwrap().push(thread_id);
             }
         });
@@ -4478,6 +4582,61 @@ mod tests {
 
         assert!(selection.is_none());
         assert_eq!(state.query, "");
+    }
+
+    #[tokio::test]
+    async fn escape_cancels_transcript_loading_and_restores_picker_navigation() {
+        let thread_id = ThreadId::new();
+        let cancellation = Arc::new(Mutex::new(None));
+        let cancellation_sink = cancellation.clone();
+        let loader: PickerLoader = Arc::new(move |request| {
+            if let PickerLoadRequest::Transcript { cancellation, .. } = request {
+                *cancellation_sink.lock().unwrap() = Some(cancellation);
+            }
+        });
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        let mut first = make_row("/tmp/1.jsonl", "2026-05-02T12:00:00Z", "one");
+        first.thread_id = Some(thread_id);
+        state.filtered_rows = vec![
+            first,
+            make_row("/tmp/2.jsonl", "2026-05-02T12:00:00Z", "two"),
+        ];
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+        assert_eq!(state.pending_transcript_open, Some(thread_id));
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(state.pending_transcript_open, None);
+        assert!(!state.transcript_cells.contains_key(&thread_id));
+        assert!(
+            cancellation
+                .lock()
+                .unwrap()
+                .as_mut()
+                .expect("transcript cancellation receiver")
+                .try_recv()
+                .is_ok()
+        );
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 1);
     }
 
     #[tokio::test]
@@ -4571,7 +4730,7 @@ mod tests {
         let recorded_requests: Arc<Mutex<Vec<ThreadId>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
         let loader: PickerLoader = Arc::new(move |request| {
-            if let PickerLoadRequest::Transcript { thread_id } = request {
+            if let PickerLoadRequest::Transcript { thread_id, .. } = request {
                 request_sink.lock().unwrap().push(thread_id);
             }
         });

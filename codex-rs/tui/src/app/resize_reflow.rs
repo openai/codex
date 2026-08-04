@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use color_eyre::eyre::Result;
+use ratatui::layout::Size;
 use ratatui::text::Line;
 
 use super::App;
@@ -192,7 +193,8 @@ impl App {
             return;
         }
 
-        let max_rows = self.resize_reflow_max_rows();
+        let max_rows =
+            crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow);
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
@@ -237,6 +239,19 @@ impl App {
 
     fn resize_reflow_max_rows(&self) -> Option<usize> {
         crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow)
+    }
+
+    pub(super) fn update_visible_history_rows(&mut self, screen_size: Size) {
+        let width = screen_size.width.max(/*other*/ 1);
+        let viewport_height = self
+            .with_chat_widget_frame(width, |desired_height, _| desired_height)
+            .min(screen_size.height);
+        self.transcript_reflow.set_visible_history_rows(
+            screen_size
+                .height
+                .saturating_sub(viewport_height)
+                .max(/*other*/ 1),
+        );
     }
 
     fn clear_terminal_for_resize_replay(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -316,6 +331,10 @@ impl App {
         last_known_screen_size: ratatui::layout::Size,
         frame_requester: &tui::FrameRequester,
     ) -> bool {
+        if size != last_known_screen_size || self.transcript_reflow.visible_history_rows().is_none()
+        {
+            self.update_visible_history_rows(size);
+        }
         let width = self.transcript_reflow.note_width(size.width);
         let reflow_needed = self.transcript_reflow.reflow_needed_for_width(size.width);
         let height_changed = size.height != last_known_screen_size.height;
@@ -570,3 +589,7 @@ impl App {
                 < self.transcript_cells.len()
     }
 }
+
+#[cfg(test)]
+#[path = "resize_reflow_tests.rs"]
+mod tests;

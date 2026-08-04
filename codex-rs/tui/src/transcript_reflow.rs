@@ -29,6 +29,7 @@ pub(crate) struct TranscriptReflowState {
     last_reflow_width: Option<u16>,
     pending_reflow_width: Option<u16>,
     pending_until: Option<Instant>,
+    visible_history_rows: Option<u16>,
     ran_during_stream: bool,
     resize_requested_during_stream: bool,
 }
@@ -41,6 +42,16 @@ impl TranscriptReflowState {
     /// from unrelated cells.
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// Cache the history rows left above the composer for the current terminal size.
+    pub(crate) fn set_visible_history_rows(&mut self, rows: u16) {
+        self.visible_history_rows = Some(rows.max(/*other*/ 1));
+    }
+
+    /// Return the last viewport budget without querying the terminal during cell replay.
+    pub(crate) fn visible_history_rows(&self) -> Option<u16> {
+        self.visible_history_rows
     }
 
     /// Record the width observed during a draw and report whether it is new or changed.
@@ -177,6 +188,24 @@ pub(crate) struct TranscriptWidthChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_history_rows_are_cached_for_resize_replay() {
+        let mut state = TranscriptReflowState::default();
+
+        state.set_visible_history_rows(/*rows*/ 19);
+
+        assert_eq!(state.visible_history_rows(), Some(19));
+    }
+
+    #[test]
+    fn visible_history_rows_keep_one_row_for_a_full_height_composer() {
+        let mut state = TranscriptReflowState::default();
+
+        state.set_visible_history_rows(/*rows*/ 0);
+
+        assert_eq!(state.visible_history_rows(), Some(1));
+    }
 
     #[test]
     fn schedule_debounced_postpones_existing_reflow() {

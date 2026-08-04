@@ -3240,6 +3240,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resume_picker_loads_complete_paginated_and_legacy_transcripts()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.terminal_resize_reflow.max_rows =
+            crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(2);
+        let mut app_server = AppServerSession::new(
+            AppServerClient::InProcess(start_test_embedded_app_server(config.clone()).await?),
+            ThreadParamsMode::Embedded,
+        );
+        let filename_ts = "2025-01-05T12-00-00";
+        let rollout_line = |ordinal: usize, payload: serde_json::Value| {
+            serde_json::json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "event_msg",
+                "payload": payload,
+                "ordinal": ordinal,
+            })
+        };
+        for (history_mode, create_rollout) in [
+            app_test_support::create_fake_rollout,
+            app_test_support::create_fake_paginated_rollout,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let thread_id = create_rollout(
+                temp_dir.path(),
+                filename_ts,
+                "2025-01-05T12:00:00Z",
+                "message 0",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create session rollout");
+            let path = app_test_support::rollout_path(temp_dir.path(), filename_ts, &thread_id);
+            let mut contents = std::fs::read_to_string(&path)?;
+            let started = rollout_line(
+                /*ordinal*/ 3,
+                serde_json::json!({ "type": "task_started", "turn_id": "history-turn", "model_context_window": null }),
+            );
+            contents.push_str(&format!("{started}\n"));
+            for index in 0..=100 {
+                let message = format!("message {index}");
+                let payload = if history_mode == 1 {
+                    serde_json::json!({
+                        "type": "item_completed",
+                        "thread_id": thread_id,
+                        "turn_id": "history-turn",
+                        "item": { "type": "UserMessage", "id": format!("user-{index}"),
+                            "content": [{ "type": "text", "text": message }] },
+                    })
+                } else {
+                    serde_json::json!({ "type": "user_message", "message": message })
+                };
+                let item = rollout_line(index + 4, payload);
+                contents.push_str(&format!("{item}\n"));
+            }
+            if history_mode == 1 {
+                for index in 0..125 {
+                    let item = rollout_line(
+                        index + 105,
+                        serde_json::json!({
+                            "type": "item_completed",
+                            "thread_id": thread_id,
+                            "turn_id": "history-turn",
+                            "item": { "type": "Reasoning", "id": format!("hidden-{index}"),
+                                "summary_text": [], "raw_content": [] },
+                        }),
+                    );
+                    contents.push_str(&format!("{item}\n"));
+                }
+            }
+            std::fs::write(path, contents)?;
+            let thread_id = ThreadId::from_string(&thread_id)?;
+            let started = app_server
+                .resume_thread(
+                    config.clone(),
+                    thread_id,
+                    app_server_session::ResumeModelSettings::RestoreFromThread,
+                )
+                .await?;
+            if history_mode == 1 {
+                assert!(
+                    started
+                        .turns
+                        .iter()
+                        .flat_map(|turn| &turn.items)
+                        .any(|item| {
+                            matches!(
+                                item,
+                                codex_app_server_protocol::ThreadItem::UserMessage { .. }
+                            )
+                        })
+                );
+                let preview = crate::resume_picker::load_transcript_preview(
+                    &mut app_server,
+                    thread_id,
+                    /*codex_home*/ None,
+                )
+                .await?;
+                assert!(!preview.is_empty());
+            }
+            let cells = crate::thread_transcript::load_session_transcript(
+                &mut app_server,
+                thread_id,
+                crate::thread_transcript::RawReasoningVisibility::Hidden,
+                /*codex_home*/ None,
+            )
+            .await?;
+            assert!(cells.len() > 100);
+        }
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
         Box::pin(async {
             let temp_dir = TempDir::new()?;

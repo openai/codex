@@ -28,6 +28,7 @@ use crate::app::App;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
+use crate::app_server_session::thread_items_page_params;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::UserMessage;
@@ -40,9 +41,7 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
@@ -114,13 +113,12 @@ impl App {
                 let result = request_handle
                     .request_typed::<ThreadItemsListResponse>(ClientRequest::ThreadItemsList {
                         request_id,
-                        params: ThreadItemsListParams {
-                            thread_id: thread_id.to_string(),
-                            turn_id: None,
-                            cursor: Some(cursor.clone()),
-                            limit: Some(HISTORY_ITEM_PAGE_LIMIT),
-                            sort_direction: Some(SortDirection::Desc),
-                        },
+                        params: thread_items_page_params(
+                            thread_id,
+                            /*turn_id*/ None,
+                            Some(cursor.clone()),
+                            HISTORY_ITEM_PAGE_LIMIT,
+                        ),
                     })
                     .await
                     .map_err(|err| err.to_string());

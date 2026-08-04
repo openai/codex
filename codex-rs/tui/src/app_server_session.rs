@@ -7,6 +7,9 @@ mod fs;
 mod history;
 
 pub(crate) use history::HISTORY_ITEM_PAGE_LIMIT;
+pub(crate) use history::HISTORY_ITEM_SCAN_LIMIT;
+pub(crate) use history::HistoryHydrationScope;
+pub(crate) use history::thread_items_page_params;
 
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
@@ -578,6 +581,7 @@ impl AppServerSession {
             response.turns_backwards_cursor.clone(),
             response.items_backwards_cursor.clone(),
             Some(&config),
+            HistoryHydrationScope::Initial,
         )
         .await?;
         let fork_parent_title = self
@@ -691,6 +695,7 @@ impl AppServerSession {
                 /*turn_cursor*/ None,
                 /*item_cursor*/ None,
                 Some(&config),
+                HistoryHydrationScope::Initial,
             )
             .await?;
         }
@@ -824,6 +829,7 @@ impl AppServerSession {
             /*turn_cursor*/ None,
             /*item_cursor*/ None,
             /*config*/ None,
+            HistoryHydrationScope::Initial,
         )
         .await?;
         Ok(response.thread)
