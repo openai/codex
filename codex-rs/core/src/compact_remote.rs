@@ -10,6 +10,8 @@ use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
+use crate::compact_remote_history::HistoryItemGroup;
+use crate::compact_remote_history::history_item_groups;
 use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
 use crate::context_manager::estimate_item_token_count;
@@ -301,7 +303,7 @@ async fn run_remote_compact_task_inner_impl(
 
 pub(crate) async fn process_compacted_history(
     sess: &Session,
-    mut compacted_history: Vec<ResponseItem>,
+    compacted_history: Vec<ResponseItem>,
     initial_context_injection: &InitialContextInjection,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Mid-turn compaction is the only path that must inject initial context above the last user
@@ -310,7 +312,10 @@ pub(crate) async fn process_compacted_history(
     let (initial_context, world_state_baseline) =
         build_compaction_initial_context(sess, initial_context_injection).await;
 
-    compacted_history.retain(should_keep_compacted_history_item);
+    let compacted_history = history_item_groups(compacted_history)
+        .filter(|group| should_keep_compacted_history_item(&group.source))
+        .flat_map(HistoryItemGroup::into_items)
+        .collect();
     (
         insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context),
         world_state_baseline,
@@ -375,34 +380,34 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     let base_tokens =
         i128::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i128::MAX);
     let original_items = history.raw_items();
-    let item_token_estimates = original_items
-        .iter()
-        .map(estimate_item_token_count)
-        .collect::<Vec<_>>();
-    let mut estimated_tokens = item_token_estimates
-        .iter()
-        .copied()
-        .map(i128::from)
+    let mut estimated_tokens = history_item_groups(original_items)
+        .map(|group| group.estimated_token_count())
         .fold(base_tokens, i128::saturating_add);
     let initial_estimated_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);
     let mut rewritten_items = Vec::new();
+    let mut consumed_items = 0;
 
-    for (item, item_tokens) in original_items.iter().zip(item_token_estimates).rev() {
+    for group in history_item_groups(original_items)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         if i64::try_from(estimated_tokens).unwrap_or(i64::MAX) <= context_window {
             break;
         }
-        let Some(rewritten_item) = rewritten_output_for_context_window(item) else {
+        let Some(rewritten_item) = rewritten_output_for_context_window(group.source) else {
             break;
         };
         estimated_tokens = estimated_tokens
-            .saturating_sub(i128::from(item_tokens))
+            .saturating_sub(group.estimated_token_count())
             .saturating_add(i128::from(estimate_item_token_count(&rewritten_item)));
+        consumed_items += 1 + usize::from(group.attached_notice.is_some());
         rewritten_items.push(rewritten_item);
     }
 
     let rewritten_outputs = rewritten_items.len();
     if rewritten_outputs > 0 {
-        let retained_len = original_items.len() - rewritten_outputs;
+        let retained_len = original_items.len() - consumed_items;
         let mut items = original_items[..retained_len].to_vec();
         items.extend(rewritten_items.into_iter().rev());
         history.replace(items);

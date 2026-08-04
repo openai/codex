@@ -28,6 +28,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -928,7 +929,53 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
             }),
     )
     .await?;
-    let codex = harness.test().codex.clone();
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+    let user_notice = "<image_resize_notice>retained user image</image_resize_notice>";
+    let tool_notice = "<image_resize_notice>discarded tool image</image_resize_notice>";
+    let unlisted_notice = "<unlisted_notice>discarded developer notice</unlisted_notice>";
+    let developer_message = |text| {
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{ "type": "input_text", "text": text }]
+        })
+    };
+    let initial_history = [
+        json!({
+            "type": "message",
+            "role": "user",
+            "content": [
+                { "type": "input_text", "text": "retained image source" },
+                { "type": "input_image", "image_url": image_url }
+            ]
+        }),
+        developer_message(user_notice),
+        developer_message(unlisted_notice),
+        json!({
+            "type": "function_call",
+            "name": "view_image",
+            "arguments": "{}",
+            "call_id": "image-call"
+        }),
+        json!({
+            "type": "function_call_output",
+            "call_id": "image-call",
+            "output": [{ "type": "input_image", "image_url": image_url }]
+        }),
+        developer_message(tool_notice),
+    ]
+    .into_iter()
+    .map(|item| serde_json::from_value(item).map(RolloutItem::ResponseItem))
+    .collect::<serde_json::Result<Vec<_>>>()?;
+    let codex = harness
+        .test()
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            initial_history: InitialHistory::Forked(initial_history),
+            ..StartThreadOptions::new(harness.test().config.clone())
+        })
+        .await?
+        .thread;
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -1108,6 +1155,23 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     assert!(
         follow_up_body.contains("hello remote compact"),
         "expected v2 follow-up request to preserve retained original user messages"
+    );
+    assert!(
+        follow_up_request.input().windows(2).any(|items| {
+            items[0]["role"] == "user"
+                && items[0]["content"][0]["text"] == "retained image source"
+                && items[1]["role"] == "developer"
+                && items[1]["content"][0]["text"] == user_notice
+        }),
+        "expected v2 compaction to retain the user image and its adjacent resize notice"
+    );
+    assert!(
+        !follow_up_body.contains(unlisted_notice),
+        "expected v2 compaction to drop unlisted developer notices"
+    );
+    assert!(
+        !follow_up_body.contains(tool_notice),
+        "expected v2 compaction to drop the resize notice with its tool output"
     );
 
     Ok(())

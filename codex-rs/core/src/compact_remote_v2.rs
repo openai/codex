@@ -13,6 +13,8 @@ use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
+use crate::compact_remote_history::HistoryItemGroup;
+use crate::compact_remote_history::history_item_groups;
 use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -443,10 +445,10 @@ fn build_v2_compacted_history(
     prompt_input: &[ResponseItem],
     compaction_output: ResponseItem,
 ) -> (Vec<ResponseItem>, usize) {
-    let retained = prompt_input
-        .iter()
-        .filter(|item| is_retained_for_remote_compaction_v2(item))
-        .filter(|item| should_keep_compacted_history_item(item))
+    let retained = history_item_groups(prompt_input)
+        .filter(|group| is_retained_for_remote_compaction_v2(group.source))
+        .filter(|group| should_keep_compacted_history_item(group.source))
+        .flat_map(HistoryItemGroup::into_items)
         .cloned()
         .collect::<Vec<_>>();
     let mut retained =
@@ -494,18 +496,37 @@ fn truncate_retained_messages_for_remote_compaction(
 ) -> Vec<ResponseItem> {
     let mut remaining = max_tokens;
     let mut truncated_reversed = Vec::with_capacity(items.len());
-    for item in items.into_iter().rev() {
+    for group in history_item_groups(items)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         if remaining == 0 {
             continue;
         }
 
-        let token_count = message_text_token_count(&item).max(1);
+        let notice_tokens = group
+            .attached_notice
+            .as_ref()
+            .map_or(0, |notice| message_text_token_count(notice).max(1));
+        let token_count = message_text_token_count(&group.source)
+            .max(1)
+            .saturating_add(notice_tokens);
         if token_count <= remaining {
-            truncated_reversed.push(item);
+            if let Some(notice) = group.attached_notice {
+                truncated_reversed.push(notice);
+            }
+            truncated_reversed.push(group.source);
             remaining = remaining.saturating_sub(token_count);
-        } else if let Some(truncated_item) =
-            truncate_message_text_to_token_budget(item, /*max_tokens*/ remaining)
+        } else if remaining > notice_tokens
+            && let Some(truncated_item) = truncate_message_text_to_token_budget(
+                group.source,
+                /*max_tokens*/ remaining - notice_tokens,
+            )
         {
+            if let Some(notice) = group.attached_notice {
+                truncated_reversed.push(notice);
+            }
             truncated_reversed.push(truncated_item);
             remaining = 0;
         }
