@@ -225,6 +225,11 @@ pub(crate) enum AppEvent {
         event: HistoryLookupResponse,
     },
 
+    /// Refill terminal scrollback from older paginated history after its rows reflow.
+    RequestOlderScrollbackHistory {
+        thread_id: ThreadId,
+    },
+
     /// One background-loaded page of older Ctrl+T transcript history.
     OlderThreadHistoryLoaded {
         thread_id: ThreadId,

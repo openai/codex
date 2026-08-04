@@ -5124,7 +5124,8 @@ async fn capped_resize_reflow_renders_recent_suffix_only() {
             .map(rendered_line_text)
             .collect::<Vec<_>>(),
         vec![
-            "cell 17".to_string(),
+            "Earlier messages are available — press ctrl + t to view the full transcript"
+                .to_string(),
             String::new(),
             "cell 18".to_string(),
             String::new(),

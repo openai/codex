@@ -1279,7 +1279,7 @@ async fn thread_fork_creates_reference_backed_paginated_thread() -> Result<()> {
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: forked_thread_id,
+            thread_id: forked_thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "Continue from the fork".to_string(),
                 text_elements: Vec::new(),
@@ -1322,6 +1322,33 @@ async fn thread_fork_creates_reference_backed_paginated_thread() -> Result<()> {
     let excluded_turns_path = excluded_turns_thread.path.expect("forked rollout path");
     let excluded_turns_meta = read_session_meta_line(excluded_turns_path.as_path()).await?;
     assert_eq!(excluded_turns_meta.meta.history_base, Some(history_base));
+
+    let ThreadForkResponse {
+        thread: nested_thread,
+        ..
+    } = mcp
+        .request(|request_id| ClientRequest::ThreadFork {
+            request_id,
+            params: ThreadForkParams {
+                thread_id: forked_thread_id.clone(),
+                exclude_turns: true,
+                ..ThreadForkParams::default()
+            },
+        })
+        .await?;
+    assert_eq!(nested_thread.forked_from_id, Some(forked_thread_id.clone()));
+    assert_eq!(nested_thread.history_mode, ThreadHistoryMode::Paginated);
+    assert!(nested_thread.turns.is_empty());
+    let nested_path = nested_thread.path.expect("nested fork rollout path");
+    let nested_meta = read_session_meta_line(nested_path.as_path()).await?;
+    assert_eq!(
+        nested_meta
+            .meta
+            .history_base
+            .expect("nested fork history base")
+            .thread_id,
+        ThreadId::from_string(forked_thread_id.as_str())?
+    );
     Ok(())
 }
 

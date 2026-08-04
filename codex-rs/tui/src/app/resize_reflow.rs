@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use color_eyre::eyre::Result;
 use ratatui::layout::Size;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 use super::App;
@@ -141,6 +142,7 @@ impl App {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
                 render_from_transcript_tail: true,
+                was_truncated: false,
             });
         }
     }
@@ -163,14 +165,21 @@ impl App {
         }
 
         if buffer.retained_lines.is_empty() {
+            self.request_scrollback_history_top_up(/*rendered_rows*/ 0);
             return;
         }
 
-        let retained_lines = buffer.retained_lines.into_iter().collect::<Vec<_>>();
+        let mut retained_lines = buffer.retained_lines.into_iter().collect::<Vec<_>>();
+        let width = self
+            .chat_widget
+            .history_wrap_width(tui.terminal.last_known_screen_size.width);
+        self.prepend_scrollback_history_notice(&mut retained_lines, buffer.was_truncated, width);
+        let retained_rows = retained_lines.len();
         tui.insert_history_hyperlink_lines_with_wrap_policy(
             retained_lines,
             self.history_line_wrap_policy(),
         );
+        self.request_scrollback_history_top_up(retained_rows);
     }
 
     pub(super) fn insert_history_cell_lines_with_initial_replay_buffer(
@@ -230,6 +239,7 @@ impl App {
         buffer.retained_lines.extend(display);
         while buffer.retained_lines.len() > max_rows {
             buffer.retained_lines.pop_front();
+            buffer.was_truncated = true;
         }
     }
 
@@ -286,7 +296,7 @@ impl App {
         Ok(())
     }
 
-    fn schedule_immediate_resize_reflow(&mut self, tui: &mut tui::Tui) {
+    pub(super) fn schedule_immediate_resize_reflow(&mut self, tui: &mut tui::Tui) {
         self.transcript_reflow.schedule_immediate();
         tui.frame_requester().schedule_frame();
     }
@@ -457,6 +467,7 @@ impl App {
 
         let reflow_result = self.render_transcript_lines_for_reflow(width);
         let reflowed_lines = reflow_result.lines;
+        let reflowed_rows = reflowed_lines.len();
 
         // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
         tui.clear_pending_history_lines();
@@ -469,8 +480,33 @@ impl App {
                 self.history_line_wrap_policy(),
             );
         }
+        self.request_scrollback_history_top_up(reflowed_rows);
 
         Ok(terminal_width)
+    }
+
+    /// Return whether older paginated source can fill unused configured scrollback rows.
+    pub(super) fn scrollback_history_needs_top_up(&self, rendered_rows: usize) -> bool {
+        self.overlay.is_none()
+            && self.scrollback_has_older_history
+            && self
+                .resize_reflow_max_rows()
+                .is_some_and(|max_rows| rendered_rows < max_rows)
+    }
+
+    fn request_scrollback_history_top_up(&self, rendered_rows: usize) {
+        if self.scrollback_history_needs_top_up(rendered_rows)
+            && let Some(thread_id) = self.chat_widget.thread_id()
+        {
+            tracing::debug!(
+                %thread_id,
+                rendered_rows,
+                max_rows = self.resize_reflow_max_rows(),
+                "refilling underfilled terminal scrollback from paginated history"
+            );
+            self.app_event_tx
+                .send(crate::app_event::AppEvent::RequestOlderScrollbackHistory { thread_id });
+        }
     }
 
     /// Rebuild scrollback after rollback removes transcript cells.
@@ -517,6 +553,7 @@ impl App {
         let mut cell_displays = VecDeque::new();
         let mut rendered_rows = 0usize;
         let mut start = self.transcript_cells.len();
+        let mut history_was_truncated = false;
 
         while start > 0 {
             start -= 1;
@@ -530,6 +567,7 @@ impl App {
             });
 
             if row_cap.is_some_and(|max_rows| rendered_rows > max_rows) {
+                history_was_truncated = true;
                 break;
             }
         }
@@ -565,14 +603,47 @@ impl App {
         if let Some(max_rows) = row_cap
             && reflowed_lines.len() > max_rows
         {
+            history_was_truncated = true;
             let trimmed_line_count = reflowed_lines.len() - max_rows;
             reflowed_lines = reflowed_lines.split_off(trimmed_line_count);
         }
+        self.prepend_scrollback_history_notice(&mut reflowed_lines, history_was_truncated, width);
         self.has_emitted_history_lines = !reflowed_lines.is_empty();
 
         ReflowRenderResult {
             lines: reflowed_lines,
         }
+    }
+
+    fn prepend_scrollback_history_notice(
+        &self,
+        lines: &mut Vec<HyperlinkLine>,
+        history_was_truncated: bool,
+        width: u16,
+    ) {
+        if lines.is_empty() || (!history_was_truncated && !self.scrollback_has_older_history) {
+            return;
+        }
+        let Some(binding) = crate::keymap::primary_binding(&self.keymap.app.open_transcript) else {
+            return;
+        };
+        let notice = Line::from(format!(
+            "Earlier messages are available — press {} to view the full transcript",
+            binding.display_label()
+        ))
+        .dim();
+        let notice_lines =
+            crate::wrapping::word_wrap_lines([notice], usize::from(width.max(/*other*/ 1)));
+        if let Some(max_rows) = self.resize_reflow_max_rows() {
+            let available_history_rows = max_rows.saturating_sub(notice_lines.len());
+            if available_history_rows == 0 {
+                return;
+            }
+            if lines.len() > available_history_rows {
+                lines.drain(..lines.len() - available_history_rows);
+            }
+        }
+        lines.splice(0..0, notice_lines.into_iter().map(HyperlinkLine::new));
     }
 
     /// Return whether current transcript state should be treated as stream-time resize state.

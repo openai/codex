@@ -34,6 +34,14 @@ impl App {
                 self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
+            AppEvent::RequestOlderScrollbackHistory { thread_id } => {
+                if self.chat_widget.thread_id() == Some(thread_id)
+                    && self.overlay.is_none()
+                    && self.scrollback_has_older_history
+                {
+                    self.request_older_history_page(app_server, thread_id);
+                }
+            }
             AppEvent::OlderThreadHistoryLoaded {
                 thread_id,
                 cursor,

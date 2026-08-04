@@ -801,15 +801,23 @@ impl AppServerSession {
             }
         };
         let mut response = response;
-        if presentation == ForkPresentation::Regular && !response.thread.ephemeral {
-            self.hydrate_initial_thread_history(
-                &mut response.thread,
-                /*turn_cursor*/ None,
-                /*item_cursor*/ None,
-                Some(&config),
-                HistoryHydrationScope::Initial,
-            )
-            .await?;
+        if presentation == ForkPresentation::Regular
+            && !response.thread.ephemeral
+            && let Err(error) = self
+                .hydrate_initial_thread_history(
+                    &mut response.thread,
+                    /*turn_cursor*/ None,
+                    /*item_cursor*/ None,
+                    Some(&config),
+                    HistoryHydrationScope::Initial,
+                )
+                .await
+        {
+            tracing::warn!(
+                thread_id = %response.thread.id,
+                error = %error,
+                "preserving the created fork after bounded history hydration failed"
+            );
         }
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
@@ -2788,6 +2796,97 @@ mod tests {
 
         assert_eq!(fork.session.forked_from_id, Some(source_thread_id));
         assert!(fork.turns.is_empty());
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn side_fork_uses_one_request_for_long_paginated_history() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&codex_home).await;
+        config.terminal_resize_reflow.max_rows =
+            crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(100);
+        let filename_ts = "2025-01-05T12-00-00";
+        let source_id = create_fake_paginated_rollout(
+            codex_home.path(),
+            filename_ts,
+            "2025-01-05T12:00:00Z",
+            "Saved user message",
+            Some(config.model_provider_id.as_str()),
+            /*git_info*/ None,
+        )
+        .expect("create long paginated source rollout");
+        let source_path =
+            app_test_support::rollout_path(codex_home.path(), filename_ts, source_id.as_str());
+        let mut contents = std::fs::read_to_string(&source_path)?;
+        let rollout_line = |ordinal: usize, payload: serde_json::Value| {
+            serde_json::json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "event_msg",
+                "payload": payload,
+                "ordinal": ordinal,
+            })
+        };
+        let started = rollout_line(
+            /*ordinal*/ 3,
+            serde_json::json!({
+                "type": "task_started",
+                "turn_id": "long-history-turn",
+                "model_context_window": null,
+            }),
+        );
+        contents.push_str(&format!("{started}\n"));
+        for index in 0..256 {
+            let item = rollout_line(
+                index + 4,
+                serde_json::json!({
+                    "type": "item_completed",
+                    "thread_id": source_id,
+                    "turn_id": "long-history-turn",
+                    "item": {
+                        "type": "UserMessage",
+                        "id": format!("long-history-user-{index}"),
+                        "content": [{
+                            "type": "text",
+                            "text": format!("long history message {index}"),
+                        }],
+                    },
+                }),
+            );
+            contents.push_str(&format!("{item}\n"));
+        }
+        std::fs::write(source_path, contents)?;
+
+        let source_thread_id = ThreadId::from_string(source_id.as_str())?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        let resumed = app_server
+            .resume_thread(
+                config.clone(),
+                source_thread_id,
+                ResumeModelSettings::RestoreFromThread,
+            )
+            .await?;
+        let loaded_items: usize = resumed.turns.iter().map(|turn| turn.items.len()).sum();
+        assert!(loaded_items <= HISTORY_ITEM_PAGE_LIMIT as usize);
+        assert!(app_server.has_older_history(source_thread_id));
+
+        let mut side_config = config;
+        side_config.ephemeral = true;
+        let next_request_id = app_server.next_request_id;
+        let side = app_server
+            .fork_side_thread(side_config, source_thread_id)
+            .await?;
+
+        assert_eq!(app_server.next_request_id, next_request_id + 1);
+        assert_eq!(side.session.forked_from_id, Some(source_thread_id));
+        assert_eq!(side.turns, Vec::<Turn>::new());
+        assert!(app_server.has_older_history(source_thread_id));
+        assert!(
+            !app_server
+                .history_pagination
+                .contains_key(&side.session.thread_id)
+        );
+
         app_server.shutdown().await?;
         Ok(())
     }

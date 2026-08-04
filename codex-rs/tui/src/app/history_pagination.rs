@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use super::*;
 use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
 use crate::app_server_session::thread_items_page_params;
+use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::thread_transcript::RawReasoningVisibility;
@@ -13,7 +14,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadItemsListResponse;
 
 impl App {
-    /// Start one bounded page request shared by transcript-history navigation.
+    /// Start one bounded page request shared by scrollback refill and the transcript overlay.
     pub(crate) fn request_older_history_page(
         &self,
         app_server: &mut AppServerSession,
@@ -61,9 +62,7 @@ impl App {
         cursor: &str,
         result: Result<ThreadItemsListResponse, String>,
     ) -> Result<()> {
-        if self.chat_widget.thread_id() != Some(thread_id)
-            || !matches!(self.overlay, Some(Overlay::Transcript(_)))
-        {
+        if self.chat_widget.thread_id() != Some(thread_id) {
             app_server.cancel_older_history_page(thread_id);
             return Ok(());
         }
@@ -229,6 +228,24 @@ impl App {
             });
             continue_to_start = previous_state == TranscriptHistoryState::LoadingBeginning
                 && self.scrollback_has_older_history;
+        } else {
+            let index = self
+                .transcript_cells
+                .iter()
+                .rposition(|cell| cell.as_any().is::<SessionInfoCell>())
+                .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1));
+            self.transcript_cells.splice(index..index, cells);
+            let wrap_width = self.chat_widget.history_wrap_width(width);
+            let rendered_rows = self
+                .render_transcript_lines_for_reflow(wrap_width)
+                .lines
+                .len();
+            self.schedule_immediate_resize_reflow(tui);
+            if self.scrollback_history_needs_top_up(rendered_rows)
+                && self.request_older_history_page(app_server, thread_id)
+            {
+                return Ok(());
+            }
         }
         if continue_to_start
             && self.request_older_history_page(app_server, thread_id)

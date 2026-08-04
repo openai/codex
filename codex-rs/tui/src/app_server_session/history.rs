@@ -191,6 +191,10 @@ impl AppServerSession {
         Ok(items)
     }
 
+    /// Hydrates paginated threads through bounded turn and item pages.
+    ///
+    /// Legacy servers expose neither paging method, so only legacy threads may
+    /// use `thread/read(includeTurns: true)` to preserve their existing history.
     pub(crate) async fn hydrate_initial_thread_history(
         &mut self,
         thread: &mut Thread,
