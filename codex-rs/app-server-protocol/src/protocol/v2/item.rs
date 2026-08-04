@@ -10,7 +10,7 @@ use super::UserInput;
 use super::shared::v2_enum_from_core;
 use crate::JsonSchema;
 use crate::TS;
-use crate::protocol::item_builders::command_actions_for_path_uri;
+use crate::protocol::item_builders::CommandExecutionPresentation;
 use crate::protocol::item_builders::convert_patch_changes;
 use crate::protocol::item_builders::review_output_text;
 use codex_experimental_api_macros::ExperimentalApi;
@@ -43,7 +43,6 @@ use codex_protocol::protocol::GuardianUserAuthorization as CoreGuardianUserAutho
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
-use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use serde::Deserialize;
@@ -841,24 +840,31 @@ impl From<CoreTurnItem> for ThreadItem {
                 summary: reasoning.summary_text,
                 content: reasoning.raw_content,
             },
-            CoreTurnItem::CommandExecution(command) => ThreadItem::CommandExecution {
-                id: command.id,
-                plugin_id: command.plugin_id,
-                script_path: command.script_path,
-                command: shlex_join(&command.command),
-                cwd: command.cwd.clone().into(),
-                process_id: command.process_id,
-                source: command.source.into(),
-                status: command.status.into(),
-                command_actions: command_actions_for_path_uri(&command.parsed_cmd, &command.cwd),
-                aggregated_output: command
-                    .aggregated_output
-                    .filter(|output| !output.is_empty()),
-                exit_code: command.exit_code,
-                duration_ms: command
-                    .duration
-                    .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
-            },
+            CoreTurnItem::CommandExecution(command) => {
+                let presentation = CommandExecutionPresentation::from_raw(
+                    &command.command,
+                    &command.parsed_cmd,
+                    &command.cwd,
+                );
+                ThreadItem::CommandExecution {
+                    id: command.id,
+                    plugin_id: command.plugin_id,
+                    script_path: command.script_path,
+                    command: presentation.command,
+                    cwd: command.cwd.clone().into(),
+                    process_id: command.process_id,
+                    source: command.source.into(),
+                    status: command.status.into(),
+                    command_actions: presentation.command_actions,
+                    aggregated_output: command
+                        .aggregated_output
+                        .filter(|output| !output.is_empty()),
+                    exit_code: command.exit_code,
+                    duration_ms: command
+                        .duration
+                        .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
+                }
+            }
             CoreTurnItem::DynamicToolCall(call) => ThreadItem::DynamicToolCall {
                 id: call.id,
                 namespace: call.namespace,

@@ -2144,6 +2144,7 @@ dependencies = [
  "codex-extension-items",
  "codex-internal-extra-config",
  "codex-protocol",
+ "codex-secrets",
  "codex-shell-command",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

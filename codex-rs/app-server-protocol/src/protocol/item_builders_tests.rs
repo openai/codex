@@ -4,6 +4,7 @@ use serde_json::json;
 
 #[test]
 fn read_command_actions_preserve_native_and_foreign_paths() {
+    let api_key = "sk-abcdefghijklmnopqrstuvwxyz123456";
     for (cwd_uri, relative_path, expected_path) in [
         (
             "file:///home/alice/repo",
@@ -39,6 +40,11 @@ fn read_command_actions_preserve_native_and_foreign_paths() {
                 path: Some("subdir".to_string()),
             },
             ParsedCommand::Search {
+                cmd: format!("rg {api_key}"),
+                query: Some(api_key.to_string()),
+                path: Some("src".to_string()),
+            },
+            ParsedCommand::Search {
                 cmd: "rg needle".to_string(),
                 query: Some("needle".to_string()),
                 path: Some("src".to_string()),
@@ -59,6 +65,12 @@ fn read_command_actions_preserve_native_and_foreign_paths() {
                     "type": "listFiles",
                     "command": "ls",
                     "path": "subdir",
+                },
+                {
+                    "type": "search",
+                    "command": "rg [REDACTED_SECRET]",
+                    "query": "[REDACTED_SECRET]",
+                    "path": "src",
                 },
                 {
                     "type": "search",

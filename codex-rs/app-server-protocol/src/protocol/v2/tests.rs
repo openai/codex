@@ -2927,10 +2927,19 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         plugin_id: Some("sample@openai-curated".to_string()),
         script_path: Some("scripts/run.py".to_string()),
         process_id: Some("pid-1".to_string()),
-        command: vec!["echo".to_string(), "done".to_string()],
+        command: vec![
+            "git".to_string(),
+            "-c".to_string(),
+            "http.extraHeader=Authorization: Bearer example_synthetic_bearer_token_123456"
+                .to_string(),
+            "-c".to_string(),
+            "http.extraHeader=X-Trace:example".to_string(),
+            "push".to_string(),
+        ],
         cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
         parsed_cmd: vec![codex_protocol::parse_command::ParsedCommand::Unknown {
-            cmd: "echo done".to_string(),
+            cmd: "git -c 'http.extraHeader=Authorization: Bearer example_synthetic_bearer_token_123456' -c http.extraHeader=X-Trace:example push"
+                .to_string(),
         }],
         source: CoreExecCommandSource::Agent,
         interaction_input: None,
@@ -2949,13 +2958,15 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             id: "exec-1".to_string(),
             plugin_id: Some("sample@openai-curated".to_string()),
             script_path: Some("scripts/run.py".to_string()),
-            command: "echo done".to_string(),
+            command: "git -c 'http.extraHeader=Authorization: Bearer [REDACTED_SECRET]' -c 'http.extraHeader=X-Trace:example' push"
+                .to_string(),
             cwd: LegacyAppPathString::from_abs_path(&test_path_buf("/tmp").abs()),
             process_id: Some("pid-1".to_string()),
             source: CommandExecutionSource::Agent,
             status: CommandExecutionStatus::Completed,
             command_actions: vec![CommandAction::Unknown {
-                command: "echo done".to_string(),
+                command: "git -c 'http.extraHeader=Authorization: Bearer [REDACTED_SECRET]' -c http.extraHeader=X-Trace:example push"
+                    .to_string(),
             }],
             aggregated_output: Some("done\n".to_string()),
             exit_code: Some(0),

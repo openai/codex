@@ -16,6 +16,7 @@ use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermis
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionPresentation;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionSource;
@@ -620,13 +621,17 @@ pub(crate) async fn apply_bespoke_event_handling(
             {
                 CommandExecutionApprovalPresentation::Network(network_approval_context)
             } else {
-                let command_string = shlex_join(&command);
+                let command_presentation = CommandExecutionPresentation::from_raw(
+                    &command,
+                    &parsed_cmd,
+                    &cwd.clone().into(),
+                );
                 let completion_item = CommandExecutionCompletionItem {
                     plugin_id,
                     script_path,
-                    command: command_string,
+                    command: command_presentation.command,
                     cwd: cwd.clone().into(),
-                    command_actions: command_actions.clone(),
+                    command_actions: command_presentation.command_actions,
                 };
                 CommandExecutionApprovalPresentation::Command(completion_item)
             };
@@ -637,9 +642,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     }
                     CommandExecutionApprovalPresentation::Command(completion_item) => (
                         None,
-                        Some(completion_item.command.clone()),
+                        Some(shlex_join(&command)),
                         Some(completion_item.cwd.clone()),
-                        Some(completion_item.command_actions.clone()),
+                        Some(command_actions),
                         Some(completion_item),
                     ),
                 };
