@@ -1628,7 +1628,6 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         session_success.item_type,
         ExternalAgentConfigMigrationItemType::Sessions
     );
-    assert_eq!(session_success.cwd, None);
     let session_source = std::fs::canonicalize(&session_path)?.display().to_string();
     assert_eq!(
         session_success.source.as_deref(),

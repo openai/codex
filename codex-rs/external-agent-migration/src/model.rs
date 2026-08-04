@@ -147,10 +147,20 @@ impl ExternalAgentConfigImportItemResult {
         target: Option<String>,
         title: Option<String>,
     ) {
+        self.record_success_with_cwd(self.cwd.clone(), source, target, title);
+    }
+
+    pub fn record_success_with_cwd(
+        &mut self,
+        cwd: Option<PathBuf>,
+        source: Option<String>,
+        target: Option<String>,
+        title: Option<String>,
+    ) {
         self.success_count = self.success_count.saturating_add(1);
         self.successes.push(ExternalAgentConfigImportSuccess {
             item_type: self.item_type,
-            cwd: self.cwd.clone(),
+            cwd,
             source,
             target,
             title,

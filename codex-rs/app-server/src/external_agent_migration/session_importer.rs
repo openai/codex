@@ -46,6 +46,7 @@ use crate::config_manager::ConfigManager;
 const SESSION_IMPORT_CONCURRENCY: usize = 5;
 
 struct CompletedSessionImport {
+    cwd: PathBuf,
     import: CompletedExternalAgentSessionImport,
     connector_attribution: Option<ImportedSessionConnectorAttribution>,
 }
@@ -53,6 +54,7 @@ struct CompletedSessionImport {
 enum SessionImportOutcome {
     Created(CompletedSessionImport),
     Appended {
+        cwd: PathBuf,
         source_path: PathBuf,
         imported_thread_id: ThreadId,
         title: Option<String>,
@@ -129,7 +131,8 @@ impl ExternalAgentSessionImporter {
         while let Some(result) = import_results.next().await {
             match result {
                 Ok(Some(SessionImportOutcome::Created(completed_import))) => {
-                    item_result.record_success(
+                    item_result.record_success_with_cwd(
+                        Some(completed_import.cwd.clone()),
                         Some(completed_import.import.source_path.display().to_string()),
                         Some(completed_import.import.imported_thread_id.to_string()),
                         completed_import.import.title.clone(),
@@ -137,11 +140,13 @@ impl ExternalAgentSessionImporter {
                     completed_imports.push(completed_import);
                 }
                 Ok(Some(SessionImportOutcome::Appended {
+                    cwd,
                     source_path,
                     imported_thread_id,
                     title,
                 })) => {
-                    item_result.record_success(
+                    item_result.record_success_with_cwd(
+                        Some(cwd),
                         Some(source_path.display().to_string()),
                         Some(imported_thread_id.to_string()),
                         title,
@@ -286,6 +291,7 @@ impl ExternalAgentSessionImporter {
                 thread_id,
                 expected_source_content_sha256,
             } => {
+                let cwd = session.cwd.clone();
                 let title = session.title.clone();
                 let appended = append_existing_session(
                     &self.codex_home,
@@ -302,6 +308,7 @@ impl ExternalAgentSessionImporter {
                 )
                 .await;
                 Ok(appended.then_some(SessionImportOutcome::Appended {
+                    cwd,
                     source_path,
                     imported_thread_id: thread_id,
                     title,
@@ -326,6 +333,7 @@ impl ExternalAgentSessionImporter {
                 session_id: session_id.to_string(),
                 server_ids: attributed_mcp_server_ids,
             });
+        let cwd = session.cwd.clone();
         let title = session.title.clone();
         let imported_thread_id =
             self.persist_session(session)
@@ -337,6 +345,7 @@ impl ExternalAgentSessionImporter {
                     sub_error_type: failure.sub_error_type,
                 })?;
         Ok(CompletedSessionImport {
+            cwd,
             import: CompletedExternalAgentSessionImport {
                 source_path,
                 source_content_sha256,

@@ -35,6 +35,43 @@ fn detects_cur_transcript_with_project_cwd() {
 }
 
 #[test]
+fn detects_projectless_cur_transcript_without_embedded_metadata() {
+    let root = TempDir::new().expect("tempdir");
+    let external_agent_home = root.path().join(".cursor");
+    let transcript = write_transcript(
+        &external_agent_home,
+        "empty-window",
+        "projectless-session",
+        "first request",
+    );
+
+    let sessions =
+        detect_recent_cur_sessions(&external_agent_home, root.path()).expect("detect sessions");
+
+    assert_eq!(
+        sessions,
+        vec![ExternalAgentSessionMigration {
+            path: transcript,
+            cwd: root.path().to_path_buf(),
+            title: Some("first request".to_string()),
+        }]
+    );
+}
+
+#[test]
+fn resolves_projectless_cur_cwd_from_relative_home() {
+    let current_dir = std::env::current_dir().expect("current dir");
+
+    assert_eq!(
+        cur_project_cwd(
+            Path::new(".cursor/projects/empty-window"),
+            Path::new(".cursor"),
+        ),
+        Some(current_dir)
+    );
+}
+
+#[test]
 fn detects_cur_transcript_with_embedded_unc_cwd() {
     let root = TempDir::new().expect("tempdir");
     let external_agent_home = root.path().join(".external");
