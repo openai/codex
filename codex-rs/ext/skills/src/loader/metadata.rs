@@ -1,12 +1,16 @@
 use std::io;
-use std::path::PathBuf;
 
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_skills::SkillDependencies;
+use codex_skills::SkillInterface;
+use codex_skills::SkillInterfaceAssetPolicy;
+use codex_skills::SkillInterfaceFile;
 use codex_skills::SkillParseError;
 use codex_skills::SkillPolicy;
 use codex_skills::SkillToolDependency;
+use codex_skills::resolve_skill_interface;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 
 use super::MAX_DEPENDENCY_COMMAND_LEN;
@@ -20,34 +24,17 @@ use super::discovery::SkillMetadataDiscovery;
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct SkillMetadataFile {
-    // Keep parsing the host-only interface fields so malformed interface metadata
-    // invalidates the file exactly as it does in the legacy loader.
-    #[serde(default, rename = "interface")]
-    _interface: Option<Interface>,
+    #[serde(default)]
+    interface: Option<SkillInterfaceFile>,
     #[serde(default)]
     pub(super) dependencies: Option<Dependencies>,
     #[serde(default)]
     pub(super) policy: Option<Policy>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct Interface {
-    #[serde(rename = "display_name")]
-    _display_name: Option<String>,
-    #[serde(rename = "short_description")]
-    _short_description: Option<String>,
-    #[serde(rename = "icon_small")]
-    _icon_small: Option<PathBuf>,
-    #[serde(rename = "icon_large")]
-    _icon_large: Option<PathBuf>,
-    #[serde(rename = "brand_color")]
-    _brand_color: Option<String>,
-    #[serde(rename = "default_prompt")]
-    _default_prompt: Option<String>,
-}
-
 #[derive(Default)]
 pub(super) struct LoadedSkillMetadata {
+    pub(super) interface: Option<SkillInterface>,
     pub(super) dependencies: Option<SkillDependencies>,
     pub(super) policy: Option<SkillPolicy>,
 }
@@ -79,9 +66,14 @@ struct DependencyTool {
 
 pub(super) async fn load_host_skill_metadata(
     file_system: &dyn ExecutorFileSystem,
+    skill_path: &AbsolutePathBuf,
     metadata: &SkillMetadataDiscovery,
+    plugin_root: Option<&AbsolutePathBuf>,
 ) -> LoadedSkillMetadata {
     // Fail open: optional metadata should not block loading SKILL.md.
+    let Some(skill_dir) = skill_path.parent() else {
+        return LoadedSkillMetadata::default();
+    };
     let metadata_path = match metadata {
         SkillMetadataDiscovery::Present(path) => path,
         SkillMetadataDiscovery::Absent => return LoadedSkillMetadata::default(),
@@ -130,11 +122,16 @@ pub(super) async fn load_host_skill_metadata(
     };
 
     let SkillMetadataFile {
-        _interface: _,
+        interface,
         dependencies,
         policy,
     } = parsed;
+    let asset_policy = match plugin_root {
+        Some(plugin_root) => SkillInterfaceAssetPolicy::PluginShared { plugin_root },
+        None => SkillInterfaceAssetPolicy::LocalOnly,
+    };
     LoadedSkillMetadata {
+        interface: resolve_skill_interface(interface, &skill_dir, asset_policy),
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
     }
@@ -221,7 +218,11 @@ pub(super) fn validate_len(
     Ok(())
 }
 
-fn resolve_str(value: Option<String>, max_len: usize, field: &'static str) -> Option<String> {
+pub(super) fn resolve_str(
+    value: Option<String>,
+    max_len: usize,
+    field: &'static str,
+) -> Option<String> {
     let value = value?;
     let value = sanitize_single_line(&value);
     if value.is_empty() {

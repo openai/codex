@@ -5,6 +5,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillDependencies;
+use codex_skills::SkillInterface;
 use codex_skills::SkillMetadata;
 use codex_skills::SkillPolicy;
 use codex_skills::SkillToolDependency;
@@ -39,6 +40,53 @@ fn root_for(temp_dir: &TempDir, scope: SkillScope) -> HostSkillRoot {
         path: AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute root"),
         scope,
         file_system: Arc::clone(&LOCAL_FS),
+        plugin_root: None,
+    }
+}
+
+struct PluginSkillFixture {
+    root: TempDir,
+    plugin_root: AbsolutePathBuf,
+    skill_path: AbsolutePathBuf,
+}
+
+impl PluginSkillFixture {
+    fn new() -> Self {
+        let root = TempDir::new().expect("temp dir");
+        let plugin_root = AbsolutePathBuf::from_absolute_path(
+            fs::canonicalize(root.path()).expect("canonical plugin root"),
+        )
+        .expect("absolute plugin root");
+        let skill_path = write_skill(
+            &root,
+            "skills/send-message",
+            "name: send-message\ndescription: Send messages",
+        );
+        Self {
+            root,
+            plugin_root,
+            skill_path,
+        }
+    }
+
+    fn write_asset(&self, relative_path: &str) {
+        let asset_path = self.root.path().join(relative_path);
+        fs::create_dir_all(asset_path.parent().expect("asset parent"))
+            .expect("create asset directory");
+        fs::write(asset_path, "<svg/>").expect("write asset");
+    }
+
+    fn write_metadata(&self, contents: &str) {
+        write_metadata(&self.root, "skills/send-message", contents);
+    }
+
+    fn host_root(&self) -> HostSkillRoot {
+        HostSkillRoot {
+            path: self.plugin_root.join("skills"),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_root: Some(self.plugin_root.clone()),
+        }
     }
 }
 
@@ -116,6 +164,163 @@ async fn invalid_optional_metadata_fails_open() {
             policy: None,
             path_to_skills_md: skill_path,
             scope: SkillScope::Repo,
+            plugin_id: None,
+            remote_plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn loads_host_interface_metadata_and_local_asset_paths() {
+    let root = TempDir::new().expect("temp dir");
+    let skill_path = write_skill(&root, "demo", "name: demo\ndescription: Demo skill");
+    fs::create_dir_all(root.path().join("demo/assets")).expect("create assets");
+    write_metadata(
+        &root,
+        "demo",
+        r##"interface:
+  display_name: Demo
+  short_description: Interface summary
+  icon_small: assets/icon.svg
+  icon_large: assets/icon-large.png
+  brand_color: "#123ABC"
+  default_prompt: Run the demo
+"##,
+    );
+
+    let snapshot = load_host_skill_root(root_for(&root, SkillScope::User)).await;
+    let skill_dir = skill_path.parent().expect("skill parent");
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: "demo".to_string(),
+            description: "Demo skill".to_string(),
+            short_description: None,
+            interface: Some(SkillInterface {
+                display_name: Some("Demo".to_string()),
+                short_description: Some("Interface summary".to_string()),
+                icon_small: Some(skill_dir.join("assets/icon.svg")),
+                icon_large: Some(skill_dir.join("assets/icon-large.png")),
+                brand_color: Some("#123ABC".to_string()),
+                default_prompt: Some("Run the demo".to_string()),
+            }),
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: skill_path,
+            scope: SkillScope::User,
+            plugin_id: None,
+            remote_plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn loads_plugin_skill_interface_icons_from_local_and_shared_assets() {
+    let fixture = PluginSkillFixture::new();
+    fixture.write_asset("skills/send-message/assets/icon.svg");
+    fixture.write_asset("assets/logo.svg");
+    fixture.write_metadata(
+        r#"interface:
+  icon_small: "assets/icon.svg"
+  icon_large: "../../assets/logo.svg"
+"#,
+    );
+
+    let snapshot = load_host_skill_root(fixture.host_root()).await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: "send-message".to_string(),
+            description: "Send messages".to_string(),
+            short_description: None,
+            interface: Some(SkillInterface {
+                display_name: None,
+                short_description: None,
+                icon_small: Some(
+                    fixture
+                        .plugin_root
+                        .join("skills/send-message/assets/icon.svg"),
+                ),
+                icon_large: Some(fixture.plugin_root.join("assets/logo.svg")),
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: fixture.skill_path,
+            scope: SkillScope::User,
+            plugin_id: None,
+            remote_plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn rejects_plugin_skill_interface_icons_outside_shared_assets() {
+    let fixture = PluginSkillFixture::new();
+    fixture.write_asset("other/icon.svg");
+    fixture.write_metadata(
+        r#"interface:
+  display_name: Send Message
+  icon_small: "../../other/icon.svg"
+"#,
+    );
+
+    let snapshot = load_host_skill_root(fixture.host_root()).await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: "send-message".to_string(),
+            description: "Send messages".to_string(),
+            short_description: None,
+            interface: Some(SkillInterface {
+                display_name: Some("Send Message".to_string()),
+                short_description: None,
+                icon_small: None,
+                icon_large: None,
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: fixture.skill_path,
+            scope: SkillScope::User,
+            plugin_id: None,
+            remote_plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn rejects_interface_fields_that_escape_or_fail_validation() {
+    let root = TempDir::new().expect("temp dir");
+    let skill_path = write_skill(&root, "demo", "name: demo\ndescription: Demo skill");
+    write_metadata(
+        &root,
+        "demo",
+        "interface:\n  icon_small: ../outside.svg\n  brand_color: blue\n",
+    );
+
+    let snapshot = load_host_skill_root(root_for(&root, SkillScope::User)).await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: "demo".to_string(),
+            description: "Demo skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: skill_path,
+            scope: SkillScope::User,
             plugin_id: None,
             remote_plugin_id: None,
         }]

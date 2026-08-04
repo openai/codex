@@ -32,6 +32,7 @@ pub struct HostSkillRoot {
     pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub file_system: Arc<dyn ExecutorFileSystem>,
+    pub plugin_root: Option<AbsolutePathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +73,10 @@ async fn load_skills_under_root(
     root: &AbsolutePathBuf,
 ) -> (Vec<SkillMetadata>, Vec<HostSkillError>) {
     let file_system = skill_root.file_system.as_ref();
+    let plugin_root = match skill_root.plugin_root.as_ref() {
+        Some(plugin_root) => Some(canonicalize_for_skill_identity(file_system, plugin_root).await),
+        None => None,
+    };
     let directory_symlinks = match skill_root.scope {
         SkillScope::User | SkillScope::Repo | SkillScope::Admin => DirectorySymlinkPolicy::Follow,
         SkillScope::System => DirectorySymlinkPolicy::Ignore,
@@ -138,16 +143,20 @@ async fn load_skills_under_root(
         namespace_roots,
     );
     let skill_results = futures::stream::iter(resolved_skills)
-        .map(|skill| async move {
-            let result = parse_skill_file(
-                file_system,
-                &skill.skill,
-                &skill.path,
-                &skill.path_uri,
-                skill_root.scope,
-            )
-            .await;
-            (skill.path, skill.path_uri, result)
+        .map(|skill| {
+            let plugin_root = plugin_root.as_ref();
+            async move {
+                let result = parse_skill_file(
+                    file_system,
+                    &skill.skill,
+                    &skill.path,
+                    &skill.path_uri,
+                    skill_root.scope,
+                    plugin_root,
+                )
+                .await;
+                (skill.path, skill.path_uri, result)
+            }
         })
         .buffered(MAX_CONCURRENT_SKILL_LOADS)
         .collect::<Vec<_>>();
@@ -181,6 +190,7 @@ async fn parse_skill_file(
     path: &AbsolutePathBuf,
     path_uri: &PathUri,
     scope: SkillScope,
+    plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, String> {
     let metadata_path = path_uri
         .parent()
@@ -194,7 +204,7 @@ async fn parse_skill_file(
     .unwrap_or(SkillMetadataDiscovery::Absent);
     let (contents, loaded_metadata) = tokio::join!(
         file_system.read_file_text(path_uri, /*sandbox*/ None),
-        load_host_skill_metadata(file_system, &metadata),
+        load_host_skill_metadata(file_system, path, &metadata, plugin_root),
     );
     let contents = contents.map_err(|error| format!("failed to read file: {error}"))?;
     let ParsedSkillFrontmatter {
@@ -204,6 +214,7 @@ async fn parse_skill_file(
     } = parse_skill_frontmatter_metadata(&contents, || default_skill_name(path))
         .map_err(|error| error.to_string())?;
     let LoadedSkillMetadata {
+        interface,
         dependencies,
         policy,
     } = loaded_metadata;
@@ -212,7 +223,7 @@ async fn parse_skill_file(
         name,
         description,
         short_description,
-        interface: None,
+        interface,
         dependencies,
         policy,
         path_to_skills_md: path.clone(),

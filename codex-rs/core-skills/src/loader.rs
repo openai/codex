@@ -24,8 +24,11 @@ use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::ParsedSkillFrontmatter;
+use codex_skills::SkillInterfaceAssetPolicy;
+use codex_skills::SkillInterfaceFile;
 use codex_skills::SkillParseError;
 use codex_skills::parse_skill_frontmatter_metadata;
+use codex_skills::resolve_skill_interface;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
@@ -49,9 +52,6 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::path::Component;
-use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use toml::Value as TomlValue;
@@ -63,7 +63,7 @@ pub const MAX_CONCURRENT_ROOT_SCANS: usize = 8;
 #[derive(Debug, Default, Deserialize)]
 struct SkillMetadataFile {
     #[serde(default)]
-    interface: Option<Interface>,
+    interface: Option<SkillInterfaceFile>,
     #[serde(default)]
     dependencies: Option<Dependencies>,
     #[serde(default)]
@@ -75,16 +75,6 @@ struct LoadedSkillMetadata {
     interface: Option<SkillInterface>,
     dependencies: Option<SkillDependencies>,
     policy: Option<SkillPolicy>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct Interface {
-    display_name: Option<String>,
-    short_description: Option<String>,
-    icon_small: Option<PathBuf>,
-    icon_large: Option<PathBuf>,
-    brand_color: Option<String>,
-    default_prompt: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -120,8 +110,6 @@ const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_QUALIFIED_NAME_LEN: usize = 128;
 const MAX_DESCRIPTION_LEN: usize = 1024;
-const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
-const MAX_DEFAULT_PROMPT_LEN: usize = MAX_DESCRIPTION_LEN;
 const MAX_DEPENDENCY_TYPE_LEN: usize = MAX_NAME_LEN;
 const MAX_DEPENDENCY_TRANSPORT_LEN: usize = MAX_NAME_LEN;
 const MAX_DEPENDENCY_VALUE_LEN: usize = MAX_DESCRIPTION_LEN;
@@ -784,56 +772,15 @@ async fn load_skill_metadata(
         dependencies,
         policy,
     } = parsed;
+    let asset_policy = match plugin_root {
+        Some(plugin_root) => SkillInterfaceAssetPolicy::PluginShared { plugin_root },
+        None => SkillInterfaceAssetPolicy::LocalOnly,
+    };
     LoadedSkillMetadata {
-        interface: resolve_interface(interface, &skill_dir, plugin_root),
+        interface: resolve_skill_interface(interface, &skill_dir, asset_policy),
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
     }
-}
-
-fn resolve_interface(
-    interface: Option<Interface>,
-    skill_dir: &AbsolutePathBuf,
-    plugin_root: Option<&AbsolutePathBuf>,
-) -> Option<SkillInterface> {
-    let interface = interface?;
-    let interface = SkillInterface {
-        display_name: resolve_str(
-            interface.display_name,
-            MAX_NAME_LEN,
-            "interface.display_name",
-        ),
-        short_description: resolve_str(
-            interface.short_description,
-            MAX_SHORT_DESCRIPTION_LEN,
-            "interface.short_description",
-        ),
-        icon_small: resolve_asset_path(
-            skill_dir,
-            plugin_root,
-            "interface.icon_small",
-            interface.icon_small,
-        ),
-        icon_large: resolve_asset_path(
-            skill_dir,
-            plugin_root,
-            "interface.icon_large",
-            interface.icon_large,
-        ),
-        brand_color: resolve_color_str(interface.brand_color, "interface.brand_color"),
-        default_prompt: resolve_str(
-            interface.default_prompt,
-            MAX_DEFAULT_PROMPT_LEN,
-            "interface.default_prompt",
-        ),
-    };
-    let has_fields = interface.display_name.is_some()
-        || interface.short_description.is_some()
-        || interface.icon_small.is_some()
-        || interface.icon_large.is_some()
-        || interface.brand_color.is_some()
-        || interface.default_prompt.is_some();
-    if has_fields { Some(interface) } else { None }
 }
 
 fn resolve_dependencies(dependencies: Option<Dependencies>) -> Option<SkillDependencies> {
@@ -895,97 +842,6 @@ fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> 
     })
 }
 
-fn resolve_asset_path(
-    skill_dir: &AbsolutePathBuf,
-    plugin_root: Option<&AbsolutePathBuf>,
-    field: &'static str,
-    path: Option<PathBuf>,
-) -> Option<AbsolutePathBuf> {
-    // Icons must stay under the skill's assets directory. Plugin skills may
-    // also share icons from the plugin-level assets directory.
-    let path = path?;
-    if path.as_os_str().is_empty() {
-        return None;
-    }
-
-    let assets_dir = skill_dir.join("assets");
-    if path.is_absolute() {
-        tracing::warn!(
-            "ignoring {field}: icon must be a relative assets path (not {})",
-            assets_dir.display()
-        );
-        return None;
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::Normal(component) => normalized.push(component),
-            Component::ParentDir => {
-                return resolve_plugin_shared_asset_path(skill_dir, plugin_root, field, &path);
-            }
-            _ => {
-                tracing::warn!("ignoring {field}: icon path must be under assets/");
-                return None;
-            }
-        }
-    }
-
-    let mut components = normalized.components();
-    match components.next() {
-        Some(Component::Normal(component)) if component == "assets" => {}
-        _ => {
-            tracing::warn!("ignoring {field}: icon path must be under assets/");
-            return None;
-        }
-    }
-
-    Some(skill_dir.join(normalized))
-}
-
-fn resolve_plugin_shared_asset_path(
-    skill_dir: &AbsolutePathBuf,
-    plugin_root: Option<&AbsolutePathBuf>,
-    field: &'static str,
-    path: &Path,
-) -> Option<AbsolutePathBuf> {
-    let Some(plugin_root) = plugin_root else {
-        tracing::warn!("ignoring {field}: icon path must not contain '..'");
-        return None;
-    };
-
-    let plugin_assets_dir = lexically_normalize(plugin_root.join("assets").as_path());
-    let resolved = lexically_normalize(skill_dir.join(path).as_path());
-    if !resolved.starts_with(&plugin_assets_dir) {
-        tracing::warn!("ignoring {field}: icon path with '..' must resolve under plugin assets/");
-        return None;
-    }
-
-    AbsolutePathBuf::try_from(resolved)
-        .map_err(|err| {
-            tracing::warn!("ignoring {field}: icon path must resolve to an absolute path: {err}");
-            err
-        })
-        .ok()
-}
-
-fn lexically_normalize(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
-}
-
 fn sanitize_single_line(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1031,22 +887,6 @@ fn resolve_required_str(
         return None;
     };
     resolve_str(Some(value), max_len, field)
-}
-
-fn resolve_color_str(value: Option<String>, field: &'static str) -> Option<String> {
-    let value = value?;
-    let value = value.trim();
-    if value.is_empty() {
-        tracing::warn!("ignoring {field}: value is empty");
-        return None;
-    }
-    let mut chars = value.chars();
-    if value.len() == 7 && chars.next() == Some('#') && chars.all(|c| c.is_ascii_hexdigit()) {
-        Some(value.to_string())
-    } else {
-        tracing::warn!("ignoring {field}: expected #RRGGBB, got {value}");
-        None
-    }
 }
 
 #[cfg(test)]

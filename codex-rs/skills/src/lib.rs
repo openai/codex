@@ -1,6 +1,10 @@
+mod interface;
 mod model;
 mod parser;
 
+pub use interface::SkillInterfaceAssetPolicy;
+pub use interface::SkillInterfaceFile;
+pub use interface::resolve_skill_interface;
 pub use model::EnvironmentSkillMetadata;
 pub use model::SkillConfigRule;
 pub use model::SkillConfigRuleSelector;
