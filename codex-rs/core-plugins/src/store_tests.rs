@@ -396,7 +396,7 @@ fn agent_plugin_install_does_not_migrate_commands() {
 
 #[cfg(unix)]
 #[test]
-fn agent_plugin_install_rejects_symlinked_skill_file() {
+fn agent_plugin_install_skips_symlinked_skill_file() {
     let tmp = tempdir().unwrap();
     let plugin_root = tmp.path().join("agent-plugin");
     let skill_root = plugin_root.join("skills/greet");
@@ -411,19 +411,17 @@ fn agent_plugin_install_rejects_symlinked_skill_file() {
     std::os::unix::fs::symlink(&outside_skill, skill_root.join("SKILL.md")).unwrap();
     let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
 
-    let err = PluginStore::new(tmp.path().to_path_buf())
+    let result = PluginStore::new(tmp.path().to_path_buf())
         .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
-        .expect_err("symlinked Agent Plugin skill should be rejected");
+        .expect("install Agent Plugin");
 
-    assert!(
-        err.to_string()
-            .contains("plugin source contains unsupported symbolic link")
-    );
+    assert!(result.installed_path.join("plugin.json").is_file());
+    assert!(!result.installed_path.join("skills/greet/SKILL.md").exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn agent_plugin_install_rejects_symlinked_executable() {
+fn agent_plugin_install_skips_symlinked_executable() {
     let tmp = tempdir().unwrap();
     let plugin_root = tmp.path().join("agent-plugin");
     let bin_root = plugin_root.join("bin");
@@ -438,14 +436,12 @@ fn agent_plugin_install_rejects_symlinked_executable() {
     std::os::unix::fs::symlink(&outside_executable, bin_root.join("tool")).unwrap();
     let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
 
-    let err = PluginStore::new(tmp.path().to_path_buf())
+    let result = PluginStore::new(tmp.path().to_path_buf())
         .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
-        .expect_err("symlinked Agent Plugin executable should be rejected");
+        .expect("install Agent Plugin");
 
-    assert!(
-        err.to_string()
-            .contains("plugin source contains unsupported symbolic link")
-    );
+    assert!(result.installed_path.join("plugin.json").is_file());
+    assert!(!result.installed_path.join("bin/tool").exists());
 }
 
 #[test]

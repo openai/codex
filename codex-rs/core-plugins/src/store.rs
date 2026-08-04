@@ -745,16 +745,6 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreErr
         } else if file_type.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|err| PluginStoreError::io("failed to copy plugin file", err))?;
-        } else if file_type.is_symlink() {
-            return Err(PluginStoreError::Invalid(format!(
-                "plugin source contains unsupported symbolic link: {}",
-                source_path.display()
-            )));
-        } else {
-            return Err(PluginStoreError::Invalid(format!(
-                "plugin source contains unsupported file type: {}",
-                source_path.display()
-            )));
         }
     }
 
