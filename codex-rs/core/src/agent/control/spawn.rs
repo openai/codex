@@ -269,6 +269,7 @@ impl AgentControl {
             })
             .await?;
         let stored_model = stored_thread.model.clone();
+        let stored_model_provider = stored_thread.model_provider.clone();
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
         let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
@@ -323,6 +324,18 @@ impl AgentControl {
         }
         if let Some(model) = stored_model {
             config.model = Some(model);
+        }
+        if config.model_provider_id != stored_model_provider {
+            config.model_provider = config
+                .model_providers
+                .get(&stored_model_provider)
+                .cloned()
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(format!(
+                        "Model provider `{stored_model_provider}` not found"
+                    ))
+                })?;
+            config.model_provider_id = stored_model_provider;
         }
         let residency_slot = self
             .reserve_v2_residency_slot(&state, &config, Some(thread_id))
