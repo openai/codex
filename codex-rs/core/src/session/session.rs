@@ -13,6 +13,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::auth::AgentIdentityAuthPolicy;
+use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -65,8 +66,8 @@ pub(crate) struct Session {
 
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
-    /// Provider identifier ("openai", "openrouter", ...).
-    pub(super) provider: ModelProviderInfo,
+    /// Runtime provider and its provider-specific execution policy.
+    pub(super) provider: SharedModelProvider,
 
     pub(super) collaboration_mode: CollaborationMode,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
@@ -840,7 +841,7 @@ impl Session {
             let terminal_type = user_agent();
             let session_model = session_configuration.collaboration_mode.model().to_string();
             let auth_env_telemetry = collect_auth_env_telemetry(
-                &session_configuration.provider,
+                session_configuration.provider.info(),
                 auth_manager.codex_api_key_env_enabled(),
             );
             let mut session_telemetry = SessionTelemetry::new(
@@ -1147,7 +1148,7 @@ impl Session {
                         AgentIdentityAuthPolicy::JwtOnly
                     },
                     thread_id,
-                    session_configuration.provider.clone(),
+                    session_configuration.provider.info().clone(),
                     session_configuration.session_source.clone(),
                     session_configuration.originator.clone(),
                     config.model_verbosity,
