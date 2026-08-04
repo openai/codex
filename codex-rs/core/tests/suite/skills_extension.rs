@@ -17,6 +17,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::HostSkillProvider;
+use codex_skills_extension::OrchestratorSkillProvider;
 use codex_skills_extension::SkillProvider;
 use codex_skills_extension::SkillProviderSource;
 use codex_skills_extension::SkillProviders;
@@ -44,13 +45,21 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
+use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use toml::toml;
+use wiremock::Mock;
+use wiremock::Request;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 struct StaticSkillProvider {
     catalog: SkillCatalog,
@@ -434,6 +443,192 @@ async fn rendered_catalogs_for_turns(
     }));
     let _codex_home_guard = codex_home;
     Ok((developer_texts, client_warning_messages))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const SKILL_PACKAGE: &str = "skill://demo/explicit-only";
+    const MAIN_RESOURCE: &str = "skill://demo/explicit-only/SKILL.md";
+    const REFERENCED_RESOURCE: &str = "skill://demo/explicit-only/references/guide.md";
+    const REFERENCED_CONTENTS: &str = "# Referenced guide";
+    const READ_CALL_ID: &str = "read-explicit-only-resource";
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let response = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    READ_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({
+                        "authority": { "kind": "orchestrator" },
+                        "package": SKILL_PACKAGE,
+                        "resource": REFERENCED_RESOURCE,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path_regex("^/api/codex/ps/mcp/?$"))
+        .and(|request: &Request| {
+            serde_json::from_slice::<Value>(&request.body).is_ok_and(|body| {
+                matches!(
+                    body["method"].as_str(),
+                    Some("resources/list" | "resources/read")
+                )
+            })
+        })
+        .respond_with(|request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body)
+                .expect("MCP resource request should be valid JSON");
+            let result = match body["method"].as_str() {
+                Some("resources/list") => {
+                    let resources = [
+                        ("visible", Some(json!(true))),
+                        ("explicit-only", Some(json!(false))),
+                        ("missing-policy", None),
+                        ("non-boolean-policy", Some(json!("false"))),
+                    ]
+                    .map(|(name, allow_implicit_invocation)| {
+                        let mut metadata = json!({
+                            "plugin_name": "demo",
+                            "skill_name": name,
+                        });
+                        if let Some(allow_implicit_invocation) = allow_implicit_invocation {
+                            metadata["allow_implicit_invocation"] = allow_implicit_invocation;
+                        }
+                        json!({
+                            "name": name,
+                            "uri": format!("skill://demo/{name}"),
+                            "mimeType": "mcp/skill",
+                            "_meta": metadata,
+                        })
+                    });
+                    json!({ "resources": resources })
+                }
+                Some("resources/read") => {
+                    let uri = body["params"]["uri"]
+                        .as_str()
+                        .expect("MCP resource read should include a resource URI");
+                    let contents = match uri {
+                        MAIN_RESOURCE => {
+                            format!("# Explicit-only instructions\nRead {REFERENCED_RESOURCE}.")
+                        }
+                        REFERENCED_RESOURCE => REFERENCED_CONTENTS.to_string(),
+                        _ => unreachable!("unexpected MCP resource URI: {uri}"),
+                    };
+                    json!({
+                        "contents": [{
+                            "uri": uri,
+                            "mimeType": "text/markdown",
+                            "text": contents,
+                        }],
+                    })
+                }
+                method => unreachable!("unexpected MCP resource method: {method:?}"),
+            };
+            ResponseTemplate::new(/*status*/ 200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": result,
+            }))
+        })
+        .with_priority(/*p*/ 1)
+        .mount(&server)
+        .await;
+
+    let mut extensions = ExtensionRegistryBuilder::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new()
+            .with_orchestrator_provider(Arc::new(OrchestratorSkillProvider::new())),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: false,
+            orchestrator_skills_enabled: true,
+            shadow_selection_enabled: false,
+        },
+    );
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url)
+        // Local executors disable orchestrator skill discovery.
+        .with_exec_server_url("none")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config.include_skill_instructions = true;
+            config.orchestrator_skills_enabled = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+
+    test.submit_turn("Use $demo:explicit-only.").await?;
+
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    let request = &requests[0];
+    let developer_messages = request.message_input_texts("developer");
+    for name in ["visible", "missing-policy", "non-boolean-policy"] {
+        let catalog_entry = format!("- demo:{name}:");
+        assert!(
+            developer_messages
+                .iter()
+                .any(|message| message.contains(&catalog_entry)),
+            "model-visible skills should include `{name}`: {developer_messages:?}"
+        );
+    }
+    assert!(
+        developer_messages
+            .iter()
+            .all(|message| !message.contains("- demo:explicit-only:")),
+        "model-visible skills should omit the explicit-only skill: {developer_messages:?}"
+    );
+    let user_messages = request.message_input_texts("user");
+    let skill_instructions = user_messages
+        .iter()
+        .find(|message| {
+            message.contains("<name>demo:explicit-only</name>")
+                && message.contains("# Explicit-only instructions")
+                && message.contains(REFERENCED_RESOURCE)
+        })
+        .expect("explicit invocation should inject the hidden skill instructions and reference");
+    let resource_access = skill_instructions
+        .split_once("<resource_access>")
+        .and_then(|(_, remainder)| remainder.split_once("</resource_access>"))
+        .map(|(metadata, _)| metadata)
+        .expect("hidden orchestrator skills should include resource-access metadata");
+    assert_eq!(
+        serde_json::from_str::<Value>(resource_access)?,
+        json!({
+            "authority": { "kind": "orchestrator" },
+            "package": SKILL_PACKAGE,
+            "main_resource": MAIN_RESOURCE,
+        })
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &requests[1]
+                .function_call_output_text(READ_CALL_ID)
+                .expect("skills.read should return the referenced resource"),
+        )?,
+        json!({
+            "resource": REFERENCED_RESOURCE,
+            "contents": REFERENCED_CONTENTS,
+            "next_cursor": null,
+        })
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -135,7 +135,7 @@ impl SkillToolAuthoritySelector {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum SkillToolAuthority {
+pub(crate) enum SkillToolAuthority {
     Orchestrator,
     Executor { id: String },
 }
@@ -148,7 +148,7 @@ impl SkillToolAuthority {
         }
     }
 
-    fn from_authority(authority: &SkillAuthority) -> Option<Self> {
+    pub(crate) fn from_authority(authority: &SkillAuthority) -> Option<Self> {
         match &authority.kind {
             SkillSourceKind::Orchestrator if authority.id == CODEX_APPS_MCP_SERVER_NAME => {
                 Some(Self::Orchestrator)

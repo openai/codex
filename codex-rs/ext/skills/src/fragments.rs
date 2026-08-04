@@ -5,6 +5,7 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use crate::catalog_prompt::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 use crate::catalog_prompt::SKILLS_HOW_TO_USE_WITH_ALIASES;
 use crate::catalog_prompt::render_available_skills_body;
+use crate::tools::SkillToolAuthority;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AvailableSkillsInstructions {
@@ -57,12 +58,12 @@ pub(crate) struct SkillInstructions {
     pub(crate) name: String,
     pub(crate) path: String,
     pub(crate) contents: String,
-    pub(crate) executor_resource_access: Option<ExecutorSkillResourceAccess>,
+    pub(crate) resource_access: Option<SkillResourceAccess>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExecutorSkillResourceAccess {
-    pub(crate) authority_id: String,
+pub(crate) struct SkillResourceAccess {
+    pub(crate) authority: SkillToolAuthority,
     pub(crate) package: String,
     pub(crate) main_resource: String,
 }
@@ -85,14 +86,11 @@ impl ContextualUserFragment for SkillInstructions {
         let path = &self.path;
         let contents = &self.contents;
         let resource_access = self
-            .executor_resource_access
+            .resource_access
             .as_ref()
             .map(|access| {
                 let metadata = serde_json::json!({
-                    "authority": {
-                        "kind": "executor",
-                        "id": access.authority_id,
-                    },
+                    "authority": access.authority,
                     "package": access.package,
                     "main_resource": access.main_resource,
                 });

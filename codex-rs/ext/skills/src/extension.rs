@@ -40,8 +40,8 @@ use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
-use crate::fragments::ExecutorSkillResourceAccess;
 use crate::fragments::SkillInstructions;
+use crate::fragments::SkillResourceAccess;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
@@ -68,6 +68,7 @@ use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
+use crate::tools::SkillToolAuthority;
 use crate::tools::skill_tools;
 use crate::warnings::bounded_warnings;
 use crate::world_state::HostSkillsWarningEmitter;
@@ -640,10 +641,11 @@ where
                             )
                             .0,
                             contents,
-                            executor_resource_access: (!entry.prompt_visible
-                                && entry.authority.kind == SkillSourceKind::Executor)
-                                .then(|| ExecutorSkillResourceAccess {
-                                    authority_id: entry.authority.id.clone(),
+                            resource_access: (!entry.prompt_visible)
+                                .then_some(&entry.authority)
+                                .and_then(SkillToolAuthority::from_authority)
+                                .map(|authority| SkillResourceAccess {
+                                    authority,
                                     package: entry.id.0.clone(),
                                     main_resource: entry.main_prompt.as_str().to_string(),
                                 }),
