@@ -462,6 +462,8 @@ mod shutdown_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::API_CALL_COUNT_METRIC;
+    use crate::metrics::API_CALL_DURATION_METRIC;
     use crate::metrics::MetricsExporter;
     use crate::metrics::TOOL_CALL_COUNT_METRIC;
     use crate::metrics::TOOL_CALL_DURATION_METRIC;
@@ -544,6 +546,8 @@ mod tests {
         config.exporter = MetricsExporter::InMemory(exporter.clone());
         let metrics = MetricsClient::new(config)?;
 
+        metrics.counter(API_CALL_COUNT_METRIC, /*inc*/ 1, &[])?;
+        metrics.record_duration(API_CALL_DURATION_METRIC, Duration::from_millis(100), &[])?;
         metrics.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &[])?;
         metrics.record_duration(TOOL_CALL_DURATION_METRIC, Duration::from_millis(25), &[])?;
         metrics.counter("codex.turns", /*inc*/ 1, &[])?;
