@@ -43,9 +43,8 @@ fn search_info_uses_connector_name_for_output_namespace_description() {
 }
 
 #[test]
-fn mcp_namespace_descriptions_are_bounded_without_mutating_metadata() {
-    let expected_description = "é".repeat(499);
-    let full_description = format!("{expected_description}🦀keep the complete app metadata");
+fn mcp_namespace_descriptions_preserve_complete_metadata() {
+    let full_description = format!("{}🦀keep the complete app metadata", "é".repeat(499));
     let mut info = tool_info();
     info.namespace_description = Some(full_description.clone());
     let handler = McpHandler::new(info).expect("MCP tool spec should build");
@@ -55,17 +54,39 @@ fn mcp_namespace_descriptions_are_bounded_without_mutating_metadata() {
         search_info.source_info,
         Some(ToolSearchSourceInfo {
             name: "Calendar".to_string(),
-            description: Some(expected_description.clone()),
+            description: Some(full_description.clone()),
+        })
+    );
+    let LoadableToolSpec::Namespace(namespace) = search_info.entry.output else {
+        panic!("expected namespace search output");
+    };
+    assert_eq!(namespace.description, full_description);
+    assert_eq!(
+        handler.tool_info.namespace_description,
+        Some(full_description)
+    );
+}
+
+#[test]
+fn mcp_namespace_descriptions_are_bounded_at_512_kib() {
+    let expected_description = "é".repeat(MAX_MCP_NAMESPACE_DESCRIPTION_BYTES / 2 - 1);
+    let full_description = format!("{expected_description}🦀overflow");
+    let mut info = tool_info();
+    info.namespace_description = Some(full_description.clone());
+    let handler = McpHandler::new(info).expect("MCP tool spec should build");
+    let search_info = handler.search_info().expect("MCP search info");
+
+    assert_eq!(
+        search_info.source_info,
+        Some(ToolSearchSourceInfo {
+            name: "Calendar".to_string(),
+            description: Some(full_description),
         })
     );
     let LoadableToolSpec::Namespace(namespace) = search_info.entry.output else {
         panic!("expected namespace search output");
     };
     assert_eq!(namespace.description, expected_description);
-    assert_eq!(
-        handler.tool_info.namespace_description,
-        Some(full_description)
-    );
 }
 
 fn tool_info() -> ToolInfo {
