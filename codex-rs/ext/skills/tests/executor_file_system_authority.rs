@@ -642,6 +642,124 @@ async fn pre_discovered_executor_catalog_snapshot() {
 }
 
 #[tokio::test]
+async fn direct_executor_discovery_preserves_hidden_nested_and_probed_metadata() {
+    let id = NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+    let test_root = std::env::temp_dir().join(format!(
+        "codex-executor-skill-discovery-{}-{id}",
+        std::process::id()
+    ));
+    let outer_manifest = test_root.join(".codex-plugin/plugin.json");
+    let hidden_skill = test_root.join(".hidden/deploy/SKILL.md");
+    let hidden_metadata = test_root.join(".hidden/deploy/agents/openai.yaml");
+    let inner_manifest = test_root.join("nested/.codex-plugin/plugin.json");
+    let inner_skill = test_root.join("nested/skills/audit/SKILL.md");
+    for (path, contents) in [
+        (&outer_manifest, r#"{"name":"outer"}"#),
+        (
+            &hidden_skill,
+            "---\nname: hidden\ndescription: Hidden skill.\n---\n",
+        ),
+        (&inner_manifest, r#"{"name":"inner"}"#),
+        (
+            &inner_skill,
+            "---\nname: audit\ndescription: Audit skill.\n---\n",
+        ),
+    ] {
+        std::fs::create_dir_all(path.parent().expect("test file parent"))
+            .expect("create test directory");
+        std::fs::write(path, contents).expect("write test file");
+    }
+    std::fs::create_dir_all(hidden_metadata.parent().expect("metadata parent"))
+        .expect("create metadata directory");
+    let metadata_contents = "policy:\n  allow_implicit_invocation: false\n";
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let metadata_target = test_root.join("linked-openai.yaml");
+        std::fs::write(&metadata_target, metadata_contents).expect("write metadata target");
+        symlink(metadata_target, &hidden_metadata).expect("link metadata");
+    }
+    #[cfg(not(unix))]
+    std::fs::write(&hidden_metadata, metadata_contents).expect("write metadata");
+
+    let root_uri = PathUri::from_host_native_path(&test_root).expect("skill root URI");
+    let selected_root = SelectedCapabilityRoot {
+        id: "discovery-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "local".to_string(),
+            path: root_uri.clone(),
+        },
+    };
+    let manager = Arc::new(EnvironmentManager::default_for_tests());
+    let legacy_file_system = manager
+        .get_environment("local")
+        .expect("local environment")
+        .get_filesystem();
+    let legacy = load_legacy_environment_skills_from_root(
+        legacy_file_system.as_ref(),
+        &root_uri,
+        /*restriction_product*/ None,
+    )
+    .await;
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        manager, /*restriction_product*/ None,
+    );
+    let direct = provider
+        .list(SkillListQuery {
+            turn_id: "turn-1".to_string(),
+            executor_roots: vec![selected_root],
+            resolved_executor_roots: Vec::new(),
+            host_snapshot: None,
+            include_host_skills: false,
+            include_bundled_skills: true,
+            include_orchestrator_skills: false,
+            mcp_resources: None,
+            executor_capability_discovery: None,
+        })
+        .await
+        .expect("list directly discovered executor skills");
+
+    assert_eq!(direct.warnings, legacy.warnings);
+    let legacy_metadata = legacy
+        .skills
+        .iter()
+        .map(|skill| {
+            (
+                skill.name.clone(),
+                skill.description.clone(),
+                skill.allows_implicit_invocation(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let catalog_metadata = direct
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.name.clone(),
+                entry.description.clone(),
+                entry.prompt_visible,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(catalog_metadata, legacy_metadata);
+    assert_eq!(
+        catalog_metadata,
+        vec![
+            ("inner:audit".to_string(), "Audit skill.".to_string(), true),
+            (
+                "outer:hidden".to_string(),
+                "Hidden skill.".to_string(),
+                false,
+            ),
+        ]
+    );
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+#[tokio::test]
 async fn high_level_discovery_reuses_materialized_skill_contents_for_reads() {
     let test_root = create_local_skill_root("materialized").expect("create local skill root");
     let manager = Arc::new(EnvironmentManager::default_for_tests());
