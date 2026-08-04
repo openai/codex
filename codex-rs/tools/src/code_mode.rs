@@ -42,6 +42,20 @@ pub fn augment_tool_spec_for_code_mode(spec: ToolSpec) -> ToolSpec {
                         tool.description =
                             codex_code_mode::augment_tool_definition(definition).description;
                     }
+                    ResponsesApiNamespaceTool::Custom(tool) => {
+                        let tool_name =
+                            ToolName::namespaced(namespace.name.clone(), tool.name.clone());
+                        let definition = CodeModeToolDefinition {
+                            name: code_mode_name_for_tool_name(&tool_name),
+                            tool_name,
+                            description: tool.description.clone(),
+                            kind: CodeModeToolKind::Freeform,
+                            input_schema: None,
+                            output_schema: None,
+                        };
+                        tool.description =
+                            codex_code_mode::augment_tool_definition(definition).description;
+                    }
                 }
             }
             ToolSpec::Namespace(namespace)
@@ -144,6 +158,17 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
                         kind: CodeModeToolKind::Function,
                         input_schema: serde_json::to_value(&tool.parameters).ok(),
                         output_schema: tool.output_schema.clone(),
+                    }
+                }
+                ResponsesApiNamespaceTool::Custom(tool) => {
+                    let tool_name = ToolName::namespaced(namespace.name.clone(), tool.name.clone());
+                    CodeModeToolDefinition {
+                        name: code_mode_name_for_tool_name(&tool_name),
+                        tool_name,
+                        description: tool.description.clone(),
+                        kind: CodeModeToolKind::Freeform,
+                        input_schema: None,
+                        output_schema: None,
                     }
                 }
             })

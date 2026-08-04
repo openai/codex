@@ -84,6 +84,7 @@ impl ToolPlanProbe {
                         .iter()
                         .map(|tool| match tool {
                             ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
+                            ResponsesApiNamespaceTool::Custom(tool) => tool.name.clone(),
                         })
                         .collect::<Vec<_>>(),
                 )),
@@ -1666,7 +1667,9 @@ async fn code_mode_only_exposes_configured_dynamic_namespace_directly() {
     let ToolSpec::Namespace(namespace) = plan.visible_spec("direct_only") else {
         panic!("expected direct-only namespace spec");
     };
-    let ResponsesApiNamespaceTool::Function(tool) = &namespace.tools[0];
+    let ResponsesApiNamespaceTool::Function(tool) = &namespace.tools[0] else {
+        panic!("expected direct-only namespace function tool");
+    };
     assert_eq!(tool.defer_loading, None);
     let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
         panic!("expected code mode exec tool");

@@ -713,11 +713,16 @@ fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
             continue;
         };
 
-        namespace.tools.sort_by(|left, right| match (left, right) {
-            (
-                ResponsesApiNamespaceTool::Function(left),
-                ResponsesApiNamespaceTool::Function(right),
-            ) => left.name.cmp(&right.name),
+        namespace.tools.sort_by(|left, right| {
+            let left_name = match left {
+                ResponsesApiNamespaceTool::Function(tool) => &tool.name,
+                ResponsesApiNamespaceTool::Custom(tool) => &tool.name,
+            };
+            let right_name = match right {
+                ResponsesApiNamespaceTool::Function(tool) => &tool.name,
+                ResponsesApiNamespaceTool::Custom(tool) => &tool.name,
+            };
+            left_name.cmp(right_name)
         });
 
         if namespace.description.trim().is_empty() {

@@ -8,7 +8,9 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
 use codex_core::config::Config;
 use codex_core::config::CurrentTimeReminderConfig;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ToolContributor;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -27,6 +29,19 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
+use codex_tools::FunctionCallError;
+use codex_tools::JsonToolOutput;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ToolCall;
+use codex_tools::ToolExecutor;
+use codex_tools::ToolExecutorFuture;
+use codex_tools::ToolName;
+use codex_tools::ToolOutput;
+use codex_tools::ToolPayload;
+use codex_tools::ToolSpec;
 use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
@@ -4029,6 +4044,170 @@ text(JSON.stringify({
             "hasNonPrefixedEcho": true,
             "hasPrefixedEcho": false,
             "echo": "ECHOING: ping",
+        })
+    );
+
+    Ok(())
+}
+
+struct NamespacedCustomTool;
+
+impl ToolContributor for NamespacedCustomTool {
+    fn tools(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        vec![Arc::new(Self)]
+    }
+}
+
+impl ToolExecutor<ToolCall> for NamespacedCustomTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced("editor", "apply_patch")
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "editor".to_string(),
+            description: "Editing tools.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Custom(FreeformTool {
+                name: "apply_patch".to_string(),
+                description: "Apply a raw editor patch.".to_string(),
+                defer_loading: None,
+                format: FreeformToolFormat {
+                    r#type: "grammar".to_string(),
+                    syntax: "lark".to_string(),
+                    definition: "start: /.+/".to_string(),
+                },
+            })],
+        })
+    }
+
+    fn handle(&self, call: ToolCall) -> ToolExecutorFuture<'_> {
+        Box::pin(async move {
+            let ToolPayload::Custom { input } = call.payload else {
+                return Err(FunctionCallError::Fatal(
+                    "expected custom tool payload".to_string(),
+                ));
+            };
+            Ok(Box::new(JsonToolOutput::new(serde_json::json!({
+                "namespace": call.tool_name.namespace,
+                "name": call.tool_name.name,
+                "input": input,
+            }))) as Box<dyn ToolOutput>)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exposes_and_dispatches_namespaced_custom_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_contributor(Arc::new(NamespacedCustomTool));
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+        });
+    let test = builder.build(&server).await?;
+    let code = r#"
+const tool = ALL_TOOLS.find(({ name }) => name === "editor__apply_patch");
+const result = await tools.editor__apply_patch("nested patch");
+text(JSON.stringify({
+  name: tool?.name ?? null,
+  description: tool?.description ?? null,
+  result,
+}));
+"#;
+
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                responses::ev_custom_tool_call_with_namespace(
+                    "call-direct",
+                    "editor",
+                    "apply_patch",
+                    "direct patch",
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_custom_tool_call("call-exec", "exec", code),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("call the namespaced custom editor tool directly and through exec")
+        .await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+
+    let declaration =
+        "declare const tools: { editor__apply_patch(input: string): Promise<unknown>; };";
+    let description =
+        format!("Apply a raw editor patch.\n\nexec tool declaration:\n```ts\n{declaration}\n```");
+    let first_body = requests[0].body_json();
+    let namespaced_custom_tool = namespace_child_tool(&first_body, "editor", "apply_patch")
+        .expect("namespaced custom tool should be included in the model request");
+    assert_eq!(
+        namespaced_custom_tool,
+        &serde_json::json!({
+            "type": "custom",
+            "name": "apply_patch",
+            "description": description,
+            "format": {
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": "start: /.+/",
+            },
+        })
+    );
+
+    let (direct_output, direct_success) =
+        custom_tool_output_body_and_success(&requests[1], "call-direct");
+    assert_ne!(direct_success, Some(false));
+    let direct_output = serde_json::from_str::<Value>(&direct_output).unwrap_or_else(|error| {
+        panic!("invalid direct custom tool output `{direct_output}`: {error}")
+    });
+    assert_eq!(
+        direct_output,
+        serde_json::json!({
+            "namespace": "editor",
+            "name": "apply_patch",
+            "input": "direct patch",
+        })
+    );
+
+    let (exec_output, exec_success) =
+        custom_tool_output_body_and_success(&requests[2], "call-exec");
+    assert_ne!(exec_success, Some(false));
+    let exec_output = serde_json::from_str::<Value>(&exec_output).unwrap_or_else(|error| {
+        panic!("invalid code mode custom tool output `{exec_output}`: {error}")
+    });
+    assert_eq!(
+        exec_output,
+        serde_json::json!({
+            "name": "editor__apply_patch",
+            "description": format!("Editing tools.\n\n{description}"),
+            "result": {
+                "namespace": "editor",
+                "name": "apply_patch",
+                "input": "nested patch",
+            },
         })
     );
 

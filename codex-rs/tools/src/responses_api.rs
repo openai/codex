@@ -63,9 +63,12 @@ pub fn default_namespace_description(namespace_name: &str) -> String {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum ResponsesApiNamespaceTool {
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
+    #[serde(rename = "custom")]
+    Custom(FreeformTool),
 }
 
 pub fn dynamic_tool_to_responses_api_tool(

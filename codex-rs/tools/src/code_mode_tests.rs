@@ -4,6 +4,8 @@ use crate::AdditionalProperties;
 use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
+use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ToolName;
 use crate::ToolSpec;
@@ -114,6 +116,42 @@ fn tool_spec_to_code_mode_tool_definition_returns_augmented_nested_tools() {
 exec tool declaration:
 ```ts
 declare const tools: { apply_patch(input: string): Promise<unknown>; };
+```"#
+                .to_string(),
+            kind: codex_code_mode::CodeModeToolKind::Freeform,
+            input_schema: None,
+            output_schema: None,
+        })
+    );
+}
+
+#[test]
+fn tool_spec_to_code_mode_tool_definition_supports_namespaced_custom_tools() {
+    let spec = ToolSpec::Namespace(ResponsesApiNamespace {
+        name: "editor".to_string(),
+        description: "Editing tools".to_string(),
+        tools: vec![ResponsesApiNamespaceTool::Custom(FreeformTool {
+            name: "apply_patch".to_string(),
+            description: "Apply a patch".to_string(),
+            defer_loading: None,
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: \"patch\"".to_string(),
+            },
+        })],
+    });
+
+    assert_eq!(
+        tool_spec_to_code_mode_tool_definition(&spec),
+        Some(codex_code_mode::ToolDefinition {
+            name: "editor__apply_patch".to_string(),
+            tool_name: ToolName::namespaced("editor", "apply_patch"),
+            description: r#"Apply a patch
+
+exec tool declaration:
+```ts
+declare const tools: { editor__apply_patch(input: string): Promise<unknown>; };
 ```"#
                 .to_string(),
             kind: codex_code_mode::CodeModeToolKind::Freeform,

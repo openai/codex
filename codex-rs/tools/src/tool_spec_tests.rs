@@ -174,21 +174,33 @@ fn namespace_tool_spec_serializes_expected_wire_shape() {
         serde_json::to_value(ToolSpec::Namespace(ResponsesApiNamespace {
             name: "mcp__demo__".to_string(),
             description: "Demo tools".to_string(),
-            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: "lookup_order".to_string(),
-                description: "Look up an order".to_string(),
-                strict: false,
-                defer_loading: None,
-                parameters: JsonSchema::object(
-                    BTreeMap::from([(
-                        "order_id".to_string(),
-                        JsonSchema::string(/*description*/ None),
-                    )]),
-                    /*required*/ None,
-                    /*additional_properties*/ None,
-                ),
-                output_schema: None,
-            })],
+            tools: vec![
+                ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                    name: "lookup_order".to_string(),
+                    description: "Look up an order".to_string(),
+                    strict: false,
+                    defer_loading: None,
+                    parameters: JsonSchema::object(
+                        BTreeMap::from([(
+                            "order_id".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        )]),
+                        /*required*/ None,
+                        /*additional_properties*/ None,
+                    ),
+                    output_schema: None,
+                }),
+                ResponsesApiNamespaceTool::Custom(FreeformTool {
+                    name: "apply_patch".to_string(),
+                    description: "Apply a patch".to_string(),
+                    defer_loading: None,
+                    format: FreeformToolFormat {
+                        r#type: "grammar".to_string(),
+                        syntax: "lark".to_string(),
+                        definition: "start: \"patch\"".to_string(),
+                    },
+                }),
+            ],
         }))
         .expect("serialize namespace tool"),
         json!({
@@ -206,6 +218,16 @@ fn namespace_tool_spec_serializes_expected_wire_shape() {
                         "properties": {
                             "order_id": { "type": "string" },
                         },
+                    },
+                },
+                {
+                    "type": "custom",
+                    "name": "apply_patch",
+                    "description": "Apply a patch",
+                    "format": {
+                        "type": "grammar",
+                        "syntax": "lark",
+                        "definition": "start: \"patch\"",
                     },
                 },
             ],
