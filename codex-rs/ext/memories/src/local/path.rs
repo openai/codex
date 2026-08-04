@@ -1,23 +1,32 @@
+use std::fs::FileType;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::backend::MemoriesBackendError;
 
-pub(super) async fn read_sorted_dir_paths(
+/// Returns lexically sorted paths and their cached, non-symlink-following file types.
+///
+/// Missing directories and entries that disappear during iteration are ignored.
+pub(super) async fn read_sorted_dir_entries(
     dir_path: &Path,
-) -> Result<Vec<PathBuf>, MemoriesBackendError> {
+) -> Result<Vec<(PathBuf, FileType)>, MemoriesBackendError> {
     let mut dir = match tokio::fs::read_dir(dir_path).await {
         Ok(dir) => dir,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err.into()),
     };
-    let mut paths = Vec::new();
+    let mut entries = Vec::new();
     while let Some(entry) = dir.next_entry().await? {
-        paths.push(entry.path());
+        let file_type = match entry.file_type().await {
+            Ok(file_type) => file_type,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+        entries.push((entry.path(), file_type));
     }
-    paths.sort();
-    Ok(paths)
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    Ok(entries)
 }
 
 pub(super) fn reject_symlink(

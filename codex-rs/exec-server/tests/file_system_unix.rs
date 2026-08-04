@@ -24,6 +24,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WalkEntry;
 use codex_exec_server::WalkEntryKind;
@@ -297,7 +298,7 @@ async fn remote_read_file_preserves_empty_workspace_roots() -> Result<()> {
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_get_metadata_reports_symlink_targets(
+async fn file_system_metadata_and_directory_listing_follow_symlinks(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
     let context = create_file_system_context(implementation).await?;
@@ -349,6 +350,43 @@ async fn file_system_get_metadata_reports_symlink_targets(
             created_at_ms: dir_symlink_metadata.created_at_ms,
             modified_at_ms: dir_symlink_metadata.modified_at_ms,
         }
+    );
+
+    let dangling_symlink_path = tmp.path().join("dangling-link");
+    symlink(tmp.path().join("missing"), &dangling_symlink_path)?;
+    let error = file_system
+        .get_metadata(
+            &PathUri::from_host_native_path(&dangling_symlink_path)?,
+            /*sandbox*/ None,
+        )
+        .await
+        .expect_err("dangling symlink should not resolve");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+    let mut entries = file_system
+        .read_directory(
+            &PathUri::from_host_native_path(tmp.path())?,
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    entries.retain(|entry| entry.file_name.contains("link"));
+    entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+
+    assert_eq!(
+        entries,
+        vec![
+            ReadDirectoryEntry {
+                file_name: "note-link.txt".to_string(),
+                is_directory: false,
+                is_file: true,
+            },
+            ReadDirectoryEntry {
+                file_name: "notes-link".to_string(),
+                is_directory: true,
+                is_file: false,
+            },
+        ]
     );
 
     Ok(())

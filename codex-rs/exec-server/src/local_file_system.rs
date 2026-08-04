@@ -596,12 +596,17 @@ impl DirectFileSystem {
     ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
-        let metadata = tokio::fs::metadata(path.as_path()).await?;
         let symlink_metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
+        let is_symlink = symlink_metadata.is_symlink();
+        let metadata = if is_symlink {
+            tokio::fs::metadata(path.as_path()).await?
+        } else {
+            symlink_metadata
+        };
         Ok(FileMetadata {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
-            is_symlink: symlink_metadata.file_type().is_symlink(),
+            is_symlink,
             size: metadata.len(),
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
@@ -618,13 +623,19 @@ impl DirectFileSystem {
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
-            let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
+            let Ok(mut file_type) = entry.file_type().await else {
                 continue;
             };
+            if file_type.is_symlink() {
+                let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
+                    continue;
+                };
+                file_type = metadata.file_type();
+            }
             entries.push(ReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
-                is_directory: metadata.is_dir(),
-                is_file: metadata.is_file(),
+                is_directory: file_type.is_dir(),
+                is_file: file_type.is_file(),
             });
         }
         Ok(entries)

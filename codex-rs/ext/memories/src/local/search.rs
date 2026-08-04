@@ -11,7 +11,7 @@ use crate::backend::SearchMemoriesResponse;
 use super::LocalMemoriesBackend;
 use super::path::display_relative_path;
 use super::path::is_hidden_path;
-use super::path::read_sorted_dir_paths;
+use super::path::read_sorted_dir_entries;
 use super::path::reject_symlink;
 
 pub(super) async fn search(
@@ -106,7 +106,7 @@ async fn search_entries(
 
     let mut pending = vec![current.to_path_buf()];
     while let Some(dir_path) = pending.pop() {
-        for path in read_sorted_dir_paths(&dir_path).await? {
+        for (path, _) in read_sorted_dir_entries(&dir_path).await? {
             if is_hidden_path(&path) {
                 continue;
             }

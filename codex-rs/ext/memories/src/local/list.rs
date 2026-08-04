@@ -8,7 +8,7 @@ use crate::backend::MemoryEntryType;
 use super::LocalMemoriesBackend;
 use super::path::display_relative_path;
 use super::path::is_hidden_path;
-use super::path::read_sorted_dir_paths;
+use super::path::read_sorted_dir_entries;
 use super::path::reject_symlink;
 
 pub(super) async fn list(
@@ -37,20 +37,14 @@ pub(super) async fn list(
         }]
     } else if metadata.is_dir() {
         let mut entries = Vec::new();
-        for path in read_sorted_dir_paths(&start).await? {
-            if is_hidden_path(&path) {
-                continue;
-            }
-            let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
-                continue;
-            };
-            if metadata.file_type().is_symlink() {
+        for (path, file_type) in read_sorted_dir_entries(&start).await? {
+            if is_hidden_path(&path) || file_type.is_symlink() {
                 continue;
             }
 
-            let entry_type = if metadata.is_dir() {
+            let entry_type = if file_type.is_dir() {
                 MemoryEntryType::Directory
-            } else if metadata.is_file() {
+            } else if file_type.is_file() {
                 MemoryEntryType::File
             } else {
                 continue;
