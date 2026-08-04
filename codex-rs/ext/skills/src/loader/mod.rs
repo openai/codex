@@ -1,5 +1,6 @@
 mod discovery;
 mod environment;
+mod host;
 mod metadata;
 mod namespace;
 

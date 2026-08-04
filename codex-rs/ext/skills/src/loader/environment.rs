@@ -13,8 +13,11 @@ use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 
 use super::MAX_QUALIFIED_NAME_LEN;
+use super::discovery::DirectorySymlinkPolicy;
 use super::discovery::DiscoveredSkill;
+use super::discovery::HiddenDirectoryPolicy;
 use super::discovery::MAX_CONCURRENT_SKILL_LOADS;
+use super::discovery::SkillDiscoveryOptions;
 use super::discovery::SkillMetadataDiscovery;
 use super::discovery::discover_skills;
 use super::metadata::SkillMetadataFile;
@@ -111,7 +114,15 @@ pub async fn load_environment_skills_from_root(
     let mut outcome = EnvironmentSkillLoadOutcome::default();
     // Preserve environment discovery behavior by following directory aliases and including
     // hidden directories exposed by the executor.
-    let discovery = discover_skills(file_system, root).await;
+    let discovery = discover_skills(
+        file_system,
+        root,
+        SkillDiscoveryOptions {
+            directory_symlinks: DirectorySymlinkPolicy::Follow,
+            hidden_directories: HiddenDirectoryPolicy::Include,
+        },
+    )
+    .await;
     tracing::Span::current().record("skill_count", discovery.skills.len());
     outcome.warnings.extend(discovery.warnings);
     if discovery.skills.is_empty() {

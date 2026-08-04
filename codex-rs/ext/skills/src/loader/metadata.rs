@@ -1,5 +1,7 @@
+use std::io;
 use std::path::PathBuf;
 
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_skills::SkillDependencies;
 use codex_skills::SkillParseError;
@@ -13,6 +15,8 @@ use super::MAX_DEPENDENCY_TRANSPORT_LEN;
 use super::MAX_DEPENDENCY_TYPE_LEN;
 use super::MAX_DEPENDENCY_URL_LEN;
 use super::MAX_DEPENDENCY_VALUE_LEN;
+use super::SKILLS_METADATA_FILENAME;
+use super::discovery::SkillMetadataDiscovery;
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct SkillMetadataFile {
@@ -42,6 +46,12 @@ struct Interface {
     _default_prompt: Option<String>,
 }
 
+#[derive(Default)]
+pub(super) struct LoadedSkillMetadata {
+    pub(super) dependencies: Option<SkillDependencies>,
+    pub(super) policy: Option<SkillPolicy>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct Dependencies {
     #[serde(default)]
@@ -67,6 +77,68 @@ struct DependencyTool {
     url: Option<String>,
 }
 
+pub(super) async fn load_host_skill_metadata(
+    file_system: &dyn ExecutorFileSystem,
+    metadata: &SkillMetadataDiscovery,
+) -> LoadedSkillMetadata {
+    // Fail open: optional metadata should not block loading SKILL.md.
+    let metadata_path = match metadata {
+        SkillMetadataDiscovery::Present(path) => path,
+        SkillMetadataDiscovery::Absent => return LoadedSkillMetadata::default(),
+        SkillMetadataDiscovery::Probe(path) => {
+            match file_system.get_metadata(path, /*sandbox*/ None).await {
+                Ok(metadata) if metadata.is_file => {}
+                Ok(_) => return LoadedSkillMetadata::default(),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return LoadedSkillMetadata::default();
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "ignoring {path}: failed to stat {label}: {error}",
+                        label = SKILLS_METADATA_FILENAME
+                    );
+                    return LoadedSkillMetadata::default();
+                }
+            }
+            path
+        }
+    };
+
+    let contents = match file_system
+        .read_file_text(metadata_path, /*sandbox*/ None)
+        .await
+    {
+        Ok(contents) => contents,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {metadata_path}: failed to read {label}: {error}",
+                label = SKILLS_METADATA_FILENAME
+            );
+            return LoadedSkillMetadata::default();
+        }
+    };
+
+    let parsed: SkillMetadataFile = match serde_yaml::from_str(&contents) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {metadata_path}: invalid {label}: {error}",
+                label = SKILLS_METADATA_FILENAME
+            );
+            return LoadedSkillMetadata::default();
+        }
+    };
+
+    let SkillMetadataFile {
+        _interface: _,
+        dependencies,
+        policy,
+    } = parsed;
+    LoadedSkillMetadata {
+        dependencies: resolve_dependencies(dependencies),
+        policy: resolve_policy(policy),
+    }
+}
 pub(super) fn resolve_dependencies(
     dependencies: Option<Dependencies>,
 ) -> Option<SkillDependencies> {

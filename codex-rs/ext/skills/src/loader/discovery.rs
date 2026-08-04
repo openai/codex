@@ -16,6 +16,21 @@ use super::SKILLS_METADATA_FILENAME;
 const MAX_SKILLS_ENTRIES_PER_ROOT: usize = 20_000;
 pub(super) const MAX_CONCURRENT_SKILL_LOADS: usize = 64;
 
+pub(super) enum DirectorySymlinkPolicy {
+    Follow,
+    Ignore,
+}
+
+pub(super) enum HiddenDirectoryPolicy {
+    Include,
+    Skip,
+}
+
+pub(super) struct SkillDiscoveryOptions {
+    pub directory_symlinks: DirectorySymlinkPolicy,
+    pub hidden_directories: HiddenDirectoryPolicy,
+}
+
 pub(super) struct SkillDiscovery {
     pub skills: Vec<DiscoveredSkill>,
     pub plugin_roots: HashSet<PathUri>,
@@ -37,6 +52,7 @@ pub(super) enum SkillMetadataDiscovery {
 pub(super) async fn discover_skills(
     file_system: &dyn ExecutorFileSystem,
     root: &PathUri,
+    options: SkillDiscoveryOptions,
 ) -> SkillDiscovery {
     let empty_discovery = || SkillDiscovery {
         skills: Vec::new(),
@@ -51,8 +67,14 @@ pub(super) async fn discover_skills(
                 max_depth: MAX_SCAN_DEPTH,
                 max_directories: MAX_SKILLS_DIRS_PER_ROOT,
                 max_entries: MAX_SKILLS_ENTRIES_PER_ROOT,
-                follow_directory_symlinks: true,
-                prune_hidden_directories: false,
+                follow_directory_symlinks: matches!(
+                    options.directory_symlinks,
+                    DirectorySymlinkPolicy::Follow
+                ),
+                prune_hidden_directories: matches!(
+                    options.hidden_directories,
+                    HiddenDirectoryPolicy::Skip
+                ),
             },
             /*sandbox*/ None,
         )
@@ -86,11 +108,15 @@ pub(super) async fn discover_skills(
         ));
     }
 
+    let skip_hidden = matches!(options.hidden_directories, HiddenDirectoryPolicy::Skip);
     let mut skill_files = Vec::new();
     let mut file_paths = HashSet::new();
     let mut metadata_directory_parents = HashSet::new();
     let mut plugin_roots = HashSet::new();
     for entry in walk.entries {
+        if skip_hidden && has_hidden_ancestor_below_root(&entry.path, root) {
+            continue;
+        }
         match entry.kind {
             WalkEntryKind::Directory => {
                 if entry
@@ -136,6 +162,20 @@ pub(super) async fn discover_skills(
         namespace_roots: HashSet::from([root.clone()]),
         warnings,
     }
+}
+
+fn has_hidden_ancestor_below_root(path: &PathUri, root: &PathUri) -> bool {
+    let mut ancestor = path.parent();
+    while let Some(current) = ancestor {
+        if &current == root {
+            return false;
+        }
+        if current.basename().is_some_and(|name| name.starts_with('.')) {
+            return true;
+        }
+        ancestor = current.parent();
+    }
+    false
 }
 
 fn discover_skill_metadata(

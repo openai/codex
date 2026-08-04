@@ -18,8 +18,10 @@ use super::discovery::MAX_CONCURRENT_SKILL_LOADS;
 /// ancestor manifest probes for sibling skills. This resolver resolves relevant
 /// roots once per scan, then selects the nearest matching root for each skill.
 ///
-/// The deepest matching canonical symlink root or nested plugin root wins,
-/// followed by the namespace inherited from the scanned skills root.
+/// Namespace precedence is:
+///
+/// 1. the deepest matching canonical symlink root or nested plugin root;
+/// 2. the namespace inherited from the scanned skills root.
 pub(crate) struct SkillNamespaceResolver {
     inherited_namespace: ResolvedSkillNamespace,
     nested_namespaces: Vec<(PathUri, ResolvedSkillNamespace)>,
