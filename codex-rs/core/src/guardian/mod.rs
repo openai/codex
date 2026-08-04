@@ -23,6 +23,8 @@ use codex_protocol::protocol::GuardianAssessmentOutcome;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::tools::sandboxing::ApprovalRequestReasons;
+
 pub(crate) use approval_request::GuardianApprovalRequest;
 pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::GuardianNetworkAccessTrigger;

@@ -52,6 +52,7 @@ use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_path_uri::PathUri;
 
+use super::ApprovalRequestReasons;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::prompt::BUNDLED_GUARDIAN_POLICY;
@@ -80,7 +81,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_turn: Arc<TurnContext>,
     pub(crate) spawn_config: Config,
     pub(crate) request: GuardianApprovalRequest,
-    pub(crate) retry_reason: Option<String>,
+    pub(crate) reasons: ApprovalRequestReasons,
     pub(crate) schema: Value,
     pub(crate) model: String,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -767,7 +768,7 @@ async fn run_review_on_session(
             build_guardian_prompt_items_with_parent_turn(
                 params.parent_session.as_ref(),
                 Some(params.parent_turn.as_ref()),
-                params.retry_reason.clone(),
+                params.reasons.clone(),
                 params.request.clone(),
                 prompt_mode,
             )
@@ -1246,7 +1247,7 @@ mod tests {
                 additional_permissions: None,
                 justification: Some("Inspect repo state.".to_string()),
             },
-            retry_reason: None,
+            reasons: ApprovalRequestReasons::default(),
             schema: super::super::prompt::guardian_output_schema(),
             model,
             reasoning_effort,

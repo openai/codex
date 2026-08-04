@@ -139,14 +139,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
-        let retry_reason = ctx.retry_reason.clone();
+        let approval_reason = ctx.reasons.approval.clone();
+        let retry_reason = ctx.reasons.retry.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
-            if req.permissions_preapproved && retry_reason.is_none() {
+            if req.permissions_preapproved && approval_reason.is_none() && retry_reason.is_none() {
                 return ReviewDecision::Approved;
             }
-            if let Some(reason) = retry_reason {
+            if let Some(reason) = retry_reason.or(approval_reason) {
                 return session
                     .request_patch_approval(
                         turn,

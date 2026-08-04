@@ -190,7 +190,6 @@ impl ApprovalResolution {
 pub(super) async fn resolve_tool_approval<Rq, Out, T>(
     tool: &mut T,
     req: &Rq,
-    permission_request_run_id: &str,
     ctx: ApprovalCtx<'_>,
     reviewer: ApprovalReviewer,
 ) -> Result<ReviewDecision, ToolError>
@@ -198,10 +197,15 @@ where
     T: ToolRuntime<Rq, Out>,
 {
     if let Some(permission_request) = tool.permission_request_payload(req) {
+        let permission_request_run_id = ctx
+            .reasons
+            .retry
+            .as_ref()
+            .map(|_| format!("{}:retry", ctx.call_id));
         match run_permission_request_hooks(
             ctx.session,
             ctx.turn,
-            permission_request_run_id,
+            permission_request_run_id.as_deref().unwrap_or(ctx.call_id),
             permission_request,
         )
         .await
@@ -251,7 +255,7 @@ where
                 ctx.turn,
                 review_id,
                 action,
-                ctx.retry_reason.clone(),
+                ctx.reasons.clone(),
             )
             .await
         }

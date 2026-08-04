@@ -129,6 +129,21 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
     });
     let mut builder = test_codex()
         .with_config(move |config| {
+            let rules_dir = config.codex_home.join("rules");
+            fs::create_dir_all(&rules_dir).expect("create execution policy directory");
+            let policy_justification = format!(
+                "Explicit policy approval required {} policy-justification-end",
+                "x".repeat(10_000)
+            );
+            let policy_justification =
+                serde_json::to_string(&policy_justification).expect("serialize policy justification");
+            fs::write(
+                rules_dir.join("default.rules"),
+                format!(
+                    r#"prefix_rule(pattern=["true"], decision="prompt", justification={policy_justification})"#
+                ),
+            )
+            .expect("write execution policy rule");
             config.model_catalog = Some(ModelsResponse {
                 models: vec![review_model],
             });
@@ -206,6 +221,12 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         guardian_review["client_metadata"]["thread_id"].as_str(),
         Some(guardian_thread_id)
     );
+    let guardian_review_text = guardian_review.to_string();
+    assert!(guardian_review_text.contains("Retry reason:"));
+    assert!(guardian_review_text.contains("Explicit policy approval required"));
+    assert!(guardian_review_text.contains("tokens truncated"));
+    assert!(guardian_review_text.contains("policy-justification-end"));
+    assert!(!guardian_review_text.contains(&"x".repeat(4_096)));
     let current_date = DateTime::<Utc>::from_timestamp(CURRENT_TIME_AT, 0)
         .expect("test timestamp should be valid")
         .with_timezone(&Local)

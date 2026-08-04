@@ -462,6 +462,85 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> anyhow::Result<()> {
+    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let prompt = build_guardian_prompt_items_with_parent_turn(
+        session.as_ref(),
+        Some(turn.as_ref()),
+        ApprovalRequestReasons {
+            approval: Some("A policy rule requires approval.".to_string()),
+            retry: Some("The sandbox blocked the initial command.".to_string()),
+        },
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+        GuardianPromptMode::Full,
+    )
+    .await?;
+
+    let text = guardian_prompt_text(&prompt.items);
+    assert!(text.contains("Retry reason:\nThe sandbox blocked the initial command.\n\n"));
+    assert!(!text.contains("A policy rule requires approval."));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::Result<()> {
+    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    seed_guardian_parent_history(&session, &turn).await;
+    let approval_reason = format!("policy-start {} policy-end", "x".repeat(10_000));
+    let expected_reason = codex_utils_output_truncation::truncate_text(
+        &approval_reason,
+        codex_utils_output_truncation::TruncationPolicy::Tokens(/*tokens*/ 512),
+    );
+
+    let prompt = build_guardian_prompt_items_with_parent_turn(
+        session.as_ref(),
+        Some(turn.as_ref()),
+        ApprovalRequestReasons {
+            approval: Some(approval_reason),
+            retry: None,
+        },
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+        GuardianPromptMode::Full,
+    )
+    .await?;
+
+    let reason_item = prompt
+        .items
+        .iter()
+        .find_map(|item| match item {
+            codex_protocol::user_input::UserInput::Text { text, .. }
+                if text.contains("tokens truncated") =>
+            {
+                Some(text)
+            }
+            _ => None,
+        })
+        .expect("oversized approval reason should include a truncation marker");
+    assert!(reason_item.starts_with("policy-start"));
+    assert!(reason_item.ends_with("policy-end\n\n"));
+    assert_eq!(reason_item, &format!("{expected_reason}\n\n"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Result<()> {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.thread_id = fixed_guardian_parent_session_id();
@@ -504,7 +583,10 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
         Some(turn.as_ref()),
-        Some("Sandbox denied reading /repo/private/secret.txt.".to_string()),
+        ApprovalRequestReasons {
+            approval: None,
+            retry: Some("Sandbox denied reading /repo/private/secret.txt.".to_string()),
+        },
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["cat".to_string(), "/repo/private/secret.txt".to_string()],
@@ -1498,7 +1580,10 @@ async fn guardian_request_model_for_auto_review(
             additional_permissions: None,
             justification: None,
         },
-        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        ApprovalRequestReasons {
+            approval: None,
+            retry: Some("Sandbox denied outbound git push to github.com.".to_string()),
+        },
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
@@ -1741,7 +1826,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         Arc::clone(&session),
         Arc::clone(&turn),
         request,
-        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        ApprovalRequestReasons {
+            approval: None,
+            retry: Some("Sandbox denied outbound git push to github.com.".to_string()),
+        },
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
@@ -1943,7 +2031,10 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&session),
         Arc::clone(&turn),
         first_request,
-        Some("First retry reason".to_string()),
+        ApprovalRequestReasons {
+            approval: None,
+            retry: Some("First retry reason".to_string()),
+        },
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
@@ -1990,7 +2081,10 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&session),
         Arc::clone(&turn),
         second_request,
-        Some("Second retry reason".to_string()),
+        ApprovalRequestReasons {
+            approval: None,
+            retry: Some("Second retry reason".to_string()),
+        },
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
@@ -2033,7 +2127,10 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&session),
         Arc::clone(&turn),
         third_request,
-        Some("Third retry reason".to_string()),
+        ApprovalRequestReasons {
+            approval: None,
+            retry: Some("Third retry reason".to_string()),
+        },
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
@@ -2225,7 +2322,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
             additional_permissions: None,
             justification: Some("Need to push the first docs fix.".to_string()),
         },
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
@@ -2270,7 +2367,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
             additional_permissions: None,
             justification: Some("Need to push the second docs fix.".to_string()),
         },
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
@@ -2350,7 +2447,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
             additional_permissions: None,
             justification: Some("Need to push the reviewed docs fix.".to_string()),
         },
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
     )
     .await;
 
@@ -2436,7 +2533,7 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
         Arc::clone(&session),
         Arc::clone(&turn),
         guardian_shell_request("shell-session-retry"),
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 3,
@@ -2478,7 +2575,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
         &turn,
         "review-missing-assessment".to_string(),
         guardian_shell_request("shell-missing-assessment"),
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
     )
     .await;
 
@@ -2527,7 +2624,7 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
         Arc::clone(&session),
         Arc::clone(&turn),
         guardian_shell_request("shell-parse-retry"),
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
         guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 3,
@@ -2582,7 +2679,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
         &turn,
         "review-exhausted-retry".to_string(),
         guardian_shell_request("shell-exhausted-retry"),
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
     )
     .await;
 
@@ -2633,7 +2730,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
         &turn,
         "review-valid-denial".to_string(),
         guardian_shell_request("shell-valid-denial"),
-        /*retry_reason*/ None,
+        ApprovalRequestReasons::default(),
     )
     .await;
 
@@ -2736,7 +2833,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                 &turn,
                 "review-shell-guardian-1".to_string(),
                 initial_request,
-                /*retry_reason*/ None
+                ApprovalRequestReasons::default()
             )
             .await,
             ReviewDecision::Approved
@@ -2790,7 +2887,10 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                 &turn_for_second,
                 "review-shell-guardian-2".to_string(),
                 second_request,
-                Some("trunk follow-up".to_string()),
+                ApprovalRequestReasons {
+                    approval: None,
+                    retry: Some("trunk follow-up".to_string()),
+                },
             )
             .await
         });
@@ -2837,7 +2937,10 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
             &turn,
             "review-shell-guardian-3".to_string(),
             third_request,
-            Some("parallel follow-up".to_string()),
+            ApprovalRequestReasons {
+                approval: None,
+                retry: Some("parallel follow-up".to_string()),
+            },
         )
         .await;
         assert_eq!(third_decision, ReviewDecision::Approved);

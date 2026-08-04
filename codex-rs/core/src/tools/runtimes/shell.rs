@@ -146,8 +146,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let cwd = req.cwd.clone();
         let environment_id = Some(req.turn_environment.environment_id.clone());
         let reason = ctx
-            .retry_reason
+            .reasons
+            .retry
             .clone()
+            .or_else(|| ctx.reasons.approval.clone())
             .or_else(|| req.justification.clone());
         let session = ctx.session;
         let turn = ctx.turn;

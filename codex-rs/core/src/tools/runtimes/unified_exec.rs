@@ -185,8 +185,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let command = req.command.clone();
         let environment_id = Some(req.turn_environment.environment_id.clone());
         let reason = ctx
-            .retry_reason
+            .reasons
+            .retry
             .clone()
+            .or_else(|| ctx.reasons.approval.clone())
             .or_else(|| req.justification.clone());
         Box::pin(async move {
             let native_cwd = match req.cwd.to_abs_path() {

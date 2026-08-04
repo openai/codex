@@ -796,7 +796,7 @@ async fn review_guardian_mcp_elicitation(
         &turn_context,
         review_id.clone(),
         guardian_request,
-        /*retry_reason*/ None,
+        Default::default(),
     )
     .await;
     Ok(Some(mcp_elicitation_response_from_guardian_decision(

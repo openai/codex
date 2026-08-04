@@ -477,7 +477,7 @@ impl CoreShellActionProvider {
                             cwd: workdir.clone(),
                             additional_permissions,
                         },
-                        /*retry_reason*/ None,
+                        Default::default(),
                     )
                     .await;
                 }

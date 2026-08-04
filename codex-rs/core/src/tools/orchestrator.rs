@@ -17,6 +17,7 @@ use crate::tools::network_approval::begin_network_approval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::network_approval::finish_immediate_network_approval;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalRequestReasons;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -172,17 +173,11 @@ impl ToolOrchestrator {
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
                         tool_name: &tool_ctx.tool_name,
-                        retry_reason: None,
+                        reasons: ApprovalRequestReasons::default(),
                         network_approval_context: None,
                     };
-                    resolve_tool_approval(
-                        tool,
-                        req,
-                        tool_ctx.call_id.as_str(),
-                        approval_ctx,
-                        ApprovalReviewer::Guardian,
-                    )
-                    .await?;
+                    resolve_tool_approval(tool, req, approval_ctx, ApprovalReviewer::Guardian)
+                        .await?;
                     already_approved = true;
                 } else {
                     otel.tool_decision(
@@ -202,13 +197,15 @@ impl ToolOrchestrator {
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
                     tool_name: &tool_ctx.tool_name,
-                    retry_reason: reason.clone(),
+                    reasons: ApprovalRequestReasons {
+                        approval: reason.clone(),
+                        retry: None,
+                    },
                     network_approval_context: None,
                 };
                 resolve_tool_approval(
                     tool,
                     req,
-                    tool_ctx.call_id.as_str(),
                     approval_ctx,
                     if strict_auto_review {
                         ApprovalReviewer::Guardian
@@ -391,20 +388,26 @@ impl ToolOrchestrator {
                     && tool.should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
+                    let approval_reason = match &requirement {
+                        ExecApprovalRequirement::NeedsApproval { reason, .. } => reason.clone(),
+                        ExecApprovalRequirement::Skip { .. }
+                        | ExecApprovalRequirement::Forbidden { .. } => None,
+                    };
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
                         tool_name: &tool_ctx.tool_name,
-                        retry_reason: Some(retry_reason),
+                        reasons: ApprovalRequestReasons {
+                            approval: approval_reason,
+                            retry: Some(retry_reason),
+                        },
                         network_approval_context: network_approval_context.clone(),
                     };
 
-                    let permission_request_run_id = format!("{}:retry", tool_ctx.call_id);
                     resolve_tool_approval(
                         tool,
                         req,
-                        &permission_request_run_id,
                         approval_ctx,
                         if strict_auto_review {
                             ApprovalReviewer::Guardian
