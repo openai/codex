@@ -1,6 +1,5 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
-use crate::connectors::AppInfo;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::mcp_tool_exposure::append_mcp_tools;
 use crate::session::session::Session;
@@ -119,7 +118,7 @@ pub(crate) fn build_tool_router(
     turn_context: &TurnContext,
     environments: &TurnEnvironmentSnapshot,
     mcp: &codex_mcp::McpBinding,
-    connectors: Option<&[AppInfo]>,
+    apps_enabled: bool,
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
 ) -> ToolRouter {
@@ -147,8 +146,8 @@ pub(crate) fn build_tool_router(
     } else {
         let registered_mcp_tools = append_mcp_tools(
             mcp.tools(),
-            connectors,
             &turn_context.config,
+            apps_enabled,
             search_tool_enabled(turn_context),
             &mut registry,
         );

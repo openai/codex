@@ -12,23 +12,23 @@ use tracing::instrument;
 use tracing::warn;
 
 use crate::config::Config;
-use crate::connectors;
 use crate::tools::handlers::McpHandler;
 use crate::tools::registry::ToolRegistry;
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn append_mcp_tools(
     all_mcp_tools: &[McpToolInfo],
-    connectors: Option<&[connectors::AppInfo]>,
     config: &Config,
+    apps_enabled: bool,
     search_tool_enabled: bool,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
     // Keep regular MCP tools first; Apps tools also require connector and policy checks.
     let non_app_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
-    let app_tools = connectors
+    let app_tools = apps_enabled
+        .then(|| filter_codex_apps_mcp_tools(all_mcp_tools, config))
         .into_iter()
-        .flat_map(move |connectors| filter_codex_apps_mcp_tools(all_mcp_tools, connectors, config));
+        .flatten();
     let exposure = if search_tool_enabled {
         ToolExposure::Deferred
     } else {
@@ -61,13 +61,8 @@ fn filter_non_codex_apps_mcp_tools_only(
 
 fn filter_codex_apps_mcp_tools<'a>(
     mcp_tools: &'a [McpToolInfo],
-    connectors: &'a [connectors::AppInfo],
     config: &'a Config,
 ) -> impl Iterator<Item = &'a McpToolInfo> + 'a {
-    let allowed: HashSet<&str> = connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect();
     let app_tool_policy = AppToolPolicyEvaluator::new(&config.config_layer_stack);
 
     mcp_tools.iter().filter(move |tool| {
@@ -81,18 +76,15 @@ fn filter_codex_apps_mcp_tools<'a>(
             return false;
         };
         let annotations = tool.tool.annotations.as_ref();
-        allowed.contains(connector_id)
-            && app_tool_policy
-                .policy(AppToolPolicyInput {
-                    connector_id: Some(connector_id),
-                    tool_name: &tool.tool.name,
-                    tool_title: tool.tool.title.as_deref(),
-                    destructive_hint: annotations
-                        .and_then(|annotations| annotations.destructive_hint),
-                    open_world_hint: annotations
-                        .and_then(|annotations| annotations.open_world_hint),
-                })
-                .enabled
+        app_tool_policy
+            .policy(AppToolPolicyInput {
+                connector_id: Some(connector_id),
+                tool_name: &tool.tool.name,
+                tool_title: tool.tool.title.as_deref(),
+                destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
+                open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
+            })
+            .enabled
     })
 }
 

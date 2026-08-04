@@ -15,28 +15,7 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
-use crate::connectors::AppInfo;
 use tempfile::tempdir;
-
-fn make_connector(id: &str, name: &str) -> AppInfo {
-    AppInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        description: None,
-        logo_url: None,
-        logo_url_dark: None,
-        icon_assets: None,
-        icon_dark_assets: None,
-        distribution_channel: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: None,
-        is_accessible: true,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }
-}
 
 fn make_mcp_tool(
     server_name: &str,
@@ -93,15 +72,15 @@ fn expected_runtimes(
 
 fn runtimes_by_name(
     tools: &[ToolInfo],
-    connectors: Option<&[AppInfo]>,
     config: &Config,
+    apps_enabled: bool,
     search_tool_enabled: bool,
 ) -> HashMap<ToolName, ToolExposure> {
     let mut registry = ToolRegistry::default();
     append_mcp_tools(
         tools,
-        connectors,
         config,
+        apps_enabled,
         search_tool_enabled,
         &mut registry,
     );
@@ -127,7 +106,7 @@ async fn directly_exposes_effective_tool_sets_when_search_is_unavailable() {
     let mcp_tools = numbered_mcp_tools(/*count*/ 2);
 
     let runtimes = runtimes_by_name(
-        &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ false,
+        &mcp_tools, &config, /*apps_enabled*/ false, /*search_tool_enabled*/ false,
     );
 
     assert_eq!(
@@ -198,18 +177,90 @@ async fn excludes_tools_hidden_from_model_exposure() {
         visible_app_tool.clone(),
         hidden_app_tool,
     ];
-    let connectors = vec![make_connector("calendar", "Calendar")];
-
     let runtimes = runtimes_by_name(
-        &mcp_tools,
-        Some(connectors.as_slice()),
-        &config,
-        /*search_tool_enabled*/ false,
+        &mcp_tools, &config, /*apps_enabled*/ true, /*search_tool_enabled*/ false,
     );
 
     assert_eq!(
         runtimes,
         expected_runtimes(&[visible_tool, visible_app_tool], ToolExposure::Direct)
+    );
+}
+
+#[tokio::test]
+async fn app_tool_registration_uses_trusted_catalog_metadata_and_preserves_source_order() {
+    let config = test_config().await;
+    let app_tool = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "calendar_list_events",
+        "mcp__codex_apps__calendar",
+        "list_events",
+        Some("calendar"),
+        Some("Calendar"),
+    );
+    let missing_connector_id = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "unknown_tool",
+        "mcp__codex_apps__unknown",
+        "unknown",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    );
+    let mut synthetic_app_tool = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "gmail_batch_read_email",
+        "mcp__codex_apps__gmail",
+        "batch_read_email",
+        Some("gmail"),
+        Some("Gmail"),
+    );
+    synthetic_app_tool.tool.meta = Some(MetaObject(
+        serde_json::json!({ "_codex_apps": { "synthetic_link": true } })
+            .as_object()
+            .expect("metadata should be an object")
+            .clone(),
+    ));
+    let regular_tool = make_mcp_tool(
+        "rmcp",
+        "regular_tool",
+        "mcp__rmcp",
+        "regular_tool",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    );
+    let mcp_tools = [
+        app_tool.clone(),
+        missing_connector_id,
+        synthetic_app_tool.clone(),
+        regular_tool.clone(),
+    ];
+    let mut registry = ToolRegistry::default();
+
+    append_mcp_tools(
+        &mcp_tools,
+        &config,
+        /*apps_enabled*/ true,
+        /*search_tool_enabled*/ false,
+        &mut registry,
+    );
+
+    let registered_names = registry
+        .entries()
+        .map(|entry| entry.runtime.tool_name())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        registered_names,
+        vec![
+            regular_tool.canonical_tool_name(),
+            app_tool.canonical_tool_name(),
+            synthetic_app_tool.canonical_tool_name(),
+        ]
+    );
+    assert_eq!(
+        runtimes_by_name(
+            &mcp_tools, &config, /*apps_enabled*/ false, /*search_tool_enabled*/ false,
+        ),
+        expected_runtimes(&[regular_tool], ToolExposure::Direct)
     );
 }
 
@@ -248,14 +299,9 @@ enabled = true
         Some("calendar"),
         Some("Calendar"),
     );
-    let connectors = vec![make_connector("calendar", "Calendar")];
-
     let mcp_tools = [enabled_tool.clone(), disabled_tool];
     let runtimes = runtimes_by_name(
-        &mcp_tools,
-        Some(connectors.as_slice()),
-        &config,
-        /*search_tool_enabled*/ false,
+        &mcp_tools, &config, /*apps_enabled*/ true, /*search_tool_enabled*/ false,
     );
 
     assert_eq!(
@@ -270,7 +316,7 @@ async fn defers_effective_tool_sets_when_search_is_available() {
     let mcp_tools = numbered_mcp_tools(/*count*/ 2);
 
     let runtimes = runtimes_by_name(
-        &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ true,
+        &mcp_tools, &config, /*apps_enabled*/ false, /*search_tool_enabled*/ true,
     );
 
     assert_eq!(
@@ -300,13 +346,8 @@ async fn defers_apps_and_non_app_mcp_tools() {
             Some("Calendar"),
         ),
     ];
-    let connectors = vec![make_connector("calendar", "Calendar")];
-
     let runtimes = runtimes_by_name(
-        &mcp_tools,
-        Some(connectors.as_slice()),
-        &config,
-        /*search_tool_enabled*/ true,
+        &mcp_tools, &config, /*apps_enabled*/ true, /*search_tool_enabled*/ true,
     );
 
     assert_eq!(
