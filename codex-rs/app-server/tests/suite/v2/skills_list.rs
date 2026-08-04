@@ -15,6 +15,7 @@ use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::SkillScope;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::SkillsExtraRootsSetParams;
 use codex_app_server_protocol::SkillsExtraRootsSetResponse;
@@ -149,6 +150,187 @@ fn write_cached_local_curated_plugin_with_skill(codex_home: &std::path::Path) ->
         skill_dir.join("SKILL.md"),
         "---\nname: meeting-prep\ndescription: Prepare for meetings\n---\n\n# Body\n",
     )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_disabled_bundled_skills_preserves_shared_system_skill_cache() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let mut enabled_mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let enabled_skills_request_id = enabled_mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let SkillsListResponse { data } = timeout(
+        DEFAULT_TIMEOUT,
+        enabled_mcp.read_response(enabled_skills_request_id),
+    )
+    .await??;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].errors, Vec::new());
+    let system_skill_paths = data[0]
+        .skills
+        .iter()
+        .filter(|skill| skill.scope == SkillScope::System)
+        .map(|skill| skill.path.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        !system_skill_paths.is_empty(),
+        "expected enabled app-server to materialize bundled system skills"
+    );
+
+    let mut disabled_mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_args(&["-c", "skills.bundled.enabled=false"])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let disabled_skills_request_id = disabled_mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let SkillsListResponse { data } = timeout(
+        DEFAULT_TIMEOUT,
+        disabled_mcp.read_response(disabled_skills_request_id),
+    )
+    .await??;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].errors, Vec::new());
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .all(|skill| skill.scope != SkillScope::System)
+    );
+    assert!(
+        system_skill_paths
+            .iter()
+            .all(|path| path.as_path().is_file()),
+        "disabled app-server must not remove the cache shared by other processes"
+    );
+
+    let reloaded_skills_request_id = enabled_mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let SkillsListResponse { data } = timeout(
+        DEFAULT_TIMEOUT,
+        enabled_mcp.read_response(reloaded_skills_request_id),
+    )
+    .await??;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].errors, Vec::new());
+    let reloaded_system_skill_paths = data[0]
+        .skills
+        .iter()
+        .filter(|skill| skill.scope == SkillScope::System)
+        .map(|skill| skill.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(reloaded_system_skill_paths, system_skill_paths);
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_runtime_enable_refreshes_shared_system_skill_cache() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let stale_skill_path = codex_home
+        .path()
+        .join("skills/.system/stale-system-skill/SKILL.md");
+    std::fs::create_dir_all(
+        stale_skill_path
+            .parent()
+            .expect("stale system skill should have a parent"),
+    )?;
+    std::fs::write(
+        &stale_skill_path,
+        "---\nname: stale-system-skill\ndescription: stale system skill\n---\n\n# Body\n",
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[skills.bundled]\nenabled = false\n",
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let disabled_skills_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let SkillsListResponse { data } = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_response(disabled_skills_request_id),
+    )
+    .await??;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].errors, Vec::new());
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .all(|skill| skill.scope != SkillScope::System)
+    );
+    assert!(stale_skill_path.is_file());
+
+    let enable_request_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "skills.bundled.enabled".to_string(),
+                value: serde_json::json!(true),
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let _: ConfigWriteResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(enable_request_id)).await??;
+
+    let enabled_skills_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let SkillsListResponse { data } = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_response(enabled_skills_request_id),
+    )
+    .await??;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].errors, Vec::new());
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .any(|skill| skill.scope == SkillScope::System)
+    );
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .all(|skill| skill.name != "stale-system-skill")
+    );
+    assert!(!stale_skill_path.exists());
     Ok(())
 }
 
