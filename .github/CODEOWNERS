@@ -19,12 +19,6 @@
 /codex-rs/external-agent-migration/ @openai/chatgpt-work-expansions
 /codex-rs/tui/src/external_agent_config_migration/ @openai/chatgpt-work-expansions
 
-# Connector and plugin product ownership.
-/codex-rs/connectors/ @openai/codex-core-agent-team @openai/connectors
-/codex-rs/core-plugins/ @openai/codex-core-agent-team @openai/connectors
-/codex-rs/plugin/ @openai/codex-core-agent-team @openai/connectors
-/codex-rs/utils/plugins/ @openai/codex-core-agent-team @openai/connectors
-
 # Keep macOS AKV signing changes reviewed by Codex maintainers.
 /.github/actions/setup-akv-pkcs11-codesigning/ @openai/codex-core-agent-team
 /.github/scripts/macos-signing/ @openai/codex-core-agent-team
