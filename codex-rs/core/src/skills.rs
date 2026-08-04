@@ -26,7 +26,6 @@ pub use codex_core_skills::injection::collect_explicit_skill_mentions;
 pub use codex_core_skills::loader;
 pub use codex_core_skills::model;
 pub use codex_core_skills::remote;
-pub use codex_core_skills::system;
 pub use codex_skills::SkillMetadata;
 pub use codex_skills::SkillPolicy;
 pub use codex_skills_extension::HostSkillsLoadInput;

@@ -27,7 +27,6 @@ codex-skills = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
-dirs = { workspace = true }
 dunce = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -35,10 +34,10 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shlex = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt"] }
-toml = { workspace = true }
 tracing = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+toml = { workspace = true }

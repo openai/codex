@@ -4,6 +4,7 @@ mod config;
 mod dynamic_skill_selector;
 mod extension;
 mod fragments;
+mod host_roots;
 mod host_service;
 // Host loading is staged before its crate-internal runtime caller in this PR stack.
 #[allow(dead_code)]

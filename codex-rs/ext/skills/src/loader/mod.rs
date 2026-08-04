@@ -6,6 +6,7 @@ mod namespace;
 
 pub(crate) use environment::load_environment_skills_from_discovery;
 pub(crate) use environment::load_environment_skills_from_root;
+pub(crate) use host::HostSkillRoot;
 
 pub(super) const SKILLS_FILENAME: &str = "SKILL.md";
 pub(super) const SKILLS_METADATA_DIR: &str = "agents";

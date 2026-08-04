@@ -7,7 +7,6 @@ pub mod model;
 pub mod remote;
 mod root_loader;
 mod skill_instructions;
-pub mod system;
 
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
 pub use invocation_utils::detect_implicit_skill_invocation_for_command;
