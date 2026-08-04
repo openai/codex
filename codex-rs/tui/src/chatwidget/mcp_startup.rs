@@ -236,11 +236,9 @@ impl ChatWidget {
 
         for name in server_names {
             match current.get(&name) {
-                Some(McpStartupStatus::Ready) => {}
                 Some(McpStartupStatus::Failed { .. }) => failed.push(name),
-                Some(McpStartupStatus::Cancelled | McpStartupStatus::Starting) | None => {
-                    cancelled.push(name);
-                }
+                Some(McpStartupStatus::Cancelled) => cancelled.push(name),
+                Some(McpStartupStatus::Ready | McpStartupStatus::Starting) | None => {}
             }
         }
 
@@ -249,6 +247,7 @@ impl ChatWidget {
         cancelled.sort();
         cancelled.dedup();
         self.finish_mcp_startup(failed, cancelled);
+        self.mcp_startup_allow_terminal_only_next_round = true;
     }
 
     pub(super) fn status_header_is_mcp_startup_owned(&self) -> bool {
