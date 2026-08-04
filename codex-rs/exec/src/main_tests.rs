@@ -7,6 +7,7 @@ fn top_cli_parses_resume_prompt_after_config_flag() {
     let cli = TopCli::parse_from([
         "codex-exec",
         "resume",
+        "--psp",
         "--strict-config",
         "--last",
         "--json",
@@ -18,6 +19,7 @@ fn top_cli_parses_resume_prompt_after_config_flag() {
         "--skip-git-repo-check",
         PROMPT,
     ]);
+    assert!(cli.psp);
     let mut inner = cli.inner;
     inner
         .config_overrides

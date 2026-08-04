@@ -13,6 +13,7 @@ clap = { workspace = true, features = ["derive"] }
 codex-connectors = { workspace = true }
 codex-core = { workspace = true }
 codex-git-utils = { workspace = true }
+codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-plugin = { workspace = true }

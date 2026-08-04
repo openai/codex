@@ -340,7 +340,7 @@ async fn start_app_server_for_archive_command(
         &cli_kv_overrides,
         &launch_loader_overrides,
         strict_config,
-        cli.bypass_hook_trust,
+        cli.bypass_hook_trust || cli.psp,
     );
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         super::maybe_probe_default_daemon_socket(codex_home.as_path()).await
@@ -406,11 +406,6 @@ async fn start_app_server_for_archive_command(
             .feature_requirements
             .as_ref(),
     )?;
-    let environment_manager = Arc::new(
-        prepared_environment_manager
-            .build(Some(local_runtime_paths), http_client_factory.clone())
-            .wrap_err("failed to initialize environment manager")?,
-    );
     let auth_route_config = AuthRouteConfig::from_http_client_factory(http_client_factory);
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
@@ -449,6 +444,7 @@ async fn start_app_server_for_archive_command(
             main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
             show_raw_agent_reasoning: cli.oss.then_some(true),
             bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
+            psp: Some(cli.psp),
             ..Default::default()
         })
         .loader_overrides(loader_overrides.clone())
@@ -457,6 +453,11 @@ async fn start_app_server_for_archive_command(
         .build()
         .await
         .wrap_err("failed to load configuration")?;
+    let environment_manager = Arc::new(
+        prepared_environment_manager
+            .build(Some(local_runtime_paths), config.http_client_factory())
+            .wrap_err("failed to initialize environment manager")?,
+    );
     let state_db = super::init_state_db_for_app_server_target(&config, &app_server_target)
         .await
         .wrap_err("failed to initialize state database")?;

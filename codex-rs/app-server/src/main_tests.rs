@@ -46,6 +46,7 @@ fn app_server_accepts_process_scoped_code_mode_host() {
         "wss://example.test/code-mode",
         "--listen",
         "off",
+        "--psp",
     ])
     .expect("parse app-server args");
 
@@ -54,6 +55,7 @@ fn app_server_accepts_process_scoped_code_mode_host() {
         Some(Url::parse("wss://example.test/code-mode").expect("test endpoint should parse"))
     );
     assert_eq!(args.listen, AppServerTransport::Off);
+    assert!(args.psp);
     assert_eq!(args.config_overrides.raw_overrides, Vec::<String>::new());
 }
 

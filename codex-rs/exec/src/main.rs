@@ -18,6 +18,9 @@ use codex_utils_cli::CliConfigOverrides;
 
 #[derive(Parser, Debug)]
 struct TopCli {
+    #[arg(long, global = true, hide = true)]
+    psp: bool,
+
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
 
@@ -30,6 +33,7 @@ fn main() -> anyhow::Result<()> {
         let top_cli = TopCli::parse();
         // Merge root-level overrides into inner CLI struct so downstream logic remains unchanged.
         let mut inner = top_cli.inner;
+        inner.psp = top_cli.psp;
         inner
             .config_overrides
             .prepend_root_overrides(top_cli.config_overrides);

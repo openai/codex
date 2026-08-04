@@ -107,6 +107,41 @@ personality = true
 }
 
 #[tokio::test]
+async fn process_routing_does_not_enter_config_layers() -> Result<()> {
+    let tmp = tempdir()?;
+    let mut service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleLoader::default(),
+    );
+    service.psp = true;
+
+    let config = service
+        .load_with_overrides(
+            Some(
+                [("features".to_string(), serde_json::json!({ "apps": true }))]
+                    .into_iter()
+                    .collect(),
+            ),
+            Default::default(),
+        )
+        .await?;
+
+    assert!(config.psp);
+    assert!(config.http_client_factory().has_chatgpt_cookies());
+    assert!(
+        config
+            .config_layer_stack
+            .effective_config()
+            .get("features")
+            .and_then(|features| features.get("psp"))
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn clear_missing_nested_config_is_noop() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);
