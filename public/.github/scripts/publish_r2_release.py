@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
 from urllib.parse import quote
@@ -30,6 +31,7 @@ PREFIX = "codex"
 REPOSITORY = "openai/codex"
 RELEASE_METADATA_NAME = "release.json"
 INSTALLER_NAMES = ("install.sh", "install.ps1")
+MAX_UPLOAD_WORKERS = 8
 # Keep this pattern in sync with release-tag validation in
 # .github/workflows/rust-release.yml.
 VERSION_RE = re.compile(
@@ -38,6 +40,7 @@ VERSION_RE = re.compile(
 )
 CRC64_RE = re.compile(r"^[A-Za-z0-9+/]{11}=$")
 SHA256_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+MISSING_OBJECT_RE = re.compile(r"\((?:404|NoSuchKey|NotFound)\)")
 
 
 class PublishError(RuntimeError):
@@ -65,7 +68,7 @@ def run_command(args: list[str]) -> str:
     return result.stdout or ""
 
 
-def download_assets(tag: str, directory: Path) -> list[ReleaseAsset]:
+def get_release_metadata(tag: str, directory: Path, stage: str) -> list[ReleaseAsset]:
     try:
         metadata = json.loads(
             run_command(
@@ -83,21 +86,9 @@ def download_assets(tag: str, directory: Path) -> list[ReleaseAsset]:
                 ]
             )
         )
-        run_command(
-            [
-                "gh",
-                "release",
-                "download",
-                tag,
-                "--repo",
-                REPOSITORY,
-                "--dir",
-                str(directory),
-            ]
-        )
     except (OSError, subprocess.CalledProcessError) as error:
         raise PublishError(
-            f"GitHub release download failed for {tag}: {error}"
+            f"GitHub release metadata request failed for {tag}: {error}"
         ) from error
     except json.JSONDecodeError as error:
         raise PublishError(
@@ -112,6 +103,9 @@ def download_assets(tag: str, directory: Path) -> list[ReleaseAsset]:
             raise PublishError(
                 f"GitHub returned invalid release metadata for {tag}: {asset!r}"
             )
+        # DotSlash runs concurrently, so defer its in-progress assets to finalization.
+        if stage == "assets" and asset.get("state") != "uploaded":
+            continue
         name = asset.get("name")
         size = asset.get("size")
         digest = asset.get("digest")
@@ -131,14 +125,37 @@ def download_assets(tag: str, directory: Path) -> list[ReleaseAsset]:
             )
         expected[name] = ReleaseAsset(directory / name, size, match.group(1))
 
-    assets = sorted(directory.iterdir(), key=lambda path: path.name)
-    if not assets:
+    if not expected:
         raise PublishError(f"GitHub Release {tag} has no assets")
-    if any(not path.is_file() for path in assets) or {
-        path.name for path in assets
-    } != set(expected):
+    return sorted(expected.values(), key=lambda asset: asset.path.name)
+
+
+def download_assets(tag: str, directory: Path, assets: list[ReleaseAsset]) -> None:
+    if not assets:
+        return
+
+    command = [
+        "gh",
+        "release",
+        "download",
+        tag,
+        "--repo",
+        REPOSITORY,
+        "--dir",
+        str(directory),
+    ]
+    for asset in assets:
+        command.extend(["--pattern", asset.path.name])
+
+    try:
+        run_command(command)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise PublishError(
+            f"GitHub release download failed for {tag}: {error}"
+        ) from error
+
+    if any(not asset.path.is_file() for asset in assets):
         raise PublishError("GitHub returned invalid release assets")
-    return [expected[path.name] for path in assets]
 
 
 def stream_digest(source: Any) -> tuple[int, str]:
@@ -148,6 +165,17 @@ def stream_digest(source: Any) -> tuple[int, str]:
         digest.update(chunk)
         size += len(chunk)
     return size, digest.hexdigest()
+
+
+def validate_asset(asset: ReleaseAsset) -> None:
+    with asset.path.open("rb") as source:
+        size, sha256 = stream_digest(source)
+    if size != asset.size or sha256 != asset.sha256:
+        raise PublishError(
+            f"GitHub asset mismatch for {asset.path.name}: expected "
+            f"size={asset.size} sha256={asset.sha256}, got "
+            f"size={size} sha256={sha256}"
+        )
 
 
 def raise_s3(
@@ -246,6 +274,7 @@ def publish_installers(endpoint: str, tag: str, assets: list[ReleaseAsset]) -> N
         )
     for name in INSTALLER_NAMES:
         asset = installers[name]
+        validate_asset(asset)
         installer_key = f"{PREFIX}/{name}"
         put_object(endpoint, installer_key, asset.path, asset.sha256, extra_args=[])
         verify_remote(endpoint, installer_key, asset.size, asset.sha256)
@@ -256,11 +285,92 @@ def publish_installers(endpoint: str, tag: str, assets: list[ReleaseAsset]) -> N
         )
 
 
+def publish_asset(
+    endpoint: str, version: str, asset: ReleaseAsset, *, verify: bool = True
+) -> dict[str, Any]:
+    validate_asset(asset)
+    key = f"{PREFIX}/releases/{version}/{asset.path.name}"
+    put_object(endpoint, key, asset.path, asset.sha256, extra_args=["--no-overwrite"])
+    if verify:
+        verify_remote(endpoint, key, asset.size, asset.sha256)
+    status = "published and verified" if verify else "published"
+    print(
+        f"{status} s3://{BUCKET}/{key} size={asset.size} sha256={asset.sha256}",
+        file=sys.stderr,
+    )
+    return {
+        "key": key,
+        "name": asset.path.name,
+        "sha256": asset.sha256,
+        "size": asset.size,
+    }
+
+
+def publish_assets(
+    endpoint: str, version: str, assets: list[ReleaseAsset], *, verify: bool = True
+) -> list[dict[str, Any]]:
+    if not assets:
+        return []
+
+    published = {}
+    with ThreadPoolExecutor(
+        max_workers=min(MAX_UPLOAD_WORKERS, len(assets))
+    ) as executor:
+        futures = {
+            executor.submit(
+                publish_asset, endpoint, version, asset, verify=verify
+            ): asset
+            for asset in assets
+        }
+        for future in as_completed(futures):
+            asset = futures[future]
+            published[asset.path.name] = future.result()
+    return [published[asset.path.name] for asset in assets]
+
+
+def find_published_assets(
+    endpoint: str, version: str, assets: list[ReleaseAsset]
+) -> dict[str, dict[str, Any]]:
+    published = {}
+    with ThreadPoolExecutor(
+        max_workers=min(MAX_UPLOAD_WORKERS, len(assets))
+    ) as executor:
+        futures = {
+            executor.submit(
+                verify_remote,
+                endpoint,
+                f"{PREFIX}/releases/{version}/{asset.path.name}",
+                asset.size,
+                asset.sha256,
+            ): asset
+            for asset in assets
+        }
+        for future in as_completed(futures):
+            asset = futures[future]
+            try:
+                future.result()
+            except PublishError as error:
+                cause = error.__cause__
+                if isinstance(cause, subprocess.CalledProcessError) and (
+                    MISSING_OBJECT_RE.search(cause.stderr or "")
+                ):
+                    continue
+                raise
+            published[asset.path.name] = {
+                "key": f"{PREFIX}/releases/{version}/{asset.path.name}",
+                "name": asset.path.name,
+                "sha256": asset.sha256,
+                "size": asset.size,
+            }
+    return published
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--make-latest", choices=("true", "false"), required=True)
     parser.add_argument("--prerelease", choices=("true", "false"), required=True)
+    parser.add_argument("--stage", choices=("assets", "finalize"), required=True)
     return parser.parse_args()
 
 
@@ -276,50 +386,62 @@ def main() -> int:
         version = args.tag.removeprefix("rust-v")
         if args.tag == version or not VERSION_RE.fullmatch(version):
             raise PublishError(f"invalid rust release tag: {args.tag}")
-        published = []
-        metadata_assets = []
         with tempfile.TemporaryDirectory() as temp_dir:
             assets_directory = Path(temp_dir) / "assets"
             assets_directory.mkdir()
-            assets = download_assets(args.tag, assets_directory)
-            for asset in assets:
-                with asset.path.open("rb") as source:
-                    size, sha256 = stream_digest(source)
-                if size != asset.size or sha256 != asset.sha256:
-                    raise PublishError(
-                        f"GitHub asset mismatch for {asset.path.name}: expected "
-                        f"size={asset.size} sha256={asset.sha256}, got "
-                        f"size={size} sha256={sha256}"
-                    )
-            for asset in assets:
-                path = asset.path
-                size = asset.size
-                sha256 = asset.sha256
-                key = f"{PREFIX}/releases/{version}/{path.name}"
-                put_object(endpoint, key, path, sha256, extra_args=["--no-overwrite"])
-                verify_remote(endpoint, key, size, sha256)
+            assets = get_release_metadata(args.tag, assets_directory, args.stage)
+
+            if args.stage == "assets":
+                download_assets(args.tag, assets_directory, assets)
+                published = publish_assets(endpoint, version, assets, verify=False)
                 print(
-                    f"published and verified s3://{BUCKET}/{key} "
-                    f"size={size} sha256={sha256}",
-                    file=sys.stderr,
+                    json.dumps(
+                        {
+                            "assetCount": len(published),
+                            "assets": published,
+                            "releasePrefix": f"{PREFIX}/releases/{version}/",
+                            "stage": args.stage,
+                            "tag": args.tag,
+                            "version": version,
+                        },
+                        sort_keys=True,
+                    )
                 )
-                published.append(
-                    {
-                        "key": key,
-                        "sha256": sha256,
-                        "size": size,
-                    }
+                return 0
+
+            previously_published = find_published_assets(endpoint, version, assets)
+            remaining = [
+                asset for asset in assets if asset.path.name not in previously_published
+            ]
+            required_downloads = list(remaining)
+            if args.prerelease == "false":
+                required_downloads.extend(
+                    asset
+                    for asset in assets
+                    if asset.path.name in INSTALLER_NAMES
+                    and asset.path.name in previously_published
                 )
-                metadata_assets.append(
-                    {
-                        "name": path.name,
-                        "digest": f"sha256:{sha256}",
-                        "browser_download_url": (
-                            f"https://releases.openai.com/{PREFIX}/releases/"
-                            f"{version}/{quote(path.name, safe='')}"
-                        ),
-                    }
-                )
+            download_assets(args.tag, assets_directory, required_downloads)
+            additionally_published = {
+                asset["name"]: asset
+                for asset in publish_assets(endpoint, version, remaining)
+            }
+            published = [
+                previously_published.get(asset.path.name)
+                or additionally_published[asset.path.name]
+                for asset in assets
+            ]
+            metadata_assets = [
+                {
+                    "name": asset.path.name,
+                    "digest": f"sha256:{asset.sha256}",
+                    "browser_download_url": (
+                        f"https://releases.openai.com/{PREFIX}/releases/"
+                        f"{version}/{quote(asset.path.name, safe='')}"
+                    ),
+                }
+                for asset in assets
+            ]
 
             metadata_path = Path(temp_dir) / RELEASE_METADATA_NAME
             metadata_path.write_text(
@@ -393,6 +515,7 @@ def main() -> int:
                         "size": metadata_size,
                     },
                     "releasePrefix": f"{PREFIX}/releases/{version}/",
+                    "stage": args.stage,
                     "tag": args.tag,
                     "version": version,
                 },

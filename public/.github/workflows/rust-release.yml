@@ -1356,9 +1356,9 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ steps.release_name.outputs.prerelease }}
 
-  publish-r2:
-    name: publish-r2
-    needs: [release, publish-dotslash]
+  publish-r2-assets:
+    name: publish-r2-assets
+    needs: release
     permissions:
       contents: read
     uses: ./.github/workflows/r2-release.yml
@@ -1367,6 +1367,20 @@ jobs:
       tag: ${{ needs.release.outputs.tag }}
       make_latest: ${{ fromJSON(needs.release.outputs.make_latest) }}
       prerelease: ${{ fromJSON(needs.release.outputs.prerelease) }}
+      stage: assets
+
+  publish-r2:
+    name: publish-r2
+    needs: [release, publish-dotslash, publish-r2-assets]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/r2-release.yml
+    secrets: inherit
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      make_latest: ${{ fromJSON(needs.release.outputs.make_latest) }}
+      prerelease: ${{ fromJSON(needs.release.outputs.prerelease) }}
+      stage: finalize
 
   publish-dotslash:
     name: publish-dotslash
