@@ -39,6 +39,7 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
+use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -4092,7 +4093,7 @@ async fn set_rate_limits_retains_previous_credits() {
         },
     };
     let session_configuration = SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -4201,7 +4202,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         },
     };
     let session_configuration = SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -4747,7 +4748,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     };
 
     SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -5486,7 +5487,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         },
     };
     let session_configuration = SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        ),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -5623,7 +5627,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        ),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -5760,7 +5767,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             Some(auth_manager.clone()),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
-            session_configuration.provider.clone(),
+            session_configuration.provider.info().clone(),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,
@@ -5895,7 +5902,10 @@ async fn make_session_with_config_and_rx(
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        ),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -6005,7 +6015,10 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        ),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -7822,7 +7835,10 @@ where
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
-        provider: config.model_provider.clone(),
+        provider: create_model_provider(
+            config.model_provider.clone(),
+            Some(Arc::clone(&auth_manager)),
+        ),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -7958,7 +7974,7 @@ where
             Some(Arc::clone(&auth_manager)),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
-            session_configuration.provider.clone(),
+            session_configuration.provider.info().clone(),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,

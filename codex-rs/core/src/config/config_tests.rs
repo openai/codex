@@ -71,6 +71,7 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -5797,7 +5798,11 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 #[test]
 fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Indexed);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Indexed);
 }
@@ -5806,7 +5811,11 @@ fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
     let permission_profile = PermissionProfile::read_only();
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &permission_profile);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &permission_profile,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Cached);
 }
@@ -5814,15 +5823,75 @@ fn web_search_mode_for_turn_uses_preference_for_read_only() {
 #[test]
 fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Live);
 }
 
 #[test]
+fn web_search_mode_for_turn_falls_back_when_provider_disallows_external_web_access() {
+    for preferred in [WebSearchMode::Live, WebSearchMode::Indexed] {
+        let web_search_mode = Constrained::allow_any(preferred);
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &PermissionProfile::Disabled,
+            ProviderCapabilities {
+                external_web_access: false,
+                ..ProviderCapabilities::default()
+            },
+        );
+
+        assert_eq!(mode, WebSearchMode::Cached);
+    }
+}
+
+#[test]
+fn web_search_mode_for_turn_disables_when_external_access_and_cached_are_disallowed()
+-> anyhow::Result<()> {
+    let allowed = [
+        WebSearchMode::Disabled,
+        WebSearchMode::Live,
+        WebSearchMode::Indexed,
+    ];
+    for preferred in [WebSearchMode::Live, WebSearchMode::Indexed] {
+        let web_search_mode = Constrained::new(preferred, move |candidate| {
+            if allowed.contains(candidate) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "web_search_mode",
+                    candidate: format!("{candidate:?}"),
+                    allowed: format!("{allowed:?}"),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            }
+        })?;
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &PermissionProfile::Disabled,
+            ProviderCapabilities {
+                external_web_access: false,
+                ..ProviderCapabilities::default()
+            },
+        );
+
+        assert_eq!(mode, WebSearchMode::Disabled);
+    }
+    Ok(())
+}
+
+#[test]
 fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Disabled);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Disabled);
 }
@@ -5842,7 +5911,11 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -5867,7 +5940,11 @@ fn web_search_mode_for_turn_does_not_implicitly_select_indexed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -10332,6 +10409,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
             &config.permissions.effective_permission_profile(),
+            ProviderCapabilities::default(),
         ),
         WebSearchMode::Cached,
     );

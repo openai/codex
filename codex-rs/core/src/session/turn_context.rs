@@ -6,7 +6,6 @@ use codex_core_plugins::TrustedPluginRoots;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
-use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -451,8 +450,11 @@ impl Session {
         session_configuration
             .apply_permission_profile_to_permissions(&mut per_turn_config.permissions);
         let permission_profile = session_configuration.permission_profile();
-        let resolved_web_search_mode =
-            resolve_web_search_mode_for_turn(&per_turn_config.web_search_mode, &permission_profile);
+        let resolved_web_search_mode = resolve_web_search_mode_for_turn(
+            &per_turn_config.web_search_mode,
+            &permission_profile,
+            session_configuration.provider.capabilities(),
+        );
         if let Err(err) = per_turn_config
             .web_search_mode
             .set(resolved_web_search_mode)
@@ -484,7 +486,7 @@ impl Session {
         session_id: SessionId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
-        provider: ModelProviderInfo,
+        provider: SharedModelProvider,
         session_configuration: &SessionConfiguration,
         multi_agent_version: MultiAgentVersion,
         user_shell: &shell::Shell,
@@ -509,8 +511,6 @@ impl Session {
             model_info.slug.as_str(),
         );
         let session_source = session_configuration.session_source.clone();
-        let auth_manager_for_context = auth_manager.clone();
-        let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
@@ -551,10 +551,10 @@ impl Session {
             realtime_active: false,
             code_mode_available: true,
             config: per_turn_config,
-            auth_manager: auth_manager_for_context,
+            auth_manager,
             model_info,
             session_telemetry: session_telemetry_for_context,
-            provider: provider_for_context,
+            provider,
             reasoning_effort,
             reasoning_summary,
             session_source,

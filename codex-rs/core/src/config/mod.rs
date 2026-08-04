@@ -81,6 +81,7 @@ use codex_mcp::McpProtocolMode;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
 use codex_memories_read::memory_root;
+use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -2990,8 +2991,19 @@ pub fn resolve_bootstrap_http_client_factory(
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     permission_profile: &PermissionProfile,
+    provider_capabilities: ProviderCapabilities,
 ) -> WebSearchMode {
     let preferred = web_search_mode.value();
+    let is_allowed = |mode: WebSearchMode| {
+        let provider_supports_mode = match mode {
+            WebSearchMode::Live | WebSearchMode::Indexed => {
+                provider_capabilities.external_web_access
+            }
+            WebSearchMode::Cached | WebSearchMode::Disabled => true,
+        };
+
+        provider_supports_mode && web_search_mode.can_set(&mode).is_ok()
+    };
 
     if matches!(permission_profile, PermissionProfile::Disabled)
         && !matches!(preferred, WebSearchMode::Disabled | WebSearchMode::Indexed)
@@ -3001,12 +3013,12 @@ pub(crate) fn resolve_web_search_mode_for_turn(
             WebSearchMode::Cached,
             WebSearchMode::Disabled,
         ] {
-            if web_search_mode.can_set(&mode).is_ok() {
+            if is_allowed(mode) {
                 return mode;
             }
         }
     } else {
-        if web_search_mode.can_set(&preferred).is_ok() {
+        if is_allowed(preferred) {
             return preferred;
         }
         for mode in [
@@ -3014,7 +3026,7 @@ pub(crate) fn resolve_web_search_mode_for_turn(
             WebSearchMode::Live,
             WebSearchMode::Disabled,
         ] {
-            if web_search_mode.can_set(&mode).is_ok() {
+            if is_allowed(mode) {
                 return mode;
             }
         }

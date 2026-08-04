@@ -2342,10 +2342,30 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     .await;
     standalone_web_search.assert_visible_lacks(&["web_search"]);
 
-    let unsupported_provider = probe(|turn| {
-        set_web_search_mode(turn, WebSearchMode::Live);
+    let bedrock_cached_web_search = probe(|turn| {
         use_bedrock_provider(turn);
+        turn.model_info.web_search_tool_type = WebSearchToolType::Text;
     })
     .await;
-    unsupported_provider.assert_visible_lacks(&["web_search"]);
+    assert_eq!(
+        bedrock_cached_web_search.visible_spec("web_search"),
+        &ToolSpec::WebSearch {
+            external_web_access: Some(false),
+            indexed_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        }
+    );
+
+    let bedrock_with_standalone_web_search = probe(|turn| {
+        set_feature(turn, Feature::StandaloneWebSearch, /*enabled*/ true);
+        set_web_search_mode(turn, WebSearchMode::Cached);
+        use_bedrock_provider(turn);
+        turn.model_info.web_search_tool_type = WebSearchToolType::Text;
+    })
+    .await;
+    bedrock_with_standalone_web_search.assert_visible_contains(&["web_search"]);
+    bedrock_with_standalone_web_search.assert_visible_lacks(&["web"]);
 }

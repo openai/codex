@@ -343,8 +343,7 @@ async fn responses_lite_does_not_expose_disabled_standalone_web_search_for_opted
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_lite_does_not_expose_standalone_web_search_for_opted_in_bedrock_provider()
--> Result<()> {
+async fn responses_lite_does_not_expose_standalone_web_search_for_bedrock_provider() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -373,7 +372,7 @@ async fn responses_lite_does_not_expose_standalone_web_search_for_opted_in_bedro
             config.model_provider.name = "Amazon Bedrock".to_string();
             config.model_provider.requires_openai_auth = false;
             config.model_provider.http_headers = None;
-            config.model_provider.supports_standalone_web_search = true;
+            config.model_provider.supports_standalone_web_search = false;
         });
     let test = builder.build(&server).await?;
 

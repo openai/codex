@@ -1,8 +1,15 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_login::auth::BedrockApiKeyAuth;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::WebSearchToolType;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -57,6 +64,153 @@ async fn web_search_mode_cached_sets_external_web_access_false() {
         Some(false),
         "web_search cached mode should force external_web_access=false"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn amazon_bedrock_web_search_uses_text_only_hosted_tools() {
+    skip_if_no_network!();
+
+    enum ModelCatalog {
+        BuiltIn,
+        Configured,
+    }
+
+    for (case, configured_web_search_mode, model_catalog) in [
+        ("cached by default", None, ModelCatalog::BuiltIn),
+        (
+            "unsupported explicit live search falls back to cached",
+            Some(WebSearchMode::Live),
+            ModelCatalog::BuiltIn,
+        ),
+        (
+            "unsupported explicit indexed search falls back to cached",
+            Some(WebSearchMode::Indexed),
+            ModelCatalog::BuiltIn,
+        ),
+        ("configured model catalog", None, ModelCatalog::Configured),
+    ] {
+        let server = start_mock_server().await;
+        let resp_mock = responses::mount_sse_once(
+            &server,
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_completed("resp-1"),
+            ]),
+        )
+        .await;
+
+        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "dummy".to_string(),
+            region: "us-east-1".to_string(),
+        });
+        let mut builder = test_codex().with_auth(auth);
+        builder = match model_catalog {
+            ModelCatalog::BuiltIn => builder.with_model(AMAZON_BEDROCK_GPT_5_4_MODEL_ID),
+            ModelCatalog::Configured => builder.with_model_info_override("gpt-5.4", |model_info| {
+                model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
+            }),
+        };
+        builder = builder.with_config(move |config| {
+            let base_url = config.model_provider.base_url.clone();
+            config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+            config.model_provider =
+                ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+            config.model_provider.base_url = base_url;
+            if let Some(mode) = configured_web_search_mode {
+                config
+                    .web_search_mode
+                    .set(mode)
+                    .expect("test web search mode should satisfy constraints");
+            }
+        });
+        let test = builder
+            .build_with_auto_env(&server)
+            .await
+            .expect("create test Bedrock conversation");
+
+        test.submit_turn_with_permission_profile(
+            "hello Bedrock web search",
+            PermissionProfile::Disabled,
+        )
+        .await
+        .expect("submit Bedrock turn");
+
+        let body = resp_mock.single_request().body_json();
+        assert_eq!(
+            find_web_search_tool(&body),
+            &json!({
+                "type": "web_search",
+                "external_web_access": false,
+            }),
+            "unexpected Bedrock search tool for {case}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn amazon_bedrock_web_search_is_disabled_when_managed_requirements_prohibit_cached_search() {
+    skip_if_no_network!();
+
+    for (allowed_mode, requested_mode) in [
+        ("live", WebSearchMode::Live),
+        ("indexed", WebSearchMode::Indexed),
+    ] {
+        let server = start_mock_server().await;
+        let resp_mock = responses::mount_sse_once(
+            &server,
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_completed("resp-1"),
+            ]),
+        )
+        .await;
+
+        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "dummy".to_string(),
+            region: "us-east-1".to_string(),
+        });
+        let mut builder = test_codex()
+            .with_auth(auth)
+            .with_model(AMAZON_BEDROCK_GPT_5_4_MODEL_ID)
+            .with_cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                    r#"allowed_web_search_modes = ["{allowed_mode}"]"#
+                )),
+            )
+            .with_config(move |config| {
+                assert_eq!(config.web_search_mode.value(), requested_mode);
+                let base_url = config.model_provider.base_url.clone();
+                config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+                config.model_provider =
+                    ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+                config.model_provider.base_url = base_url;
+            });
+        let test = builder
+            .build_with_auto_env(&server)
+            .await
+            .expect("create managed Bedrock conversation");
+
+        test.submit_turn_with_permission_profile(
+            "hello managed Bedrock web search",
+            PermissionProfile::Disabled,
+        )
+        .await
+        .expect("submit managed Bedrock turn");
+
+        let body = resp_mock.single_request().body_json();
+        let web_search_tool = body
+            .get("tools")
+            .and_then(Value::as_array)
+            .and_then(|tools| {
+                tools
+                    .iter()
+                    .find(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search"))
+            });
+        assert_eq!(
+            web_search_tool, None,
+            "Bedrock search should be disabled when managed requirements only allow {allowed_mode}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
