@@ -19,6 +19,24 @@ struct ChatGptCloudflareCookieStore {
     jar: Jar,
 }
 
+pub(crate) struct ChatGptCookieStore {
+    cloudflare: Arc<ChatGptCloudflareCookieStore>,
+    cookies: Vec<HeaderValue>,
+}
+
+impl ChatGptCookieStore {
+    pub(crate) fn new(cookies: Vec<HeaderValue>) -> Self {
+        Self {
+            cloudflare: Arc::clone(&SHARED_CHATGPT_CLOUDFLARE_COOKIE_STORE),
+            cookies,
+        }
+    }
+
+    pub(crate) fn configured_cookies(&self) -> &[HeaderValue] {
+        &self.cookies
+    }
+}
+
 impl CookieStore for ChatGptCloudflareCookieStore {
     fn set_cookies(
         &self,
@@ -39,6 +57,41 @@ impl CookieStore for ChatGptCloudflareCookieStore {
             self.jar.cookies(url).and_then(only_cloudflare_cookies)
         } else {
             None
+        }
+    }
+}
+
+impl CookieStore for ChatGptCookieStore {
+    fn set_cookies(
+        &self,
+        cookie_headers: &mut dyn Iterator<Item = &HeaderValue>,
+        url: &reqwest::Url,
+    ) {
+        self.cloudflare.set_cookies(cookie_headers, url);
+    }
+
+    fn cookies(&self, url: &reqwest::Url) -> Option<HeaderValue> {
+        if !is_chatgpt_cookie_url(url) {
+            return self.cloudflare.cookies(url);
+        }
+        let cloudflare = self.cloudflare.cookies(url);
+        let mut sensitive = cloudflare.as_ref().is_some_and(HeaderValue::is_sensitive);
+        let mut cookies = cloudflare
+            .map(|cloudflare| cloudflare.as_bytes().to_vec())
+            .unwrap_or_default();
+        for cookie in &self.cookies {
+            sensitive |= cookie.is_sensitive();
+            if !cookies.is_empty() {
+                cookies.extend_from_slice(b"; ");
+            }
+            cookies.extend_from_slice(cookie.as_bytes());
+        }
+        if cookies.is_empty() {
+            None
+        } else {
+            let mut header = HeaderValue::from_bytes(&cookies).ok()?;
+            header.set_sensitive(sensitive);
+            Some(header)
         }
     }
 }
@@ -123,6 +176,62 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use reqwest::cookie::CookieStore;
+
+    #[test]
+    fn additional_cookies_use_current_path_scoped_cloudflare_cookies() {
+        let cloudflare = Arc::new(ChatGptCloudflareCookieStore::default());
+        let mut sensitive_cookie = HeaderValue::from_static("additional=true");
+        sensitive_cookie.set_sensitive(true);
+        let store = ChatGptCookieStore {
+            cloudflare: Arc::clone(&cloudflare),
+            cookies: vec![
+                sensitive_cookie,
+                HeaderValue::from_static("another=enabled"),
+            ],
+        };
+        let first_url = reqwest::Url::parse("https://cookies.chatgpt.com/a").unwrap();
+        let second_url = reqwest::Url::parse("https://cookies.chatgpt.com/b").unwrap();
+        let affinity = HeaderValue::from_static("__cflb=current; Path=/a; Secure");
+        cloudflare.set_cookies(&mut std::iter::once(&affinity), &first_url);
+
+        assert_eq!(
+            store.cookies(&first_url),
+            Some(HeaderValue::from_static(
+                "__cflb=current; additional=true; another=enabled"
+            ))
+        );
+        assert!(store.cookies(&first_url).unwrap().is_sensitive());
+        assert_eq!(
+            store.cookies(&second_url),
+            Some(HeaderValue::from_static("additional=true; another=enabled"))
+        );
+
+        let expired = HeaderValue::from_static("__cflb=; Max-Age=0; Path=/a; Secure");
+        store.set_cookies(&mut std::iter::once(&expired), &first_url);
+        assert_eq!(
+            store.cookies(&first_url),
+            Some(HeaderValue::from_static("additional=true; another=enabled"))
+        );
+    }
+
+    #[test]
+    fn additional_cookies_are_restricted_to_https_chatgpt_hosts() {
+        let store = ChatGptCookieStore {
+            cloudflare: Arc::new(ChatGptCloudflareCookieStore::default()),
+            cookies: vec![HeaderValue::from_static("additional=true")],
+        };
+
+        for url in ["http://chatgpt.com/a", "https://api.openai.com/a"] {
+            let url = reqwest::Url::parse(url).unwrap();
+            assert_eq!(store.cookies(&url), None);
+        }
+        let url = reqwest::Url::parse("https://chatgpt.com/a").unwrap();
+        assert_eq!(
+            store.cookies(&url),
+            Some(HeaderValue::from_static("additional=true"))
+        );
+        assert!(!store.cookies(&url).unwrap().is_sensitive());
+    }
 
     #[test]
     fn stores_and_returns_cloudflare_cookies_for_chatgpt_hosts() {
