@@ -74,6 +74,7 @@ fn tool_spec_name_covers_all_variants() {
         ToolSpec::Freeform(FreeformTool {
             name: "exec".to_string(),
             description: "Run a command".to_string(),
+            defer_loading: None,
             format: FreeformToolFormat {
                 r#type: "grammar".to_string(),
                 syntax: "lark".to_string(),

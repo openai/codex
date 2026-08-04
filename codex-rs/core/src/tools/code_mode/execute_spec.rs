@@ -30,6 +30,7 @@ SOURCE: /[\s\S]+/
             default_exec_yield_time_ms,
             code_mode_only,
         ),
+        defer_loading: None,
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
@@ -72,6 +73,7 @@ mod tests {
                     codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                     /*code_mode_only*/ true,
                 ),
+                defer_loading: None,
                 format: FreeformToolFormat {
                     r#type: "grammar".to_string(),
                     syntax: "lark".to_string(),
