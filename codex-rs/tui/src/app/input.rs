@@ -254,13 +254,11 @@ impl App {
         }
 
         if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
-            // Enter alternate screen and set viewport to full size.
-            let _ = tui.enter_alt_screen();
-            self.overlay = Some(Overlay::new_transcript(
-                self.transcript_cells.clone(),
-                self.keymap.pager.clone(),
-            ));
-            tui.frame_requester().schedule_frame();
+            self.scrollback_has_older_history = self
+                .chat_widget
+                .thread_id()
+                .is_some_and(|thread_id| app_server.has_older_history(thread_id));
+            self.open_transcript_overlay(tui);
             return;
         }
 

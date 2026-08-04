@@ -130,7 +130,7 @@ impl AppServerSession {
             .wrap_err("failed to load a bounded thread item page")
     }
 
-    async fn thread_turns_page(
+    pub(crate) async fn thread_turns_page(
         &mut self,
         thread_id: ThreadId,
         cursor: Option<String>,

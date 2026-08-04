@@ -3,9 +3,12 @@
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_server_session::ForkGoalContinuation;
+use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
 use crate::chatwidget::ThreadInputState;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::chatwidget::UserMessage;
+use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::UserInput;
 
 pub(super) struct SafetyBufferedRetry {
@@ -76,9 +79,52 @@ impl App {
             return;
         }
 
-        let thread = match app_server
-            .thread_read(thread_id, /*include_turns*/ true)
-            .await
+        let thread = match async {
+            let mut thread = app_server
+                .thread_read(thread_id, /*include_turns*/ false)
+                .await?;
+            if thread.history_mode == ThreadHistoryMode::Legacy {
+                app_server
+                    .hydrate_initial_thread_history(
+                        &mut thread,
+                        /*turn_cursor*/ None,
+                        /*item_cursor*/ None,
+                        /*config*/ None,
+                        crate::app_server_session::HistoryHydrationScope::Initial,
+                    )
+                    .await?;
+            } else {
+                let page = app_server
+                    .thread_turns_page(thread_id, /*cursor*/ None)
+                    .await?;
+                thread.turns = page.data.into_iter().rev().collect();
+                if let Some(turn_index) = thread.turns.iter().position(|turn| turn.id == turn_id) {
+                    let page = app_server
+                        .thread_items_page(
+                            thread_id,
+                            Some(&turn_id),
+                            /*cursor*/ None,
+                            HISTORY_ITEM_PAGE_LIMIT,
+                        )
+                        .await?;
+                    if page.next_cursor.is_some() {
+                        color_eyre::eyre::bail!(
+                            "Cannot safely retry a turn whose input exceeds the bounded history page."
+                        );
+                    }
+                    let turn = &mut thread.turns[turn_index];
+                    turn.items = page
+                        .data
+                        .into_iter()
+                        .rev()
+                        .map(|entry| entry.item)
+                        .collect();
+                    turn.items_view = TurnItemsView::Full;
+                }
+            }
+            Ok::<_, color_eyre::Report>(thread)
+        }
+        .await
         {
             Ok(thread) => thread,
             Err(err) => {

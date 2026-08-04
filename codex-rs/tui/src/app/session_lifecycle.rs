@@ -384,22 +384,24 @@ impl App {
                     error = %resume_err,
                     "failed to resume live thread for selection; falling back to thread/read"
                 );
-                let (thread, turns) = match app_server
-                    .thread_read(thread_id, /*include_turns*/ true)
+                let mut thread = app_server
+                    .thread_read(thread_id, /*include_turns*/ false)
+                    .await?;
+                match app_server
+                    .hydrate_initial_thread_history(
+                        &mut thread,
+                        /*turn_cursor*/ None,
+                        /*item_cursor*/ None,
+                        Some(&self.config),
+                        crate::app_server_session::HistoryHydrationScope::Initial,
+                    )
                     .await
                 {
-                    Ok(thread) => {
-                        let turns = thread.turns.clone();
-                        (thread, turns)
-                    }
-                    Err(err) if Self::can_fallback_from_include_turns_error(&err) => {
-                        let thread = app_server
-                            .thread_read(thread_id, /*include_turns*/ false)
-                            .await?;
-                        (thread, Vec::new())
-                    }
+                    Ok(()) => {}
+                    Err(err) if Self::can_fallback_from_include_turns_error(&err) => {}
                     Err(err) => return Err(err),
-                };
+                }
+                let turns = thread.turns.clone();
                 if turns.is_empty() {
                     // A `thread/read` fallback without turns would create a blank local replay
                     // channel with no live listener attached, which blocks later real re-attach.

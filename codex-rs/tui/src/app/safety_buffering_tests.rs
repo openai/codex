@@ -31,3 +31,14 @@ fn retry_rejects_a_stale_or_in_progress_turn() {
     assert!(safety_retry_fork_point(&in_progress, "missing").is_err());
     assert!(safety_retry_fork_point(&previous_in_progress, "turn-2").is_err());
 }
+
+#[test]
+fn retry_accepts_a_targeted_latest_turn_and_its_completed_predecessor() {
+    let turns = vec![
+        turn("turn-1", TurnStatus::Completed),
+        turn("turn-2", TurnStatus::Interrupted),
+    ];
+
+    assert!(safety_retry_fork_point(&turns, "turn-2").is_ok());
+    assert!(safety_retry_fork_point(&turns[1..], "turn-2").is_ok());
+}

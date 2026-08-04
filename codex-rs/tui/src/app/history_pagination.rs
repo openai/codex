@@ -3,12 +3,56 @@
 use std::collections::HashSet;
 
 use super::*;
+use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
+use crate::app_server_session::thread_items_page_params;
 use crate::history_cell::UserHistoryCell;
+use crate::pager_overlay::TranscriptHistoryState;
 use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::thread_items_to_transcript_cells;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadItemsListResponse;
 
 impl App {
+    /// Start one bounded page request shared by transcript-history navigation.
+    pub(crate) fn request_older_history_page(
+        &self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> bool {
+        let Some(cursor) = app_server.begin_older_history_page(thread_id) else {
+            return false;
+        };
+        tracing::debug!(
+            %thread_id,
+            %cursor,
+            overlay = self.overlay.is_some(),
+            "loading older transcript history page"
+        );
+        let request_id = app_server.next_request_id();
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed::<ThreadItemsListResponse>(ClientRequest::ThreadItemsList {
+                    request_id,
+                    params: thread_items_page_params(
+                        thread_id,
+                        /*turn_id*/ None,
+                        Some(cursor.clone()),
+                        HISTORY_ITEM_PAGE_LIMIT,
+                    ),
+                })
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::OlderThreadHistoryLoaded {
+                thread_id,
+                cursor,
+                result,
+            });
+        });
+        true
+    }
+
     pub(super) async fn handle_older_history_page(
         &mut self,
         tui: &mut tui::Tui,
@@ -173,9 +217,24 @@ impl App {
                     .count(),
             );
         }
+        self.scrollback_has_older_history = app_server.has_older_history(thread_id);
+        let mut continue_to_start = false;
         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
             let index = overlay.prepend(cells.clone(), width);
             self.transcript_cells.splice(index..index, cells);
+            let previous_state = overlay.set_history_state(if self.scrollback_has_older_history {
+                TranscriptHistoryState::Partial
+            } else {
+                TranscriptHistoryState::Complete
+            });
+            continue_to_start = previous_state == TranscriptHistoryState::LoadingBeginning
+                && self.scrollback_has_older_history;
+        }
+        if continue_to_start
+            && self.request_older_history_page(app_server, thread_id)
+            && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
+        {
+            overlay.set_history_state(TranscriptHistoryState::LoadingBeginning);
         }
         if self.backtrack.overlay_preview_active {
             self.apply_backtrack_selection_internal(self.backtrack.nth_user_message);

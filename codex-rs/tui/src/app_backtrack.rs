@@ -27,8 +27,6 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
-use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
-use crate::app_server_session::thread_items_page_params;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::UserMessage;
@@ -38,11 +36,10 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::pager_overlay::TranscriptHistoryState;
 use crate::tui;
 use crate::tui::TuiEvent;
-use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
@@ -104,30 +101,17 @@ impl App {
                     && matches!(key_event.code, KeyCode::Esc | KeyCode::Left)
                     && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)))
             && let Some(thread_id) = self.chat_widget.thread_id()
-            && let Some(cursor) = app_server.begin_older_history_page(thread_id)
+            && app_server.has_older_history(thread_id)
+            && self.request_older_history_page(app_server, thread_id)
         {
-            let request_id = app_server.next_request_id();
-            let request_handle = app_server.request_handle();
-            let app_event_tx = self.app_event_tx.clone();
-            tokio::spawn(async move {
-                let result = request_handle
-                    .request_typed::<ThreadItemsListResponse>(ClientRequest::ThreadItemsList {
-                        request_id,
-                        params: thread_items_page_params(
-                            thread_id,
-                            /*turn_id*/ None,
-                            Some(cursor.clone()),
-                            HISTORY_ITEM_PAGE_LIMIT,
-                        ),
-                    })
-                    .await
-                    .map_err(|err| err.to_string());
-                app_event_tx.send(AppEvent::OlderThreadHistoryLoaded {
-                    thread_id,
-                    cursor,
-                    result,
+            if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
+                overlay.set_history_state(if overlay.should_load_from_start(*key_event) {
+                    TranscriptHistoryState::LoadingBeginning
+                } else {
+                    TranscriptHistoryState::LoadingOlder
                 });
-            });
+            }
+            tui.frame_requester().schedule_frame();
         }
         if self.backtrack.overlay_preview_active {
             match event {
@@ -237,6 +221,11 @@ impl App {
             self.transcript_cells.clone(),
             self.keymap.pager.clone(),
         ));
+        if self.scrollback_has_older_history
+            && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
+        {
+            overlay.set_history_state(TranscriptHistoryState::Partial);
+        }
         tui.frame_requester().schedule_frame();
     }
 

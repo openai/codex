@@ -1,0 +1,47 @@
+---
+source: tui/src/pager_overlay.rs
+expression: snapshots
+---
+--- loading ---
+/ T R A N S C R I P T / / / / / / / / / / / /  loading older history...
+recent transcript
+~
+~
+~
+~
+────────────────────────────────────────────────────────────────────────
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ q to quit   esc to edit prev
+
+--- partial ---
+/ T R A N S C R I P T / / / / / / /  partial history | PgUp for earlier
+recent transcript
+~
+~
+~
+~
+────────────────────────────────────────────────────────────────────────
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ q to quit   esc to edit prev
+
+--- failed ---
+/ T R A N S C R I P T / / / / / / / history unavailable | PgUp to retry
+recent transcript
+~
+~
+~
+~
+────────────────────────────────────────────────────────────────────────
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ q to quit   esc to edit prev
+
+--- complete ---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / /  start of history
+recent transcript
+~
+~
+~
+~
+───────────────────────────────────────────────────────────────── 100% ─
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ q to quit   esc to edit prev

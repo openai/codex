@@ -143,6 +143,7 @@ use uuid::Uuid;
 
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+const JSONRPC_INVALID_PARAMS: i64 = -32602;
 pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str = "A previous external agent import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
@@ -158,8 +159,75 @@ enum ForkPresentation {
     SideConversation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThreadHistorySupport {
+    Paginated,
+    LegacyOnly,
+}
+
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
+}
+
+fn is_history_pagination_unsupported(source: &JSONRPCErrorError) -> bool {
+    if source.code == JSONRPC_METHOD_NOT_FOUND {
+        return true;
+    }
+
+    if !matches!(
+        source.code,
+        JSONRPC_INVALID_REQUEST | JSONRPC_INVALID_PARAMS
+    ) {
+        return false;
+    }
+
+    let message = source.message.to_ascii_lowercase();
+    [
+        "historymode",
+        "history mode",
+        "excludeturns",
+        "exclude turns",
+        "thread/turns/list",
+        "thread/items/list",
+    ]
+    .into_iter()
+    .any(|field| message.contains(field))
+        || (message.contains("paginated")
+            && ["unknown variant", "unsupported variant", "invalid enum"]
+                .into_iter()
+                .any(|error| message.contains(error)))
+}
+
+async fn request_thread_start_with_history_fallback(
+    request_handle: &AppServerRequestHandle,
+    request_id: RequestId,
+    mut params: ThreadStartParams,
+) -> std::result::Result<(ThreadStartResponse, ThreadHistorySupport), TypedRequestError> {
+    match request_handle
+        .request_typed(ClientRequest::ThreadStart {
+            request_id,
+            params: params.clone(),
+        })
+        .await
+    {
+        Ok(response) => Ok((response, ThreadHistorySupport::Paginated)),
+        Err(TypedRequestError::Server { source, .. })
+            if params.history_mode.is_some() && is_history_pagination_unsupported(&source) =>
+        {
+            params.history_mode = None;
+            let response = request_handle
+                .request_typed(ClientRequest::ThreadStart {
+                    request_id: RequestId::String(format!(
+                        "legacy-thread-start-{}",
+                        Uuid::new_v4()
+                    )),
+                    params,
+                })
+                .await?;
+            Ok((response, ThreadHistorySupport::LegacyOnly))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
@@ -196,6 +264,7 @@ pub(crate) struct AppServerSession {
     history_pagination: HashMap<ThreadId, history::ThreadHistoryPagination>,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
+    history_support: ThreadHistorySupport,
     thread_settings_update_supported: bool,
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
@@ -269,6 +338,7 @@ impl AppServerSession {
             history_pagination: HashMap::new(),
             remote_cwd_override: None,
             thread_params_mode,
+            history_support: ThreadHistorySupport::Paginated,
             thread_settings_update_supported: true,
             default_model: None,
             available_models: Vec::new(),
@@ -523,21 +593,25 @@ impl AppServerSession {
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(config);
-        let response: ThreadStartResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id,
-                params: thread_start_params_from_config(
-                    &session_config,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                    session_start_source,
-                ),
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("thread/start failed during TUI bootstrap", err)
-            })?;
+        let mut params = thread_start_params_from_config(
+            &session_config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+            session_start_source,
+        );
+        if self.history_support == ThreadHistorySupport::LegacyOnly {
+            params.history_mode = None;
+        }
+        let request_handle = self.request_handle();
+        let (response, history_support) =
+            request_thread_start_with_history_fallback(&request_handle, request_id, params)
+                .await
+                .map_err(|err| {
+                    bootstrap_request_error("thread/start failed during TUI bootstrap", err)
+                })?;
+        if history_support == ThreadHistorySupport::LegacyOnly {
+            self.history_support = ThreadHistorySupport::LegacyOnly;
+        }
         started_thread_from_start_response(response, config, self.thread_params_mode()).await
     }
 
@@ -553,29 +627,47 @@ impl AppServerSession {
         } else {
             self.session_config_with_effective_service_tier(&config)
         };
-        let exclude_turns = self
-            .history_pagination
-            .get(&thread_id)
-            .is_some_and(|state| state.history_mode == ThreadHistoryMode::Paginated);
-        let mut response: ThreadResumeResponse = self
+        let mut params = thread_resume_params_from_config(
+            session_config,
+            thread_id,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+            model_settings,
+        );
+        params.exclude_turns = self.history_support == ThreadHistorySupport::Paginated
+            && self
+                .history_pagination
+                .get(&thread_id)
+                .is_none_or(|state| state.history_mode == ThreadHistoryMode::Paginated);
+        let mut response: ThreadResumeResponse = match self
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
-                params: ThreadResumeParams {
-                    exclude_turns,
-                    ..thread_resume_params_from_config(
-                        session_config,
-                        thread_id,
-                        self.thread_params_mode(),
-                        self.remote_cwd_override.as_deref(),
-                        model_settings,
-                    )
-                },
+                params: params.clone(),
             })
             .await
-            .map_err(|err| {
-                bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-            })?;
+        {
+            Ok(response) => response,
+            Err(TypedRequestError::Server { source, .. })
+                if params.exclude_turns && is_history_pagination_unsupported(&source) =>
+            {
+                self.history_support = ThreadHistorySupport::LegacyOnly;
+                params.exclude_turns = false;
+                let request_id = self.next_request_id();
+                self.client
+                    .request_typed(ClientRequest::ThreadResume { request_id, params })
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
+                    })?
+            }
+            Err(err) => {
+                return Err(bootstrap_request_error(
+                    "thread/resume failed during TUI bootstrap",
+                    err,
+                ));
+            }
+        };
         self.hydrate_initial_thread_history(
             &mut response.thread,
             response.turns_backwards_cursor.clone(),
@@ -660,34 +752,54 @@ impl AppServerSession {
                 .ok(),
             ForkPresentation::SideConversation => None,
         };
-        let exclude_turns = fork_parent
-            .as_ref()
-            .is_some_and(|thread| thread.history_mode == ThreadHistoryMode::Paginated)
-            || presentation == ForkPresentation::SideConversation;
+        let exclude_turns = self.history_support == ThreadHistorySupport::Paginated
+            && (fork_parent
+                .as_ref()
+                .is_some_and(|thread| thread.history_mode == ThreadHistoryMode::Paginated)
+                || presentation == ForkPresentation::SideConversation);
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
-        let response: ThreadForkResponse = self
+        let mut params = ThreadForkParams {
+            last_turn_id,
+            before_turn_id,
+            defer_goal_continuation: goal_continuation == ForkGoalContinuation::DeferUntilNextTurn,
+            exclude_turns,
+            ..thread_fork_params_from_config(
+                session_config,
+                thread_id,
+                self.thread_params_mode(),
+                self.remote_cwd_override.as_deref(),
+            )
+        };
+        let response: ThreadForkResponse = match self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
-                params: ThreadForkParams {
-                    last_turn_id,
-                    before_turn_id,
-                    defer_goal_continuation: goal_continuation
-                        == ForkGoalContinuation::DeferUntilNextTurn,
-                    exclude_turns,
-                    ..thread_fork_params_from_config(
-                        session_config,
-                        thread_id,
-                        self.thread_params_mode(),
-                        self.remote_cwd_override.as_deref(),
-                    )
-                },
+                params: params.clone(),
             })
             .await
-            .map_err(|err| {
-                bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
-            })?;
+        {
+            Ok(response) => response,
+            Err(TypedRequestError::Server { source, .. })
+                if params.exclude_turns && is_history_pagination_unsupported(&source) =>
+            {
+                self.history_support = ThreadHistorySupport::LegacyOnly;
+                params.exclude_turns = false;
+                let request_id = self.next_request_id();
+                self.client
+                    .request_typed(ClientRequest::ThreadFork { request_id, params })
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
+                    })?
+            }
+            Err(err) => {
+                return Err(bootstrap_request_error(
+                    "thread/fork failed during TUI bootstrap",
+                    err,
+                ));
+            }
+        };
         let mut response = response;
         if presentation == ForkPresentation::Regular && !response.thread.ephemeral {
             self.hydrate_initial_thread_history(
@@ -1351,18 +1463,19 @@ pub(crate) async fn start_thread_with_request_handle(
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
 ) -> Result<AppServerStartedThread> {
-    let response: ThreadStartResponse = request_handle
-        .request_typed(ClientRequest::ThreadStart {
-            request_id: RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4())),
-            params: thread_start_params_from_config(
-                &config,
-                thread_params_mode,
-                remote_cwd_override.as_deref(),
-                /*session_start_source*/ None,
-            ),
-        })
-        .await
-        .map_err(|err| bootstrap_request_error("thread/start failed during TUI bootstrap", err))?;
+    let request_id = RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4()));
+    let params = thread_start_params_from_config(
+        &config,
+        thread_params_mode,
+        remote_cwd_override.as_deref(),
+        /*session_start_source*/ None,
+    );
+    let (response, _history_support) =
+        request_thread_start_with_history_fallback(&request_handle, request_id, params)
+            .await
+            .map_err(|err| {
+                bootstrap_request_error("thread/start failed during TUI bootstrap", err)
+            })?;
     started_thread_from_start_response(response, &config, thread_params_mode).await
 }
 
@@ -1596,6 +1709,7 @@ fn thread_start_params_from_config(
         permissions,
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
+        history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
         session_start_source,
         thread_source: Some(ThreadSource::User),
         developer_instructions: with_terminal_visualization_instructions(
@@ -2067,6 +2181,75 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn history_pagination_compat_detects_unsupported_server_fields() {
+        let cases = [
+            (JSONRPC_INVALID_PARAMS, "unknown field `historyMode`", true),
+            (
+                JSONRPC_INVALID_REQUEST,
+                "thread/resume.excludeTurns requires experimentalApi capability",
+                true,
+            ),
+            (
+                JSONRPC_INVALID_REQUEST,
+                "thread/fork.excludeTurns requires experimentalApi capability",
+                true,
+            ),
+            (
+                JSONRPC_METHOD_NOT_FOUND,
+                "unknown method thread/turns/list",
+                true,
+            ),
+            (JSONRPC_METHOD_NOT_FOUND, "method not found", true),
+            (
+                JSONRPC_INVALID_PARAMS,
+                "unknown variant \"paginated\", expected \"legacy\"",
+                true,
+            ),
+            (
+                JSONRPC_INVALID_PARAMS,
+                "invalid enum value `paginated`",
+                true,
+            ),
+            (
+                JSONRPC_INVALID_PARAMS,
+                "paginated thread was not found",
+                false,
+            ),
+            (JSONRPC_INVALID_PARAMS, "invalid thread id", false),
+        ];
+
+        for (code, message, expected) in cases {
+            let source = JSONRPCErrorError {
+                code,
+                data: None,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                is_history_pagination_unsupported(&source),
+                expected,
+                "{message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ephemeral_thread_start_does_not_request_paginated_history() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.ephemeral = true;
+
+        let params = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+
+        assert_eq!(params.ephemeral, Some(true));
+        assert_eq!(params.history_mode, None);
     }
 
     #[tokio::test]

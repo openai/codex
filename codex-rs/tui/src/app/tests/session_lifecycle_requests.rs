@@ -8,6 +8,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadItemsListParams;
@@ -34,17 +35,27 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
+type RecordedRequests = Arc<Mutex<Vec<JSONRPCRequest>>>;
+type RecordingAppServer = (AppServerSession, RecordedRequests, JoinHandle<Result<()>>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HistoryCapabilities {
+    Current,
+    LegacyOnly,
+    LegacyOnlyUnsupportedVariant,
+}
+
 /// Returns and resets `(thread/loaded/list, thread/read)` request counts.
-fn take_backfill_counts(requests: &Arc<Mutex<Vec<String>>>) -> (usize, usize) {
+fn take_backfill_counts(requests: &RecordedRequests) -> (usize, usize) {
     let requests = std::mem::take(&mut *requests.lock().expect("request recorder lock"));
     (
         requests
             .iter()
-            .filter(|method| *method == "thread/loaded/list")
+            .filter(|request| request.method == "thread/loaded/list")
             .count(),
         requests
             .iter()
-            .filter(|method| *method == "thread/read")
+            .filter(|request| request.method == "thread/read")
             .count(),
     )
 }
@@ -52,13 +63,25 @@ fn take_backfill_counts(requests: &Arc<Mutex<Vec<String>>>) -> (usize, usize) {
 /// Starts an embedded app server behind a loopback WebSocket proxy that records JSON-RPC methods.
 async fn start_recording_app_server(
     config: &Config,
+    blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    failed_thread_name: Option<&'static str>,
+) -> Result<RecordingAppServer> {
+    start_recording_app_server_with_history(
+        config,
+        HistoryCapabilities::Current,
+        blocked_thread_list,
+        failed_thread_name,
+    )
+    .await
+}
+
+/// Proxies a real app server while optionally rejecting modern pagination like an older server.
+async fn start_recording_app_server_with_history(
+    config: &Config,
+    history_capabilities: HistoryCapabilities,
     mut blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
     failed_thread_name: Option<&'static str>,
-) -> Result<(
-    AppServerSession,
-    Arc<Mutex<Vec<String>>>,
-    JoinHandle<Result<()>>,
-)> {
+) -> Result<RecordingAppServer> {
     let state_db =
         crate::init_state_db_for_app_server_target(config, &crate::AppServerTarget::Embedded)
             .await?;
@@ -107,42 +130,79 @@ async fn start_recording_app_server(
                     request_sink
                         .lock()
                         .expect("request recorder lock")
-                        .push(request.method.clone());
+                        .push(request.clone());
                     let request_id = request.id.clone();
-                    let request =
-                        serde_json::from_value::<ClientRequest>(serde_json::to_value(request)?)?;
-                    if let ClientRequest::ThreadList { params, .. } = &request
-                        && let Some((root, started, release)) = blocked_thread_list.take()
+                    let params = request.params.as_ref();
+                    let requires_pagination = match request.method.as_str() {
+                        "thread/start" => params
+                            .and_then(|params| params.get("historyMode"))
+                            .is_some_and(|mode| !mode.is_null()),
+                        "thread/resume" | "thread/fork" => params
+                            .and_then(|params| params.get("excludeTurns"))
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        "thread/turns/list" | "thread/items/list" => true,
+                        _ => false,
+                    };
+                    let response = if matches!(
+                        history_capabilities,
+                        HistoryCapabilities::LegacyOnly
+                            | HistoryCapabilities::LegacyOnlyUnsupportedVariant
+                    ) && requires_pagination
                     {
-                        assert_eq!(params.ancestor_thread_id, Some(root.to_string()));
-                        assert_eq!(params.sort_direction, Some(SortDirection::Desc));
-                        let _ = started.send(());
-                        let _ = release.await;
-                    }
-                    let force_failure = matches!(
-                        &request,
-                        ClientRequest::ThreadSetName { params, .. }
-                            if failed_thread_name == Some(params.name.as_str())
-                    );
-                    let response = if force_failure {
+                        let (code, message) = if history_capabilities
+                            == HistoryCapabilities::LegacyOnlyUnsupportedVariant
+                            && request.method == "thread/start"
+                        {
+                            (-32602, "unknown variant \"paginated\", expected \"legacy\"")
+                        } else {
+                            (-32601, "method not found")
+                        };
                         JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,
                             error: JSONRPCErrorError {
-                                code: -32603,
-                                message: "forced thread/name/set failure".to_string(),
+                                code,
                                 data: None,
+                                message: message.to_string(),
                             },
                         })
                     } else {
-                        match embedded.request(request).await? {
-                            Ok(result) => JSONRPCMessage::Response(JSONRPCResponse {
+                        let request = serde_json::from_value::<ClientRequest>(
+                            serde_json::to_value(request)?,
+                        )?;
+                        if let ClientRequest::ThreadList { params, .. } = &request
+                            && let Some((root, started, release)) = blocked_thread_list.take()
+                        {
+                            assert_eq!(params.ancestor_thread_id, Some(root.to_string()));
+                            assert_eq!(params.sort_direction, Some(SortDirection::Desc));
+                            let _ = started.send(());
+                            let _ = release.await;
+                        }
+                        let force_failure = matches!(
+                            &request,
+                            ClientRequest::ThreadSetName { params, .. }
+                                if failed_thread_name == Some(params.name.as_str())
+                        );
+                        if force_failure {
+                            JSONRPCMessage::Error(JSONRPCError {
                                 id: request_id,
-                                result,
-                            }),
-                            Err(error) => JSONRPCMessage::Error(JSONRPCError {
-                                id: request_id,
-                                error,
-                            }),
+                                error: JSONRPCErrorError {
+                                    code: -32603,
+                                    message: "forced thread/name/set failure".to_string(),
+                                    data: None,
+                                },
+                            })
+                        } else {
+                            match embedded.request(request).await? {
+                                Ok(result) => JSONRPCMessage::Response(JSONRPCResponse {
+                                    id: request_id,
+                                    result,
+                                }),
+                                Err(error) => JSONRPCMessage::Error(JSONRPCError {
+                                    id: request_id,
+                                    error,
+                                }),
+                            }
                         }
                     };
                     websocket
@@ -180,12 +240,40 @@ async fn start_recording_app_server(
     ))
 }
 
-#[tokio::test]
-async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> Result<()> {
+fn create_legacy_history_rollout(config: &Config) -> Result<ThreadId> {
+    let thread_id = create_fake_rollout(
+        config.codex_home.as_path(),
+        "2026-01-02T00-00-00",
+        "2026-01-02T00:00:00Z",
+        "legacy history",
+        Some(config.model_provider_id.as_str()),
+        /*git_info*/ None,
+    )
+    .map_err(|err| color_eyre::eyre::eyre!("failed to create history rollout: {err}"))?;
+    Ok(ThreadId::from_string(&thread_id)?)
+}
+
+fn recorded_params(requests: &RecordedRequests, method: &str) -> Vec<serde_json::Value> {
+    requests
+        .lock()
+        .expect("request recorder lock")
+        .iter()
+        .filter(|request| request.method == method)
+        .map(|request| request.params.clone().unwrap_or(serde_json::Value::Null))
+        .collect()
+}
+
+async fn make_history_test_app() -> Result<(App, tempfile::TempDir)> {
     let mut app = make_test_app().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    Ok((app, codex_home))
+}
+
+#[tokio::test]
+async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> Result<()> {
+    let (mut app, codex_home) = make_history_test_app().await?;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(100);
     let thread_id = create_fake_paginated_rollout(
         codex_home.path(),
@@ -377,6 +465,277 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn transcript_home_loads_every_older_history_page() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(2);
+    let thread_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        "2026-01-02T00-00-00",
+        "2026-01-02T00:00:00Z",
+        "multi-page transcript",
+        Some(app.config.model_provider_id.as_str()),
+        /*git_info*/ None,
+    )
+    .map_err(|error| color_eyre::eyre::eyre!("failed to create paginated rollout: {error}"))?;
+    let thread_id = ThreadId::from_string(&thread_id)?;
+    let path = rollout_path(
+        codex_home.path(),
+        "2026-01-02T00-00-00",
+        &thread_id.to_string(),
+    );
+    let mut records = std::fs::read_to_string(&path)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: "multi-page-turn".to_string(),
+        trace_id: None,
+        started_at: None,
+        model_context_window: None,
+        collaboration_mode_kind: Default::default(),
+    }))
+    .chain((0..305).map(|index| {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "multi-page-turn".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: format!("history-item-{index}"),
+                content: vec![AgentMessageContent::Text {
+                    text: format!("history output {index}"),
+                }],
+                phase: None,
+                memory_citation: None,
+            }),
+            started_at_ms: None,
+            completed_at_ms: 0,
+        })
+    }));
+    for event in events {
+        records.push(serde_json::json!({
+            "timestamp": "2026-01-02T00:00:00Z",
+            "ordinal": records.len(),
+            "type": "event_msg",
+            "payload": serde_json::to_value(event)?,
+        }));
+    }
+    let records = records
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, format!("{records}\n"))?;
+
+    let (mut app_server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let started = app_server
+        .resume_thread(
+            app.config.clone(),
+            thread_id,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    let initial_cells = crate::thread_transcript::thread_items_to_transcript_cells(
+        Some(thread_id),
+        &app.config.cwd,
+        started.turns.iter().flat_map(|turn| turn.items.clone()),
+        crate::thread_transcript::RawReasoningVisibility::Hidden,
+        Some(app.config.codex_home.as_path()),
+    );
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    app.transcript_cells = initial_cells;
+    app.scrollback_has_older_history = app_server.has_older_history(thread_id);
+    assert!(app.scrollback_has_older_history);
+    while app_event_rx.try_recv().is_ok() {}
+    let initial_page_requests = recorded_params(&requests, "thread/items/list").len();
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.open_transcript_overlay(&mut tui);
+
+    app.handle_backtrack_overlay_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+    )
+    .await?;
+    while app_server.has_older_history(thread_id) {
+        let event = tokio::time::timeout(Duration::from_secs(5), app_event_rx.recv())
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("history event channel closed"))?;
+        if matches!(event, AppEvent::OlderThreadHistoryLoaded { .. }) {
+            app.handle_event(&mut tui, &mut app_server, event).await?;
+        }
+    }
+
+    assert!(recorded_params(&requests, "thread/items/list").len() >= initial_page_requests + 3);
+    assert!(app.transcript_cells.iter().any(|cell| {
+        cell.display_lines(/*width*/ 80)
+            .iter()
+            .any(|line| line.to_string().contains("history output 0"))
+    }));
+    let Some(Overlay::Transcript(overlay)) = app.overlay.as_mut() else {
+        panic!("expected transcript overlay after Home navigation");
+    };
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 12,
+    );
+    let mut buffer = Buffer::empty(area);
+    overlay.render(area, &mut buffer);
+    let visible = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(visible.contains("history output 0"), "{visible}");
+    assert!(!visible.contains("history output 304"), "{visible}");
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_legacy_history_start_negotiates_once_for_resume_and_fork() -> Result<()> {
+    let (app, _codex_home) = make_history_test_app().await?;
+    let legacy_thread_id = create_legacy_history_rollout(&app.config)?;
+    let (mut app_server, requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        HistoryCapabilities::LegacyOnly,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+
+    let started = app_server.start_thread(&app.config).await?;
+    let resumed = app_server
+        .resume_thread(
+            app.config.clone(),
+            legacy_thread_id,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    let forked = app_server
+        .fork_thread(app.config.clone(), legacy_thread_id)
+        .await?;
+
+    assert_ne!(started.session.thread_id, legacy_thread_id);
+    assert_eq!(resumed.session.thread_id, legacy_thread_id);
+    assert_ne!(forked.session.thread_id, legacy_thread_id);
+    let starts = recorded_params(&requests, "thread/start");
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0]["historyMode"], "paginated");
+    assert_eq!(starts[1]["historyMode"], serde_json::Value::Null);
+
+    for method in ["thread/resume", "thread/fork"] {
+        let params = recorded_params(&requests, method);
+        assert_eq!(params.len(), 1, "legacy {method} must not be reprobed");
+        assert_ne!(params[0]["excludeTurns"], true);
+    }
+    assert!(recorded_params(&requests, "thread/turns/list").is_empty());
+    assert!(recorded_params(&requests, "thread/items/list").is_empty());
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_legacy_history_start_retries_unsupported_paginated_variant() -> Result<()> {
+    let (app, _codex_home) = make_history_test_app().await?;
+    let (mut app_server, requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        HistoryCapabilities::LegacyOnlyUnsupportedVariant,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+
+    app_server.start_thread(&app.config).await?;
+
+    let starts = recorded_params(&requests, "thread/start");
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0]["historyMode"], "paginated");
+    assert_eq!(starts[1]["historyMode"], serde_json::Value::Null);
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LegacyHistoryRequest {
+    Resume,
+    Fork,
+}
+
+async fn assert_remote_legacy_history_retry(request: LegacyHistoryRequest) -> Result<()> {
+    let (app, _codex_home) = make_history_test_app().await?;
+    let legacy_thread_id = create_legacy_history_rollout(&app.config)?;
+    let (mut app_server, requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        HistoryCapabilities::LegacyOnly,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+
+    let method = match request {
+        LegacyHistoryRequest::Resume => {
+            let resumed = app_server
+                .resume_thread(
+                    app.config.clone(),
+                    legacy_thread_id,
+                    crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+                )
+                .await?;
+            assert_eq!(resumed.session.thread_id, legacy_thread_id);
+            "thread/resume"
+        }
+        LegacyHistoryRequest::Fork => {
+            let forked = app_server
+                .fork_thread(app.config.clone(), legacy_thread_id)
+                .await?;
+            assert_ne!(forked.session.thread_id, legacy_thread_id);
+            "thread/fork"
+        }
+    };
+    let attempts = recorded_params(&requests, method);
+    if request == LegacyHistoryRequest::Resume {
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0]["excludeTurns"], true);
+    } else {
+        assert_eq!(attempts.len(), 1);
+    }
+    assert_ne!(
+        attempts.last().expect("history request")["excludeTurns"],
+        true
+    );
+    assert!(recorded_params(&requests, "thread/turns/list").is_empty());
+    assert!(recorded_params(&requests, "thread/items/list").is_empty());
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_legacy_history_resume_retries_generic_method_not_found() -> Result<()> {
+    assert_remote_legacy_history_retry(LegacyHistoryRequest::Resume).await
+}
+
+#[tokio::test]
+async fn remote_legacy_history_fork_avoids_unsupported_fields() -> Result<()> {
+    assert_remote_legacy_history_retry(LegacyHistoryRequest::Fork).await
+}
 #[test]
 fn fresh_session_applies_requested_name() -> Result<()> {
     const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
@@ -420,7 +779,7 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                         .lock()
                         .expect("request recorder lock")
                         .iter()
-                        .any(|method| method == "thread/name/set"),
+                        .any(|request| request.method == "thread/name/set"),
                     "fresh session should be named through the app server"
                 );
                 let thread = app_server
@@ -664,7 +1023,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                         .lock()
                         .expect("request recorder lock")
                         .iter()
-                        .filter(|method| *method == "thread/list")
+                        .filter(|request| request.method == "thread/list")
                         .count(),
                     1
                 );

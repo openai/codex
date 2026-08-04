@@ -9,6 +9,7 @@ use super::*;
 use crate::app_server_session::ForkGoalContinuation;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
+use crate::pager_overlay::TranscriptHistoryState;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
@@ -43,6 +44,12 @@ impl App {
                     .await
                 {
                     app_server.cancel_older_history_page(thread_id);
+                    if self.chat_widget.thread_id() == Some(thread_id)
+                        && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
+                    {
+                        overlay.set_history_state(TranscriptHistoryState::Failed);
+                        tui.frame_requester().schedule_frame();
+                    }
                     tracing::warn!(%thread_id, error = %err, "failed to load older transcript history");
                 }
             }
@@ -282,12 +289,13 @@ impl App {
                 self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                     .await;
                 let config = self.fresh_session_config();
-                let started = match app_server
-                    .thread_read(thread_id, /*include_turns*/ true)
-                    .await
-                {
-                    Ok(thread) => match crate::app_backtrack::backtrack_fork_before_turn_id(
-                        &thread.turns,
+                let turns = match self.thread_event_channels.get(&thread_id) {
+                    Some(channel) => Some(channel.store.lock().await.turns.clone()),
+                    None => None,
+                };
+                let started = match turns {
+                    Some(turns) => match crate::app_backtrack::backtrack_fork_before_turn_id(
+                        &turns,
                         nth_user_message,
                         &mut prompt,
                     ) {
@@ -296,7 +304,7 @@ impl App {
                                 || app_server.has_older_history(thread_id) =>
                         {
                             let before_turn_id = before_turn_id
-                                .or_else(|| thread.turns.first().map(|turn| turn.id.clone()));
+                                .or_else(|| turns.first().map(|turn| turn.id.clone()));
                             app_server
                                 .fork_thread_at(
                                     config.clone(),
@@ -316,7 +324,9 @@ impl App {
                         }
                         Err(err) => Err(err),
                     },
-                    Err(err) => Err(err),
+                    None => Err(color_eyre::eyre::eyre!(
+                        "the selected thread is no longer available for prompt editing"
+                    )),
                 };
                 match started {
                     Ok(forked) => {
@@ -352,6 +362,10 @@ impl App {
                 self.insert_history_cell(tui, cell);
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
+                self.scrollback_has_older_history = self
+                    .chat_widget
+                    .thread_id()
+                    .is_some_and(|thread_id| app_server.has_older_history(thread_id));
                 self.finish_initial_history_replay_buffer(tui);
             }
             AppEvent::ConsolidateAgentMessage {
