@@ -1,5 +1,10 @@
 use super::*;
 use crate::ModelsManagerConfig;
+use crate::cache::FileModelsCache;
+use crate::cache::ModelsCache;
+use crate::cache::ModelsCacheEntry;
+use crate::cache::ModelsCacheError;
+use crate::cache::ModelsCacheFuture;
 use chrono::Utc;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -87,6 +92,95 @@ struct TestModelsEndpoint {
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
     observed_proxy_policy: Mutex<Option<OutboundProxyPolicy>>,
+}
+
+#[derive(Debug)]
+struct TestModelsCache {
+    entry: Mutex<Option<ModelsCacheEntry>>,
+    load_error: bool,
+    store_error: bool,
+    stored_entries: Mutex<Vec<ModelsCacheEntry>>,
+}
+
+impl TestModelsCache {
+    fn with_entry(entry: ModelsCacheEntry) -> Arc<Self> {
+        Arc::new(Self {
+            entry: Mutex::new(Some(entry)),
+            load_error: false,
+            store_error: false,
+            stored_entries: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn failing(load_error: bool, store_error: bool) -> Arc<Self> {
+        Arc::new(Self {
+            entry: Mutex::new(None),
+            load_error,
+            store_error,
+            stored_entries: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn stored_entries(&self) -> Vec<ModelsCacheEntry> {
+        self.stored_entries
+            .lock()
+            .expect("stored entries lock should not be poisoned")
+            .clone()
+    }
+}
+
+impl ModelsCache for TestModelsCache {
+    fn load<'a>(
+        &'a self,
+        _client_version: &'a str,
+    ) -> ModelsCacheFuture<'a, Result<Option<ModelsCacheEntry>, ModelsCacheError>> {
+        Box::pin(async move {
+            if self.load_error {
+                return Err(ModelsCacheError::new("test load failure"));
+            }
+            Ok(self
+                .entry
+                .lock()
+                .expect("cache entry lock should not be poisoned")
+                .clone())
+        })
+    }
+
+    fn store<'a>(
+        &'a self,
+        entry: &'a ModelsCacheEntry,
+    ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
+        Box::pin(async move {
+            if self.store_error {
+                return Err(ModelsCacheError::new("test store failure"));
+            }
+            self.stored_entries
+                .lock()
+                .expect("stored entries lock should not be poisoned")
+                .push(entry.clone());
+            Ok(())
+        })
+    }
+
+    fn refresh_ttl<'a>(
+        &'a self,
+        _client_version: &'a str,
+    ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
+        Box::pin(async move {
+            let refreshed = {
+                let mut entry = self
+                    .entry
+                    .lock()
+                    .expect("cache entry lock should not be poisoned");
+                let entry = entry
+                    .as_mut()
+                    .ok_or_else(|| ModelsCacheError::new("cache not found"))?;
+                entry.fetched_at = Utc::now();
+                entry.clone()
+            };
+            self.store(&refreshed).await
+        })
+    }
 }
 
 impl TestModelsEndpoint {
@@ -211,8 +305,99 @@ fn openai_manager_for_tests_with_auth(
     OpenAiModelsManager::new(codex_home, endpoint_client, auth_manager)
 }
 
+async fn mutate_file_cache_for_test<F>(codex_home: &Path, f: F)
+where
+    F: FnOnce(&mut ModelsCacheEntry),
+{
+    let client_version = crate::client_version_to_whole();
+    let cache = FileModelsCache::new(codex_home.join(MODEL_CACHE_FILE), DEFAULT_MODEL_CACHE_TTL);
+    let mut entry = cache
+        .load(&client_version)
+        .await
+        .expect("cache load succeeds")
+        .expect("cache entry exists");
+    f(&mut entry);
+    cache.store(&entry).await.expect("cache store succeeds");
+}
+
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
     StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
+}
+
+#[tokio::test]
+async fn file_cache_implements_models_cache_contract() {
+    let codex_home = tempdir().expect("temp dir");
+    let cache = FileModelsCache::new(
+        codex_home.path().join(MODEL_CACHE_FILE),
+        DEFAULT_MODEL_CACHE_TTL,
+    );
+    let client_version = crate::client_version_to_whole();
+    let entry = ModelsCacheEntry {
+        fetched_at: Utc::now(),
+        etag: Some("file-etag".to_string()),
+        client_version: Some(client_version.clone()),
+        models: vec![remote_model(
+            "file-cached",
+            "File Cached",
+            /*priority*/ 0,
+        )],
+    };
+
+    cache.store(&entry).await.expect("cache store succeeds");
+
+    assert_eq!(
+        cache
+            .load(&client_version)
+            .await
+            .expect("cache load succeeds"),
+        Some(entry)
+    );
+}
+
+#[tokio::test]
+async fn file_cache_refresh_ttl_renews_expired_entry_without_serving_it_stale() {
+    let codex_home = tempdir().expect("temp dir");
+    let cache = FileModelsCache::new(
+        codex_home.path().join(MODEL_CACHE_FILE),
+        DEFAULT_MODEL_CACHE_TTL,
+    );
+    let client_version = crate::client_version_to_whole();
+    let expired_at = Utc::now() - chrono::Duration::hours(1);
+    let entry = ModelsCacheEntry {
+        fetched_at: expired_at,
+        etag: Some("expired-etag".to_string()),
+        client_version: Some(client_version.clone()),
+        models: vec![remote_model(
+            "expired-file-cache",
+            "Expired File Cache",
+            /*priority*/ 0,
+        )],
+    };
+    cache.store(&entry).await.expect("cache store succeeds");
+
+    assert_eq!(
+        cache
+            .load(&client_version)
+            .await
+            .expect("cache load succeeds"),
+        None,
+        "an expired entry must not be returned before revalidation"
+    );
+
+    cache
+        .refresh_ttl(&client_version)
+        .await
+        .expect("TTL refresh succeeds");
+
+    let refreshed = cache
+        .load(&client_version)
+        .await
+        .expect("cache load succeeds")
+        .expect("revalidated entry is fresh");
+    assert!(refreshed.fetched_at > expired_at);
+    let mut expected = entry;
+    expected.fetched_at = refreshed.fetched_at;
+    assert_eq!(refreshed, expected);
 }
 
 #[tokio::test]
@@ -243,6 +428,134 @@ async fn manager_without_cache_fetches_on_every_refresh() {
     assert_eq!(second_catalog, catalog);
     assert_eq!(manager.get_remote_models().await, remote_models);
     assert_eq!(endpoint.fetch_count(), 2);
+}
+
+#[tokio::test]
+async fn injected_cache_hit_avoids_remote_fetch() {
+    let cached_models = vec![remote_model("cached", "Cached", /*priority*/ 0)];
+    let cache = TestModelsCache::with_entry(ModelsCacheEntry {
+        fetched_at: Utc::now(),
+        etag: Some("cached-etag".to_string()),
+        client_version: Some(crate::client_version_to_whole()),
+        models: cached_models.clone(),
+    });
+    let endpoint = TestModelsEndpoint::new(vec![vec![remote_model(
+        "remote", "Remote", /*priority*/ 0,
+    )]]);
+    let manager = OpenAiModelsManager::new_with_cache(
+        cache,
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
+
+    let catalog = manager
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+
+    assert_eq!(catalog.models, cached_models);
+    assert_eq!(endpoint.fetch_count(), 0);
+}
+
+#[tokio::test]
+async fn injected_cache_read_error_falls_back_and_persists_remote_models() {
+    let remote_models = vec![remote_model("remote", "Remote", /*priority*/ 0)];
+    let cache = TestModelsCache::failing(/*load_error*/ true, /*store_error*/ false);
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone()]);
+    let manager = OpenAiModelsManager::new_with_cache(
+        cache.clone(),
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
+
+    let catalog = manager
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+
+    assert_eq!(catalog.models, remote_models);
+    assert_eq!(endpoint.fetch_count(), 1);
+    let stored_entries = cache.stored_entries();
+    assert_eq!(
+        stored_entries,
+        vec![ModelsCacheEntry {
+            fetched_at: stored_entries[0].fetched_at,
+            etag: None,
+            client_version: Some(crate::client_version_to_whole()),
+            models: remote_models,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn injected_cache_write_error_does_not_fail_remote_refresh() {
+    let remote_models = vec![remote_model("remote", "Remote", /*priority*/ 0)];
+    let cache = TestModelsCache::failing(/*load_error*/ false, /*store_error*/ true);
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone()]);
+    let manager = OpenAiModelsManager::new_with_cache(
+        cache,
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
+
+    let catalog = manager
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+
+    assert_eq!(catalog.models, remote_models);
+    assert_eq!(endpoint.fetch_count(), 1);
+}
+
+#[tokio::test]
+async fn injected_cache_ttl_refresh_preserves_cached_payload() {
+    let cached_models = vec![remote_model("cached", "Cached", /*priority*/ 0)];
+    let cached_at = Utc::now() - chrono::Duration::minutes(1);
+    let cache = TestModelsCache::with_entry(ModelsCacheEntry {
+        fetched_at: cached_at,
+        etag: Some("cached-etag".to_string()),
+        client_version: Some(crate::client_version_to_whole()),
+        models: cached_models.clone(),
+    });
+    let manager = OpenAiModelsManager::new_with_cache(
+        cache.clone(),
+        TestModelsEndpoint::new(Vec::new()),
+        Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+            "test-api-key",
+        ))),
+    );
+
+    manager
+        .raw_model_catalog(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+    manager
+        .refresh_if_new_etag("cached-etag".to_string(), DEFAULT_HTTP_CLIENT_FACTORY)
+        .await;
+
+    let stored_entries = cache.stored_entries();
+    assert_eq!(stored_entries.len(), 1);
+    assert!(stored_entries[0].fetched_at > cached_at);
+    assert_eq!(stored_entries[0].etag.as_deref(), Some("cached-etag"));
+    assert_eq!(
+        stored_entries[0].client_version,
+        Some(crate::client_version_to_whole())
+    );
+    assert_eq!(stored_entries[0].models, cached_models);
 }
 
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
@@ -753,15 +1066,10 @@ async fn refresh_available_models_refetches_when_cache_stale() {
         .expect("initial refresh succeeds");
 
     // Rewrite cache with an old timestamp so it is treated as stale.
-    manager
-        .cache_manager
-        .as_ref()
-        .expect("cached model manager")
-        .manipulate_cache_for_test(|fetched_at| {
-            *fetched_at = Utc::now() - chrono::Duration::hours(1);
-        })
-        .await
-        .expect("cache manipulation succeeds");
+    mutate_file_cache_for_test(codex_home.path(), |cache| {
+        cache.fetched_at = Utc::now() - chrono::Duration::hours(1);
+    })
+    .await;
 
     manager
         .refresh_available_models(
@@ -794,16 +1102,11 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
         .await
         .expect("initial refresh succeeds");
 
-    manager
-        .cache_manager
-        .as_ref()
-        .expect("cached model manager")
-        .mutate_cache_for_test(|cache| {
-            let client_version = crate::client_version_to_whole();
-            cache.client_version = Some(format!("{client_version}-mismatch"));
-        })
-        .await
-        .expect("cache mutation succeeds");
+    mutate_file_cache_for_test(codex_home.path(), |cache| {
+        let client_version = crate::client_version_to_whole();
+        cache.client_version = Some(format!("{client_version}-mismatch"));
+    })
+    .await;
 
     manager
         .refresh_available_models(
@@ -834,12 +1137,16 @@ async fn refresh_available_models_drops_removed_remote_models() {
         /*priority*/ 1,
     )];
     let endpoint = TestModelsEndpoint::new(vec![initial_models, refreshed_models]);
-    let mut manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
-    manager
-        .cache_manager
-        .as_mut()
-        .expect("cached model manager")
-        .set_ttl(Duration::ZERO);
+    let manager = OpenAiModelsManager::new_with_cache(
+        Arc::new(FileModelsCache::new(
+            codex_home.path().join(MODEL_CACHE_FILE),
+            Duration::ZERO,
+        )),
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    );
 
     manager
         .refresh_available_models(

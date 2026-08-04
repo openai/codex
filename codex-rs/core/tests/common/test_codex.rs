@@ -36,6 +36,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::PermissionProfile;
@@ -308,6 +309,7 @@ pub struct TestCodexBuilder {
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     code_mode_host_program: Option<PathBuf>,
     history_mode: Option<ThreadHistoryMode>,
+    models_manager: Option<SharedModelsManager>,
 }
 
 impl TestCodexBuilder {
@@ -321,6 +323,11 @@ impl TestCodexBuilder {
 
     pub fn with_auth(mut self, auth: CodexAuth) -> Self {
         self.auth = auth;
+        self
+    }
+
+    pub fn with_models_manager(mut self, models_manager: SharedModelsManager) -> Self {
+        self.models_manager = Some(models_manager);
         self
     }
 
@@ -643,10 +650,14 @@ impl TestCodexBuilder {
                 ))
             });
         let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
+        let models_manager = self
+            .models_manager
+            .clone()
+            .unwrap_or_else(|| codex_core::build_models_manager(&config, auth_manager.clone()));
         let thread_manager = ThreadManager::new(
             &config,
             auth_manager.clone(),
-            codex_core::build_models_manager(&config, auth_manager),
+            models_manager,
             codex_core::CodexAppsToolsCache::default(),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
@@ -1281,6 +1292,7 @@ pub fn test_codex() -> TestCodexBuilder {
         external_time_provider: None,
         code_mode_host_program: None,
         history_mode: None,
+        models_manager: None,
     }
 }
 
