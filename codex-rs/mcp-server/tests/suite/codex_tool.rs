@@ -476,7 +476,12 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
             .count(),
         1
     );
-    assert_eq!(developer_text.matches("Generated with Codex.").count(), 1);
+    assert_eq!(
+        developer_text
+            .matches("Generated with [Codex](https://openai.com/codex/).")
+            .count(),
+        1
+    );
     assert_eq!(
         developer_text.matches("- demo: Demo skill.").count(),
         1,

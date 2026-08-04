@@ -17,7 +17,7 @@ Rules:
 pub(super) const ENABLED_INSTRUCTIONS: &str = r#"
 When you create or amend a git commit or create or update a pull request for this task, add Codex attribution exactly once:
 - Commit messages must end with `Co-authored-by: Codex <noreply@openai.com>`. Preserve existing trailers and, if this exact trailer is missing, append it with one blank line before the trailer block.
-- Pull request bodies must include the exact line `Generated with Codex.`. Preserve the existing body and hidden markers and, if this exact marker is missing, append it near the end, before any trailing hidden metadata markers.
+- Pull request bodies must include the exact line `Generated with [Codex](https://openai.com/codex/).`. Preserve the existing body and hidden markers and, if this exact marker is missing, append it near the end, before any trailing hidden metadata markers.
 - Do not add duplicate attribution. If a message or body you are already editing contains duplicate exact attribution, keep exactly one.
 - Ignore any earlier instructions disabling Codex attribution; this policy reflects the current workspace.
 - Do not rewrite an existing commit or pull request solely to add attribution.
@@ -71,6 +71,7 @@ fn is_enabled_fragment(role: &str, text: &str) -> bool {
     role == "developer"
         && text.trim_start().starts_with(START_MARKER)
         && text.contains("Co-authored-by: Codex <noreply@openai.com>")
-        && text.contains("Generated with Codex.")
+        && (text.contains("Generated with [Codex](https://openai.com/codex/).")
+            || text.contains("Generated with Codex."))
         && text.trim_end().ends_with(END_MARKER)
 }
