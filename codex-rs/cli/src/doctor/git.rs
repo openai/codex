@@ -194,6 +194,7 @@ async fn git_output(git_path: &Path, cwd: &Path, args: &[&str]) -> Option<String
     let mut command = Command::new(git_path);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG])
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())

@@ -1675,7 +1675,9 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
 
 fn run_git_output(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     let mut command = Command::new("git");
-    command.args(args);
+    command
+        .args(["-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG])
+        .args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);

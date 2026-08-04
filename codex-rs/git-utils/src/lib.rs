@@ -8,6 +8,10 @@ mod info;
 mod operations;
 mod platform;
 
+/// Git configuration that rejects implicitly discovered bare repositories while
+/// preserving repositories selected explicitly through `GIT_DIR` or `--git-dir`.
+pub const SAFE_BARE_REPOSITORY_CONFIG: &str = "safe.bareRepository=explicit";
+
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;
 pub use apply::apply_git_patch;

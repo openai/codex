@@ -684,7 +684,9 @@ fn git_head_sha(repo_path: &Path, git_binary: &Path) -> Result<String, String> {
 
 fn git_command(git_binary: &Path) -> Command {
     let mut command = Command::new(git_binary);
-    command.env("GIT_OPTIONAL_LOCKS", "0");
+    command
+        .args(["-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG])
+        .env("GIT_OPTIONAL_LOCKS", "0");
     for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES {
         command.env_remove(name);
     }

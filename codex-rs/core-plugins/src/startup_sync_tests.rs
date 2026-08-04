@@ -94,6 +94,14 @@ async fn backup_archive_routes_metadata_and_backend_supplied_download_urls() {
 fn git_command_sanitizes_ambient_repository_environment() {
     let command = git_command(Path::new("git"));
 
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        [
+            OsStr::new("-c"),
+            OsStr::new(codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG),
+        ]
+    );
+
     for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES {
         assert_eq!(
             command
@@ -104,6 +112,147 @@ fn git_command_sanitizes_ambient_repository_environment() {
             "{name} should be removed from startup sync Git commands"
         );
     }
+}
+
+#[tokio::test]
+async fn ordinary_clone_rejects_tracked_embedded_bare_repository() {
+    let temp_dir = tempdir().expect("create temporary directory");
+    let source = temp_dir.path().join("source");
+    let clone = temp_dir.path().join("clone");
+    let nested_source = source.join("nested");
+    std::fs::create_dir_all(nested_source.join("objects")).expect("create nested object directory");
+    std::fs::create_dir_all(nested_source.join("refs"))
+        .expect("create nested references directory");
+
+    let run_setup_git = |cwd: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run repository setup Git command");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run_setup_git(&source, &["init", "--quiet"]);
+    std::fs::write(nested_source.join("HEAD"), "ref: refs/heads/main\n")
+        .expect("write tracked nested HEAD");
+    std::fs::write(
+        nested_source.join("config"),
+        "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = ./payload.sh\n",
+    )
+    .expect("write tracked nested Git configuration");
+    std::fs::write(nested_source.join("objects/.keep"), "").expect("track nested object directory");
+    std::fs::write(nested_source.join("refs/.keep"), "")
+        .expect("track nested references directory");
+    std::fs::write(
+        nested_source.join("payload.sh"),
+        "#!/bin/sh\nprintf ran > \"$0.ran\"\n",
+    )
+    .expect("write tracked filesystem monitor");
+
+    run_setup_git(&source, &["add", "--all"]);
+    run_setup_git(&source, &["add", "--chmod=+x", "nested/payload.sh"]);
+    run_setup_git(
+        &source,
+        &[
+            "-c",
+            "user.name=Codex Tests",
+            "-c",
+            "user.email=codex-tests@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            "track embedded Git repository",
+        ],
+    );
+    let clone_output = Command::new("git")
+        .arg("clone")
+        .arg(&source)
+        .arg(&clone)
+        .output()
+        .expect("clone repository normally");
+    assert!(
+        clone_output.status.success(),
+        "ordinary git clone failed: {}",
+        String::from_utf8_lossy(&clone_output.stderr)
+    );
+
+    let nested = clone.join("nested");
+    let marker = nested.join("payload.sh.ran");
+    let vulnerable = Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(&nested)
+        .output()
+        .expect("run unguarded Git against tracked embedded repository");
+    assert!(
+        vulnerable.status.success(),
+        "unguarded Git should discover the tracked embedded repository: {}",
+        String::from_utf8_lossy(&vulnerable.stderr)
+    );
+    assert!(
+        marker.exists(),
+        "unguarded Git should execute the tracked helper"
+    );
+    std::fs::remove_file(&marker).expect("remove unguarded execution marker");
+
+    let guarded = git_command(Path::new("git"))
+        .args(["status", "--short"])
+        .current_dir(&nested)
+        .output()
+        .expect("run guarded startup Git against tracked embedded repository");
+    assert!(
+        !guarded.status.success(),
+        "startup Git should reject the repository"
+    );
+    assert!(
+        !marker.exists(),
+        "startup Git must reject the repository before executing its helper"
+    );
+
+    let apply_error = codex_git_utils::apply_git_patch(&codex_git_utils::ApplyGitRequest {
+        cwd: nested.clone(),
+        diff: String::new(),
+        revert: false,
+        preflight: true,
+    })
+    .expect_err("patch root discovery should reject the tracked embedded repository");
+    assert!(apply_error.to_string().contains("not a git repository"));
+    assert!(codex_git_utils::collect_git_info(&nested).await.is_none());
+    assert!(codex_git_utils::git_diff_to_remote(&nested).await.is_none());
+    assert!(
+        !marker.exists(),
+        "Rust-owned Git inspection must not execute the tracked helper"
+    );
+
+    let explicit_git_dir = git_command(Path::new("git"))
+        .arg("--git-dir")
+        .arg(&nested)
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(&clone)
+        .output()
+        .expect("run Git with an explicitly selected bare repository");
+    assert!(
+        explicit_git_dir.status.success(),
+        "--git-dir must continue to permit an explicitly selected repository: {}",
+        String::from_utf8_lossy(&explicit_git_dir.stderr)
+    );
+
+    let explicit_environment = Command::new("git")
+        .args(["-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG])
+        .args(["rev-parse", "--git-dir"])
+        .env("GIT_DIR", &nested)
+        .current_dir(&clone)
+        .output()
+        .expect("run Git with explicitly selected GIT_DIR");
+    assert!(
+        explicit_environment.status.success(),
+        "GIT_DIR must continue to permit an explicitly selected repository: {}",
+        String::from_utf8_lossy(&explicit_environment.stderr)
+    );
 }
 
 fn write_file(path: &Path, contents: &str) {
@@ -411,6 +560,7 @@ fn concurrent_syncs_serialize_fetches_without_skipping_remote_checks() {
         &git_path,
         &format!(
             r#"#!/bin/sh
+if [ "$1" = "-c" ] && [ "$2" = "safe.bareRepository=explicit" ]; then shift 2; fi
 printf '%s\n' "$*" >> '{}'
 if [ "$1" = "ls-remote" ]; then
   sleep 1
@@ -652,7 +802,7 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
         .collect::<Vec<_>>();
     let curated_repo_path = curated_plugins_repo_path(tmp.path());
     assert!(incremental_sync_invocations.iter().any(|invocation| {
-        invocation.starts_with(&format!("-C {} fetch ", curated_repo_path.display()))
+        invocation.contains(&format!(" -C {} fetch ", curated_repo_path.display()))
             && invocation.contains(" https://github.com/openai/plugins.git ")
             && invocation.contains(updated_sha.as_str())
             && invocation.ends_with(CURATED_PLUGINS_FETCH_REF)
@@ -675,8 +825,8 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
             .any(|invocation| invocation.split_whitespace().any(|arg| arg == "clone"))
     );
     assert!(!incremental_sync_invocations.iter().any(|invocation| {
-        invocation.starts_with(&format!("-C {} reset ", curated_repo_path.display()))
-            || invocation.starts_with(&format!("-C {} clean ", curated_repo_path.display()))
+        invocation.contains(&format!(" -C {} reset ", curated_repo_path.display()))
+            || invocation.contains(&format!(" -C {} clean ", curated_repo_path.display()))
     }));
     assert!(!has_plugins_clone_dirs(tmp.path()));
 
@@ -693,7 +843,7 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
     assert!(
         unchanged_sync_invocations
             .iter()
-            .any(|invocation| invocation.starts_with("ls-remote "))
+            .any(|invocation| invocation.contains(" ls-remote "))
     );
     assert!(
         !unchanged_sync_invocations
@@ -825,6 +975,7 @@ fn sync_openai_plugins_repo_via_git_cleans_up_staged_dir_on_fetch_failure() {
         &git_path,
         &format!(
             r#"#!/bin/sh
+if [ "$1" = "-c" ] && [ "$2" = "safe.bareRepository=explicit" ]; then shift 2; fi
 if [ "$1" = "ls-remote" ]; then
   printf '%s\tHEAD\n' "{sha}"
   exit 0
@@ -870,6 +1021,7 @@ fn sync_openai_plugins_repo_via_git_preserves_existing_snapshot_on_validation_fa
         &git_path,
         &format!(
             r#"#!/bin/sh
+if [ "$1" = "-c" ] && [ "$2" = "safe.bareRepository=explicit" ]; then shift 2; fi
 if [ "$1" = "ls-remote" ]; then
   printf '%s\tHEAD\n' "{remote_sha}"
   exit 0

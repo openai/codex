@@ -125,6 +125,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 
 fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
     let out = std::process::Command::new("git")
+        .args(["-c", crate::SAFE_BARE_REPOSITORY_CONFIG])
         .arg("rev-parse")
         .arg("--show-toplevel")
         .current_dir(cwd)
@@ -153,6 +154,7 @@ fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, 
     for p in git_cfg {
         cmd.arg(p);
     }
+    cmd.args(["-c", crate::SAFE_BARE_REPOSITORY_CONFIG]);
     for a in args {
         cmd.arg(a);
     }
@@ -330,6 +332,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
         return Ok(());
     }
     let mut cmd = std::process::Command::new("git");
+    cmd.args(["-c", crate::SAFE_BARE_REPOSITORY_CONFIG]);
     cmd.arg("add");
     cmd.arg("--");
     for p in &existing {

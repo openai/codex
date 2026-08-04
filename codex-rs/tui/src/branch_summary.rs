@@ -474,8 +474,10 @@ async fn run_git_command(
     cwd: &Path,
     args: &[&str],
 ) -> Result<WorkspaceCommandOutput, crate::workspace_command::WorkspaceCommandError> {
-    let mut argv = Vec::with_capacity(args.len() + 1);
+    let mut argv = Vec::with_capacity(args.len() + 3);
     argv.push("git".to_string());
+    argv.push("-c".to_string());
+    argv.push(codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG.to_string());
     argv.extend(args.iter().map(|arg| (*arg).to_string()));
     runner
         .run(
@@ -672,8 +674,18 @@ mod tests {
     }
 
     fn response(argv: &[&str], exit_code: i32, stdout: &str) -> FakeResponse {
+        let mut argv: Vec<String> = argv.iter().map(|arg| (*arg).to_string()).collect();
+        if argv.first().map(String::as_str) == Some("git") {
+            argv.splice(
+                1..1,
+                [
+                    "-c".to_string(),
+                    codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG.to_string(),
+                ],
+            );
+        }
         FakeResponse {
-            argv: argv.iter().map(|arg| (*arg).to_string()).collect(),
+            argv,
             output: WorkspaceCommandOutput {
                 exit_code,
                 stdout: stdout.to_string(),
@@ -701,7 +713,16 @@ mod tests {
         }
 
         fn saw(&self, argv: &[&str]) -> bool {
-            let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_string()).collect();
+            let mut argv: Vec<String> = argv.iter().map(|arg| (*arg).to_string()).collect();
+            if argv.first().map(String::as_str) == Some("git") {
+                argv.splice(
+                    1..1,
+                    [
+                        "-c".to_string(),
+                        codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG.to_string(),
+                    ],
+                );
+            }
             self.seen
                 .lock()
                 .expect("seen lock")

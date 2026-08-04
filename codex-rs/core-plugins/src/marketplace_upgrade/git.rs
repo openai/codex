@@ -136,6 +136,7 @@ fn is_full_git_sha(value: &str) -> bool {
 fn git_command() -> Command {
     let mut command = Command::new("git");
     command
+        .args(["-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG])
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
     command
@@ -241,6 +242,13 @@ mod tests {
         let command = git_command();
 
         assert_eq!(command.get_program(), OsStr::new("git"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("-c"),
+                OsStr::new(codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG),
+            ]
+        );
         assert_eq!(
             command_env(&command, "GIT_OPTIONAL_LOCKS"),
             Some(Some(OsStr::new("0")))

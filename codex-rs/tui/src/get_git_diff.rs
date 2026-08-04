@@ -33,7 +33,9 @@ struct WorkspaceFsmonitorProbeRunner<'a> {
 
 impl FsmonitorProbeRunner for WorkspaceFsmonitorProbeRunner<'_> {
     async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
-        let argv = ["git"].into_iter().chain(args.iter().copied());
+        let argv = ["git", "-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG]
+            .into_iter()
+            .chain(args.iter().copied());
         let command = WorkspaceCommand::new(argv).cwd(self.cwd.to_path_buf());
         match self.runner.run(command).await {
             Ok(output) if output.success() => Some(output.stdout.into_bytes()),
@@ -231,6 +233,8 @@ async fn run_git_command(
 ) -> Result<WorkspaceCommandOutput, String> {
     let argv = [
         "git",
+        "-c",
+        codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG,
         "-c",
         fsmonitor.git_config_arg(),
         "-c",
@@ -745,6 +749,8 @@ mod tests {
         [
             "git",
             "-c",
+            codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG,
+            "-c",
             fsmonitor.git_config_arg(),
             "-c",
             DISABLE_HOOKS_CONFIG,
@@ -756,7 +762,7 @@ mod tests {
     }
 
     fn git_probe_command(args: &[&str]) -> Vec<String> {
-        ["git"]
+        ["git", "-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG]
             .into_iter()
             .chain(args.iter().copied())
             .map(str::to_string)
@@ -830,7 +836,7 @@ mod tests {
         for command in commands {
             assert_eq!(command.cwd.as_deref(), Some(cwd));
             if matches!(
-                command.argv.get(1).map(String::as_str),
+                command.argv.get(3).map(String::as_str),
                 Some("config" | "version")
             ) {
                 assert_eq!(command.env, HashMap::new());

@@ -400,7 +400,10 @@ impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
         // Both probes are fast, bounded metadata queries that do not inspect the
         // worktree or index, so do not reduce the requested command's timeout.
         let mut command = Command::new(self.git);
-        command.args(args).current_dir(self.cwd);
+        command
+            .args(["-c", crate::SAFE_BARE_REPOSITORY_CONFIG])
+            .args(args)
+            .current_dir(self.cwd);
         match run_git_command_with_timeout_output(&mut command, GIT_COMMAND_TIMEOUT).await {
             Some(output) if output.status.success() => Some(output.stdout),
             _ => None,
@@ -422,6 +425,7 @@ async fn run_git_command_with_timeout_from(
     let mut command = Command::new(git);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["-c", crate::SAFE_BARE_REPOSITORY_CONFIG])
         // Keep internal Git commands independent of repository-selected hooks
         // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
         .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
@@ -1032,6 +1036,7 @@ mod tests {
         std::fs::write(
             &git,
             "#!/bin/sh\n\
+             if [ \"$1\" = \"-c\" ] && [ \"$2\" = \"safe.bareRepository=explicit\" ]; then shift 2; fi\n\
              printf '%s\\n' \"$*\" >>\"$0.log\"\n\
              case \"$1\" in\n\
              config) printf '/tmp/fsmonitor-helper\\000' ;;\n\
@@ -1097,6 +1102,7 @@ mod tests {
         std::fs::write(
             &git,
             "#!/bin/sh\n\
+             if [ \"$1\" = \"-c\" ] && [ \"$2\" = \"safe.bareRepository=explicit\" ]; then shift 2; fi\n\
              printf '%s\\n' \"$*\" >>\"$0.log\"\n\
              case \"$1\" in\n\
              config)\n\
