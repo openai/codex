@@ -7,7 +7,6 @@
 
 use codex_api::Provider as ApiProvider;
 use codex_api::RetryConfig as ApiRetryConfig;
-use codex_api::is_azure_responses_provider;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
@@ -417,10 +416,6 @@ impl ModelProviderInfo {
 
     pub fn is_amazon_bedrock(&self) -> bool {
         self.name == AMAZON_BEDROCK_PROVIDER_NAME
-    }
-
-    pub fn supports_remote_compaction(&self) -> bool {
-        self.is_openai() || is_azure_responses_provider(&self.name, self.base_url.as_deref())
     }
 
     pub fn has_command_auth(&self) -> bool {

@@ -29,6 +29,7 @@ use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
+use crate::provider::RemoteCompactionSupport;
 use auth::resolve_provider_auth as resolve_bedrock_provider_auth;
 use catalog::normalize_bedrock_catalog;
 pub(crate) use catalog::static_model_catalog;
@@ -126,6 +127,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
             image_generation: false,
             web_search: true,
             external_web_access: false,
+            remote_compaction: RemoteCompactionSupport::V1,
         }
     }
 
@@ -368,6 +370,7 @@ mod tests {
                 image_generation: false,
                 web_search: true,
                 external_web_access: false,
+                remote_compaction: RemoteCompactionSupport::V1,
             }
         );
     }

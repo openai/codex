@@ -50,8 +50,6 @@ use codex_utils_output_truncation::truncate_text;
 use futures::prelude::*;
 use tracing::error;
 
-use codex_model_provider_info::ModelProviderInfo;
-
 pub use codex_prompts::SUMMARIZATION_PROMPT;
 pub use codex_prompts::SUMMARY_PREFIX;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -103,10 +101,6 @@ pub(crate) async fn build_compaction_initial_context(
         }
         InitialContextInjection::DoNotInject => (Vec::new(), None),
     }
-}
-
-pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
-    provider.supports_remote_compaction()
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
