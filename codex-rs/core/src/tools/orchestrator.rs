@@ -7,7 +7,7 @@ retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
 use super::approvals::ApprovalReviewer;
-use super::approvals::resolve_tool_apporval;
+use super::approvals::resolve_tool_approval;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
@@ -174,7 +174,7 @@ impl ToolOrchestrator {
                         retry_reason: None,
                         network_approval_context: None,
                     };
-                    resolve_tool_apporval(
+                    resolve_tool_approval(
                         tool,
                         req,
                         tool_ctx.call_id.as_str(),
@@ -205,7 +205,7 @@ impl ToolOrchestrator {
                     retry_reason: reason.clone(),
                     network_approval_context: None,
                 };
-                resolve_tool_apporval(
+                resolve_tool_approval(
                     tool,
                     req,
                     tool_ctx.call_id.as_str(),
@@ -402,7 +402,7 @@ impl ToolOrchestrator {
                     };
 
                     let permission_request_run_id = format!("{}:retry", tool_ctx.call_id);
-                    resolve_tool_apporval(
+                    resolve_tool_approval(
                         tool,
                         req,
                         &permission_request_run_id,

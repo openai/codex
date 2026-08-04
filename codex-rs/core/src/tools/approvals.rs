@@ -188,7 +188,7 @@ impl ApprovalResolution {
     }
 }
 
-pub(super) async fn resolve_tool_apporval<Rq, Out, T>(
+pub(super) async fn resolve_tool_approval<Rq, Out, T>(
     tool: &mut T,
     req: &Rq,
     permission_request_run_id: &str,
