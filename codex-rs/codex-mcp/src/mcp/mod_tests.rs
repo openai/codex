@@ -362,6 +362,25 @@ fn codex_apps_server_config_forwards_originator_and_configured_product_sku_heade
     }
 }
 
+#[test]
+fn effective_mcp_servers_preserve_chatgpt_auth_for_staging() {
+    for url in [
+        "https://chatgpt-staging.com",
+        "https://preview.chatgpt-staging.com",
+    ] {
+        let mut config = test_mcp_config(PathBuf::new());
+        config.chatgpt_base_url = url.to_string();
+        let server = codex_apps_mcp_server_config(
+            url, /*apps_mcp_product_sku*/ None, /*originator*/ None,
+        );
+        let configured = HashMap::from([("staging".to_string(), server)]);
+        let effective =
+            effective_mcp_servers_from_configured(configured, &config, /*auth*/ None);
+
+        assert_eq!(effective["staging"].config().auth, McpServerAuth::ChatGpt);
+    }
+}
+
 #[tokio::test]
 async fn effective_mcp_servers_preserve_runtime_servers() {
     let codex_home = tempfile::tempdir().expect("tempdir");

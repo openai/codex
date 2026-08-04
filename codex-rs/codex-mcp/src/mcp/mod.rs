@@ -270,6 +270,38 @@ pub fn effective_mcp_servers(
     effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
 }
 
+fn is_trusted_chatgpt_mcp_server(
+    transport: &McpServerTransportConfig,
+    chatgpt_base_url: &str,
+) -> bool {
+    let McpServerTransportConfig::StreamableHttp { url, .. } = transport else {
+        return false;
+    };
+    let Ok(server_url) = url::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(server_url.scheme(), "http" | "https") {
+        return false;
+    }
+
+    if url::Url::parse(CHATGPT_CODEX_BASE_URL)
+        .ok()
+        .is_some_and(|chatgpt_url| server_url.origin() == chatgpt_url.origin())
+    {
+        return true;
+    }
+
+    url::Url::parse(chatgpt_base_url)
+        .ok()
+        .is_some_and(|staging_url| {
+            staging_url.scheme() == "https"
+                && staging_url.domain().is_some_and(|host| {
+                    host == "chatgpt-staging.com" || host.ends_with(".chatgpt-staging.com")
+                })
+                && server_url.origin() == staging_url.origin()
+        })
+}
+
 /// Converts a materialized server map to its auth-gated runtime view.
 ///
 /// Compatibility built-ins and extension overlays must already be reflected in
@@ -279,24 +311,12 @@ pub fn effective_mcp_servers_from_configured(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
-    let chatgpt_origin = url::Url::parse(CHATGPT_CODEX_BASE_URL)
-        .ok()
-        .map(|url| url.origin());
     let mut servers = configured_servers
         .into_iter()
         .map(|(name, mut server)| {
             match server.auth.clone() {
                 McpServerAuth::ChatGpt => {
-                    let server_origin = match &server.transport {
-                        McpServerTransportConfig::StreamableHttp { url, .. } => {
-                            url::Url::parse(url)
-                                .ok()
-                                .filter(|url| matches!(url.scheme(), "http" | "https"))
-                                .map(|url| url.origin())
-                        }
-                        McpServerTransportConfig::Stdio { .. } => None,
-                    };
-                    if server_origin.as_ref() != chatgpt_origin.as_ref() {
+                    if !is_trusted_chatgpt_mcp_server(&server.transport, &config.chatgpt_base_url) {
                         server.auth = McpServerAuth::OAuth;
                     }
                 }
