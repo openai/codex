@@ -609,6 +609,7 @@ async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
             r#"
 [features.token_budget]
 enabled = true
+mode = "thread"
 reminder_threshold_tokens = 16000
 reminder_message_template = "Custom reminder: {n_remaining} tokens."
 guidance_message = "Preserve important state before compaction."
@@ -616,11 +617,19 @@ auto_compact_fallback_prompt = "  Write notes immediately.  "
 auto_compact_fallback_buffer_tokens = 8000
 "#,
             TokenBudgetConfig {
+                mode: TokenBudgetMode::Thread,
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
                 guidance_message: Some("Preserve important state before compaction.".to_string()),
                 auto_compact_fallback_prompt: Some("Write notes immediately.".to_string()),
                 auto_compact_fallback_buffer_tokens: Some(8_000),
+            },
+        ),
+        (
+            "[features.token_budget]\nenabled = true\nmode = \"name\"\n",
+            TokenBudgetConfig {
+                mode: TokenBudgetMode::Name,
+                ..TokenBudgetConfig::default()
             },
         ),
     ] {

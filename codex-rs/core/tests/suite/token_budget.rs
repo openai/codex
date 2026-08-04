@@ -8,6 +8,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_features::FeatureToml;
 use codex_features::TokenBudgetConfigToml;
+use codex_features::TokenBudgetMode;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::items::TurnItem;
@@ -74,7 +75,7 @@ fn model_token_budget_config() -> ModelTokenBudgetConfig {
 }
 
 fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
-    let context_window_prefix = format!("{CONTEXT_WINDOW_OPEN_TAG}\nAgent name: ");
+    let context_window_prefix = format!("{CONTEXT_WINDOW_OPEN_TAG}\n");
     request
         .message_input_texts("developer")
         .into_iter()
@@ -85,7 +86,7 @@ fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
 fn token_budget_window_ids(text: &str, agent_name: &str) -> (String, Option<String>, String) {
     let captures = assert_regex_match(
         &format!(
-            r"^{CONTEXT_WINDOW_OPEN_TAG}\nAgent name: {agent_name}\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})(?:\nPrevious context window id: ([0-9a-f-]{{36}}))?\n{CONTEXT_WINDOW_CLOSE_TAG}$"
+            r"^{CONTEXT_WINDOW_OPEN_TAG}\n(?:Thread id: [0-9a-f-]{{36}}|Agent name: {agent_name})\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})(?:\nPrevious context window id: ([0-9a-f-]{{36}}))?\n{CONTEXT_WINDOW_CLOSE_TAG}$"
         ),
         text,
     );
@@ -290,6 +291,13 @@ async fn token_budget_uses_model_message_defaults() -> Result<()> {
     let model_defaults = model_token_budget_config();
     let expected_guidance = model_defaults.guidance_message.clone();
     let test = test_codex()
+        .with_pre_build_hook(|home| {
+            std::fs::write(
+                home.join("config.toml"),
+                "[features.token_budget]\nenabled = true\nmode = \"name\"\n",
+            )
+            .expect("write agent-name token-budget configuration");
+        })
         .with_model_info_override("gpt-5.2", move |model_info| {
             model_info
                 .model_messages
@@ -310,7 +318,14 @@ async fn token_budget_uses_model_message_defaults() -> Result<()> {
     test.submit_turn("inspect model-owned context guidance")
         .await?;
 
-    let developer_texts = response.single_request().message_input_texts("developer");
+    let request = response.single_request();
+    let token_budget_context = token_budget_contexts(&request);
+    assert_eq!(token_budget_context.len(), 1);
+    assert!(
+        token_budget_context[0]
+            .starts_with(&format!("{CONTEXT_WINDOW_OPEN_TAG}\nAgent name: /root\n"))
+    );
+    let developer_texts = request.message_input_texts("developer");
     assert!(developer_texts.iter().any(|text| {
         text == &format!(
             "{CONTEXT_WINDOW_GUIDANCE_OPEN_TAG}\n{expected_guidance}\n{CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG}"
@@ -414,6 +429,7 @@ async fn token_budget_model_defaults_survive_config_lock_replay() -> Result<()> 
             .and_then(|features| features.token_budget.as_ref()),
         Some(&FeatureToml::Config(TokenBudgetConfigToml {
             enabled: Some(true),
+            mode: Some(TokenBudgetMode::Thread),
             reminder_threshold_tokens: Some(6_144),
             reminder_message_template: Some(
                 "Model reminder: {n_remaining} tokens remain.".to_string()
@@ -727,7 +743,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
     assert_eq!(token_budgets.len(), 1);
     let captures = assert_regex_match(
         &format!(
-            r"^{CONTEXT_WINDOW_OPEN_TAG}\nAgent name: /root\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})\nmanual history hint for thread {thread_id}\nunstructured notes/thread_hint fixture result\n{CONTEXT_WINDOW_CLOSE_TAG}$"
+            r"^{CONTEXT_WINDOW_OPEN_TAG}\nThread id: {thread_id}\nFirst context window id: ([0-9a-f-]{{36}})\nCurrent context window id: ([0-9a-f-]{{36}})\nmanual history hint for thread {thread_id}\nunstructured notes/thread_hint fixture result\n{CONTEXT_WINDOW_CLOSE_TAG}$"
         ),
         &token_budgets[0],
     );
@@ -1492,6 +1508,7 @@ async fn new_context_tool_skips_auto_compact_fallback() -> Result<()> {
         .with_config(|config| {
             config.model_context_window = Some(10_000);
             config.token_budget = Some(TokenBudgetConfig {
+                mode: TokenBudgetMode::Name,
                 auto_compact_fallback_prompt: Some(AUTO_COMPACT_FALLBACK_PROMPT.to_string()),
                 auto_compact_fallback_buffer_tokens: Some(4_000),
                 ..TokenBudgetConfig::default()

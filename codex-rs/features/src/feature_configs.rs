@@ -134,11 +134,23 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
     }
 }
 
+/// Identity included in the context-window developer message.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenBudgetMode {
+    #[default]
+    Thread,
+    Name,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TokenBudgetConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// Select whether context-window metadata identifies the thread or agent name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<TokenBudgetMode>,
     /// Number of tokens remaining before auto-compaction when the wrap-up reminder is emitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]

@@ -69,6 +69,7 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::TokenBudgetConfigToml;
+use codex_features::TokenBudgetMode;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -1119,6 +1120,7 @@ const AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES: usize = 2000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
+    pub mode: TokenBudgetMode,
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
     pub guidance_message: Option<String>,
@@ -1211,6 +1213,7 @@ impl TokenBudgetConfig {
 impl Default for TokenBudgetConfig {
     fn default() -> Self {
         Self {
+            mode: TokenBudgetMode::default(),
             reminder_threshold_tokens: None,
             reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
             guidance_message: None,
@@ -2757,6 +2760,9 @@ fn resolve_token_budget_config(
     }
 
     let token_budget_config = token_budget_toml_config(config_toml.features.as_ref());
+    let mode = token_budget_config
+        .and_then(|config| config.mode)
+        .unwrap_or_default();
     let reminder_threshold_tokens =
         token_budget_config.and_then(|config| config.reminder_threshold_tokens);
     let reminder_message_template = token_budget_config
@@ -2774,6 +2780,7 @@ fn resolve_token_budget_config(
         token_budget_config.and_then(|config| config.auto_compact_fallback_buffer_tokens);
 
     let token_budget = TokenBudgetConfig {
+        mode,
         reminder_threshold_tokens,
         reminder_message_template,
         guidance_message,

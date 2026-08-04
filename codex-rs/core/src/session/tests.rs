@@ -9105,7 +9105,12 @@ async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_develo
     let turn_context_mut =
         Arc::get_mut(&mut turn_context).expect("thread settings should not be shared");
     turn_context_mut.session_source = session_source;
-    Arc::make_mut(&mut turn_context_mut.config)
+    let config = Arc::make_mut(&mut turn_context_mut.config);
+    config.token_budget = Some(crate::config::TokenBudgetConfig {
+        mode: codex_features::TokenBudgetMode::Name,
+        ..crate::config::TokenBudgetConfig::default()
+    });
+    config
         .features
         .enable(Feature::TokenBudget)
         .expect("test config should allow token budget");

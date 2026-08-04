@@ -3119,6 +3119,14 @@
           "maxLength": 2000,
           "type": "string"
         },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TokenBudgetMode"
+            }
+          ],
+          "description": "Select whether context-window metadata identifies the thread or agent name."
+        },
         "reminder_message_template": {
           "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
           "maxLength": 2000,
@@ -3133,6 +3141,14 @@
         }
       },
       "type": "object"
+    },
+    "TokenBudgetMode": {
+      "description": "Identity included in the context-window developer message.",
+      "enum": [
+        "thread",
+        "name"
+      ],
+      "type": "string"
     },
     "ToolExposureSurface": {
       "description": "A model-facing surface on which a tool can be exposed.",
