@@ -2,6 +2,7 @@ mod backfill_state;
 mod graph;
 mod log;
 mod memories;
+mod queued_item;
 mod thread_goal;
 mod thread_metadata;
 
@@ -16,6 +17,7 @@ pub use memories::Stage1JobClaim;
 pub use memories::Stage1JobClaimOutcome;
 pub use memories::Stage1Output;
 pub use memories::Stage1StartupClaimParams;
+pub use queued_item::QueuedUserSubmissionRecord;
 pub use thread_goal::ThreadGoal;
 pub use thread_goal::ThreadGoalStatus;
 pub use thread_metadata::Anchor;

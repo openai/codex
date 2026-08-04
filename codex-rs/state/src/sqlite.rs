@@ -29,6 +29,7 @@ use std::time::Instant;
 const LOGS_DB_FILENAME: &str = "logs_2.sqlite";
 const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
 const MEMORIES_DB_FILENAME: &str = "memories_1.sqlite";
+const QUEUE_DB_FILENAME: &str = "queue_1.sqlite";
 const STATE_DB_FILENAME: &str = "state_5.sqlite";
 const THREAD_HISTORY_DB_FILENAME: &str = "thread_history_1.sqlite";
 
@@ -79,6 +80,14 @@ const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     migrate_phase: "migrate_memories",
 };
 
+const QUEUE_DB: RuntimeDbSpec = RuntimeDbSpec {
+    label: "queue DB",
+    filename: QUEUE_DB_FILENAME,
+    kind: DbKind::Queue,
+    open_phase: "open_queue",
+    migrate_phase: "migrate_queue",
+};
+
 const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "thread history DB",
     filename: THREAD_HISTORY_DB_FILENAME,
@@ -87,8 +96,14 @@ const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
     migrate_phase: "migrate_thread_history",
 };
 
-const RUNTIME_DBS: [RuntimeDbSpec; 5] =
-    [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB, THREAD_HISTORY_DB];
+const RUNTIME_DBS: [RuntimeDbSpec; 6] = [
+    STATE_DB,
+    LOGS_DB,
+    GOALS_DB,
+    MEMORIES_DB,
+    QUEUE_DB,
+    THREAD_HISTORY_DB,
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeDbPath {
@@ -133,6 +148,11 @@ impl SqliteConfig {
     /// Return the path to the memories database.
     pub fn memories_db_path(&self) -> PathBuf {
         MEMORIES_DB.path(self.home())
+    }
+
+    /// Return the path to the durable user-message queue database.
+    pub fn queue_db_path(&self) -> PathBuf {
+        QUEUE_DB.path(self.home())
     }
 
     /// Return the path to the paginated thread-history database.
@@ -187,6 +207,15 @@ impl SqliteConfig {
         telemetry_override: Option<&dyn DbTelemetry>,
     ) -> anyhow::Result<SqlitePool> {
         self.open_runtime_db(MEMORIES_DB, migrator, telemetry_override)
+            .await
+    }
+
+    pub(super) async fn open_queue_db(
+        &self,
+        migrator: &Migrator,
+        telemetry_override: Option<&dyn DbTelemetry>,
+    ) -> anyhow::Result<SqlitePool> {
+        self.open_runtime_db(QUEUE_DB, migrator, telemetry_override)
             .await
     }
 

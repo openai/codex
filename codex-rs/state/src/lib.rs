@@ -23,6 +23,7 @@ pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;
 pub use model::Phase2JobClaimOutcome;
+pub use model::QueuedUserSubmissionRecord;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 pub use sqlite::SqliteConfig;
@@ -65,6 +66,7 @@ pub use runtime::GoalUpdate;
 pub use runtime::MemoryStore;
 pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::RuntimeDbBackup;
+pub use runtime::SqliteQueueStore;
 pub use runtime::ThreadFilterOptions;
 pub use runtime::backup_runtime_db_for_fresh_start;
 pub use runtime::is_sqlite_corruption_error;
@@ -79,6 +81,9 @@ pub use telemetry::DbTelemetryHandle;
 pub use telemetry::install_process_db_telemetry;
 pub use telemetry::record_backfill_gate;
 pub use telemetry::record_fallback;
+
+/// Maximum number of pending user submissions permitted for one thread.
+pub const MAX_QUEUE_ITEMS: usize = 100;
 
 /// Stable UUIDv7 identifying the built-in pinned thread section.
 pub const PINNED_THREAD_SECTION_ID: &str = "01984de2-8f74-7c91-a3b2-5c5e937cf318";
