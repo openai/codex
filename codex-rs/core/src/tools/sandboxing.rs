@@ -121,6 +121,7 @@ pub(crate) struct ApprovalCtx<'a> {
     pub session: &'a Arc<Session>,
     pub turn: &'a Arc<TurnContext>,
     pub call_id: &'a str,
+    pub tool_name: &'a ToolName,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
 }

@@ -171,6 +171,7 @@ impl ToolOrchestrator {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        tool_name: &tool_ctx.tool_name,
                         retry_reason: None,
                         network_approval_context: None,
                     };
@@ -179,9 +180,7 @@ impl ToolOrchestrator {
                         req,
                         tool_ctx.call_id.as_str(),
                         approval_ctx,
-                        tool_ctx,
                         ApprovalReviewer::Guardian,
-                        &otel,
                     )
                     .await?;
                     already_approved = true;
@@ -202,6 +201,7 @@ impl ToolOrchestrator {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
+                    tool_name: &tool_ctx.tool_name,
                     retry_reason: reason.clone(),
                     network_approval_context: None,
                 };
@@ -210,13 +210,11 @@ impl ToolOrchestrator {
                     req,
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
-                    tool_ctx,
                     if strict_auto_review {
                         ApprovalReviewer::Guardian
                     } else {
                         ApprovalReviewer::for_turn(turn_ctx)
                     },
-                    &otel,
                 )
                 .await?;
                 already_approved = true;
@@ -397,6 +395,7 @@ impl ToolOrchestrator {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        tool_name: &tool_ctx.tool_name,
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
@@ -407,13 +406,11 @@ impl ToolOrchestrator {
                         req,
                         &permission_request_run_id,
                         approval_ctx,
-                        tool_ctx,
                         if strict_auto_review {
                             ApprovalReviewer::Guardian
                         } else {
                             ApprovalReviewer::for_turn(turn_ctx)
                         },
-                        &otel,
                     )
                     .await?;
                 }
