@@ -133,6 +133,17 @@ impl ExternalAgentConfigService {
         )
     }
 
+    pub fn detect_session_connectors_by_source_path(
+        &self,
+        sessions: &[ExternalAgentSessionMigration],
+    ) -> BTreeMap<PathBuf, Vec<DetectedConnectorCandidate>> {
+        self.source.detect_session_connectors_by_source_path(
+            sessions,
+            &self.connector_metadata_roots,
+            &self.external_agent_home,
+        )
+    }
+
     pub fn codex_home(&self) -> &Path {
         &self.codex_home
     }

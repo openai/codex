@@ -37,47 +37,90 @@ pub(crate) fn detect_cla_session_connectors(
     sessions: &[ExternalAgentSessionMigration],
     connector_metadata_roots: &[PathBuf],
 ) -> Vec<DetectedConnectorCandidate> {
-    let session_attributions = sessions
-        .iter()
-        .filter_map(session_connector_attribution)
-        .collect::<Vec<_>>();
-    let connector_names_by_session =
-        detect_imported_cla_session_connectors(&session_attributions, connector_metadata_roots);
+    super::aggregate_session_connector_candidates(detect_cla_session_connectors_by_source_path(
+        sessions,
+        connector_metadata_roots,
+    ))
+}
 
-    let mut candidates = BTreeMap::<String, DetectedConnectorCandidate>::new();
-    for names in connector_names_by_session.into_values() {
-        for name in names {
-            let key = name.to_lowercase();
-            let candidate = candidates.entry(key).or_insert(DetectedConnectorCandidate {
-                name,
-                session_count: 0,
-                source: DetectedConnectorSource::RemoteMcpServersConfig,
-            });
-            candidate.session_count = candidate.session_count.saturating_add(1);
-        }
-    }
-    candidates.into_values().collect()
+pub(crate) fn detect_cla_session_connectors_by_source_path(
+    sessions: &[ExternalAgentSessionMigration],
+    connector_metadata_roots: &[PathBuf],
+) -> BTreeMap<PathBuf, Vec<DetectedConnectorCandidate>> {
+    let session_attributions_by_source_path = sessions
+        .iter()
+        .filter_map(|session| {
+            let source_path = fs::canonicalize(&session.path).ok()?;
+            let attribution = session_connector_attribution(session)?;
+            Some((source_path, attribution))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let connector_names_by_source_path = detect_imported_cla_session_connectors_by_source_path(
+        &session_attributions_by_source_path,
+        connector_metadata_roots,
+    );
+
+    connector_names_by_source_path
+        .into_iter()
+        .filter_map(|(source_path, names)| {
+            let candidates = names
+                .into_iter()
+                .map(|name| DetectedConnectorCandidate {
+                    name,
+                    session_count: 1,
+                    source: DetectedConnectorSource::RemoteMcpServersConfig,
+                })
+                .collect::<Vec<_>>();
+            (!candidates.is_empty()).then_some((source_path, candidates))
+        })
+        .collect()
+}
+
+pub fn detect_imported_cla_session_connectors_by_source_path(
+    session_attributions_by_source_path: &BTreeMap<PathBuf, ImportedSessionConnectorAttribution>,
+    connector_metadata_roots: &[PathBuf],
+) -> BTreeMap<PathBuf, Vec<String>> {
+    detect_connector_names_by_key(
+        session_attributions_by_source_path
+            .iter()
+            .map(|(source_path, attribution)| (source_path.clone(), attribution)),
+        connector_metadata_roots,
+    )
 }
 
 pub fn detect_imported_cla_session_connectors(
     session_attributions: &[ImportedSessionConnectorAttribution],
     connector_metadata_roots: &[PathBuf],
 ) -> BTreeMap<String, Vec<String>> {
-    if session_attributions.is_empty() {
+    detect_connector_names_by_key(
+        session_attributions
+            .iter()
+            .map(|attribution| (attribution.session_id.clone(), attribution)),
+        connector_metadata_roots,
+    )
+}
+
+fn detect_connector_names_by_key<'a, Key>(
+    keyed_attributions: impl IntoIterator<Item = (Key, &'a ImportedSessionConnectorAttribution)>,
+    connector_metadata_roots: &[PathBuf],
+) -> BTreeMap<Key, Vec<String>>
+where
+    Key: Clone + Ord,
+{
+    // Session IDs come from file stems and can repeat across projects, so
+    // preserve the caller's key while matching shared manifest metadata.
+    let mut attributions_by_session_id = BTreeMap::<String, Vec<(Key, BTreeSet<String>)>>::new();
+    for (key, attribution) in keyed_attributions {
+        attributions_by_session_id
+            .entry(attribution.session_id.clone())
+            .or_default()
+            .push((key, attribution.server_ids.clone()));
+    }
+    if attributions_by_session_id.is_empty() {
         return BTreeMap::new();
     }
 
-    let attributed_server_ids_by_session = session_attributions
-        .iter()
-        .map(|attribution| {
-            (
-                attribution.session_id.clone(),
-                attribution.server_ids.clone(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut connector_names_by_session = BTreeMap::<String, BTreeMap<String, String>>::new();
-
+    let mut connector_names_by_key = BTreeMap::<Key, BTreeMap<String, String>>::new();
     for metadata_root in connector_metadata_roots {
         let manifests_root = metadata_root.join(SESSION_MANIFESTS_DIR);
         for manifest_path in json_files_recursively(&manifests_root) {
@@ -87,41 +130,44 @@ pub fn detect_imported_cla_session_connectors(
             let Some(session_id) = manifest.cli_session_id else {
                 continue;
             };
-            let Some(attributed_server_ids) = attributed_server_ids_by_session.get(&session_id)
-            else {
+            let Some(keyed_attributions) = attributions_by_session_id.get(&session_id) else {
                 continue;
             };
-            if attributed_server_ids.is_empty() {
-                continue;
-            }
-
-            let connector_names = connector_names_by_session.entry(session_id).or_default();
-            for server in manifest.remote_mcp_servers_config {
+            for server in &manifest.remote_mcp_servers_config {
                 let Some(name) =
                     crate::sessions::normalized_connector_display_name(server.name.as_deref())
                 else {
                     continue;
                 };
-                // Depending on the source client, attributionMcpServer contains either the
-                // manifest UUID or its configured server name.
-                let matches_uuid = server
-                    .uuid
-                    .as_deref()
-                    .is_some_and(|uuid| attributed_server_ids.contains(uuid));
-                let matches_name = attributed_server_ids
-                    .iter()
-                    .any(|server_id| server_id.eq_ignore_ascii_case(&name));
-                if !matches_uuid && !matches_name {
-                    continue;
+                for (key, attributed_server_ids) in keyed_attributions {
+                    if attributed_server_ids.is_empty() {
+                        continue;
+                    }
+                    // Depending on the source client, attributionMcpServer contains either the
+                    // manifest UUID or its configured server name.
+                    let matches_uuid = server
+                        .uuid
+                        .as_deref()
+                        .is_some_and(|uuid| attributed_server_ids.contains(uuid));
+                    let matches_name = attributed_server_ids
+                        .iter()
+                        .any(|server_id| server_id.eq_ignore_ascii_case(&name));
+                    if !matches_uuid && !matches_name {
+                        continue;
+                    }
+                    connector_names_by_key
+                        .entry(key.clone())
+                        .or_default()
+                        .entry(name.to_lowercase())
+                        .or_insert_with(|| name.clone());
                 }
-                connector_names.entry(name.to_lowercase()).or_insert(name);
             }
         }
     }
 
-    connector_names_by_session
+    connector_names_by_key
         .into_iter()
-        .map(|(session_id, names)| (session_id, names.into_values().collect()))
+        .map(|(key, names)| (key, names.into_values().collect()))
         .collect()
 }
 

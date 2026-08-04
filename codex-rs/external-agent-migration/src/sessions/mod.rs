@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 pub use crate::detect::sessions::ImportedSessionConnectorAttribution;
 pub use crate::detect::sessions::detect_imported_cla_session_connectors;
+pub use crate::detect::sessions::detect_imported_cla_session_connectors_by_source_path;
 pub use crate::detect::sessions::detect_recent_cla_sessions;
 pub use crate::detect::sessions::detect_recent_cur_sessions;
 pub use append::ExistingSessionAppend;

@@ -719,24 +719,21 @@ fn detected_session_connectors(
 ) {
     let mut connector_names_by_source_path = BTreeMap::new();
     let mut connectors_by_name = BTreeMap::<String, DetectedConnectorCandidate>::new();
-    for session in sessions {
-        if !session.path.is_file() {
-            continue;
-        }
-        let session_connectors =
-            migration_service.detect_session_connectors(std::slice::from_ref(session));
-        if session_connectors.is_empty() {
-            continue;
-        }
-        if let Ok(source_path) = std::fs::canonicalize(&session.path) {
-            connector_names_by_source_path.insert(
-                source_path,
-                session_connectors
-                    .iter()
-                    .map(|candidate| candidate.name.clone())
-                    .collect(),
-            );
-        }
+    let sessions = sessions
+        .iter()
+        .filter(|session| session.path.is_file())
+        .cloned()
+        .collect::<Vec<_>>();
+    for (source_path, session_connectors) in
+        migration_service.detect_session_connectors_by_source_path(&sessions)
+    {
+        connector_names_by_source_path.insert(
+            source_path,
+            session_connectors
+                .iter()
+                .map(|candidate| candidate.name.clone())
+                .collect(),
+        );
         for candidate in session_connectors {
             let key = candidate.name.to_lowercase();
             let session_count = candidate.session_count;

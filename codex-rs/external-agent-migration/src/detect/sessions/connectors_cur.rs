@@ -6,6 +6,7 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::model::DetectedConnectorCandidate;
 use crate::model::DetectedConnectorSource;
@@ -34,40 +35,63 @@ struct ProjectMcpServerMetadata {
     server_name: String,
 }
 
+#[derive(Default)]
+struct ProjectConnectorMetadata {
+    names_by_server_id: BTreeMap<String, String>,
+    names_by_normalized_name: BTreeMap<String, String>,
+}
+
 pub(crate) fn detect_cur_session_connectors(
     sessions: &[ExternalAgentSessionMigration],
     external_agent_home: &Path,
 ) -> Vec<DetectedConnectorCandidate> {
-    let cached_connector_names_by_server_id =
-        cached_connector_names_by_server_id(external_agent_home);
-    let mut candidates = BTreeMap::<String, DetectedConnectorCandidate>::new();
-    for session in sessions {
-        let mut connector_names_by_server_id = cached_connector_names_by_server_id.clone();
-        connector_names_by_server_id.extend(project_connector_names_by_server_id(session));
-        for (key, name) in session_connector_names(session, &connector_names_by_server_id) {
-            let candidate = candidates.entry(key).or_insert(DetectedConnectorCandidate {
-                name,
-                session_count: 0,
-                source: DetectedConnectorSource::SessionToolUse,
-            });
-            candidate.session_count = candidate.session_count.saturating_add(1);
-        }
-    }
-    candidates.into_values().collect()
+    super::aggregate_session_connector_candidates(detect_cur_session_connectors_by_source_path(
+        sessions,
+        external_agent_home,
+    ))
 }
 
-fn project_connector_names_by_server_id(
-    session: &ExternalAgentSessionMigration,
-) -> BTreeMap<String, String> {
+pub(crate) fn detect_cur_session_connectors_by_source_path(
+    sessions: &[ExternalAgentSessionMigration],
+    external_agent_home: &Path,
+) -> BTreeMap<PathBuf, Vec<DetectedConnectorCandidate>> {
+    let cached_connector_names_by_server_id =
+        cached_connector_names_by_server_id(external_agent_home);
+    let mut candidates_by_source_path = BTreeMap::new();
+    for session in sessions {
+        let Ok(source_path) = fs::canonicalize(&session.path) else {
+            continue;
+        };
+        let project_connector_metadata = project_connector_metadata(session);
+        let candidates = session_connector_names(
+            session,
+            &cached_connector_names_by_server_id,
+            &project_connector_metadata,
+        )
+        .into_values()
+        .map(|name| DetectedConnectorCandidate {
+            name,
+            session_count: 1,
+            source: DetectedConnectorSource::SessionToolUse,
+        })
+        .collect::<Vec<_>>();
+        if !candidates.is_empty() {
+            candidates_by_source_path.insert(source_path, candidates);
+        }
+    }
+    candidates_by_source_path
+}
+
+fn project_connector_metadata(session: &ExternalAgentSessionMigration) -> ProjectConnectorMetadata {
     let Some(project_root) = session
         .path
         .ancestors()
         .find(|path| path.file_name().and_then(|name| name.to_str()) == Some(AGENT_TRANSCRIPTS_DIR))
         .and_then(Path::parent)
     else {
-        return BTreeMap::new();
+        return ProjectConnectorMetadata::default();
     };
-    let mut connector_names = BTreeMap::new();
+    let mut connector_metadata = ProjectConnectorMetadata::default();
     for server_root in child_directories(&project_root.join(PROJECT_MCP_DIR)) {
         let Some(metadata) = read_project_mcp_server_metadata(&server_root) else {
             continue;
@@ -81,14 +105,26 @@ fn project_connector_names_by_server_id(
         if server_identifier.is_empty() {
             continue;
         }
-        connector_names.insert(server_identifier.to_lowercase(), display_name);
+        connector_metadata
+            .names_by_server_id
+            .insert(server_identifier.to_lowercase(), display_name.clone());
+        // Cursor has emitted both the configured identifier and display name in
+        // mcpDetails.serverName. Match either only after finding it in project
+        // metadata; never infer a connector from the tool namespace alone.
+        connector_metadata
+            .names_by_normalized_name
+            .insert(server_identifier.to_lowercase(), display_name.clone());
+        connector_metadata
+            .names_by_normalized_name
+            .insert(display_name.to_lowercase(), display_name);
     }
-    connector_names
+    connector_metadata
 }
 
 fn session_connector_names(
     session: &ExternalAgentSessionMigration,
-    connector_names_by_server_id: &BTreeMap<String, String>,
+    cached_connector_names_by_server_id: &BTreeMap<String, String>,
+    project_connector_metadata: &ProjectConnectorMetadata,
 ) -> BTreeMap<String, String> {
     let Ok(file) = fs::File::open(&session.path) else {
         return BTreeMap::new();
@@ -97,32 +133,64 @@ fn session_connector_names(
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<JsonValue>(line.trim()).ok())
-        .flat_map(|record| session_mcp_server_ids(&record).into_iter())
-        .filter_map(|server_id| connector_names_by_server_id.get(&server_id).cloned())
+        .flat_map(|record| {
+            let mut connector_names = Vec::new();
+            let Some(contents) = record
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(JsonValue::as_array)
+            else {
+                return connector_names;
+            };
+            for content in contents {
+                if content.get("type").and_then(JsonValue::as_str) != Some("tool_use") {
+                    continue;
+                }
+                let Some(tool_name) = content.get("name").and_then(JsonValue::as_str) else {
+                    continue;
+                };
+                let Some(input) = content.get("input") else {
+                    continue;
+                };
+                let connector_name = if tool_name == MCP_TOOL_CALL {
+                    input
+                        .get("server")
+                        .and_then(JsonValue::as_str)
+                        .map(str::trim)
+                        .filter(|server_id| !server_id.is_empty())
+                        .map(str::to_lowercase)
+                        .and_then(|server_id| {
+                            project_connector_metadata
+                                .names_by_server_id
+                                .get(&server_id)
+                                .or_else(|| cached_connector_names_by_server_id.get(&server_id))
+                        })
+                        .cloned()
+                } else if tool_name.starts_with("mcp__") {
+                    input
+                        .get("mcpDetails")
+                        .and_then(|details| details.get("serverName"))
+                        .and_then(JsonValue::as_str)
+                        .and_then(|server_name| {
+                            crate::sessions::normalized_connector_display_name(Some(server_name))
+                        })
+                        .map(|server_name| server_name.to_lowercase())
+                        .and_then(|server_name| {
+                            project_connector_metadata
+                                .names_by_normalized_name
+                                .get(&server_name)
+                        })
+                        .cloned()
+                } else {
+                    None
+                };
+                if let Some(connector_name) = connector_name {
+                    connector_names.push(connector_name);
+                }
+            }
+            connector_names
+        })
         .map(|name| (name.to_lowercase(), name))
-        .collect()
-}
-
-fn session_mcp_server_ids(record: &JsonValue) -> BTreeSet<String> {
-    record
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|content| {
-            content.get("type").and_then(JsonValue::as_str) == Some("tool_use")
-                && content.get("name").and_then(JsonValue::as_str) == Some(MCP_TOOL_CALL)
-        })
-        .filter_map(|content| {
-            content
-                .get("input")
-                .and_then(|input| input.get("server"))
-                .and_then(JsonValue::as_str)
-                .map(str::trim)
-                .filter(|server_id| !server_id.is_empty())
-                .map(str::to_lowercase)
-        })
         .collect()
 }
 

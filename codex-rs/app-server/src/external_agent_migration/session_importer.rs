@@ -20,7 +20,7 @@ use codex_external_agent_migration::sessions::SessionImportTarget;
 use codex_external_agent_migration::sessions::SessionMetadataMode;
 use codex_external_agent_migration::sessions::append_existing_session;
 use codex_external_agent_migration::sessions::append_imported_session_connector_names;
-use codex_external_agent_migration::sessions::detect_imported_cla_session_connectors;
+use codex_external_agent_migration::sessions::detect_imported_cla_session_connectors_by_source_path;
 use codex_external_agent_migration::sessions::prepare_validated_session_import_with_metadata_mode;
 use codex_external_agent_migration::sessions::record_completed_session_imports;
 use codex_models_manager::manager::RefreshStrategy;
@@ -191,37 +191,40 @@ impl ExternalAgentSessionImporter {
         if completed_imports.is_empty() {
             return item_result;
         }
-        let connector_attributions = completed_imports
+        let connector_attributions_by_source_path = completed_imports
             .iter()
-            .filter_map(|completed_import| completed_import.connector_attribution.clone())
-            .collect::<Vec<_>>();
+            .filter_map(|completed_import| {
+                completed_import
+                    .connector_attribution
+                    .clone()
+                    .map(|attribution| (completed_import.import.source_path.clone(), attribution))
+            })
+            .collect::<BTreeMap<_, _>>();
         let connector_metadata_roots = self.connector_metadata_roots.clone();
-        let mut connector_names_by_session = match tokio::task::spawn_blocking(move || {
-            detect_imported_cla_session_connectors(
-                &connector_attributions,
-                &connector_metadata_roots,
-            )
-        })
-        .await
-        {
-            Ok(connector_names_by_session) => connector_names_by_session,
-            Err(err) => {
-                record_import_error(
-                    &mut item_result,
-                    "session_connector_detection_task",
-                    Some("session_connector_detection_task_failed"),
-                    err.to_string(),
-                    /*source*/ None,
-                );
-                Default::default()
-            }
-        };
-        for completed_import in &mut completed_imports {
-            let Some(attribution) = &completed_import.connector_attribution else {
-                continue;
+        let mut attributed_connector_names_by_source_path =
+            match tokio::task::spawn_blocking(move || {
+                detect_imported_cla_session_connectors_by_source_path(
+                    &connector_attributions_by_source_path,
+                    &connector_metadata_roots,
+                )
+            })
+            .await
+            {
+                Ok(connector_names_by_source_path) => connector_names_by_source_path,
+                Err(err) => {
+                    record_import_error(
+                        &mut item_result,
+                        "session_connector_detection_task",
+                        Some("session_connector_detection_task_failed"),
+                        err.to_string(),
+                        /*source*/ None,
+                    );
+                    Default::default()
+                }
             };
-            completed_import.import.connector_names = connector_names_by_session
-                .remove(&attribution.session_id)
+        for completed_import in &mut completed_imports {
+            completed_import.import.connector_names = attributed_connector_names_by_source_path
+                .remove(&completed_import.import.source_path)
                 .unwrap_or_default();
         }
         for completed_import in &mut completed_imports {
