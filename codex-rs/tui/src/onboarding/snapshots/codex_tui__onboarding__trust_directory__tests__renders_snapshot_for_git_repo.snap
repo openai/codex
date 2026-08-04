@@ -1,0 +1,15 @@
+---
+source: tui/src/onboarding/trust_directory.rs
+expression: terminal.backend()
+---
+> You are in /workspace/project
+
+  Do you trust the contents of this directory? Working with untrusted
+  contents comes with higher risk of prompt injection. Trusting the
+  directory allows project-local config, hooks, and exec policies to
+  load.
+
+› 1. Yes, continue                                                    
+  2. No, quit
+
+  Press enter to continue

@@ -1488,8 +1488,7 @@ impl ConfigBuilder {
                 vec![lock_layer],
                 config_layer_stack.requirements().clone(),
                 config_layer_stack.requirements_toml().clone(),
-            )?
-            .with_project_root(config_layer_stack.project_root().cloned());
+            )?;
             let mut config = Config::load_config_with_layer_stack(
                 LOCAL_FS.as_ref(),
                 lock_config_toml,
@@ -1799,7 +1798,6 @@ impl Config {
                 .requirements_toml()
                 .clone(),
         )?
-        .with_project_root(refreshed_config.config_layer_stack.project_root().cloned())
         .with_user_and_project_exec_policy_rules_ignored(
             refreshed_config
                 .config_layer_stack
@@ -3348,21 +3346,12 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
-        let project_root = config_layer_stack
-            .project_root()
-            .cloned()
-            .unwrap_or_else(|| resolved_cwd.clone());
         let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
         let active_project = cfg
             .get_active_project(
                 resolved_cwd.as_path(),
-                Some(project_root.as_path()),
+                repo_root.as_ref().map(AbsolutePathBuf::as_path),
             )
-            .or_else(|| {
-                repo_root.as_ref().and_then(|repo_root| {
-                    cfg.get_active_project(repo_root.as_path(), /*repo_root*/ None)
-                })
-            })
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,

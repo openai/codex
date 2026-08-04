@@ -293,7 +293,6 @@ pub async fn load_config_layers_state(
     }
 
     let mut startup_warnings = None;
-    let mut project_root = None;
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
@@ -351,7 +350,6 @@ pub async fn load_config_layers_state(
             strict_config,
         )
         .await?;
-        project_root = Some(project_trust_context.project_root.clone());
         layers.extend(project_layers.layers);
         startup_warnings = Some(project_layers.startup_warnings);
     }
@@ -434,7 +432,6 @@ pub async fn load_config_layers_state(
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
     )?
-    .with_project_root(project_root)
     .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
     Ok(match startup_warnings {
         Some(startup_warnings) => config_layer_stack.with_startup_warnings(startup_warnings),

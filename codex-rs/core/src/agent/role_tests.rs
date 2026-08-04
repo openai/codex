@@ -159,7 +159,6 @@ async fn apply_role_preserves_unspecified_keys() {
         TomlValue::String("base-model".to_string()),
     )])
     .await;
-    let project_root = config.config_layer_stack.project_root().cloned();
     config.codex_linux_sandbox_exe = Some(PathBuf::from("/tmp/codex-linux-sandbox"));
     config.main_execve_wrapper_exe = Some(PathBuf::from("/tmp/codex-execve-wrapper"));
     let role_path = write_role_config(
@@ -187,10 +186,6 @@ async fn apply_role_preserves_unspecified_keys() {
     assert_eq!(
         (config.model.as_deref(), config.model_reasoning_effort),
         (Some("spawn-model"), Some(ReasoningEffort::Low)),
-    );
-    assert_eq!(
-        config.config_layer_stack.project_root(),
-        project_root.as_ref()
     );
     assert_eq!(
         config.codex_linux_sandbox_exe,

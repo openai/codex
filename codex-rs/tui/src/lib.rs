@@ -24,7 +24,6 @@ pub use app::ExitReason;
 use app_server_session::AppServerSession;
 use app_server_session::ThreadParamsMode;
 use codex_app_server_client::AppServerClient;
-use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
@@ -43,15 +42,10 @@ use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
-use codex_config::build_cli_overrides_layer;
 use codex_config::format_config_error_with_source;
-use codex_config::loader::project_trust_key;
-use codex_config::merge_toml_values;
 use codex_config::types::ResumeCwdMode;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
-use codex_exec_server::LOCAL_FS;
-use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthConfig;
 use codex_login::AuthRouteConfig;
 use codex_login::default_client::originator;
@@ -218,7 +212,8 @@ pub(crate) mod test_backend;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-use crate::onboarding::onboarding_screen::run_login_onboarding;
+use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
+use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::startup_hooks_review::StartupHooksReviewOutcome;
 use crate::startup_hooks_review::load_startup_hooks_review_entry;
 use crate::startup_hooks_review::maybe_run_startup_hooks_review;
@@ -1327,12 +1322,12 @@ async fn run_ratatui_app(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    mut app_server_target: AppServerTarget,
+    app_server_target: AppServerTarget,
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
     manually_selected_oss_provider: Option<String>,
     overrides: ConfigOverrides,
-    mut cli_kv_overrides: Vec<(String, toml::Value)>,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_config_bundle: CloudConfigBundleLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -1388,7 +1383,7 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let mut app_server_session = match start_app_server(
+    let app_server_session = match start_app_server(
         &app_server_target,
         arg0_paths.clone(),
         initial_config.clone(),
@@ -1424,20 +1419,45 @@ async fn run_ratatui_app(
             "Failed to persist selected OSS provider preference"
         );
     }
+    let mut app_server = Some(app_server_session);
+
+    let should_show_trust_screen_flag =
+        !uses_remote_workspace && should_show_trust_screen(&initial_config);
+    #[cfg(target_os = "windows")]
+    let mut trust_decision_was_made = false;
     let login_status = if initial_config.model_provider.requires_openai_auth {
-        get_login_status(&mut app_server_session, &initial_config).await?
+        let Some(app_server) = app_server.as_mut() else {
+            unreachable!("app server should exist when auth is required");
+        };
+        get_login_status(app_server, &initial_config).await?
     } else {
         LoginStatus::NotAuthenticated
     };
-    let show_login_screen = initial_config.model_provider.requires_openai_auth
-        && login_status == LoginStatus::NotAuthenticated;
+    let should_show_onboarding =
+        should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
 
-    let mut reload_after_login = false;
-    if show_login_screen {
-        let onboarding_should_exit =
-            run_login_onboarding(initial_config.clone(), &mut app_server_session, &mut tui).await?;
-        if onboarding_should_exit {
-            shutdown_app_server_if_present(Some(app_server_session)).await;
+    let config = if should_show_onboarding {
+        let show_login_screen = should_show_login_screen(login_status, &initial_config);
+        let onboarding_result = run_onboarding_app(
+            OnboardingScreenArgs {
+                show_login_screen,
+                show_trust_screen: should_show_trust_screen_flag,
+                login_status,
+                app_server_request_handle: app_server
+                    .as_ref()
+                    .map(AppServerSession::request_handle),
+                config: initial_config.clone(),
+            },
+            if show_login_screen {
+                app_server.as_mut()
+            } else {
+                None
+            },
+            &mut tui,
+        )
+        .await?;
+        if onboarding_result.should_exit {
+            shutdown_app_server_if_present(app_server.take()).await;
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
             let _ = tui.terminal.clear();
@@ -1449,9 +1469,14 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        if !uses_remote_workspace {
-            // Always refresh the cloud config bundle and rebuild config after login. This avoids
-            // missing newly available cloud-managed policy due to login status detection edge cases.
+        #[cfg(target_os = "windows")]
+        {
+            trust_decision_was_made = onboarding_result.directory_trust_persisted;
+        }
+        // If this onboarding run included the login step, always refresh the cloud config bundle
+        // and rebuild config. This avoids missing newly available cloud-managed policy due to login
+        // status detection edge cases.
+        if show_login_screen && !uses_remote_workspace {
             cloud_config_bundle = cloud_config_bundle_loader_for_storage(
                 initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
@@ -1461,25 +1486,27 @@ async fn run_ratatui_app(
                 initial_config.auth_route_config(),
             )
             .await;
-            reload_after_login = true;
         }
-    }
 
-    let config = if reload_after_login {
-        load_config_or_exit(
-            cli_kv_overrides.clone(),
-            overrides.clone(),
-            loader_overrides.clone(),
-            cloud_config_bundle.clone(),
-            strict_config,
-        )
-        .await
+        // If the user made an explicit trust decision, or we showed the login flow, reload config
+        // so current process state reflects persisted trust/auth changes.
+        if onboarding_result.directory_trust_persisted
+            || (show_login_screen && !uses_remote_workspace)
+        {
+            load_config_or_exit(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                loader_overrides.clone(),
+                cloud_config_bundle.clone(),
+                strict_config,
+            )
+            .await
+        } else {
+            initial_config
+        }
     } else {
         initial_config
     };
-    let uses_remote_workspace_or_environment =
-        uses_remote_workspace_or_environment(&app_server_target, &environment_manager);
-    let mut app_server = Some(app_server_session);
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
@@ -1626,7 +1653,7 @@ async fn run_ratatui_app(
         &session_selection,
         cli.cwd.as_deref(),
         uses_remote_workspace,
-        uses_remote_workspace_or_environment,
+        uses_remote_workspace_or_environment(&app_server_target, &environment_manager),
     )
     .await
     {
@@ -1679,11 +1706,52 @@ async fn run_ratatui_app(
         _ => config,
     };
 
+    // Configure syntax highlighting theme from the final config — onboarding
+    // and resume/fork can both reload config with a different tui_theme, so
+    // this must happen after the last possible reload.
+    if let Some(w) = crate::render::highlight::set_theme_override(
+        config.tui_theme.clone(),
+        find_codex_home().ok().map(AbsolutePathBuf::into_path_buf),
+    ) {
+        config.startup_warnings.push(w);
+    }
+
+    set_default_client_residency_requirement(config.enforce_residency.value());
+    let should_show_trust_screen = should_show_trust_screen(&config);
+    #[cfg(target_os = "windows")]
+    let windows_sandbox_level = crate::windows_sandbox::level_from_config(&config);
+    #[cfg(target_os = "windows")]
+    let required_elevated_sandbox_needs_setup = windows_sandbox_level
+        == WindowsSandboxLevel::Elevated
+        && config
+            .config_layer_stack
+            .requirements()
+            .windows_sandbox_mode
+            .source
+            .is_some()
+        && !crate::windows_sandbox::sandbox_setup_is_complete(config.codex_home.as_path());
+    #[cfg(target_os = "windows")]
+    let should_prompt_windows_sandbox_nux_at_startup = (trust_decision_was_made
+        && windows_sandbox_level == WindowsSandboxLevel::Disabled)
+        || required_elevated_sandbox_needs_setup;
+    #[cfg(not(target_os = "windows"))]
+    let should_prompt_windows_sandbox_nux_at_startup = false;
+
+    let Cli {
+        prompt,
+        shared,
+        no_alt_screen,
+        ..
+    } = cli;
+    let images = shared.into_inner().images;
+
+    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
+    tui.set_alt_screen_enabled(use_alt_screen);
     let mut app_server = match app_server {
         Some(app_server) => app_server,
         None => match start_app_server(
             &app_server_target,
-            arg0_paths.clone(),
+            arg0_paths,
             config.clone(),
             cli_kv_overrides.clone(),
             loader_overrides.clone(),
@@ -1707,102 +1775,6 @@ async fn run_ratatui_app(
             }
         },
     };
-
-    let project_trust_was_undecided =
-        !uses_remote_workspace_or_environment && config.active_project.trust_level.is_none();
-    let project_trust_outcome = persist_trust_for_undecided_project(
-        uses_remote_workspace_or_environment,
-        &config,
-        app_server.request_handle(),
-        &mut cli_kv_overrides,
-    )
-    .await;
-    let project_trust_was_added = project_trust_outcome != ProjectTrustOutcome::Unchanged;
-    let project_trust_is_in_memory = project_trust_outcome == ProjectTrustOutcome::InMemory;
-    config = if project_trust_was_added {
-        load_config_or_exit_with_fallback_cwd(
-            cli_kv_overrides.clone(),
-            overrides.clone(),
-            loader_overrides.clone(),
-            cloud_config_bundle.clone(),
-            strict_config,
-            Some(config.cwd.to_path_buf()),
-        )
-        .await
-    } else {
-        config
-    };
-    if project_trust_is_in_memory {
-        shutdown_app_server_if_present(Some(app_server)).await;
-        app_server_target = AppServerTarget::Embedded;
-        let fallback_app_server = start_app_server(
-            &app_server_target,
-            arg0_paths,
-            config.clone(),
-            cli_kv_overrides.clone(),
-            loader_overrides.clone(),
-            strict_config,
-            cloud_config_bundle.clone(),
-            feedback.clone(),
-            log_db.clone(),
-            state_db.clone(),
-            environment_manager.clone(),
-        )
-        .await
-        .inspect_err(|_err| {
-            terminal_restore_guard.restore_silently();
-            session_log::log_session_end();
-        })?;
-        app_server =
-            AppServerSession::new(fallback_app_server, app_server_target.thread_params_mode())
-                .with_remote_cwd_override(remote_cwd_override.clone());
-    }
-
-    // Configure syntax highlighting theme from the final config — onboarding
-    // and resume/fork can both reload config with a different tui_theme, so
-    // this must happen after the last possible reload.
-    if let Some(w) = crate::render::highlight::set_theme_override(
-        config.tui_theme.clone(),
-        find_codex_home().ok().map(AbsolutePathBuf::into_path_buf),
-    ) {
-        config.startup_warnings.push(w);
-    }
-
-    set_default_client_residency_requirement(config.enforce_residency.value());
-    let is_first_run = project_trust_was_undecided
-        && matches!(
-            session_selection,
-            resume_picker::SessionSelection::StartFresh
-        );
-    #[cfg(target_os = "windows")]
-    let windows_sandbox_level = crate::windows_sandbox::level_from_config(&config);
-    #[cfg(target_os = "windows")]
-    let required_elevated_sandbox_needs_setup = windows_sandbox_level
-        == WindowsSandboxLevel::Elevated
-        && config
-            .config_layer_stack
-            .requirements()
-            .windows_sandbox_mode
-            .source
-            .is_some()
-        && !crate::windows_sandbox::sandbox_setup_is_complete(config.codex_home.as_path());
-    #[cfg(target_os = "windows")]
-    let should_prompt_windows_sandbox_nux_at_startup = (project_trust_was_added
-        && windows_sandbox_level == WindowsSandboxLevel::Disabled)
-        || required_elevated_sandbox_needs_setup;
-    #[cfg(not(target_os = "windows"))]
-    let should_prompt_windows_sandbox_nux_at_startup = false;
-
-    let Cli {
-        prompt,
-        shared,
-        no_alt_screen,
-        ..
-    } = cli;
-    let images = shared.into_inner().images;
-
-    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
-    tui.set_alt_screen_enabled(use_alt_screen);
 
     // Persistent app-server resumes may attach to an already-running thread,
     // where resume config overrides are ignored.
@@ -1847,7 +1819,7 @@ async fn run_ratatui_app(
         images,
         session_selection,
         feedback,
-        is_first_run,
+        should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_prompt_windows_sandbox_nux_at_startup,
         app_server_target,
         state_db,
@@ -2035,53 +2007,31 @@ async fn load_bootstrap_config_or_exit(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProjectTrustOutcome {
-    Unchanged,
-    Persisted,
-    InMemory,
+/// Determine if the user has decided whether to trust the current directory.
+fn should_show_trust_screen(config: &Config) -> bool {
+    config.active_project.trust_level.is_none()
 }
 
-async fn persist_trust_for_undecided_project(
-    uses_remote_workspace_or_environment: bool,
+fn should_show_onboarding(
+    login_status: LoginStatus,
     config: &Config,
-    request_handle: AppServerRequestHandle,
-    cli_overrides: &mut Vec<(String, toml::Value)>,
-) -> ProjectTrustOutcome {
-    if uses_remote_workspace_or_environment || config.active_project.trust_level.is_some() {
-        return ProjectTrustOutcome::Unchanged;
+    show_trust_screen: bool,
+) -> bool {
+    if show_trust_screen {
+        return true;
     }
 
-    let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
-        .await
-        .or_else(|| config.config_layer_stack.project_root().cloned())
-        .unwrap_or_else(|| config.cwd.clone());
-    if let Err(err) = config_update::write_trusted_project(request_handle, &trust_target).await {
-        let error = config_update::format_config_error(&err);
-        warn!(
-            project = %trust_target.display(),
-            "failed to persist trusted project state; continuing with in-memory trust: {error}"
-        );
-        let project = toml::Value::Table(toml::map::Map::from_iter([(
-            "trust_level".to_string(),
-            toml::Value::String("trusted".to_string()),
-        )]));
-        let trust_override = toml::Value::Table(toml::map::Map::from_iter([(
-            "projects".to_string(),
-            toml::Value::Table(toml::map::Map::from_iter([(
-                project_trust_key(trust_target.as_path()),
-                project,
-            )])),
-        )]));
-        let mut merged_overrides = build_cli_overrides_layer(cli_overrides);
-        merge_toml_values(&mut merged_overrides, &trust_override);
-        let toml::Value::Table(merged_overrides) = merged_overrides else {
-            unreachable!("CLI overrides always build a table");
-        };
-        *cli_overrides = merged_overrides.into_iter().collect();
-        return ProjectTrustOutcome::InMemory;
+    should_show_login_screen(login_status, config)
+}
+
+fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
+    // Only show the login screen for providers that actually require OpenAI auth
+    // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
+    if !config.model_provider.requires_openai_auth {
+        return false;
     }
-    ProjectTrustOutcome::Persisted
+
+    login_status == LoginStatus::NotAuthenticated
 }
 
 #[cfg(test)]
@@ -2094,8 +2044,10 @@ mod tests {
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_config::config_toml::ProjectConfig;
     use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
     use tempfile::TempDir;
 
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
@@ -2291,83 +2243,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automatic_project_trust_persists_or_falls_back_in_memory() -> color_eyre::Result<()> {
-        use codex_protocol::config_types::TrustLevel;
-
-        let temp_dir = TempDir::new()?;
-        let codex_home = temp_dir.path().join("codex-home");
-        let repo = temp_dir.path().join("repo");
-        let nested = repo.join("nested");
-        let sibling = repo.join("sibling");
-        std::fs::create_dir_all(&codex_home)?;
-        std::fs::create_dir_all(repo.join(".git"))?;
-        std::fs::create_dir_all(&nested)?;
-        std::fs::create_dir_all(&sibling)?;
-        let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.clone())
-            .loader_overrides(loader_overrides.clone())
-            .harness_overrides(ConfigOverrides {
-                cwd: Some(nested),
-                ..Default::default()
-            })
-            .build()
-            .await?;
-        assert_eq!(config.active_project.trust_level, None);
-        let app_server = start_test_embedded_app_server(config.clone()).await?;
-
-        let mut cli_overrides = Vec::new();
-        let outcome = persist_trust_for_undecided_project(
-            /*uses_remote_workspace_or_environment*/ false,
-            &config,
-            AppServerRequestHandle::InProcess(app_server.request_handle()),
-            &mut cli_overrides,
-        )
-        .await;
-
-        assert_eq!(outcome, ProjectTrustOutcome::Persisted);
-        let reloaded = ConfigBuilder::default()
-            .codex_home(codex_home)
-            .loader_overrides(loader_overrides)
-            .harness_overrides(ConfigOverrides {
-                cwd: Some(sibling),
-                ..Default::default()
-            })
-            .build()
-            .await?;
-        assert_eq!(
-            reloaded.active_project.trust_level,
-            Some(TrustLevel::Trusted)
-        );
-        let request_handle = AppServerRequestHandle::InProcess(app_server.request_handle());
-        app_server.shutdown().await?;
-
-        let mut fallback_overrides = vec![(
-            "projects.existing.trust_level".to_string(),
-            toml::Value::String("untrusted".to_string()),
-        )];
-        let outcome = persist_trust_for_undecided_project(
-            /*uses_remote_workspace_or_environment*/ false,
-            &config,
-            request_handle,
-            &mut fallback_overrides,
-        )
-        .await;
-
-        assert_eq!(outcome, ProjectTrustOutcome::InMemory);
-        let fallback_overrides = codex_config::build_cli_overrides_layer(&fallback_overrides);
-        assert_eq!(
-            fallback_overrides["projects"][project_trust_key(&repo)]["trust_level"].as_str(),
-            Some("trusted")
-        );
-        assert_eq!(
-            fallback_overrides["projects"]["existing"]["trust_level"].as_str(),
-            Some("untrusted")
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn startup_resume_and_fork_use_configured_or_explicit_cwd() -> color_eyre::Result<()> {
         for (action, configured_mode, has_explicit_cwd, expected_directory) in [
             (CwdPromptAction::Resume, "current", false, "launch"),
@@ -2439,7 +2314,7 @@ mod tests {
                 ResolveCwdOutcome::Exit => panic!("configured cwd should not exit startup"),
             };
             let final_config = ConfigBuilder::default()
-                .codex_home(codex_home.clone())
+                .codex_home(codex_home)
                 .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
                 .harness_overrides(ConfigOverrides {
                     cwd: cwd_override.map(Path::to_path_buf),
@@ -2460,22 +2335,6 @@ mod tests {
                 Arc::new(EnvironmentManager::default_for_tests()),
             )
             .await?;
-            let mut cli_overrides = Vec::new();
-            let outcome = persist_trust_for_undecided_project(
-                /*uses_remote_workspace_or_environment*/ false,
-                &final_config,
-                app_server.request_handle(),
-                &mut cli_overrides,
-            )
-            .await;
-            assert_eq!(outcome, ProjectTrustOutcome::Persisted);
-            let config_toml: toml::Value =
-                toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
-            assert!(
-                config_toml["projects"].as_table().is_some_and(
-                    |projects| projects.contains_key(&project_trust_key(&expected_cwd))
-                )
-            );
             let started = match action {
                 CwdPromptAction::Resume => {
                     app_server
@@ -3219,6 +3078,22 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
+    async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.active_project = ProjectConfig { trust_level: None };
+        config.set_windows_sandbox_enabled(/*value*/ false);
+
+        let should_show = should_show_trust_screen(&config);
+        assert!(
+            should_show,
+            "Trust prompt should be shown when project trust is undecided"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn embedded_app_server_supports_thread_start_rpc() -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
@@ -3512,6 +3387,45 @@ mod tests {
             codex_state::sqlite_error_detail_is_corruption(startup_error.detail()),
             "startup error should preserve the SQLite corruption cause, got: {}",
             startup_error.detail()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.active_project = ProjectConfig { trust_level: None };
+        config.set_windows_sandbox_enabled(/*value*/ true);
+
+        let should_show = should_show_trust_screen(&config);
+        if cfg!(target_os = "windows") {
+            assert!(
+                should_show,
+                "Windows trust prompt should be shown on native Windows with sandbox enabled"
+            );
+        } else {
+            assert!(
+                should_show,
+                "Non-Windows should still show trust prompt when project is untrusted"
+            );
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
+        use codex_protocol::config_types::TrustLevel;
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.active_project = ProjectConfig {
+            trust_level: Some(TrustLevel::Untrusted),
+        };
+
+        let should_show = should_show_trust_screen(&config);
+        assert!(
+            !should_show,
+            "Trust prompt should not be shown for projects explicitly marked as untrusted"
         );
         Ok(())
     }
