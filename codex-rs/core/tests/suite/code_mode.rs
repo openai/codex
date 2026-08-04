@@ -21,6 +21,7 @@ use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -2049,6 +2050,140 @@ try {
         !output.contains("no-exception"),
         "nested tool error should not allow success path: {output}"
     );
+
+    Ok(())
+}
+
+/// A stalled host wait must return its timeout to the model and reconnect for the next exec.
+#[tokio::test(flavor = "current_thread")]
+async fn code_mode_wait_timeout_reconnects_on_next_exec() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("code mode should be enabled");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let first_turn = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call(
+                    "call-1",
+                    "exec",
+                    "yield_control(); await new Promise(() => {});",
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "waiting"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("start a stalled code-mode cell").await?;
+    let first_request = first_turn
+        .last_request()
+        .expect("initial exec should be returned to the model");
+    let first_items = custom_tool_output_items(&first_request, "call-1");
+    let cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
+
+    let timeout_completion = responses::mount_function_call_agent_response(
+        &server,
+        "call-2",
+        &serde_json::to_string(&serde_json::json!({
+            "cell_id": cell_id,
+            "yield_time_ms": 60_000,
+        }))?,
+        "wait",
+    )
+    .await
+    .completion;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "wait for the stalled cell".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RawResponseItem(raw) => match &raw.item {
+            ResponseItem::FunctionCall { call_id, .. } if call_id == "call-2" => Some(()),
+            _ => None,
+        },
+        _ => None,
+    })
+    .await;
+
+    tokio::time::pause();
+    for _ in 0..130 {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        if timeout_completion
+            .function_call_output_text("call-2")
+            .is_some()
+        {
+            break;
+        }
+    }
+    tokio::time::resume();
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let timeout_output = timeout_completion
+        .function_call_output_text("call-2")
+        .expect("timed-out wait should be returned to the model");
+    assert!(
+        timeout_output.contains("code-mode host timed out waiting for wait response"),
+        "unexpected wait output: {timeout_output}"
+    );
+
+    let reconnect_turn = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-5"),
+                ev_custom_tool_call(
+                    "call-3",
+                    "exec",
+                    r#"text("reconnected"); yield_control(); await new Promise(() => {});"#,
+                ),
+                ev_completed("resp-5"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-3", "reconnected"),
+                ev_completed("resp-6"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("run a cell after the timeout").await?;
+    let reconnect_request = reconnect_turn
+        .last_request()
+        .expect("replacement exec should be returned to the model");
+    let reconnect_items = custom_tool_output_items(&reconnect_request, "call-3");
+    assert_eq!(
+        extract_running_cell_id(text_item(&reconnect_items, /*index*/ 0)),
+        "g2:1"
+    );
+    assert_eq!(text_item(&reconnect_items, /*index*/ 1), "reconnected");
 
     Ok(())
 }
