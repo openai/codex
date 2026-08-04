@@ -115,6 +115,9 @@ Each connection follows this sequence:
 3. Send `initialized`.
 4. Call process or filesystem RPCs.
 
+Requests run sequentially by default. Pass `--concurrent-requests <COUNT>` to
+enable concurrent processing.
+
 If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.
 

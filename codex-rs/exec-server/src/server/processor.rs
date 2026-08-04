@@ -9,10 +9,13 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::rpc::RpcCallError;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
+use crate::rpc_server_requests::RpcServerRequestSender;
 use crate::server::ExecServerHandler;
+use crate::server::RequestDispatchMode;
 use crate::server::registry::build_router;
 use crate::server::request_dispatcher::RequestDispatcher;
 use crate::server::request_dispatcher::RequestTaskResult;
@@ -27,6 +30,7 @@ pub(crate) struct ConnectionProcessor {
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
+    request_dispatch_mode: RequestDispatchMode,
 }
 
 impl ConnectionProcessor {
@@ -38,6 +42,7 @@ impl ConnectionProcessor {
             codex_http_client::HttpClientFactory::new(
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
+            RequestDispatchMode::Inline,
         )
     }
 
@@ -45,12 +50,14 @@ impl ConnectionProcessor {
         runtime_paths: ExecServerRuntimePaths,
         telemetry: ExecServerTelemetry,
         http_client_factory: HttpClientFactory,
+        request_dispatch_mode: RequestDispatchMode,
     ) -> Self {
         Self {
             session_registry: SessionRegistry::new(telemetry.clone()),
             runtime_paths,
             telemetry,
             http_client_factory,
+            request_dispatch_mode,
         }
     }
 
@@ -66,6 +73,7 @@ impl ConnectionProcessor {
             self.telemetry.clone(),
             self.http_client_factory.clone(),
             transport,
+            self.request_dispatch_mode,
         )
         .await;
     }
@@ -82,13 +90,13 @@ async fn run_connection(
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     transport: ConnectionTransport,
+    request_dispatch_mode: RequestDispatchMode,
 ) {
     let _connection_metrics = telemetry.connection_started(transport);
-    let router = Arc::new(build_router());
     let JsonRpcConnection {
         outgoing_tx: json_outgoing_tx,
         mut incoming_rx,
-        disconnected_rx,
+        mut disconnected_rx,
         task_handles: connection_tasks,
         transport: _transport,
     } = connection;
@@ -119,20 +127,41 @@ async fn run_connection(
     });
 
     let mut dispatcher = RequestDispatcher::new(
-        router,
+        Arc::new(build_router()),
         Arc::clone(&handler),
         outgoing_tx.clone(),
-        disconnected_rx,
+        disconnected_rx.clone(),
         requests.clone(),
         telemetry,
+        request_dispatch_mode,
     );
 
-    // Process inbound events sequentially to preserve initialize/initialized ordering.
-    while let Some(event) = incoming_rx.recv().await {
+    loop {
+        let has_request_tasks = dispatcher.has_tasks();
+        let event = tokio::select! {
+            result = dispatcher.join_next(), if has_request_tasks => {
+                if result == RequestTaskResult::ConnectionClosed {
+                    break;
+                }
+                continue;
+            }
+            _ = disconnected_rx.changed() => {
+                debug!("exec-server transport disconnected");
+                break;
+            }
+            event = incoming_rx.recv() => {
+                let Some(event) = event else {
+                    break;
+                };
+                event
+            }
+        };
+
         if !handler.is_session_attached() {
             debug!("exec-server connection evicted after session resume");
             break;
         }
+
         let result = match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
                 dispatcher.handle_malformed_message(reason).await
@@ -157,8 +186,11 @@ async fn run_connection(
         }
     }
 
+    if *disconnected_rx.borrow() {
+        complete_queued_client_responses(&requests, &mut incoming_rx);
+    }
     requests.close();
-    drop(dispatcher);
+    dispatcher.shutdown().await;
     handler.shutdown().await;
     drop(handler);
     drop(requests);
@@ -168,6 +200,30 @@ async fn run_connection(
         let _ = task.await;
     }
     let _ = outbound_task.await;
+}
+
+fn complete_queued_client_responses(
+    requests: &RpcServerRequestSender,
+    incoming_rx: &mut mpsc::Receiver<JsonRpcConnectionEvent>,
+) {
+    while let Ok(event) = incoming_rx.try_recv() {
+        let (request_id, response) = match event {
+            JsonRpcConnectionEvent::Message(JSONRPCMessage::Response(response)) => {
+                (response.id, Ok(response.result))
+            }
+            JsonRpcConnectionEvent::Message(JSONRPCMessage::Error(error)) => {
+                (error.id, Err(RpcCallError::Server(error.error)))
+            }
+            JsonRpcConnectionEvent::Message(
+                JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_),
+            )
+            | JsonRpcConnectionEvent::MalformedMessage { .. }
+            | JsonRpcConnectionEvent::Disconnected { .. } => continue,
+        };
+        if !requests.complete(request_id.clone(), response) {
+            warn!("ignoring unexpected client response while disconnecting: {request_id:?}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -191,13 +247,16 @@ mod tests {
     use tokio::io::DuplexStream;
     use tokio::io::Lines;
     use tokio::io::duplex;
+    use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
     use tokio::time::timeout;
 
+    use super::complete_queued_client_responses;
     use super::run_connection;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
+    use crate::connection::JsonRpcConnectionEvent;
     use crate::protocol::ENVIRONMENT_INFO_METHOD;
     use crate::protocol::ENVIRONMENT_STATUS_METHOD;
     use crate::protocol::EXEC_METHOD;
@@ -208,13 +267,19 @@ mod tests {
     use crate::protocol::EnvironmentStatusKind;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
+    use crate::protocol::ExecServerNetworkPolicyDecision;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeParams;
     use crate::protocol::InitializeResponse;
+    use crate::protocol::NETWORK_POLICY_REQUEST_METHOD;
+    use crate::protocol::NetworkPolicyRequestResponse;
     use crate::protocol::ReadParams;
     use crate::protocol::TerminateParams;
     use crate::protocol::TerminateResponse;
+    use crate::rpc::RpcServerOutboundMessage;
+    use crate::rpc_server_requests::RpcServerRequestSender;
+    use crate::server::RequestDispatchMode;
     use crate::server::session_registry::SessionRegistry;
 
     #[tokio::test]
@@ -254,6 +319,61 @@ mod tests {
             .await
             .expect("processor should exit")
             .expect("processor should join");
+    }
+
+    /// A callback response received before EOF must survive transport shutdown.
+    #[tokio::test]
+    async fn disconnect_completes_queued_network_policy_response() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(/*buffer*/ 1);
+        let requests = RpcServerRequestSender::new(outgoing_tx);
+        let pending_request = {
+            let requests = requests.clone();
+            tokio::spawn(async move {
+                requests
+                    .call_with_timeout::<_, NetworkPolicyRequestResponse>(
+                        NETWORK_POLICY_REQUEST_METHOD,
+                        &(),
+                        Duration::from_secs(1),
+                    )
+                    .await
+            })
+        };
+        let RpcServerOutboundMessage::Request(request) = outgoing_rx
+            .recv()
+            .await
+            .expect("network policy request should be queued")
+        else {
+            panic!("expected outbound network policy request");
+        };
+
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(/*buffer*/ 2);
+        incoming_tx
+            .try_send(JsonRpcConnectionEvent::Message(JSONRPCMessage::Response(
+                JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(NetworkPolicyRequestResponse {
+                        decision: ExecServerNetworkPolicyDecision::Allow,
+                    })
+                    .expect("serialize network policy response"),
+                },
+            )))
+            .expect("queue network policy response");
+        incoming_tx
+            .try_send(JsonRpcConnectionEvent::Disconnected { reason: None })
+            .expect("queue transport disconnect");
+
+        complete_queued_client_responses(&requests, &mut incoming_rx);
+        requests.close();
+
+        assert_eq!(
+            pending_request
+                .await
+                .expect("network policy request should join")
+                .expect("network policy request should complete"),
+            NetworkPolicyRequestResponse {
+                decision: ExecServerNetworkPolicyDecision::Allow,
+            }
+        );
     }
 
     #[tokio::test]
@@ -363,6 +483,7 @@ mod tests {
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
             crate::telemetry::ConnectionTransport::Stdio,
+            RequestDispatchMode::Inline,
         ));
         (client_writer, BufReader::new(client_reader).lines(), task)
     }

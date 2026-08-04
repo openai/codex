@@ -1,3 +1,6 @@
+use std::num::NonZeroUsize;
+use std::num::ParseIntError;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -6,12 +9,21 @@ use codex_exec_server_protocol::JSONRPCNotification;
 use codex_exec_server_protocol::JSONRPCRequest;
 use codex_exec_server_protocol::JSONRPCResponse;
 use codex_exec_server_protocol::RequestId;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::warn;
 
+use crate::protocol::ENVIRONMENT_INFO_METHOD;
+use crate::protocol::ENVIRONMENT_STATUS_METHOD;
+use crate::protocol::EXEC_SIGNAL_METHOD;
+use crate::protocol::EXEC_TERMINATE_METHOD;
+use crate::protocol::FS_CLOSE_METHOD;
+use crate::protocol::INITIALIZE_METHOD;
+use crate::protocol::INITIALIZED_METHOD;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcRouter;
 use crate::rpc::RpcServerOutboundMessage;
@@ -28,6 +40,9 @@ pub(super) struct RequestDispatcher {
     disconnected_rx: watch::Receiver<bool>,
     requests: RpcServerRequestSender,
     telemetry: ExecServerTelemetry,
+    lanes: Option<RequestLanes>,
+    tasks: JoinSet<RequestTaskResult>,
+    initialized: bool,
 }
 
 impl RequestDispatcher {
@@ -38,7 +53,18 @@ impl RequestDispatcher {
         disconnected_rx: watch::Receiver<bool>,
         requests: RpcServerRequestSender,
         telemetry: ExecServerTelemetry,
+        mode: RequestDispatchMode,
     ) -> Self {
+        let lanes = match mode {
+            RequestDispatchMode::Inline => None,
+            RequestDispatchMode::Concurrent {
+                max_concurrent_requests,
+            } => Some(RequestLanes {
+                ordinary: Arc::new(Semaphore::new(max_concurrent_requests.get())),
+                control: Arc::new(Semaphore::new(max_concurrent_requests.get())),
+            }),
+        };
+
         Self {
             router,
             handler,
@@ -46,6 +72,24 @@ impl RequestDispatcher {
             disconnected_rx,
             requests,
             telemetry,
+            lanes,
+            tasks: JoinSet::new(),
+            initialized: false,
+        }
+    }
+
+    pub(super) fn has_tasks(&self) -> bool {
+        !self.tasks.is_empty()
+    }
+
+    pub(super) async fn join_next(&mut self) -> RequestTaskResult {
+        match self.tasks.join_next().await {
+            Some(Ok(result)) => result,
+            Some(Err(error)) => {
+                warn!("exec-server request task failed: {error}");
+                RequestTaskResult::ConnectionClosed
+            }
+            None => RequestTaskResult::Completed,
         }
     }
 
@@ -70,6 +114,7 @@ impl RequestDispatcher {
         &mut self,
         notification: JSONRPCNotification,
     ) -> RequestTaskResult {
+        let is_initialized = notification.method == INITIALIZED_METHOD;
         let Some(route) = self.router.notification_route(notification.method.as_str()) else {
             warn!(
                 "closing exec-server connection after unexpected notification: {}",
@@ -87,6 +132,9 @@ impl RequestDispatcher {
         if let Err(error) = result {
             warn!("closing exec-server connection after protocol error: {error}");
             return RequestTaskResult::ConnectionClosed;
+        }
+        if is_initialized {
+            self.initialized = true;
         }
 
         RequestTaskResult::Completed
@@ -150,33 +198,126 @@ impl RequestDispatcher {
             return RequestTaskResult::Completed;
         };
 
-        let span = request_span(method, &request);
-        let message = tokio::select! {
-            message = route(Arc::clone(&self.handler), request).instrument(span.clone()) => message,
-            _ = self.disconnected_rx.changed() => {
-                span.record("result", "disconnected");
-                self.telemetry
-                    .request_completed(method, "disconnected", started_at.elapsed());
-                debug!("exec-server transport disconnected while handling request");
+        let task_span = request_span(method, &request);
+        let route = route(Arc::clone(&self.handler), request);
+        let outgoing_tx = self.outgoing_tx.clone();
+        let mut disconnected_rx = self.disconnected_rx.clone();
+        let telemetry = self.telemetry.clone();
+        let task = async move {
+            let message = tokio::select! {
+                message = route.instrument(task_span.clone()) => message,
+                _ = disconnected_rx.changed() => {
+                    task_span.record("result", "disconnected");
+                    telemetry.request_completed(method, "disconnected", started_at.elapsed());
+                    return RequestTaskResult::ConnectionClosed;
+                }
+            };
+            let result = request_result(&message);
+            let response_sent = match message {
+                Some(message) => tokio::select! {
+                    result = outgoing_tx.send(message) => result.is_ok(),
+                    _ = disconnected_rx.changed() => false,
+                },
+                None => true,
+            };
+            if !response_sent {
+                task_span.record("result", "disconnected");
+                telemetry.request_completed(method, "disconnected", started_at.elapsed());
                 return RequestTaskResult::ConnectionClosed;
             }
+            task_span.record("result", result);
+            telemetry.request_completed(method, result, started_at.elapsed());
+            RequestTaskResult::Completed
         };
-        let result = request_result(&message);
-        if let Some(message) = message
-            && self.outgoing_tx.send(message).await.is_err()
-        {
-            span.record("result", "disconnected");
-            self.telemetry
-                .request_completed(method, "disconnected", started_at.elapsed());
-            return RequestTaskResult::ConnectionClosed;
-        }
-        span.record("result", result);
-        self.telemetry
-            .request_completed(method, result, started_at.elapsed());
-        drop(span);
 
+        let Some(RequestLanes { ordinary, control }) = &self.lanes else {
+            // Keep requests ordered when concurrent dispatch is not enabled.
+            return task.await;
+        };
+        // Finish the handshake before concurrent requests can observe session state.
+        if method == INITIALIZE_METHOD || !self.initialized {
+            return task.await;
+        }
+
+        // Reserve capacity for health checks and cleanup while ordinary requests are blocked.
+        let admission = if matches!(
+            method,
+            ENVIRONMENT_INFO_METHOD
+                | ENVIRONMENT_STATUS_METHOD
+                | EXEC_SIGNAL_METHOD
+                | EXEC_TERMINATE_METHOD
+                | FS_CLOSE_METHOD
+        ) {
+            Arc::clone(control)
+        } else {
+            Arc::clone(ordinary)
+        };
+
+        // TODO(anp) bound queued request bytes without blocking later responses or cleanup.
+        self.tasks.spawn(async move {
+            let Ok(_permit) = admission.acquire_owned().await else {
+                return RequestTaskResult::ConnectionClosed;
+            };
+            task.await
+        });
         RequestTaskResult::Completed
     }
+
+    pub(super) async fn shutdown(mut self) {
+        self.tasks.abort_all();
+        while self.tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Per-connection request dispatch policy for local and remote exec-servers.
+#[derive(Clone, Copy, Debug)]
+pub enum RequestDispatchMode {
+    Inline,
+    Concurrent {
+        max_concurrent_requests: ConcurrentRequestLimit,
+    },
+}
+
+/// A valid request concurrency limit accepted by Tokio's semaphore.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConcurrentRequestLimit(usize);
+
+impl ConcurrentRequestLimit {
+    /// Returns a limit when it enables concurrency and fits Tokio's semaphore.
+    pub fn new(max_concurrent_requests: usize) -> Option<Self> {
+        if !(2..=Semaphore::MAX_PERMITS).contains(&max_concurrent_requests) {
+            return None;
+        }
+
+        Some(Self(max_concurrent_requests))
+    }
+
+    /// Returns the validated number of concurrent requests.
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl FromStr for RequestDispatchMode {
+    type Err = ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let max_concurrent_requests = value.parse::<NonZeroUsize>()?.get();
+        if max_concurrent_requests == 1 {
+            Ok(Self::Inline)
+        } else {
+            Ok(Self::Concurrent {
+                max_concurrent_requests: ConcurrentRequestLimit(
+                    max_concurrent_requests.min(Semaphore::MAX_PERMITS),
+                ),
+            })
+        }
+    }
+}
+
+struct RequestLanes {
+    ordinary: Arc<Semaphore>,
+    control: Arc<Semaphore>,
 }
 
 #[derive(Eq, PartialEq)]

@@ -25,6 +25,7 @@ use tracing::warn;
 use crate::ExecServerRuntimePaths;
 use crate::ExecServerTelemetry;
 use crate::connection::JsonRpcConnection;
+use crate::server::RequestDispatchMode;
 use crate::server::processor::ConnectionProcessor;
 use crate::telemetry::ConnectionTransport;
 
@@ -85,14 +86,27 @@ pub(crate) async fn run_transport(
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
+    request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_listen_url(listen_url)? {
         ExecServerListenTransport::WebSocket(bind_address) => {
-            run_websocket_listener(bind_address, runtime_paths, telemetry, http_client_factory)
-                .await
+            run_websocket_listener(
+                bind_address,
+                runtime_paths,
+                telemetry,
+                http_client_factory,
+                request_dispatch_mode,
+            )
+            .await
         }
         ExecServerListenTransport::Stdio => {
-            run_stdio_connection(runtime_paths, telemetry, http_client_factory).await
+            run_stdio_connection(
+                runtime_paths,
+                telemetry,
+                http_client_factory,
+                request_dispatch_mode,
+            )
+            .await
         }
     }
 }
@@ -101,6 +115,7 @@ async fn run_stdio_connection(
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
+    request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     run_stdio_connection_with_io(
         io::stdin(),
@@ -108,6 +123,7 @@ async fn run_stdio_connection(
         runtime_paths,
         telemetry,
         http_client_factory,
+        request_dispatch_mode,
     )
     .await
 }
@@ -118,13 +134,18 @@ async fn run_stdio_connection_with_io<R, W>(
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
+    request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let processor =
-        ConnectionProcessor::new_with_telemetry(runtime_paths, telemetry, http_client_factory);
+    let processor = ConnectionProcessor::new_with_telemetry(
+        runtime_paths,
+        telemetry,
+        http_client_factory,
+        request_dispatch_mode,
+    );
     tracing::info!("codex-exec-server listening on stdio");
     processor
         .run_connection(
@@ -142,11 +163,16 @@ async fn run_websocket_listener(
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
+    request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
-    let processor =
-        ConnectionProcessor::new_with_telemetry(runtime_paths, telemetry, http_client_factory);
+    let processor = ConnectionProcessor::new_with_telemetry(
+        runtime_paths,
+        telemetry,
+        http_client_factory,
+        request_dispatch_mode,
+    );
     info!("codex-exec-server listening on ws://{local_addr}");
     println!("ws://{local_addr}");
     std::io::stdout().flush()?;

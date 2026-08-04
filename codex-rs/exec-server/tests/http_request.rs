@@ -162,18 +162,21 @@ async fn exec_server_http_request_uses_configured_system_proxy() -> anyhow::Resu
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_url = format!("http://{}", proxy_listener.local_addr()?);
     let request_url = "http://exec-server-system-proxy.invalid/delegated?route=system";
-    let mut server = exec_server_with_env([
-        (SYSTEM_PROXY_REQUEST_URL_ENV, request_url),
-        (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
-        ("HTTP_PROXY", ""),
-        ("http_proxy", ""),
-        ("HTTPS_PROXY", ""),
-        ("https_proxy", ""),
-        ("ALL_PROXY", ""),
-        ("all_proxy", ""),
-        ("NO_PROXY", ""),
-        ("no_proxy", ""),
-    ])
+    let mut server = exec_server_with_env(
+        [
+            (SYSTEM_PROXY_REQUEST_URL_ENV, request_url),
+            (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
+            ("HTTP_PROXY", ""),
+            ("http_proxy", ""),
+            ("HTTPS_PROXY", ""),
+            ("https_proxy", ""),
+            ("ALL_PROXY", ""),
+            ("all_proxy", ""),
+            ("NO_PROXY", ""),
+            ("no_proxy", ""),
+        ],
+        &[],
+    )
     .await?;
     initialize_exec_server(&mut server).await?;
 
@@ -218,18 +221,21 @@ async fn exec_server_http_request_normalizes_unicode_hostname() -> anyhow::Resul
     let proxy_url = format!("http://{}", proxy_listener.local_addr()?);
     let request_url = "http://münich.invalid/mcp?route=unicode";
     let normalized_url = "http://xn--mnich-kva.invalid/mcp?route=unicode";
-    let mut server = exec_server_with_env([
-        (SYSTEM_PROXY_REQUEST_URL_ENV, normalized_url),
-        (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
-        ("HTTP_PROXY", ""),
-        ("http_proxy", ""),
-        ("HTTPS_PROXY", ""),
-        ("https_proxy", ""),
-        ("ALL_PROXY", ""),
-        ("all_proxy", ""),
-        ("NO_PROXY", ""),
-        ("no_proxy", ""),
-    ])
+    let mut server = exec_server_with_env(
+        [
+            (SYSTEM_PROXY_REQUEST_URL_ENV, normalized_url),
+            (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
+            ("HTTP_PROXY", ""),
+            ("http_proxy", ""),
+            ("HTTPS_PROXY", ""),
+            ("https_proxy", ""),
+            ("ALL_PROXY", ""),
+            ("all_proxy", ""),
+            ("NO_PROXY", ""),
+            ("no_proxy", ""),
+        ],
+        &[],
+    )
     .await?;
     initialize_exec_server(&mut server).await?;
 

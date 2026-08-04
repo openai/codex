@@ -190,7 +190,7 @@ async fn sandboxed_file_system_helper_finds_bwrap_on_preserved_path() -> Result<
     }
     let helper_path = std::env::join_paths(path_entries)?;
 
-    let server = exec_server_with_env([("PATH", helper_path.as_os_str())]).await?;
+    let server = exec_server_with_env([("PATH", helper_path.as_os_str())], &[]).await?;
     let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
     let file_system = environment.get_filesystem();
     let workspace = tmp.path().join("workspace");

@@ -43,6 +43,7 @@ use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
+use crate::server::RequestDispatchMode;
 use crate::trace_context::current_trace_context_headers;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
@@ -464,6 +465,7 @@ pub struct RemoteEnvironmentConfig {
     pub base_url: String,
     pub environment_id: String,
     pub name: String,
+    pub request_dispatch_mode: RequestDispatchMode,
     auth_provider: SharedAuthProvider,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
@@ -475,6 +477,7 @@ impl std::fmt::Debug for RemoteEnvironmentConfig {
             .field("base_url", &self.base_url)
             .field("environment_id", &self.environment_id)
             .field("name", &self.name)
+            .field("request_dispatch_mode", &self.request_dispatch_mode)
             .field("auth_provider", &"<redacted>")
             .finish()
     }
@@ -492,6 +495,7 @@ impl RemoteEnvironmentConfig {
             base_url,
             environment_id,
             name: "codex-exec-server".to_string(),
+            request_dispatch_mode: RequestDispatchMode::Inline,
             auth_provider,
             telemetry: ExecServerTelemetry::default(),
             http_client_factory,
@@ -539,6 +543,7 @@ where
         runtime_paths,
         config.telemetry.clone(),
         config.http_client_factory.clone(),
+        config.request_dispatch_mode,
     );
 
     let result = {

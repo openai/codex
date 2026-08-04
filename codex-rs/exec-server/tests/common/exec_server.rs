@@ -76,10 +76,13 @@ pub(crate) fn test_codex_helper_paths() -> anyhow::Result<TestCodexHelperPaths> 
 }
 
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
-    exec_server_with_env(std::iter::empty::<(&str, &str)>()).await
+    exec_server_with_env(std::iter::empty::<(&str, &str)>(), &[]).await
 }
 
-pub(crate) async fn exec_server_with_env<I, K, V>(env: I) -> anyhow::Result<ExecServerHarness>
+pub(crate) async fn exec_server_with_env<I, K, V>(
+    env: I,
+    args: &[&str],
+) -> anyhow::Result<ExecServerHarness>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<std::ffi::OsStr>,
@@ -89,6 +92,7 @@ where
     let codex_home = TempDir::new()?;
     let mut child = Command::new(&helper_paths.codex_exe);
     child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
+    child.args(args);
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());

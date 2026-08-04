@@ -9,6 +9,8 @@ mod transport;
 
 pub(crate) use handler::ExecServerHandler;
 pub(crate) use processor::ConnectionProcessor;
+pub use request_dispatcher::ConcurrentRequestLimit;
+pub use request_dispatcher::RequestDispatchMode;
 pub use transport::DEFAULT_LISTEN_URL;
 pub use transport::ExecServerListenUrlParseError;
 
@@ -26,6 +28,7 @@ pub async fn run_main(
         runtime_paths,
         ExecServerTelemetry::default(),
         http_client_factory,
+        RequestDispatchMode::Inline,
     )
     .await
 }
@@ -40,8 +43,16 @@ pub async fn run_main_with_telemetry(
     runtime_paths: ExecServerRuntimePaths,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
+    request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    transport::run_transport(listen_url, runtime_paths, telemetry, http_client_factory).await
+    transport::run_transport(
+        listen_url,
+        runtime_paths,
+        telemetry,
+        http_client_factory,
+        request_dispatch_mode,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -78,6 +89,7 @@ mod tests {
                 .expect("runtime paths"),
                 ExecServerTelemetry::default(),
                 HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                super::RequestDispatchMode::Inline,
             )
             .await
             .expect_err("invalid listen URL should fail");
