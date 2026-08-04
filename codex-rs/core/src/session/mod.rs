@@ -3493,6 +3493,9 @@ impl Session {
             developer_sections.push(
                 crate::context::TokenBudgetContext::new(
                     self.thread_id(),
+                    session_source
+                        .get_agent_path()
+                        .unwrap_or_else(codex_protocol::AgentPath::root),
                     auto_compact_window_ids.first_window_id,
                     auto_compact_window_ids.previous_window_id,
                     auto_compact_window_ids.window_id,

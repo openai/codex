@@ -9066,13 +9066,24 @@ async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_develo
         .await
         .session_configuration
         .session_source = session_source.clone();
-    Arc::get_mut(&mut turn_context)
-        .expect("thread settings should not be shared")
-        .session_source = session_source;
+    let turn_context_mut =
+        Arc::get_mut(&mut turn_context).expect("thread settings should not be shared");
+    turn_context_mut.session_source = session_source;
+    Arc::make_mut(&mut turn_context_mut.config)
+        .features
+        .enable(Feature::TokenBudget)
+        .expect("test config should allow token budget");
 
     let initial_context = build_initial_context(&session, &turn_context).await;
 
     let developer_messages = developer_message_texts(&initial_context);
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| text.contains("<context_window>\nAgent name: /root/worker\n")),
+        "expected subagent context window to include its canonical name, got {developer_messages:?}"
+    );
     assert!(
         developer_messages
             .iter()
