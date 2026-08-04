@@ -722,7 +722,7 @@ impl NetworkApprovalService {
             pending_owner.complete(PendingApprovalDecision::Deny);
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
-        if !allows_network_approval_flow(turn_context.approval_policy.value()) {
+        if !allows_network_approval_flow(turn_context.approval_policy()) {
             if let Some(owner_call) = owner_call.as_ref() {
                 self.record_call_outcome(
                     &owner_call.registration_id,

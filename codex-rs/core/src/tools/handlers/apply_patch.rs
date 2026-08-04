@@ -572,7 +572,7 @@ async fn execute_verified_patch(
             &request,
             &tool_ctx,
             tool_ctx.turn.as_ref(),
-            tool_ctx.turn.approval_policy.value(),
+            tool_ctx.turn.approval_policy(),
         )
         .await
         .map(|result| result.output);

@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
@@ -16,6 +17,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -30,6 +32,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use regex_lite::Regex;
@@ -383,8 +386,21 @@ async fn shell_command_escalated_permissions_rejected_then_ok() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let mut builder = test_codex()
+        .with_model("test-gpt-5-codex")
+        .with_config(|config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        });
     let test = builder.build(&server).await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            approval_policy: Some(AskForApproval::Never),
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     let command = "echo shell ok";
     let call_id_blocked = "shell-command-blocked";
@@ -437,12 +453,8 @@ async fn shell_command_escalated_permissions_rejected_then_ok() -> Result<()> {
     )
     .await;
 
-    test.submit_turn_with_approval_and_permission_profile(
-        "run the shell_command script",
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-    )
-    .await?;
+    test.submit_text_turn("run the shell_command script")
+        .await?;
 
     let policy = AskForApproval::Never;
     let expected_message = format!(

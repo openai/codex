@@ -92,7 +92,8 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
 
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
-    turn_context_raw
+    Arc::make_mut(&mut turn_context_raw.config)
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
@@ -180,7 +181,8 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
     let (mut session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let turn_context_raw = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context_raw
+    Arc::make_mut(&mut turn_context_raw.config)
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
@@ -293,7 +295,8 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     .await;
 
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
-    turn_context_raw
+    Arc::make_mut(&mut turn_context_raw.config)
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
@@ -412,7 +415,8 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         )
         .await;
 
-    turn_context_raw
+    Arc::make_mut(&mut turn_context_raw.config)
+        .permissions
         .approval_policy
         .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
@@ -476,7 +480,8 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
 #[tokio::test]
 async fn guardian_allows_unified_exec_additional_permissions_requests_past_policy_validation() {
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
-    turn_context_raw
+    Arc::make_mut(&mut turn_context_raw.config)
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");

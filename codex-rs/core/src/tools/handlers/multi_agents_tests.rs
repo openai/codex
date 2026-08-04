@@ -273,9 +273,6 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
-    turn.approval_policy
-        .set(AskForApproval::OnRequest)
-        .expect("approval policy should be set");
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
     turn.config = Arc::new(config);
 
@@ -2258,7 +2255,9 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         &expected_file_system_sandbox_policy,
         expected_network_sandbox_policy,
     );
-    turn.approval_policy
+    Arc::make_mut(&mut turn.config)
+        .permissions
+        .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
     let mut config = (*turn.config).clone();
@@ -4440,7 +4439,9 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         network_sandbox_policy,
     );
     turn.permission_profile = permission_profile.clone();
-    turn.approval_policy
+    Arc::make_mut(&mut turn.config)
+        .permissions
+        .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
@@ -4474,7 +4475,9 @@ async fn build_agent_resume_config_clears_base_instructions() {
     let mut base_config = (*turn.config).clone();
     base_config.base_instructions = Some("caller-base".to_string());
     turn.config = Arc::new(base_config);
-    turn.approval_policy
+    Arc::make_mut(&mut turn.config)
+        .permissions
+        .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 

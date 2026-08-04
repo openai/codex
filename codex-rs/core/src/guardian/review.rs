@@ -179,7 +179,7 @@ pub(crate) fn routes_approval_to_guardian_with_reviewer(
     turn: &TurnContext,
     approvals_reviewer: ApprovalsReviewer,
 ) -> bool {
-    routes_approval_policy_to_guardian(turn.approval_policy.value(), approvals_reviewer)
+    routes_approval_policy_to_guardian(turn.approval_policy(), approvals_reviewer)
 }
 
 /// Whether an exact approval policy and reviewer should route through Guardian.

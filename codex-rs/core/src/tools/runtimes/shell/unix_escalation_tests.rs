@@ -547,7 +547,9 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
             ..HooksConfig::default()
         })));
 
-    turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     turn_context.permission_profile = PermissionProfile::from_runtime_permissions(
         &read_only_file_system_sandbox_policy(),
         NetworkSandboxPolicy::Restricted,

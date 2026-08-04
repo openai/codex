@@ -118,7 +118,7 @@ impl Session {
             let exec_policy = self.services.exec_policy.current();
             world_state.add_section(PermissionsState::new(
                 &permission_profile,
-                turn_context.approval_policy.value(),
+                turn_context.approval_policy(),
                 ApprovalPromptContext::new(
                     turn_context.config.approvals_reviewer,
                     model_messages.and_then(|messages| messages.approvals.as_ref()),

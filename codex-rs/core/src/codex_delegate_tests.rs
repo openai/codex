@@ -430,7 +430,8 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
     let mut config = (*parent_ctx.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     parent_ctx.config = Arc::new(config);
-    parent_ctx
+    Arc::make_mut(&mut parent_ctx.config)
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set on-request policy");
@@ -553,7 +554,8 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
     let mut config = (*parent_ctx.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     parent_ctx.config = Arc::new(config);
-    parent_ctx
+    Arc::make_mut(&mut parent_ctx.config)
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set on-request policy");
