@@ -97,6 +97,7 @@ fn gpt_5_6_bedrock_model(
     );
     model.description = openai_model.description;
     model.default_reasoning_level = openai_model.default_reasoning_level;
+    model.multi_agent_version = openai_model.multi_agent_version;
     model
         .supported_reasoning_levels
         .push(ReasoningEffortPreset {
@@ -210,6 +211,7 @@ mod tests {
             expected.display_name = display_name.to_string();
             expected.description = openai_model.description;
             expected.default_reasoning_level = openai_model.default_reasoning_level;
+            expected.multi_agent_version = openai_model.multi_agent_version;
             expected.priority = priority;
             expected
                 .supported_reasoning_levels

@@ -268,6 +268,7 @@ impl AgentControl {
                 include_history: false,
             })
             .await?;
+        let stored_model = stored_thread.model.clone();
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
         let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
@@ -319,6 +320,9 @@ impl AgentControl {
                 .map_err(|err| {
                     CodexErr::InvalidRequest(format!("permission_profile is invalid: {err}"))
                 })?;
+        }
+        if let Some(model) = stored_model {
+            config.model = Some(model);
         }
         let residency_slot = self
             .reserve_v2_residency_slot(&state, &config, Some(thread_id))

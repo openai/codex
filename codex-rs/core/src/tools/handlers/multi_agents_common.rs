@@ -37,7 +37,7 @@ pub(crate) fn model_supports_multi_agent_backend(
     multi_agent_version: MultiAgentVersion,
 ) -> bool {
     multi_agent_version != MultiAgentVersion::V2
-        || model.multi_agent_version == Some(multi_agent_version)
+        || model.multi_agent_version != Some(MultiAgentVersion::Disabled)
 }
 
 pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {

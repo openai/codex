@@ -1400,10 +1400,15 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
     Ok(())
 }
 
-#[test_case(false; "encrypted")]
-#[test_case(true; "plaintext")]
+#[test_case(None, false; "encrypted")]
+#[test_case(None, true; "plaintext")]
+#[test_case(Some("gpt-5.6-luna"), false; "luna encrypted leaf")]
+#[test_case(Some("gpt-5.5"), false; "legacy encrypted leaf")]
 #[tokio::test]
-async fn multi_agent_v2_spawn_sends_agent_message_to_child(plaintext: bool) -> Result<()> {
+async fn multi_agent_v2_spawn_sends_agent_message_to_child(
+    model: Option<&str>,
+    plaintext: bool,
+) -> Result<()> {
     let output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
@@ -1418,10 +1423,17 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(plaintext: bool) -> R
     } else {
         "opaque-encrypted-message"
     };
-    let spawn_args = serde_json::to_string(&json!({
+    let mut spawn_args = json!({
         "message": message,
         "task_name": "worker",
-    }))?;
+    });
+    if let Some(model) = model {
+        spawn_args["model"] = json!(model);
+        if model == "gpt-5.5" {
+            spawn_args["fork_turns"] = json!("none");
+        }
+    }
+    let spawn_args = serde_json::to_string(&spawn_args)?;
     let mut spawn_event = ev_function_call_with_namespace(
         SPAWN_CALL_ID,
         MULTI_AGENT_V2_NAMESPACE,
@@ -1463,7 +1475,12 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(plaintext: bool) -> R
     )
     .await;
 
-    let mut builder = test_codex().with_model("koffing").with_config(|config| {
+    let parent_model = if model.is_some() {
+        "gpt-5.6-sol"
+    } else {
+        "koffing"
+    };
+    let mut builder = test_codex().with_model(parent_model).with_config(|config| {
         config
             .features
             .enable(Feature::Collab)
@@ -1524,6 +1541,16 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(plaintext: bool) -> R
             "content": content,
         })])
     );
+    if let Some(model) = model {
+        assert_eq!(child_request.body_json()["model"], json!(model));
+        assert!(
+            !child_request
+                .body_json()
+                .to_string()
+                .contains("\"name\":\"collaboration\""),
+            "leaf workers must not receive collaboration tools",
+        );
+    }
     if plaintext {
         assert!(
             parent_request_log.requests().into_iter().any(|request| {

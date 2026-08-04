@@ -100,17 +100,19 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     )
     .await;
 
-    let mut builder = test_codex().with_model("koffing").with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-        config.multi_agent_v2.max_concurrent_threads_per_session = 2;
-    });
+    let mut builder = test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+        });
     let test = builder.build(&server).await?;
     test.submit_turn(FIRST_PROMPT).await?;
 
