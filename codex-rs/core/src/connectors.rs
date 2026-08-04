@@ -10,7 +10,6 @@ pub use codex_connectors::AppInfo;
 pub use codex_connectors::AppMetadata;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
-use codex_connectors::app_is_enabled;
 use codex_connectors::apps_config_from_layer_stack;
 use codex_connectors::connector_runtime_context_key;
 use codex_exec_server::EnvironmentManager;
@@ -488,32 +487,6 @@ fn accessible_connectors_for_app_list_from_mcp_tools(mcp_tools: &[ToolInfo]) -> 
             != Some(true)
     });
     collect_accessible_connectors_from_mcp_tools(non_synthetic_tools)
-}
-
-pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
-    let user_apps_config = apps_config_from_layer_stack(&config.config_layer_stack);
-    let requirements_apps_config = config.config_layer_stack.requirements_toml().apps.as_ref();
-    if user_apps_config.is_none() && requirements_apps_config.is_none() {
-        return connectors;
-    }
-
-    for connector in &mut connectors {
-        if let Some(apps_config) = user_apps_config.as_ref()
-            && (apps_config.default.is_some()
-                || apps_config.apps.contains_key(connector.id.as_str()))
-        {
-            connector.is_enabled = app_is_enabled(apps_config, Some(connector.id.as_str()));
-        }
-
-        if requirements_apps_config
-            .and_then(|apps| apps.apps.get(connector.id.as_str()))
-            .is_some_and(|app| app.enabled == Some(false))
-        {
-            connector.is_enabled = false;
-        }
-    }
-
-    connectors
 }
 
 pub fn with_app_plugin_sources(

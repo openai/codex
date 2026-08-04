@@ -19,6 +19,7 @@ use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::WorldState;
+use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
 use codex_protocol::error::CodexErr;
@@ -178,12 +179,12 @@ impl Session {
         ));
         let apps_available =
             if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                connectors::with_app_enabled_state(
-                    connectors::accessible_connectors_from_mcp_tools(step_context.mcp.tools()),
-                    &turn_context.config,
-                )
-                .into_iter()
-                .any(|connector| connector.is_accessible && connector.is_enabled)
+                AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
+                    .apply_app_enabled_state(connectors::accessible_connectors_from_mcp_tools(
+                        step_context.mcp.tools(),
+                    ))
+                    .into_iter()
+                    .any(|connector| connector.is_accessible && connector.is_enabled)
             } else {
                 false
             };

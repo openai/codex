@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_info::app_info_to_api;
+use codex_connectors::AppToolPolicyEvaluator;
 
 mod installed;
 mod read;
@@ -250,12 +251,13 @@ impl AppsRequestProcessor {
         let mut codex_apps_ready = true;
         let mut last_notified_apps = None;
         let mut sent_app_list_update = false;
+        let app_policy = AppToolPolicyEvaluator::new(&config.config_layer_stack);
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
-            let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors.as_deref(), accessible_connectors.as_deref()),
-                &config,
-            );
+            let merged = app_policy.apply_app_enabled_state(merge_loaded_apps(
+                all_connectors.as_deref(),
+                accessible_connectors.as_deref(),
+            ));
             if !force_refetch {
                 last_notified_apps = Some(merged);
             } else if should_send_app_list_updated_notification(
@@ -314,10 +316,10 @@ impl AppsRequestProcessor {
                 } else {
                     accessible_connectors.as_deref()
                 };
-            let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors_for_update, accessible_connectors_for_update),
-                &config,
-            );
+            let merged = app_policy.apply_app_enabled_state(merge_loaded_apps(
+                all_connectors_for_update,
+                accessible_connectors_for_update,
+            ));
             if should_send_app_list_updated_notification(
                 merged.as_slice(),
                 accessible_loaded,

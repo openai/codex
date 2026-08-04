@@ -6,6 +6,7 @@ use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 use crate::chatgpt_client::chatgpt_post_request_with_timeout;
 
 use codex_connectors::AppInfo;
+use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::ConnectorMetadata;
@@ -21,7 +22,6 @@ pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_m
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
-pub use codex_core::connectors::with_app_enabled_state;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -65,12 +65,13 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;
-    Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(
-            connectors, accessible, /*all_connectors_loaded*/ true,
+    Ok(
+        AppToolPolicyEvaluator::new(&config.config_layer_stack).apply_app_enabled_state(
+            merge_connectors_with_accessible(
+                connectors, accessible, /*all_connectors_loaded*/ true,
+            ),
         ),
-        config,
-    ))
+    )
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {

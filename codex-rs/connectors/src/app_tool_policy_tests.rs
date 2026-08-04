@@ -189,6 +189,61 @@ fn app_enablement_uses_defaults_and_per_app_overrides() {
         ],
         [true, false, false]
     );
+
+    let evaluator = AppToolPolicyEvaluator::from_parts(
+        Some(apps_config),
+        /*requirements_apps_config*/ None,
+    );
+    assert_eq!(
+        evaluator.apply_app_enabled_state(vec![
+            app("calendar", /*enabled*/ false),
+            app("drive", /*enabled*/ true),
+        ]),
+        vec![
+            app("calendar", /*enabled*/ true),
+            app("drive", /*enabled*/ false),
+        ]
+    );
+}
+
+#[test]
+fn app_enablement_preserves_source_state_and_honors_local_and_managed_overrides() {
+    let apps_config = AppsConfigToml {
+        default: None,
+        apps: HashMap::from([
+            (
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "drive".to_string(),
+                AppConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            ),
+        ]),
+    };
+    let requirements = app_enabled_requirement("drive", /*enabled*/ false);
+    let evaluator = AppToolPolicyEvaluator::from_parts(Some(apps_config), Some(&requirements));
+
+    assert_eq!(
+        evaluator.apply_app_enabled_state(vec![
+            app("calendar", /*enabled*/ false),
+            app("drive", /*enabled*/ true),
+            app("slack", /*enabled*/ false),
+            app("gmail", /*enabled*/ true),
+        ]),
+        vec![
+            app("calendar", /*enabled*/ true),
+            app("drive", /*enabled*/ false),
+            app("slack", /*enabled*/ false),
+            app("gmail", /*enabled*/ true),
+        ]
+    );
 }
 
 #[test]
@@ -654,6 +709,26 @@ fn input<'a>(tool_name: &'a str, tool_title: Option<&'a str>) -> AppToolPolicyIn
         tool_title,
         destructive_hint: Some(true),
         open_world_hint: Some(true),
+    }
+}
+
+fn app(id: &str, enabled: bool) -> AppInfo {
+    AppInfo {
+        id: id.to_string(),
+        name: id.to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: true,
+        is_enabled: enabled,
+        plugin_display_names: Vec::new(),
     }
 }
 

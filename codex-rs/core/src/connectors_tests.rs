@@ -1,11 +1,6 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use codex_config::AppRequirementToml;
-use codex_config::AppsRequirementsToml;
-use codex_config::ConfigLayerStack;
-use codex_config::ConfigRequirements;
-use codex_config::ConfigRequirementsToml;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_connectors::merge::plugin_connector_to_app_info;
@@ -19,30 +14,9 @@ use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::MetaObject;
 use rmcp::model::Tool;
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
-
-fn app(id: &str) -> AppInfo {
-    AppInfo {
-        id: id.to_string(),
-        name: id.to_string(),
-        description: None,
-        logo_url: None,
-        logo_url_dark: None,
-        icon_assets: None,
-        icon_dark_assets: None,
-        distribution_channel: None,
-        install_url: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        is_accessible: false,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }
-}
 
 fn plugin_names(names: &[&str]) -> Vec<String> {
     names.iter().map(ToString::to_string).collect()
@@ -449,44 +423,6 @@ approvals_reviewer = "user"
     assert_eq!(
         mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
         ApprovalsReviewer::AutoReview
-    );
-}
-
-#[tokio::test]
-async fn with_app_enabled_state_preserves_unrelated_disabled_connector() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await
-        .expect("config should build");
-
-    let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_drive".to_string(),
-                AppRequirementToml {
-                    enabled: Some(false),
-                    tools: None,
-                },
-            )]),
-        }),
-        ..Default::default()
-    };
-    config.config_layer_stack =
-        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
-            .expect("requirements stack");
-
-    let mut slack = app("connector_slack");
-    slack.is_enabled = false;
-
-    let mut drive = app("connector_drive");
-    drive.is_enabled = false;
-
-    assert_eq!(
-        with_app_enabled_state(vec![slack.clone(), app("connector_drive")], &config),
-        vec![slack, drive]
     );
 }
 
