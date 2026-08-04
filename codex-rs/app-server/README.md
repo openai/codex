@@ -535,7 +535,8 @@ Later, after the idle unload timeout:
 
 Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want thread history loaded into `thread.turns`. The returned thread includes `parentThreadId`, `agentNickname`, and `agentRole` for subagent threads when available.
 
-Paginated threads support metadata-only reads; `includeTurns: true` is unsupported for them.
+Paginated threads can also use `includeTurns: true`, but clients should prefer
+`thread/turns/list` and `thread/items/list` for incremental history loading.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
