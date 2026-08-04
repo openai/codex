@@ -150,6 +150,7 @@ impl TerminalInfo {
     fn from_term(term: String, multiplexer: Option<Multiplexer>) -> Self {
         let name = match term.as_str() {
             "dumb" => TerminalName::Dumb,
+            "xterm-ghostty" => TerminalName::Ghostty,
             "wezterm" | "wezterm-mux" => TerminalName::WezTerm,
             _ => TerminalName::Unknown,
         };
@@ -293,7 +294,7 @@ pub fn terminal_info() -> TerminalInfo {
 /// - Otherwise, `TERM_PROGRAM` (plus `TERM_PROGRAM_VERSION`) drives the detected terminal name.
 ///   This means `TERM_PROGRAM` can mask later probes (for example `WT_SESSION`).
 /// - Next, terminal-specific variables (WEZTERM, iTerm2, Apple Terminal, kitty, etc.) are checked.
-/// - Finally, `TERM` is used as the capability fallback with `TerminalName::Unknown`.
+/// - Finally, `TERM` is used as the capability fallback.
 ///
 /// tmux client term info is only consulted when a tmux multiplexer is detected, and it is
 /// derived from `tmux display-message` to surface the underlying terminal program instead of
