@@ -581,9 +581,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status.clone(),
         has_live_in_progress_turn,
     );
-    let token_usage_turn_id = pending
-        .include_turns
-        .then(|| restored_token_usage_turn_id(&pending.history_items, thread.turns.as_slice()));
     let mut initial_turns_page = if let Some(mut page) = pending.paginated_initial_turns_page.take()
     {
         if let (Some(active_turn), Some(params)) =
@@ -623,6 +620,12 @@ pub(super) async fn handle_pending_thread_resume_request(
     } else {
         None
     };
+    let token_usage_turn_id = pending
+        .include_turns
+        .then(|| restored_token_usage_turn_id(&pending.history_items, thread.turns.as_slice()));
+    if pending.initial_turns_page.is_none() {
+        initial_turns_page = None;
+    }
     if pending.redact_resume_payloads {
         redact_thread_resume_payloads(&mut thread.turns);
         if let Some(initial_turns_page) = initial_turns_page.as_mut() {

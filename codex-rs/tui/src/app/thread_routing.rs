@@ -1246,6 +1246,9 @@ impl App {
         self.activate_thread_channel(thread_id).await;
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
+        if !turns.is_empty() {
+            self.chat_widget.set_token_info(/*info*/ None);
+        }
         match presentation {
             ThreadAttachPresentation::SessionLineage => {
                 self.chat_widget.handle_thread_session(session);

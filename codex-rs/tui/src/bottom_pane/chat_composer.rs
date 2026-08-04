@@ -620,6 +620,7 @@ impl ChatComposer {
                 flash: None,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_pending: false,
                 collaboration_mode_indicator: None,
                 goal_status_indicator: None,
                 ide_context_active: false,
@@ -1353,10 +1354,14 @@ impl ChatComposer {
     }
 
     fn right_footer_line_with_context(&self) -> Line<'static> {
-        let mut line = context_window_line(
-            self.footer.context_window_percent,
-            self.footer.context_window_used_tokens,
-        );
+        let mut line = if self.footer.context_window_pending {
+            Line::default()
+        } else {
+            context_window_line(
+                self.footer.context_window_percent,
+                self.footer.context_window_used_tokens,
+            )
+        };
         if let Some(vim_mode) = self.vim_mode_indicator_span() {
             line.spans.push(" | ".dim());
             line.spans.push(vim_mode);
@@ -4216,6 +4221,10 @@ impl ChatComposer {
         }
         self.footer.context_window_percent = percent;
         self.footer.context_window_used_tokens = used_tokens;
+    }
+
+    pub(crate) fn set_context_window_pending(&mut self, pending: bool) {
+        self.footer.context_window_pending = pending;
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {

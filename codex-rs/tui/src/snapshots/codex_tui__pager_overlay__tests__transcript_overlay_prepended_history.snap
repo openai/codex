@@ -1,0 +1,7 @@
+---
+source: tui/src/pager_overlay.rs
+expression: visible_before.trim()
+---
+line2
+
+line3

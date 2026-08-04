@@ -314,8 +314,16 @@ fn user_message_count(thread: &Thread, prompt: &str) -> usize {
             ThreadItem::UserMessage { content, .. } => Some(content),
             _ => None,
         })
-        .flatten()
-        .filter(|item| matches!(item, AppServerUserInput::Text { text, .. } if text == prompt))
+        .filter(|content| {
+            content
+                .iter()
+                .filter_map(|item| match item {
+                    AppServerUserInput::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>()
+                == prompt
+        })
         .count()
 }
 

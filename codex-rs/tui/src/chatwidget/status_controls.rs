@@ -358,6 +358,9 @@ impl ChatWidget {
     }
 
     pub(super) fn status_line_context_remaining_percent(&self) -> Option<i64> {
+        if self.token_usage_pending {
+            return None;
+        }
         let Some(context_window) = self.status_line_context_window_size() else {
             return Some(100);
         };
@@ -375,8 +378,8 @@ impl ChatWidget {
     }
 
     pub(super) fn status_line_context_used_percent(&self) -> Option<i64> {
-        let remaining = self.status_line_context_remaining_percent().unwrap_or(100);
-        Some((100 - remaining).clamp(0, 100))
+        self.status_line_context_remaining_percent()
+            .map(|remaining| (100 - remaining).clamp(0, 100))
     }
 
     pub(super) fn status_line_total_usage(&self) -> TokenUsage {

@@ -235,6 +235,7 @@ impl App {
         err.chain().any(|cause| {
             let message = cause.to_string();
             message.contains("includeTurns is unavailable before first user message")
+                || message.contains("thread/turns/list is unavailable before first user message")
                 || message.contains("ephemeral threads do not support includeTurns")
         })
     }

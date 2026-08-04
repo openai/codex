@@ -564,6 +564,7 @@ pub(crate) struct ChatWidget {
     runtime_model_provider_base_url: Option<String>,
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     token_info: Option<TokenUsageInfo>,
+    token_usage_pending: bool,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
@@ -1144,6 +1145,9 @@ impl ChatWidget {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
+                self.token_usage_pending = true;
+                self.bottom_pane
+                    .set_context_window_pending(/*pending*/ true);
                 self.bottom_pane
                     .set_context_window(/*percent*/ None, /*used_tokens*/ None);
                 self.token_info = None;
@@ -1152,6 +1156,9 @@ impl ChatWidget {
     }
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
+        self.token_usage_pending = false;
+        self.bottom_pane
+            .set_context_window_pending(/*pending*/ false);
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
         self.bottom_pane.set_context_window(percent, used_tokens);

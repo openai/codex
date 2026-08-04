@@ -715,14 +715,18 @@ impl ChatWidget {
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
                 .map(|cws| format!("{} window", format_tokens_compact(cws))),
-            StatusLineItem::TotalInputTokens => Some(format!(
-                "{} in",
-                format_tokens_compact(self.status_line_total_usage().input_tokens)
-            )),
-            StatusLineItem::TotalOutputTokens => Some(format!(
-                "{} out",
-                format_tokens_compact(self.status_line_total_usage().output_tokens)
-            )),
+            StatusLineItem::TotalInputTokens => (!self.token_usage_pending).then(|| {
+                format!(
+                    "{} in",
+                    format_tokens_compact(self.status_line_total_usage().input_tokens)
+                )
+            }),
+            StatusLineItem::TotalOutputTokens => (!self.token_usage_pending).then(|| {
+                format!(
+                    "{} out",
+                    format_tokens_compact(self.status_line_total_usage().output_tokens)
+                )
+            }),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => Some(
                 if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {

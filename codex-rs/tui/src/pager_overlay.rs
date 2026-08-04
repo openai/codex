@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -597,6 +598,57 @@ impl TranscriptOverlay {
         }
     }
 
+    /// Returns whether an upward navigation is close enough to request older history.
+    pub(crate) fn should_load_older(&self, key_event: KeyEvent) -> bool {
+        self.view.keymap.jump_top.is_pressed(key_event)
+            || (self.view.scroll_offset
+                <= self.view.last_content_height.unwrap_or(/*default*/ 0)
+                && (self.view.keymap.scroll_up.is_pressed(key_event)
+                    || self.view.keymap.page_up.is_pressed(key_event)
+                    || self.view.keymap.half_page_up.is_pressed(key_event)))
+    }
+
+    /// Prepends history without moving visible content and returns its insertion index.
+    pub(crate) fn prepend(&mut self, cells: Vec<Arc<dyn HistoryCell>>, width: u16) -> usize {
+        if cells.is_empty() {
+            return 0;
+        }
+        let follow_bottom = self.view.is_scrolled_to_bottom();
+        let previous_height = self.view.content_height(width);
+        let live_tail = self.take_live_tail_renderable();
+        let added_cells = cells.len();
+        let insert_at = self
+            .cells
+            .iter()
+            .rposition(|cell| cell.as_any().is::<SessionInfoCell>())
+            .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1));
+        self.cells.splice(insert_at..insert_at, cells);
+        for index in [
+            &mut self.highlight_cell,
+            &mut self.view.pending_scroll_chunk,
+        ] {
+            if let Some(index) = index.as_mut()
+                && *index >= insert_at
+            {
+                *index = index.saturating_add(added_cells);
+            }
+        }
+        self.rebuild_renderables();
+        if let Some(live_tail) = live_tail {
+            self.view.renderables.push(live_tail);
+        }
+        self.view.scroll_offset = if follow_bottom {
+            usize::MAX
+        } else {
+            self.view.scroll_offset.saturating_add(
+                self.view
+                    .content_height(width)
+                    .saturating_sub(previous_height),
+            )
+        };
+        insert_at
+    }
+
     /// Replace committed transcript cells while keeping any cached in-progress output that is
     /// currently shown at the end of the overlay.
     ///
@@ -1060,6 +1112,18 @@ mod tests {
     }
 
     #[test]
+    fn jump_top_requests_older_history_from_the_bottom() {
+        let overlay = transcript_overlay(vec![Arc::new(TestCell {
+            lines: vec![Line::from("recent")],
+        })]);
+
+        assert!(overlay.should_load_older(KeyEvent::new(
+            KeyCode::Home,
+            crossterm::event::KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
     fn edit_next_hint_is_visible_when_highlighted() {
         let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
             lines: vec![Line::from("hello")],
@@ -1138,6 +1202,38 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn transcript_overlay_preserves_live_tail_when_prepending_history() {
+        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+            lines: vec![Line::from("recent")],
+        })]);
+        overlay.sync_live_tail(
+            /*width*/ 40,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation_tick: None,
+            }),
+            |_| Some(vec![HyperlinkLine::from("live tail")]),
+        );
+        overlay.prepend(
+            vec![Arc::new(TestCell {
+                lines: vec![Line::from("older")],
+            })],
+            /*width*/ 40,
+        );
+
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
+        );
+        let mut buffer = Buffer::empty(area);
+        overlay.render(area, &mut buffer);
+        let rendered = buffer_to_text(&buffer, area);
+        assert!(rendered.contains("older"));
+        assert!(rendered.contains("recent"));
+        assert!(rendered.contains("live tail"));
     }
 
     #[test]
@@ -1326,6 +1422,29 @@ mod tests {
         }));
 
         assert_eq!(overlay.view.scroll_offset, 0);
+        overlay.view.scroll_offset = 3;
+        term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        let content_area = Rect::new(
+            /*x*/ 0, /*y*/ 1, /*width*/ 40, /*height*/ 4,
+        );
+        let visible_before = buffer_to_text(term.backend().buffer(), content_area);
+        overlay.prepend(
+            vec![Arc::new(TestCell {
+                lines: vec!["older first".into(), "older second".into()],
+            })],
+            /*width*/ 40,
+        );
+        term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        assert_eq!(
+            buffer_to_text(term.backend().buffer(), content_area),
+            visible_before
+        );
+        assert_snapshot!(
+            "transcript_overlay_prepended_history",
+            visible_before.trim()
+        );
     }
 
     #[test]

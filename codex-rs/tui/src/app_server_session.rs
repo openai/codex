@@ -4,6 +4,9 @@
 //! request/response plumbing out of `App` and `ChatWidget`.
 
 mod fs;
+mod history;
+
+pub(crate) use history::HISTORY_ITEM_PAGE_LIMIT;
 
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
@@ -70,6 +73,7 @@ use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetParams;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -186,6 +190,7 @@ pub(crate) struct AppServerBootstrap {
 pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
+    history_pagination: HashMap<ThreadId, history::ThreadHistoryPagination>,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
     thread_settings_update_supported: bool,
@@ -258,6 +263,7 @@ impl AppServerSession {
         Self {
             client,
             next_request_id: 1,
+            history_pagination: HashMap::new(),
             remote_cwd_override: None,
             thread_params_mode,
             thread_settings_update_supported: true,
@@ -544,22 +550,36 @@ impl AppServerSession {
         } else {
             self.session_config_with_effective_service_tier(&config)
         };
-        let response: ThreadResumeResponse = self
+        let exclude_turns = self
+            .history_pagination
+            .get(&thread_id)
+            .is_some_and(|state| state.history_mode == ThreadHistoryMode::Paginated);
+        let mut response: ThreadResumeResponse = self
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
-                params: thread_resume_params_from_config(
-                    session_config,
-                    thread_id,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                    model_settings,
-                ),
+                params: ThreadResumeParams {
+                    exclude_turns,
+                    ..thread_resume_params_from_config(
+                        session_config,
+                        thread_id,
+                        self.thread_params_mode(),
+                        self.remote_cwd_override.as_deref(),
+                        model_settings,
+                    )
+                },
             })
             .await
             .map_err(|err| {
                 bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
             })?;
+        self.hydrate_initial_thread_history(
+            &mut response.thread,
+            response.turns_backwards_cursor.clone(),
+            response.items_backwards_cursor.clone(),
+            Some(&config),
+        )
+        .await?;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -629,6 +649,17 @@ impl AppServerSession {
         goal_continuation: ForkGoalContinuation,
         presentation: ForkPresentation,
     ) -> Result<AppServerStartedThread> {
+        let fork_parent = match presentation {
+            ForkPresentation::Regular => self
+                .thread_read(thread_id, /*include_turns*/ false)
+                .await
+                .ok(),
+            ForkPresentation::SideConversation => None,
+        };
+        let exclude_turns = fork_parent
+            .as_ref()
+            .is_some_and(|thread| thread.history_mode == ThreadHistoryMode::Paginated)
+            || presentation == ForkPresentation::SideConversation;
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
@@ -640,7 +671,7 @@ impl AppServerSession {
                     before_turn_id,
                     defer_goal_continuation: goal_continuation
                         == ForkGoalContinuation::DeferUntilNextTurn,
-                    exclude_turns: presentation == ForkPresentation::SideConversation,
+                    exclude_turns,
                     ..thread_fork_params_from_config(
                         session_config,
                         thread_id,
@@ -653,15 +684,19 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
             })?;
-        let fork_parent_title = if presentation == ForkPresentation::SideConversation {
-            None
-        } else {
-            self.fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
-                .await
-        };
+        let mut response = response;
+        if presentation == ForkPresentation::Regular && !response.thread.ephemeral {
+            self.hydrate_initial_thread_history(
+                &mut response.thread,
+                /*turn_cursor*/ None,
+                /*item_cursor*/ None,
+                Some(&config),
+            )
+            .await?;
+        }
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
-        started.session.fork_parent_title = fork_parent_title;
+        started.session.fork_parent_title = fork_parent.and_then(|thread| thread.name);
         Ok(started)
     }
 
@@ -753,17 +788,44 @@ impl AppServerSession {
         include_turns: bool,
     ) -> Result<Thread> {
         let request_id = self.next_request_id();
-        let response: ThreadReadResponse = self
+        let response = self
             .client
-            .request_typed(ClientRequest::ThreadRead {
+            .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
                 request_id,
                 params: ThreadReadParams {
                     thread_id: thread_id.to_string(),
                     include_turns,
                 },
             })
-            .await
-            .wrap_err("thread/read failed during TUI session lookup")?;
+            .await;
+        let mut response: ThreadReadResponse = match response {
+            Ok(response) => return Ok(response.thread),
+            Err(TypedRequestError::Server { source, .. })
+                if include_turns
+                    && source.message
+                        == "paginated threads do not support thread/read(includeTurns=true)" =>
+            {
+                let request_id = self.next_request_id();
+                self.client
+                    .request_typed(ClientRequest::ThreadRead {
+                        request_id,
+                        params: ThreadReadParams {
+                            thread_id: thread_id.to_string(),
+                            include_turns: false,
+                        },
+                    })
+                    .await
+                    .wrap_err("thread/read failed during TUI session lookup")?
+            }
+            Err(err) => return Err(err).wrap_err("thread/read failed during TUI session lookup"),
+        };
+        self.hydrate_initial_thread_history(
+            &mut response.thread,
+            /*turn_cursor*/ None,
+            /*item_cursor*/ None,
+            /*config*/ None,
+        )
+        .await?;
         Ok(response.thread)
     }
 
@@ -1895,6 +1957,7 @@ mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
+    use app_test_support::create_fake_paginated_rollout;
     use app_test_support::create_fake_rollout;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
@@ -2505,6 +2568,37 @@ mod tests {
             Some("Source thread")
         );
         assert_eq!(side_fork.session.fork_parent_title, None);
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ephemeral_paginated_fork_skips_unsupported_history_hydration() -> Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let config = build_config(&codex_home).await;
+        let source_thread_id = ThreadId::from_string(
+            &create_fake_paginated_rollout(
+                codex_home.path(),
+                "2025-01-05T12-00-00",
+                "2025-01-05T12:00:00Z",
+                "Saved user message",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .map_err(|error| {
+                color_eyre::eyre::eyre!("failed to create paginated rollout: {error}")
+            })?,
+        )?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        let mut ephemeral_config = config;
+        ephemeral_config.ephemeral = true;
+
+        let fork = app_server
+            .fork_thread(ephemeral_config, source_thread_id)
+            .await?;
+
+        assert_eq!(fork.session.forked_from_id, Some(source_thread_id));
+        assert!(fork.turns.is_empty());
         app_server.shutdown().await?;
         Ok(())
     }

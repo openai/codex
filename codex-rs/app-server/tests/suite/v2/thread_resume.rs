@@ -57,6 +57,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
@@ -105,6 +107,8 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::skip_if_wine_exec;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs::FileTimes;
@@ -114,6 +118,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use uuid::Uuid;
 use wiremock::Mock;
@@ -2393,6 +2398,183 @@ async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<(
 }
 
 #[tokio::test]
+async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let conversation_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let path = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &conversation_id);
+    let canonical_turn_id = "persisted-token-usage-turn";
+    append_rollout_item_to_path(
+        &path,
+        &RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: canonical_turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+    )
+    .await?;
+    append_rollout_item_to_path(
+        &path,
+        &RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+            info: Some(TokenUsageInfo {
+                total_token_usage: TokenUsage {
+                    input_tokens: 120,
+                    output_tokens: 30,
+                    total_tokens: 150,
+                    ..Default::default()
+                },
+                last_token_usage: TokenUsage {
+                    input_tokens: 70,
+                    output_tokens: 20,
+                    total_tokens: 90,
+                    ..Default::default()
+                },
+                model_context_window: Some(200_000),
+            }),
+            rate_limits: None,
+        })),
+    )
+    .await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let resume_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let ThreadResumeResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(resume_id)).await??;
+    assert!(thread.turns.is_empty());
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("thread/tokenUsage/updated"),
+    )
+    .await??;
+    let ServerNotification::ThreadTokenUsageUpdated(notification) = notification.try_into()? else {
+        panic!("expected thread/tokenUsage/updated notification");
+    };
+    assert_eq!(notification.thread_id, thread.id);
+    assert_eq!(notification.turn_id, canonical_turn_id);
+    assert_eq!(notification.token_usage.total.total_tokens, 150);
+
+    let turns_id = app_server
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread.id,
+            cursor: None,
+            limit: Some(1),
+            sort_direction: Some(SortDirection::Desc),
+            items_view: Some(TurnItemsView::NotLoaded),
+        })
+        .await?;
+    let turns: ThreadTurnsListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(turns_id)).await??;
+    assert_eq!(notification.turn_id, turns.data[0].id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_rollout_item_to_path(
+        &path,
+        &RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+            info: Some(TokenUsageInfo {
+                total_token_usage: TokenUsage {
+                    total_tokens: 150,
+                    ..Default::default()
+                },
+                last_token_usage: TokenUsage {
+                    total_tokens: 90,
+                    ..Default::default()
+                },
+                model_context_window: Some(200_000),
+            }),
+            rate_limits: None,
+        })),
+    )
+    .await?;
+    let interrupted_turn_id = "interrupted-turn-after-token-usage";
+    append_rollout_item_to_path(
+        &path,
+        &RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: interrupted_turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+    )
+    .await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let resume_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let ThreadResumeResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(resume_id)).await??;
+    assert!(thread.turns.is_empty());
+    let turns_id = app_server
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread.id,
+            cursor: None,
+            limit: Some(1),
+            sort_direction: Some(SortDirection::Desc),
+            items_view: Some(TurnItemsView::NotLoaded),
+        })
+        .await?;
+    let turns: ThreadTurnsListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(turns_id)).await??;
+    assert_eq!(turns.data[0].id, interrupted_turn_id);
+    assert!(
+        timeout(
+            Duration::from_millis(100),
+            app_server.read_stream_until_notification_message("thread/tokenUsage/updated"),
+        )
+        .await
+        .is_err(),
+        "usage owned by an implicit turn must not be attributed to {interrupted_turn_id}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_skips_restored_token_usage_when_turns_are_excluded() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -3437,22 +3619,28 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
 
 #[tokio::test]
 async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> Result<()> {
-    let server = responses::start_mock_server().await;
-    let first_response = responses::sse_response(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_assistant_message("msg-1", "Done"),
-        responses::ev_completed("resp-1"),
-    ]));
-    let second_response = responses::sse_response(responses::sse(vec![
-        responses::ev_response_created("resp-2"),
-        responses::ev_assistant_message("msg-2", "Done"),
-        responses::ev_completed("resp-2"),
-    ]))
-    .set_delay(std::time::Duration::from_secs(2));
-    let _response_mock =
-        responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
+    let (release_running_turn, running_turn_gate) = oneshot::channel();
+    let (server, _response_completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-1"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: Some(running_turn_gate),
+            body: responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-2", "Done"),
+                responses::ev_completed("resp-2"),
+            ]),
+        }],
+    ])
+    .await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    mock_responses_config(server.uri()).write(codex_home.path())?;
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3546,6 +3734,36 @@ async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> R
     assert!(initial_turns_page.backwards_cursor.is_some());
     assert!(initial_turns_page.next_cursor.is_some());
 
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("thread/tokenUsage/updated"),
+    )
+    .await??;
+
+    let metadata_resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let metadata_resume: ThreadResumeResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_response(metadata_resume_id),
+    )
+    .await??;
+    assert!(metadata_resume.thread.turns.is_empty());
+    assert!(metadata_resume.initial_turns_page.is_none());
+    assert!(
+        timeout(
+            Duration::from_millis(100),
+            primary.read_stream_until_notification_message("thread/tokenUsage/updated"),
+        )
+        .await
+        .is_err(),
+        "hot paginated resume should wait for a real token usage update"
+    );
+
     let asc_resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
@@ -3573,11 +3791,15 @@ async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> R
         status => panic!("unexpected thread status after running resume: {status:?}"),
     }
 
+    release_running_turn
+        .send(())
+        .expect("release the running model response");
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    server.shutdown().await;
 
     Ok(())
 }

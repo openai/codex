@@ -42,6 +42,52 @@ async fn token_count_none_resets_context_indicator() {
 }
 
 #[tokio::test]
+async fn resumed_session_hides_unknown_token_usage_until_an_update_arrives() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_token_info(/*info*/ None);
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("render resumed session");
+    let rendered = normalized_backend_snapshot(terminal.backend());
+    assert!(!rendered.contains("100% context left"));
+    insta::assert_snapshot!(
+        rendered
+            .lines()
+            .find(|line| line.contains("context left"))
+            .map(str::trim)
+            .unwrap_or("(hidden)"),
+        @"(hidden)"
+    );
+
+    chat.config.tui_status_line = Some(vec![
+        "context-remaining".to_string(),
+        "context-used".to_string(),
+        "total-input-tokens".to_string(),
+        "total-output-tokens".to_string(),
+    ]);
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
+
+    handle_token_count(
+        &mut chat,
+        Some(make_token_info(
+            /*total_tokens*/ 12_700, /*context_window*/ 13_000,
+        )),
+    );
+    chat.refresh_status_line();
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Context 30% left · Context 70% used · 0 in · 0 out".to_string())
+    );
+}
+
+#[tokio::test]
 async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 

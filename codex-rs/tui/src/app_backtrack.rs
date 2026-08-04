@@ -26,6 +26,8 @@ use std::sync::Arc;
 
 use crate::app::App;
 use crate::app_event::AppEvent;
+use crate::app_server_session::AppServerSession;
+use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::UserMessage;
@@ -37,7 +39,11 @@ use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemsListParams;
+use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
@@ -88,8 +94,43 @@ impl App {
     pub(crate) async fn handle_backtrack_overlay_event(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<bool> {
+        if let TuiEvent::Key(key_event) = &event
+            && let Some(Overlay::Transcript(overlay)) = self.overlay.as_ref()
+            && (overlay.should_load_older(*key_event)
+                || (self.backtrack.overlay_preview_active
+                    && self.backtrack.nth_user_message == 0
+                    && matches!(key_event.code, KeyCode::Esc | KeyCode::Left)
+                    && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)))
+            && let Some(thread_id) = self.chat_widget.thread_id()
+            && let Some(cursor) = app_server.begin_older_history_page(thread_id)
+        {
+            let request_id = app_server.next_request_id();
+            let request_handle = app_server.request_handle();
+            let app_event_tx = self.app_event_tx.clone();
+            tokio::spawn(async move {
+                let result = request_handle
+                    .request_typed::<ThreadItemsListResponse>(ClientRequest::ThreadItemsList {
+                        request_id,
+                        params: ThreadItemsListParams {
+                            thread_id: thread_id.to_string(),
+                            turn_id: None,
+                            cursor: Some(cursor.clone()),
+                            limit: Some(HISTORY_ITEM_PAGE_LIMIT),
+                            sort_direction: Some(SortDirection::Desc),
+                        },
+                    })
+                    .await
+                    .map_err(|err| err.to_string());
+                app_event_tx.send(AppEvent::OlderThreadHistoryLoaded {
+                    thread_id,
+                    cursor,
+                    result,
+                });
+            });
+        }
         if self.backtrack.overlay_preview_active {
             match event {
                 TuiEvent::Key(KeyEvent {
@@ -313,7 +354,7 @@ impl App {
     }
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
-    fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
+    pub(crate) fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
         if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -584,7 +625,7 @@ fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> 
     user_count(cells) > 0
 }
 
-fn nth_user_position(
+pub(crate) fn nth_user_position(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
     nth: usize,
 ) -> Option<usize> {

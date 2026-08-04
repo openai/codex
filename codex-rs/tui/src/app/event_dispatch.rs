@@ -33,6 +33,19 @@ impl App {
                 self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
+            AppEvent::OlderThreadHistoryLoaded {
+                thread_id,
+                cursor,
+                result,
+            } => {
+                if let Err(err) = self
+                    .handle_older_history_page(tui, app_server, thread_id, &cursor, result)
+                    .await
+                {
+                    app_server.cancel_older_history_page(thread_id);
+                    tracing::warn!(%thread_id, error = %err, "failed to load older transcript history");
+                }
+            }
             AppEvent::ClearUi { name } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
@@ -278,18 +291,23 @@ impl App {
                         nth_user_message,
                         &mut prompt,
                     ) {
-                        Ok(Some(before_turn_id)) => {
+                        Ok(before_turn_id)
+                            if before_turn_id.is_some()
+                                || app_server.has_older_history(thread_id) =>
+                        {
+                            let before_turn_id = before_turn_id
+                                .or_else(|| thread.turns.first().map(|turn| turn.id.clone()));
                             app_server
                                 .fork_thread_at(
                                     config.clone(),
                                     thread_id,
                                     /*last_turn_id*/ None,
-                                    /*before_turn_id*/ Some(before_turn_id),
+                                    before_turn_id,
                                     ForkGoalContinuation::StartIfIdle,
                                 )
                                 .await
                         }
-                        Ok(None) => {
+                        Ok(_) => {
                             app_server
                                 .start_thread_with_session_start_source(
                                     &config, /*session_start_source*/ None,

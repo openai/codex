@@ -1,4 +1,5 @@
 use super::*;
+use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_parented_rollout_with_source;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
@@ -9,8 +10,19 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::ThreadItemsListParams;
+use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::AgentPath;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::EnteredReviewModeItem;
+use codex_protocol::items::ExitedReviewModeItem;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_state::SqliteConfig;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -166,6 +178,202 @@ async fn start_recording_app_server(
         requests,
         proxy,
     ))
+}
+
+#[tokio::test]
+async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> Result<()> {
+    let mut app = make_test_app().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    let thread_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        "2026-01-02T00-00-00",
+        "2026-01-02T00:00:00Z",
+        "older visible prompt",
+        Some(app.config.model_provider_id.as_str()),
+        /*git_info*/ None,
+    )
+    .map_err(|error| color_eyre::eyre::eyre!("failed to create paginated rollout: {error}"))?;
+    let thread_id = ThreadId::from_string(&thread_id)?;
+    let path = rollout_path(
+        codex_home.path(),
+        "2026-01-02T00-00-00",
+        &thread_id.to_string(),
+    );
+    let mut records = std::fs::read_to_string(&path)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let user_item = |id: &str, text: &str| {
+        TurnItem::UserMessage(UserMessageItem {
+            id: id.to_string(),
+            client_id: None,
+            content: vec![CoreUserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+        })
+    };
+    let mut items = vec![
+        user_item("older-visible-prompt", "older visible prompt"),
+        TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+            id: "cross-page-review-start".to_string(),
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: "review started".to_string(),
+        }),
+        user_item("hidden-review-prompt", "hidden cross-page review prompt"),
+    ];
+    items.extend((0..97).map(|index| {
+        TurnItem::AgentMessage(AgentMessageItem {
+            id: format!("review-output-{index}"),
+            content: vec![AgentMessageContent::Text {
+                text: format!("review output {index}"),
+            }],
+            phase: None,
+            memory_citation: None,
+        })
+    }));
+    items.extend([
+        TurnItem::ExitedReviewMode(ExitedReviewModeItem {
+            id: "cross-page-review-end".to_string(),
+            review_output: None,
+        }),
+        user_item("newer-visible-prompt", "newer visible prompt"),
+    ]);
+    let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: "cross-page-review-turn".to_string(),
+        trace_id: None,
+        started_at: None,
+        model_context_window: None,
+        collaboration_mode_kind: Default::default(),
+    }))
+    .chain(items.into_iter().map(|item| {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "cross-page-review-turn".to_string(),
+            item,
+            started_at_ms: None,
+            completed_at_ms: 0,
+        })
+    }));
+    for event in events {
+        records.push(serde_json::json!({
+            "timestamp": "2026-01-02T00:00:00Z",
+            "ordinal": records.len(),
+            "type": "event_msg",
+            "payload": serde_json::to_value(event)?,
+        }));
+    }
+    let records = records
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, format!("{records}\n"))?;
+    let (mut app_server, _requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let started = app_server
+        .resume_thread(
+            app.config.clone(),
+            thread_id,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    let initial_cells = crate::thread_transcript::thread_items_to_transcript_cells(
+        Some(thread_id),
+        &app.config.cwd,
+        started.turns.iter().flat_map(|turn| turn.items.clone()),
+        crate::thread_transcript::RawReasoningVisibility::Hidden,
+        Some(app.config.codex_home.as_path()),
+    );
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    app.transcript_cells = initial_cells;
+    assert_eq!(
+        app.transcript_cells
+            .iter()
+            .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+            .map(|user| user.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hidden cross-page review prompt", "newer visible prompt"]
+    );
+    app.backtrack.overlay_preview_active = true;
+    app.backtrack.nth_user_message = 1;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.open_transcript_overlay(&mut tui);
+    app.apply_backtrack_selection_internal(app.backtrack.nth_user_message);
+    let cursor = app_server
+        .begin_older_history_page(thread_id)
+        .expect("review-mode marker should remain on an older page");
+    let request_id = app_server.next_request_id();
+    let page: ThreadItemsListResponse = app_server
+        .request_handle()
+        .request_typed(ClientRequest::ThreadItemsList {
+            request_id,
+            params: ThreadItemsListParams {
+                thread_id: thread_id.to_string(),
+                turn_id: None,
+                cursor: Some(cursor.clone()),
+                limit: Some(crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT),
+                sort_direction: Some(SortDirection::Desc),
+            },
+        })
+        .await?;
+    app.handle_older_history_page(&mut tui, &mut app_server, thread_id, &cursor, Ok(page))
+        .await?;
+
+    let visible_user_messages = app
+        .transcript_cells
+        .iter()
+        .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+        .map(|user| user.message.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        visible_user_messages,
+        vec!["older visible prompt", "newer visible prompt"]
+    );
+    assert_eq!(app.backtrack.nth_user_message, 1);
+    let area = ratatui::layout::Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 12,
+    );
+    let mut buffer = Buffer::empty(area);
+    let Some(Overlay::Transcript(overlay)) = app.overlay.as_mut() else {
+        panic!("expected a transcript overlay");
+    };
+    overlay.render(area, &mut buffer);
+    let highlighted_output = area
+        .positions()
+        .filter(|position| {
+            buffer[*position]
+                .style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        })
+        .map(|position| buffer[position].symbol())
+        .collect::<String>();
+    let highlighted_message = visible_user_messages
+        .iter()
+        .find(|message| highlighted_output.contains(message.as_str()))
+        .expect("the selected user message should remain highlighted");
+    insta::assert_snapshot!(
+        format!(
+            "{}\nhighlighted: {highlighted_message}",
+            visible_user_messages.join("\n")
+        ),
+        @r"
+    older visible prompt
+    newer visible prompt
+    highlighted: newer visible prompt
+    ");
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
 }
 
 #[test]
