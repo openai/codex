@@ -1,6 +1,7 @@
 mod interface;
 mod model;
 mod parser;
+mod policy;
 
 pub use interface::SkillInterfaceAssetPolicy;
 pub use interface::SkillInterfaceFile;
@@ -17,6 +18,7 @@ pub use model::SkillToolDependency;
 pub use parser::ParsedSkillFrontmatter;
 pub use parser::SkillParseError;
 pub use parser::parse_skill_frontmatter_metadata;
+pub use policy::resolve_disabled_skill_paths;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use include_dir::Dir;

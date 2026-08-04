@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::SkillConfig;
@@ -7,10 +5,8 @@ use codex_config::SkillsConfig;
 pub use codex_skills::SkillConfigRule;
 pub use codex_skills::SkillConfigRuleSelector;
 pub use codex_skills::SkillConfigRules;
-use codex_utils_absolute_path::AbsolutePathBuf;
+pub use codex_skills::resolve_disabled_skill_paths;
 use tracing::warn;
-
-use crate::SkillMetadata;
 
 pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> SkillConfigRules {
     let mut entries = Vec::new();
@@ -50,40 +46,6 @@ pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> S
     SkillConfigRules { entries }
 }
 
-pub fn resolve_disabled_skill_paths(
-    skills: &[SkillMetadata],
-    rules: &SkillConfigRules,
-) -> HashSet<AbsolutePathBuf> {
-    let mut disabled_paths = HashSet::new();
-
-    for entry in &rules.entries {
-        match &entry.selector {
-            SkillConfigRuleSelector::Path(path) => {
-                if entry.enabled {
-                    disabled_paths.remove(path);
-                } else {
-                    disabled_paths.insert(path.clone());
-                }
-            }
-            SkillConfigRuleSelector::Name(name) => {
-                for path in skills
-                    .iter()
-                    .filter(|skill| skill.name == *name)
-                    .map(|skill| skill.path_to_skills_md.clone())
-                {
-                    if entry.enabled {
-                        disabled_paths.remove(&path);
-                    } else {
-                        disabled_paths.insert(path);
-                    }
-                }
-            }
-        }
-    }
-
-    disabled_paths
-}
-
 fn skill_config_rule_selector(entry: &SkillConfig) -> Option<SkillConfigRuleSelector> {
     match (entry.path.as_ref(), entry.name.as_deref()) {
         (Some(path), None) => Some(SkillConfigRuleSelector::Path(
@@ -108,3 +70,7 @@ fn skill_config_rule_selector(entry: &SkillConfig) -> Option<SkillConfigRuleSele
         }
     }
 }
+
+#[cfg(test)]
+#[path = "config_rules_tests.rs"]
+mod tests;
