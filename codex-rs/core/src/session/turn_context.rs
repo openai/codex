@@ -15,7 +15,6 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
@@ -136,7 +135,6 @@ pub struct TurnContext {
     pub(crate) collaboration_mode_developer_instructions: Option<String>,
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
-    pub(crate) permission_profile: PermissionProfile,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) available_models: Vec<ModelPreset>,
@@ -190,23 +188,20 @@ impl TurnContext {
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile.clone()
+        self.config.permissions.effective_permission_profile()
     }
 
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile.file_system_sandbox_policy()
+        self.config.permissions.file_system_sandbox_policy()
     }
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.permission_profile.network_sandbox_policy()
+        self.config.permissions.network_sandbox_policy()
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
-        compatibility_sandbox_policy_for_permission_profile(
-            &self.permission_profile,
-            #[allow(deprecated)]
-            &self.cwd,
-        )
+        #[allow(deprecated)]
+        self.config.permissions.legacy_sandbox_policy(&self.cwd)
     }
 
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
@@ -313,7 +308,6 @@ impl TurnContext {
                 .clone(),
             multi_agent_version: self.multi_agent_version,
             personality: self.personality,
-            permission_profile: self.permission_profile.clone(),
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             available_models,
@@ -581,7 +575,6 @@ impl Session {
                 .clone(),
             multi_agent_version,
             personality: session_configuration.personality,
-            permission_profile,
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             available_models,

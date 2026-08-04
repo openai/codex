@@ -87,7 +87,7 @@ fn approval_metadata(
 
 fn approval_config(turn_context: &TurnContext) -> codex_mcp::McpConfig {
     let mut config = (*mcp_config_for_test(&turn_context.config)).clone();
-    config.permission_profile = turn_context.permission_profile.clone();
+    config.permission_profile = turn_context.permission_profile();
     config
 }
 
@@ -2814,7 +2814,10 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
-    turn_context.permission_profile = PermissionProfile::Disabled;
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("test setup should allow updating permission profile");
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);

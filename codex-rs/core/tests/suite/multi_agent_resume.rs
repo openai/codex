@@ -310,6 +310,7 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     assert!(initial_child_request.requests().iter().any(|request| {
         request.body_contains_text(INITIAL_TASK)
             && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+            && request.body_contains_text("<permission_profile type=\"disabled\">")
             && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
     }));
     let initial_worker_config = worker_thread.config_snapshot().await;
@@ -492,6 +493,7 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     assert!(followup_child_request.requests().iter().any(|request| {
         request.body_contains_text(FOLLOWUP_TASK)
             && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+            && request.body_contains_text("<permission_profile type=\"disabled\">")
             && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
     }));
     let requests = server

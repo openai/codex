@@ -9246,11 +9246,15 @@ async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() 
 async fn turn_context_item_stores_split_file_system_sandbox_policy_when_different() {
     let (_session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
-    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-        turn_context.permission_profile.enforcement(),
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile().enforcement(),
         &file_system_sandbox_policy,
         turn_context.network_sandbox_policy(),
     );
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .set_permission_profile(permission_profile)
+        .expect("test setup should allow updating permission profile");
 
     let item = turn_context.to_turn_context_item();
 
@@ -9409,11 +9413,15 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
  {
     let (mut session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
-    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-        turn_context.permission_profile.enforcement(),
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile().enforcement(),
         &file_system_sandbox_policy,
         turn_context.network_sandbox_policy(),
     );
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .set_permission_profile(permission_profile)
+        .expect("test setup should allow updating permission profile");
     let rollout_path = attach_thread_persistence(&mut session).await;
 
     let turn_context = Arc::new(turn_context);
@@ -11219,7 +11227,10 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     // command. Force DangerFullAccess so this check stays focused on approval
     // policy rather than platform-specific sandbox behavior.
     let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique thread settings Arc");
-    turn_context_mut.permission_profile = PermissionProfile::Disabled;
+    Arc::make_mut(&mut turn_context_mut.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("test setup should allow updating permission profile");
 
     let command = session.user_shell().derive_exec_args(
         command_script,

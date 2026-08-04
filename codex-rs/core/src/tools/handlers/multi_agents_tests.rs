@@ -2262,12 +2262,20 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .expect("approval policy should be set");
     let mut config = (*turn.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config
+        .permissions
+        .set_permission_profile(expected_permission_profile.clone())
+        .expect("test setup should allow updating permission profile");
     set_turn_config(&mut turn, config);
-    turn.permission_profile = expected_permission_profile.clone();
+    let role_name = install_role_with_model_override(&mut turn).await;
+    let mut role_config = (*turn.config).clone();
+    crate::agent::role::apply_role_to_config(&mut role_config, Some(role_name.as_str()))
+        .await
+        .expect("non-empty role config should apply");
     assert_ne!(
+        role_config.permissions.effective_permission_profile(),
         expected_permission_profile,
-        turn.config.permissions.effective_permission_profile(),
-        "test requires a runtime profile override that differs from base config"
+        "role config must discard the runtime permission override before it is reapplied"
     );
 
     let invocation = invocation(
@@ -2276,7 +2284,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         "spawn_agent",
         function_payload(json!({
             "message": "await this command",
-            "agent_type": "explorer"
+            "agent_type": role_name
         })),
     );
     let output = SpawnAgentHandler::default()
@@ -4438,7 +4446,10 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
     );
-    turn.permission_profile = permission_profile.clone();
+    Arc::make_mut(&mut turn.config)
+        .permissions
+        .set_permission_profile(permission_profile)
+        .expect("permission profile set");
     Arc::make_mut(&mut turn.config)
         .permissions
         .approval_policy
@@ -4464,7 +4475,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .expect("approval policy set");
     expected
         .permissions
-        .set_permission_profile(permission_profile)
+        .set_permission_profile(turn.permission_profile())
         .expect("permission profile set");
     assert_eq!(config, expected);
 }

@@ -550,10 +550,13 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     Arc::make_mut(&mut turn_context.config)
         .permissions
         .approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-    turn_context.permission_profile = PermissionProfile::from_runtime_permissions(
-        &read_only_file_system_sandbox_policy(),
-        NetworkSandboxPolicy::Restricted,
-    );
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::from_runtime_permissions(
+            &read_only_file_system_sandbox_policy(),
+            NetworkSandboxPolicy::Restricted,
+        ))
+        .expect("test setup should allow updating permission profile");
     let workdir = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
     let target = std::env::temp_dir().join("execve-hook-short-circuit.txt");
     let target_str = target.display().to_string();

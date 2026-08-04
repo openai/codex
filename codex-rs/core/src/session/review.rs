@@ -95,7 +95,7 @@ pub(super) async fn spawn_review_thread(
         review_turn_id.clone(),
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
-        &parent_turn_context.permission_profile,
+        &parent_turn_context.permission_profile(),
         parent_turn_context.windows_sandbox_level,
         parent_turn_context.network.is_some(),
     ));
@@ -134,7 +134,6 @@ pub(super) async fn spawn_review_thread(
             .clone(),
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
-        permission_profile: parent_turn_context.permission_profile(),
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         #[allow(deprecated)]
