@@ -8,6 +8,8 @@ use codex_app_server_protocol::ExternalAgentConfigImportItemTypeSuccess as Proto
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+use codex_app_server_protocol::ExternalAgentDetectedConnectorCandidate;
+use codex_app_server_protocol::ExternalAgentDetectedConnectorSource;
 use codex_app_server_protocol::HookMigration;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerMigration;
@@ -15,6 +17,8 @@ use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
 use codex_app_server_protocol::SkillMigration;
 use codex_app_server_protocol::SubagentMigration;
+use codex_external_agent_migration::DetectedConnectorCandidate as CoreDetectedConnectorCandidate;
+use codex_external_agent_migration::DetectedConnectorSource as CoreDetectedConnectorSource;
 use codex_external_agent_migration::ExternalAgentConfigImportItemResult as CoreImportItemResult;
 use codex_external_agent_migration::ExternalAgentConfigImportRawError as CoreImportRawError;
 use codex_external_agent_migration::ExternalAgentConfigImportSuccess;
@@ -27,10 +31,27 @@ use codex_external_agent_migration::sessions::ExternalAgentSessionMigration;
 use codex_state::ExternalAgentConfigImportFailureRecord;
 use codex_state::ExternalAgentConfigImportSuccessRecord;
 
-pub(super) fn detect_response(items: Vec<CoreMigrationItem>) -> ExternalAgentConfigDetectResponse {
+pub(super) fn detect_response(
+    items: Vec<CoreMigrationItem>,
+    connectors: Vec<CoreDetectedConnectorCandidate>,
+) -> ExternalAgentConfigDetectResponse {
     ExternalAgentConfigDetectResponse {
         items: items.into_iter().map(protocol_migration_item).collect(),
-        connectors: Vec::new(),
+        connectors: connectors
+            .into_iter()
+            .map(|candidate| ExternalAgentDetectedConnectorCandidate {
+                name: candidate.name,
+                session_count: candidate.session_count,
+                source: match candidate.source {
+                    CoreDetectedConnectorSource::RemoteMcpServersConfig => {
+                        ExternalAgentDetectedConnectorSource::RemoteMcpServersConfig
+                    }
+                    CoreDetectedConnectorSource::SessionToolUse => {
+                        ExternalAgentDetectedConnectorSource::SessionToolUse
+                    }
+                },
+            })
+            .collect(),
     }
 }
 

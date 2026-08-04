@@ -1,13 +1,16 @@
 use super::CompletedExternalAgentSessionImport;
 use super::ImportedConnectorCandidate;
 use super::ImportedExternalAgentSessionLedger;
+use super::append_imported_session_connector_names;
 use super::checkpoint_existing_session_import;
 use super::read_imported_connector_candidates;
 use super::record_completed_session_imports;
+use super::record_detected_session_connectors;
 use codex_protocol::ThreadId;
 use pretty_assertions::assert_eq;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -94,7 +97,7 @@ fn completed_import_refreshes_existing_record_metadata() {
     assert_eq!(ledger.records[0].source_path, source_path);
     assert_eq!(ledger.records[0].imported_thread_id, second_thread_id);
     assert!(ledger.records[0].source_modified_at.is_some());
-    assert_eq!(ledger.records[0].connector_names, vec!["Slack"]);
+    assert_eq!(ledger.records[0].connector_names, vec!["Gmail", "Slack"]);
     assert_eq!(ledger.records[0].title.as_deref(), Some("Second title"));
 }
 
@@ -168,7 +171,7 @@ fn checkpoint_is_compare_and_swap_and_preserves_record_metadata() {
 }
 
 #[test]
-fn connector_candidates_use_latest_import_for_each_source() {
+fn connector_candidates_accumulate_imports_for_each_source() {
     let root = TempDir::new().expect("tempdir");
     let codex_home = root.path().join("codex-home");
     let first_source = root.path().join("first.jsonl");
@@ -207,11 +210,81 @@ fn connector_candidates_use_latest_import_for_each_source() {
         vec![
             ImportedConnectorCandidate {
                 name: "Gmail".to_string(),
-                session_count: 1,
+                session_count: 2,
             },
             ImportedConnectorCandidate {
                 name: "Slack".to_string(),
                 session_count: 2,
+            },
+        ]
+    );
+}
+
+#[test]
+fn connector_candidates_accumulate_detected_and_imported_session_clues() {
+    let root = TempDir::new().expect("tempdir");
+    let codex_home = root.path().join("codex-home");
+    let source_path = root.path().join("session.jsonl");
+    std::fs::write(&source_path, "session contents").expect("source");
+    let source_path = std::fs::canonicalize(source_path).expect("canonical source");
+
+    record_detected_session_connectors(
+        &codex_home,
+        BTreeMap::from([(source_path.clone(), vec!["Figma".to_string()])]),
+    )
+    .expect("record detected connectors");
+    assert_eq!(
+        read_imported_connector_candidates(&codex_home).expect("read detected connectors"),
+        vec![ImportedConnectorCandidate {
+            name: "Figma".to_string(),
+            session_count: 1,
+        }]
+    );
+
+    record_completed_session_imports(
+        &codex_home,
+        vec![CompletedExternalAgentSessionImport {
+            source_path: source_path.clone(),
+            source_content_sha256: "content-sha".to_string(),
+            imported_thread_id: ThreadId::new(),
+            connector_names: vec!["Slack".to_string()],
+            title: None,
+        }],
+    )
+    .expect("record completed import");
+    assert_eq!(
+        read_imported_connector_candidates(&codex_home).expect("read imported connectors"),
+        vec![
+            ImportedConnectorCandidate {
+                name: "Figma".to_string(),
+                session_count: 1,
+            },
+            ImportedConnectorCandidate {
+                name: "Slack".to_string(),
+                session_count: 1,
+            },
+        ]
+    );
+
+    append_imported_session_connector_names(
+        &codex_home,
+        BTreeMap::from([(source_path, vec!["Gmail".to_string(), "FIGMA".to_string()])]),
+    )
+    .expect("append imported connector names");
+    assert_eq!(
+        read_imported_connector_candidates(&codex_home).expect("read appended connectors"),
+        vec![
+            ImportedConnectorCandidate {
+                name: "Figma".to_string(),
+                session_count: 1,
+            },
+            ImportedConnectorCandidate {
+                name: "Gmail".to_string(),
+                session_count: 1,
+            },
+            ImportedConnectorCandidate {
+                name: "Slack".to_string(),
+                session_count: 1,
             },
         ]
     );

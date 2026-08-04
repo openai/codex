@@ -83,6 +83,61 @@ fn detects_connector_used_by_session_mcp_tool_call() {
     );
 }
 
+#[test]
+fn detects_connector_from_project_mcp_server_metadata() {
+    let source_home = TempDir::new().expect("source home");
+    let project_root = source_home.path().join("projects/project");
+    let session_path = project_root
+        .join(AGENT_TRANSCRIPTS_DIR)
+        .join("session-1")
+        .join("session-1.jsonl");
+    fs::create_dir_all(session_path.parent().expect("session parent")).expect("session directory");
+    fs::write(
+        &session_path,
+        serde_json::json!({
+            "role": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "CallMcpTool",
+                    "input": {"server": "plugin-figma-figma", "toolName": "whoami"}
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .expect("session");
+    let server_root = project_root
+        .join(PROJECT_MCP_DIR)
+        .join("plugin-figma-figma");
+    fs::create_dir_all(&server_root).expect("server directory");
+    fs::write(
+        server_root.join(PROJECT_MCP_SERVER_METADATA_PATH),
+        serde_json::json!({
+            "serverIdentifier": "plugin-figma-figma",
+            "serverName": "Figma",
+        })
+        .to_string(),
+    )
+    .expect("server metadata");
+
+    assert_eq!(
+        detect_cur_session_connectors(
+            &[ExternalAgentSessionMigration {
+                path: session_path,
+                cwd: source_home.path().to_path_buf(),
+                title: None,
+            }],
+            source_home.path(),
+        ),
+        vec![DetectedConnectorCandidate {
+            name: "Figma".to_string(),
+            session_count: 1,
+            source: DetectedConnectorSource::SessionToolUse,
+        }]
+    );
+}
+
 fn write_cached_plugin(
     source_home: &Path,
     plugin_name: &str,

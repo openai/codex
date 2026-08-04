@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use codex_external_agent_migration::sessions::PendingSessionImport;
 use codex_external_agent_migration::sessions::SessionImportTarget;
 use codex_external_agent_migration::sessions::SessionMetadataMode;
 use codex_external_agent_migration::sessions::append_existing_session;
+use codex_external_agent_migration::sessions::append_imported_session_connector_names;
 use codex_external_agent_migration::sessions::detect_imported_cla_session_connectors;
 use codex_external_agent_migration::sessions::prepare_validated_session_import_with_metadata_mode;
 use codex_external_agent_migration::sessions::record_completed_session_imports;
@@ -95,6 +97,7 @@ impl ExternalAgentSessionImporter {
         sessions: Vec<ExternalAgentSessionMigration>,
         mut item_result: ExternalAgentConfigImportItemResult,
         metadata_mode: SessionMetadataMode,
+        mut connector_names_by_source_path: BTreeMap<PathBuf, Vec<String>>,
     ) -> ExternalAgentConfigImportItemResult {
         if sessions.is_empty() {
             return item_result;
@@ -122,6 +125,7 @@ impl ExternalAgentSessionImporter {
         futures::pin_mut!(import_results);
 
         let mut completed_imports = Vec::new();
+        let mut appended_connector_names_by_source_path = BTreeMap::new();
         while let Some(result) = import_results.next().await {
             match result {
                 Ok(Some(SessionImportOutcome::Created(completed_import))) => {
@@ -142,6 +146,12 @@ impl ExternalAgentSessionImporter {
                         Some(imported_thread_id.to_string()),
                         title,
                     );
+                    if let Some(connector_names) =
+                        connector_names_by_source_path.remove(&source_path)
+                    {
+                        appended_connector_names_by_source_path
+                            .insert(source_path, connector_names);
+                    }
                 }
                 Ok(None) => {}
                 Err(failure) => {
@@ -160,6 +170,18 @@ impl ExternalAgentSessionImporter {
                     );
                 }
             }
+        }
+        if let Err(err) = append_imported_session_connector_names(
+            &self.codex_home,
+            appended_connector_names_by_source_path,
+        ) {
+            record_import_error(
+                &mut item_result,
+                "session_ledger_update",
+                Some("failed_to_update_session_connector_metadata"),
+                err.to_string(),
+                /*source*/ None,
+            );
         }
         if completed_imports.is_empty() {
             return item_result;
@@ -196,6 +218,17 @@ impl ExternalAgentSessionImporter {
             completed_import.import.connector_names = connector_names_by_session
                 .remove(&attribution.session_id)
                 .unwrap_or_default();
+        }
+        for completed_import in &mut completed_imports {
+            let Some(connector_names) =
+                connector_names_by_source_path.remove(&completed_import.import.source_path)
+            else {
+                continue;
+            };
+            completed_import
+                .import
+                .connector_names
+                .extend(connector_names);
         }
         let completed_imports = completed_imports
             .into_iter()

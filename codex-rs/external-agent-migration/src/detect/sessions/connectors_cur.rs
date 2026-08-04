@@ -14,6 +14,9 @@ use crate::sessions::ExternalAgentSessionMigration;
 const PLUGIN_CACHE_DIR: &str = "plugins/cache";
 const PLUGIN_MANIFEST_PATH: &str = ".cursor-plugin/plugin.json";
 const MCP_CONFIG_PATH: &str = ".mcp.json";
+const PROJECT_MCP_DIR: &str = "mcps";
+const PROJECT_MCP_SERVER_METADATA_PATH: &str = "SERVER_METADATA.json";
+const AGENT_TRANSCRIPTS_DIR: &str = "agent-transcripts";
 const MCP_TOOL_CALL: &str = "CallMcpTool";
 
 #[derive(Deserialize)]
@@ -24,17 +27,23 @@ struct PluginManifest {
     mcp_servers: Option<JsonValue>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectMcpServerMetadata {
+    server_identifier: String,
+    server_name: String,
+}
+
 pub(crate) fn detect_cur_session_connectors(
     sessions: &[ExternalAgentSessionMigration],
     external_agent_home: &Path,
 ) -> Vec<DetectedConnectorCandidate> {
-    let connector_names_by_server_id = cached_connector_names_by_server_id(external_agent_home);
-    if connector_names_by_server_id.is_empty() {
-        return Vec::new();
-    }
-
+    let cached_connector_names_by_server_id =
+        cached_connector_names_by_server_id(external_agent_home);
     let mut candidates = BTreeMap::<String, DetectedConnectorCandidate>::new();
     for session in sessions {
+        let mut connector_names_by_server_id = cached_connector_names_by_server_id.clone();
+        connector_names_by_server_id.extend(project_connector_names_by_server_id(session));
         for (key, name) in session_connector_names(session, &connector_names_by_server_id) {
             let candidate = candidates.entry(key).or_insert(DetectedConnectorCandidate {
                 name,
@@ -45,6 +54,36 @@ pub(crate) fn detect_cur_session_connectors(
         }
     }
     candidates.into_values().collect()
+}
+
+fn project_connector_names_by_server_id(
+    session: &ExternalAgentSessionMigration,
+) -> BTreeMap<String, String> {
+    let Some(project_root) = session
+        .path
+        .ancestors()
+        .find(|path| path.file_name().and_then(|name| name.to_str()) == Some(AGENT_TRANSCRIPTS_DIR))
+        .and_then(Path::parent)
+    else {
+        return BTreeMap::new();
+    };
+    let mut connector_names = BTreeMap::new();
+    for server_root in child_directories(&project_root.join(PROJECT_MCP_DIR)) {
+        let Some(metadata) = read_project_mcp_server_metadata(&server_root) else {
+            continue;
+        };
+        let Some(display_name) =
+            crate::sessions::normalized_connector_display_name(Some(&metadata.server_name))
+        else {
+            continue;
+        };
+        let server_identifier = metadata.server_identifier.trim();
+        if server_identifier.is_empty() {
+            continue;
+        }
+        connector_names.insert(server_identifier.to_lowercase(), display_name);
+    }
+    connector_names
 }
 
 fn session_connector_names(
@@ -131,6 +170,11 @@ fn child_directories(root: &Path) -> Vec<std::path::PathBuf> {
 
 fn read_plugin_manifest(version_root: &Path) -> Option<PluginManifest> {
     let contents = fs::read_to_string(version_root.join(PLUGIN_MANIFEST_PATH)).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+fn read_project_mcp_server_metadata(server_root: &Path) -> Option<ProjectMcpServerMetadata> {
+    let contents = fs::read_to_string(server_root.join(PROJECT_MCP_SERVER_METADATA_PATH)).ok()?;
     serde_json::from_str(&contents).ok()
 }
 
