@@ -36,27 +36,31 @@ impl Session {
         }
     }
 
-    /// Starts a regular turn with the provided items only if automatic idle work
+    /// Starts a regular turn with the provided input only if automatic idle work
     /// is allowed for the current session state.
     ///
     /// This is the shared gate for extension-initiated idle work. It refuses to
-    /// start a turn when user/client-triggered work is queued, any task is still
-    /// active, or the session is currently in Plan mode. Active Review tasks are
-    /// covered by the active-task check because Review turns are not steerable.
+    /// start a turn when user/client-triggered work is queued or any task is
+    /// still active. Work without user input is also rejected in Plan mode.
+    /// Active Review tasks are covered by the active-task check because Review
+    /// turns are not steerable.
     pub(crate) async fn try_start_turn_if_idle(
         self: &Arc<Self>,
-        input: Vec<ResponseItem>,
+        input: Vec<TurnInput>,
     ) -> Result<(), TryStartTurnIfIdleError> {
         if input.is_empty() {
             return Ok(());
         }
+        let has_user_input = input.iter().any(
+            |item| matches!(item, TurnInput::UserInput { content, .. } if !content.is_empty()),
+        );
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
                 input,
             ));
         }
-        if self.collaboration_mode().await.mode == ModeKind::Plan {
+        if !has_user_input && self.collaboration_mode().await.mode == ModeKind::Plan {
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PlanMode,
                 input,
@@ -87,7 +91,7 @@ impl Session {
         let turn_context = self
             .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
             .await;
-        if turn_context.mode == ModeKind::Plan {
+        if !has_user_input && turn_context.mode == ModeKind::Plan {
             self.clear_reserved_idle_turn(&turn_state).await;
             self.maybe_start_turn_for_pending_work().await;
             return Err(TryStartTurnIfIdleError::new(
@@ -119,15 +123,23 @@ impl Session {
             ));
         }
 
-        self.input_queue
-            .extend_pending_input_for_turn_state(
-                turn_state.as_ref(),
-                input.into_iter().map(TurnInput::ResponseItem).collect(),
-            )
-            .await;
+        let task_input = if has_user_input {
+            self.clear_connector_selection().await;
+            for item in &input {
+                if let TurnInput::UserInput { content, .. } = item {
+                    turn_context.session_telemetry.user_prompt(content);
+                }
+            }
+            input
+        } else {
+            self.input_queue
+                .extend_pending_input_for_turn_state(turn_state.as_ref(), input)
+                .await;
+            Vec::new()
+        };
         self.start_task(
             turn_context,
-            Vec::new(),
+            task_input,
             RegularTask::new(),
             MailboxParentProvenance::Ignore,
         )

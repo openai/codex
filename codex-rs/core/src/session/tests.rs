@@ -10317,7 +10317,7 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
     )
     .await;
 
-    let item = user_message("synthetic idle input");
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await
@@ -10343,7 +10343,7 @@ async fn try_start_turn_if_idle_rejects_plan_mode_without_injecting() {
         state.session_configuration.collaboration_mode = collaboration_mode;
     }
 
-    let item = user_message("synthetic idle input");
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await
@@ -10356,6 +10356,59 @@ async fn try_start_turn_if_idle_rejects_plan_mode_without_injecting() {
         (Vec::<TurnInput>::new(), None),
         sess.input_queue.get_pending_input(&sess.active_turn).await
     );
+}
+
+#[tokio::test]
+async fn try_start_turn_if_idle_accepts_user_input_in_plan_mode() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let mut collaboration_mode = sess.collaboration_mode().await;
+    collaboration_mode.mode = ModeKind::Plan;
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode = collaboration_mode;
+        state.merge_connector_selection(["calendar".to_string()]);
+    }
+
+    sess.try_start_turn_if_idle(vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "queued user input".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: Some("queued-user-message".to_string()),
+    }])
+    .await
+    .expect("plan mode should accept user-authored idle input");
+
+    assert!(sess.state.lock().await.get_connector_selection().is_empty());
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
+async fn try_start_turn_if_idle_rejects_empty_user_input_in_plan_mode() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let mut collaboration_mode = sess.collaboration_mode().await;
+    collaboration_mode.mode = ModeKind::Plan;
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode = collaboration_mode;
+    }
+
+    let input = vec![
+        TurnInput::UserInput {
+            content: Vec::new(),
+            client_id: Some("empty-queued-user-message".to_string()),
+        },
+        TurnInput::ResponseItem(user_message("automatic idle input")),
+    ];
+    let error = sess
+        .try_start_turn_if_idle(input.clone())
+        .await
+        .expect_err("empty user input should not bypass plan mode");
+
+    assert_eq!(TryStartTurnIfIdleRejectionReason::PlanMode, error.reason());
+    assert_eq!(input, error.into_input());
+    assert!(sess.active_turn.lock().await.is_none());
 }
 
 #[tokio::test]
@@ -10374,7 +10427,7 @@ async fn try_start_turn_if_idle_rejects_pending_trigger_turn_without_injecting()
         )
         .await;
 
-    let item = user_message("synthetic idle input");
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await
@@ -10402,7 +10455,7 @@ async fn try_start_turn_if_idle_rejects_active_review_turn_without_injecting() {
     )
     .await;
 
-    let item = user_message("synthetic idle input");
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await

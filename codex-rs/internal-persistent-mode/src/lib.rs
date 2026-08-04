@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_core::ThreadManager;
+use codex_core::TurnInput;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -61,7 +62,11 @@ impl ThreadLifecycleContributor<Config> for PersistentModeExtension {
                 internal_chat_message_metadata_passthrough: None,
             };
 
-            if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
+            if thread
+                .try_start_turn_if_idle(vec![TurnInput::ResponseItem(item)])
+                .await
+                .is_err()
+            {
                 debug!("skipping persistent mode because the thread is no longer idle");
             }
         })

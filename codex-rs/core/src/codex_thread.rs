@@ -4,6 +4,7 @@ use crate::elicitation::ElicitationRegistration;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::user_message_admission::UserMessageAdmission;
 use codex_exec_server::SelectedCapabilityRootsStatus;
@@ -95,8 +96,8 @@ pub enum TryStartTurnIfIdleRejectionReason {
     /// User/client-triggered mailbox work is already queued and must take
     /// priority over extension-initiated idle work.
     PendingTriggerTurn,
-    /// The thread is in Plan mode, where automatic idle work must not start a
-    /// new model turn.
+    /// The thread is in Plan mode, where idle work without user input must not
+    /// start a new model turn.
     PlanMode,
     /// Another turn or task is active, or the idle reservation was lost before
     /// the automatic turn could start.
@@ -108,11 +109,11 @@ pub enum TryStartTurnIfIdleRejectionReason {
 #[derive(Debug)]
 pub struct TryStartTurnIfIdleError {
     reason: TryStartTurnIfIdleRejectionReason,
-    input: Vec<ResponseItem>,
+    input: Vec<TurnInput>,
 }
 
 impl TryStartTurnIfIdleError {
-    pub(crate) fn new(reason: TryStartTurnIfIdleRejectionReason, input: Vec<ResponseItem>) -> Self {
+    pub(crate) fn new(reason: TryStartTurnIfIdleRejectionReason, input: Vec<TurnInput>) -> Self {
         Self { reason, input }
     }
 
@@ -121,9 +122,9 @@ impl TryStartTurnIfIdleError {
         self.reason
     }
 
-    /// Consumes the rejection and returns the original model-visible input
+    /// Consumes the rejection and returns the original turn input
     /// unchanged, so callers can retry, drop, or log it explicitly.
-    pub fn into_input(self) -> Vec<ResponseItem> {
+    pub fn into_input(self) -> Vec<TurnInput> {
         self.input
     }
 }
@@ -373,22 +374,22 @@ impl CodexThread {
         self.session.inject_if_running(items).await
     }
 
-    /// Starts an automatic regular turn with model-visible items only when idle
-    /// work is allowed for this thread.
+    /// Starts an automatic regular turn with response items or user input only
+    /// when idle work is allowed for this thread.
     ///
     /// This is the required entry point for extensions that want to launch
     /// model-visible work from `ThreadLifecycleContributor::on_thread_idle`.
-    /// The call succeeds only if no user/client-triggered turn is queued, no
-    /// task is currently active, and the thread is not in Plan mode. Active
-    /// Review tasks are rejected by the active-task check because Review turns
-    /// are not steerable.
+    /// The call succeeds only if no user/client-triggered turn is queued and no
+    /// task is currently active. Work without user input is also rejected in
+    /// Plan mode. Active Review tasks are rejected by the active-task check
+    /// because Review turns are not steerable.
     ///
     /// On rejection, the returned error includes a stable reason and carries
     /// the original `items` unchanged so the caller can decide whether to drop
     /// them, retry later, or log why no automatic turn was started.
     pub async fn try_start_turn_if_idle(
         &self,
-        items: Vec<ResponseItem>,
+        items: Vec<TurnInput>,
     ) -> Result<(), TryStartTurnIfIdleError> {
         self.session.try_start_turn_if_idle(items).await
     }

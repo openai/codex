@@ -2,11 +2,15 @@ use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
+use codex_core::TurnInput;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::sleep::SleepItem;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -15,6 +19,7 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -40,6 +45,138 @@ use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_user_input_reaches_the_first_model_request() -> anyhow::Result<()> {
+    assert_idle_user_input_reaches_the_first_model_request(ModeKind::Default).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_user_input_reaches_the_first_model_request_in_plan_mode() -> anyhow::Result<()> {
+    assert_idle_user_input_reaches_the_first_model_request(ModeKind::Plan).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_response_items_include_pending_mailbox_in_first_request() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("idle-response-items"),
+            ev_completed("idle-response-items"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+
+    submit_queue_only_agent_mail(test.codex.as_ref(), "pending mailbox input").await;
+    test.codex
+        .try_start_turn_if_idle(vec![TurnInput::ResponseItem(responses::user_message_item(
+            "automatic response item",
+        ))])
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("idle response items were rejected: {:?}", error.reason())
+        })?;
+    wait_for_turn_complete(test.codex.as_ref()).await;
+
+    let request = response.single_request();
+    let user_messages = request.message_input_texts("user");
+    assert!(
+        user_messages
+            .iter()
+            .any(|message| message == "automatic response item")
+    );
+    assert!(
+        request
+            .inputs_of_type("agent_message")
+            .iter()
+            .any(|message| {
+                message["author"] == "/root/worker"
+                    && message["recipient"] == "/root"
+                    && message["content"].as_array().is_some_and(|content| {
+                        content.iter().any(|item| {
+                            item["type"] == "input_text" && item["text"] == "pending mailbox input"
+                        })
+                    })
+            })
+    );
+
+    Ok(())
+}
+
+async fn assert_idle_user_input_reaches_the_first_model_request(
+    mode: ModeKind,
+) -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("idle-user-input"),
+            ev_completed("idle-user-input"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+
+    if mode == ModeKind::Plan {
+        core_test_support::submit_thread_settings(
+            test.codex.as_ref(),
+            ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode,
+                    settings: Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+
+    let expected_input = vec![UserInput::Text {
+        text: "queued user input reaches the first request".to_string(),
+        text_elements: Vec::new(),
+    }];
+    test.codex
+        .try_start_turn_if_idle(vec![TurnInput::UserInput {
+            content: expected_input.clone(),
+            client_id: Some("queued-user-message".to_string()),
+        }])
+        .await
+        .map_err(|error| anyhow::anyhow!("idle user input was rejected: {:?}", error.reason()))?;
+
+    let user_message = core_test_support::wait_for_event_match(test.codex.as_ref(), |event| {
+        let EventMsg::ItemCompleted(event) = event else {
+            return None;
+        };
+        let TurnItem::UserMessage(item) = &event.item else {
+            return None;
+        };
+        Some(item.clone())
+    })
+    .await;
+    assert_eq!(
+        Some("queued-user-message".to_string()),
+        user_message.client_id
+    );
+    assert_eq!(expected_input, user_message.content);
+    wait_for_turn_complete(test.codex.as_ref()).await;
+
+    let request = response.single_request();
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "queued user input reaches the first request"),
+        "the first Responses request should contain the queued user message"
+    );
+
+    Ok(())
+}
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({

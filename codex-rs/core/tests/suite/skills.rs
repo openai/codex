@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_core::TurnInput;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::models::PermissionProfile;
@@ -129,6 +130,71 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
                 && text.contains(skill_path_str.as_ref())
         }),
         "expected skill instructions in user input, got {user_texts:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_user_turn_includes_skill_instructions_in_the_first_request() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "requires native cross-OS skill paths");
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let skill_body = "queued skill body";
+    let mut builder = test_codex().with_workspace_setup(move |cwd, fs| async move {
+        write_repo_skill(cwd, fs, "queued-demo", "queued demo skill", skill_body).await
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let skill_path = test
+        .config
+        .cwd
+        .join(".agents/skills/queued-demo/SKILL.md")
+        .canonicalize()
+        .unwrap_or_else(|_| test.config.cwd.join(".agents/skills/queued-demo/SKILL.md"))
+        .to_path_buf();
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("queued-skill-response"),
+            ev_assistant_message("queued-skill-message", "done"),
+            ev_completed("queued-skill-response"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .try_start_turn_if_idle(vec![TurnInput::UserInput {
+            content: vec![
+                UserInput::Text {
+                    text: "please use $queued-demo".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Skill {
+                    name: "queued-demo".to_string(),
+                    path: skill_path.clone(),
+                },
+            ],
+            client_id: Some("queued-skill-user-message".to_string()),
+        }])
+        .await
+        .map_err(|error| anyhow::anyhow!("idle skill input was rejected: {:?}", error.reason()))?;
+
+    core_test_support::wait_for_event(test.codex.as_ref(), |event| {
+        matches!(event, codex_protocol::protocol::EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let user_texts = mock.single_request().message_input_texts("user");
+    let skill_path_str = skill_path.to_string_lossy();
+    assert!(
+        user_texts.iter().any(|text| {
+            text.contains("<skill>\n<name>queued-demo</name>")
+                && text.contains("<path>")
+                && text.contains(skill_body)
+                && text.contains(skill_path_str.as_ref())
+        }),
+        "expected queued skill instructions in the first request, got {user_texts:?}"
     );
 
     Ok(())

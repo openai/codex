@@ -9,8 +9,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
+/// Input consumed by a regular turn.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum TurnInput {
+pub enum TurnInput {
     UserInput {
         content: Vec<UserInput>,
         client_id: Option<String>,
