@@ -440,6 +440,7 @@ impl Session {
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
         per_turn_config.cwd = cwd;
+        per_turn_config.permissions.approval_policy = session_configuration.approval_policy.clone();
         let workspace_roots = session_configuration.primary_workspace_roots();
         per_turn_config.workspace_roots = workspace_roots.clone();
         per_turn_config
@@ -478,7 +479,6 @@ impl Session {
         let mut config =
             Self::build_per_turn_config(session_configuration, session_configuration.cwd().clone());
         config.model = Some(session_configuration.collaboration_mode.model().to_string());
-        config.permissions.approval_policy = session_configuration.approval_policy.clone();
         config
     }
 

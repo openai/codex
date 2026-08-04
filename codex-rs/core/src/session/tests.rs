@@ -8148,6 +8148,11 @@ async fn refreshed_mcp_binding_captures_current_approval_authority() {
     let (session, old_turn) = make_session_and_context().await;
     let session = Arc::new(session);
     let previous_policy = old_turn.approval_policy.value();
+    assert_ne!(previous_policy, AskForApproval::Never);
+    assert_eq!(
+        old_turn.config.permissions.approval_policy.value(),
+        previous_policy
+    );
 
     session
         .update_settings(SessionSettingsUpdate {
@@ -8180,6 +8185,17 @@ async fn refreshed_mcp_binding_captures_current_approval_authority() {
         )
     );
     assert_eq!(old_turn.approval_policy.value(), previous_policy);
+    assert_eq!(
+        old_turn.config.permissions.approval_policy.value(),
+        previous_policy
+    );
+
+    let new_turn = session.new_default_turn().await;
+    assert_eq!(new_turn.approval_policy.value(), AskForApproval::Never);
+    assert_eq!(
+        new_turn.config.permissions.approval_policy.value(),
+        AskForApproval::Never
+    );
 }
 
 #[tokio::test]

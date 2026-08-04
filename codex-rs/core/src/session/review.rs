@@ -48,11 +48,8 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.permissions.shell_environment_policy = parent_turn_context
-        .config
-        .permissions
-        .shell_environment_policy
-        .clone();
+    per_turn_config.permissions = parent_turn_context.config.permissions.clone();
+    per_turn_config.approvals_reviewer = parent_turn_context.config.approvals_reviewer;
     per_turn_config.codex_linux_sandbox_exe =
         parent_turn_context.config.codex_linux_sandbox_exe.clone();
     per_turn_config.compact_prompt = parent_turn_context.config.compact_prompt.clone();

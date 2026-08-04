@@ -1,9 +1,14 @@
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
+use codex_core::find_thread_path_by_id_str;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
@@ -16,6 +21,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
@@ -544,6 +550,95 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     .await;
     assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+/// Review requests must inherit permissions and reviewer settings updated after session startup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_updated_turn_permissions_and_approval_policy() {
+    skip_if_no_network!();
+
+    let (server, request_log) =
+        start_responses_server_with_sse(completed_sse(), /*expected_requests*/ 1).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |config| {
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("initial permission profile should be valid");
+    })
+    .await;
+
+    core_test_support::submit_thread_settings(
+        &codex,
+        ThreadSettingsOverrides {
+            approval_policy: Some(AskForApproval::Never),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("updated thread permissions should be accepted");
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "review current permissions".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .expect("review should start");
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert!(
+        request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("Approval policy is currently never")),
+        "review should use the updated approval policy"
+    );
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains("<permission_profile type=\"disabled\">")),
+        "review should use the updated permission profile"
+    );
+    let review_thread_id = request.body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .expect("review request should include its thread ID")
+        .to_string();
+    let review_rollout_path = find_thread_path_by_id_str(
+        codex_home.path(),
+        &review_thread_id,
+        /*state_db_ctx*/ None,
+    )
+    .await
+    .expect("review rollout lookup should succeed")
+    .expect("review thread should have a rollout");
+    let review_rollout =
+        std::fs::read_to_string(review_rollout_path).expect("review rollout should be readable");
+    let review_approvals_reviewer = review_rollout
+        .lines()
+        .filter_map(|line| {
+            let rollout_line: RolloutLine =
+                serde_json::from_str(line).expect("review rollout line should be valid");
+            match rollout_line.item {
+                RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
+                _ => None,
+            }
+        })
+        .next_back();
+    assert_eq!(review_approvals_reviewer, Some(ApprovalsReviewer::User));
 
     let _codex_home_guard = codex_home;
     server.verify().await;

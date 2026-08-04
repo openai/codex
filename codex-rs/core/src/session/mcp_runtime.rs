@@ -67,8 +67,7 @@ impl Session {
             .primary()
             .and_then(|environment| environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
-        let mut config = Self::build_per_turn_config(&session_configuration, cwd);
-        config.permissions.approval_policy = session_configuration.approval_policy.clone();
+        let config = Self::build_per_turn_config(&session_configuration, cwd);
 
         McpDesiredState {
             config: Arc::new(config),
@@ -90,8 +89,7 @@ impl Session {
     ) -> anyhow::Result<()> {
         let cwd = AbsolutePathBuf::from_absolute_path(local_stdio_fallback_cwd)
             .unwrap_or_else(|_| session_configuration.cwd().clone());
-        let mut config = Self::build_per_turn_config(session_configuration, cwd);
-        config.permissions.approval_policy = session_configuration.approval_policy.clone();
+        let config = Self::build_per_turn_config(session_configuration, cwd);
         let desired = McpDesiredState {
             config: Arc::new(config),
             auth,
