@@ -13,6 +13,9 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ResponseItemId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
+use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -38,6 +41,52 @@ use tempfile::tempdir;
 use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+#[tokio::test]
+async fn child_session_inherits_client_mcp_extensions() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let parent = manager
+        .start_thread(StartThreadOptions {
+            client_mcp_extensions: ClientMcpExtensions::new(HashMap::from([
+                (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({})),
+                (
+                    MCP_APP_UI_EXTENSION_ID.to_string(),
+                    serde_json::json!({
+                        "mimeTypes": ["text/html;profile=mcp-app"],
+                    }),
+                ),
+            ])),
+            ..StartThreadOptions::new(config)
+        })
+        .await
+        .expect("start parent thread");
+
+    assert_eq!(
+        manager
+            .state
+            .client_mcp_extensions_for_child(Some(parent.thread_id))
+            .await,
+        ClientMcpExtensions::new(HashMap::from([
+            (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({})),
+            (
+                MCP_APP_UI_EXTENSION_ID.to_string(),
+                serde_json::json!({
+                    "mimeTypes": ["text/html;profile=mcp-app"],
+                }),
+            ),
+        ]))
+    );
+}
 
 struct FakeAgentGraphStore {
     root_thread_id: ThreadId,
@@ -960,7 +1009,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("resume source thread");
@@ -1117,7 +1166,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("resume active source thread");
@@ -1184,7 +1233,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("resume stopped source thread");
@@ -1258,7 +1307,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("resume source thread");
@@ -1384,7 +1433,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             }),
             auth_manager.clone(),
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("seed rollout path in store");
@@ -1401,7 +1450,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("resume from rollout path");
@@ -1772,7 +1821,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             ]),
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("create source thread from completed history");
@@ -1892,7 +1941,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             ]),
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("create source thread from explicit partial history");
@@ -1988,7 +2037,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ]),
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("create source thread from partial history");

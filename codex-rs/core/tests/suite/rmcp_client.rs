@@ -426,58 +426,6 @@ async fn openai_form_capability_is_not_advertised_by_default() -> anyhow::Result
     assert_openai_form_capability_advertisement(/*expected*/ false).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn openai_form_capability_updates_for_loaded_thread() -> anyhow::Result<()> {
-    skip_if_wine_exec!(
-        Ok(()),
-        "requires a Windows test_stdio_server in the Wine-exec environment"
-    );
-
-    let server = start_mock_server().await;
-    let server_name = "capabilities";
-    let command = stdio_server_bin()?;
-    let fixture = test_codex()
-        .with_config(move |config| {
-            insert_mcp_server(
-                config,
-                server_name,
-                stdio_transport(command, /*env*/ None, Vec::new()),
-                TestMcpServerOptions::default(),
-            );
-        })
-        .build(&server)
-        .await?;
-    wait_for_mcp_server(&fixture.codex, server_name).await?;
-
-    let unsupported = call_structured_tool(
-        &server,
-        &fixture,
-        server_name,
-        "client_capabilities",
-        "call-client-capabilities-unsupported",
-    )
-    .await?;
-    assert_eq!(
-        unsupported,
-        json!({ "supportsOpenaiFormElicitation": false })
-    );
-
-    fixture
-        .codex
-        .set_openai_form_elicitation_support(/*supported*/ true)
-        .await?;
-    let supported = call_structured_tool(
-        &server,
-        &fixture,
-        server_name,
-        "client_capabilities",
-        "call-client-capabilities-supported",
-    )
-    .await?;
-    assert_eq!(supported, json!({ "supportsOpenaiFormElicitation": true }));
-    Ok(())
-}
-
 async fn assert_openai_form_capability_advertisement(expected: bool) -> anyhow::Result<()> {
     skip_if_wine_exec!(
         Ok(()),

@@ -340,6 +340,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::LocalImagePreparation;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -448,7 +449,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) thread_extension_init: ExtensionDataInit,
-    pub(crate) supports_openai_form_elicitation: bool,
+    pub(crate) client_mcp_extensions: ClientMcpExtensions,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
@@ -540,7 +541,7 @@ impl Session {
             parent_trace: _,
             environment_selections,
             thread_extension_init,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             analytics_events_client,
             thread_store,
             attestation_provider,
@@ -731,7 +732,7 @@ impl Session {
             code_mode_session_provider,
             extensions,
             thread_extension_init,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             agent_control,
             environment_manager,
             inherited_environments,

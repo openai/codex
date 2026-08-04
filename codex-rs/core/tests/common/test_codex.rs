@@ -36,6 +36,8 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -674,6 +676,12 @@ impl TestCodexBuilder {
         };
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
+        let client_mcp_extensions = || {
+            ClientMcpExtensions::new(
+                self.supports_openai_form_elicitation
+                    .then(|| (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({}))),
+            )
+        };
 
         let new_conversation = match (resume_from, user_shell_override) {
             (Some(path), Some(user_shell_override)) => {
@@ -697,7 +705,7 @@ impl TestCodexBuilder {
                     path,
                     auth_manager,
                     /*parent_trace*/ None,
-                    self.supports_openai_form_elicitation,
+                    client_mcp_extensions(),
                 ))
                 .await?
             }
@@ -715,7 +723,7 @@ impl TestCodexBuilder {
             (None, None) => {
                 Box::pin(thread_manager.start_thread(StartThreadOptions {
                     history_mode: self.history_mode,
-                    supports_openai_form_elicitation: self.supports_openai_form_elicitation,
+                    client_mcp_extensions: client_mcp_extensions(),
                     ..StartThreadOptions::new(config.clone())
                 }))
                 .await?

@@ -48,6 +48,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -210,7 +211,7 @@ pub struct StartThreadOptions {
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
     pub thread_extension_init: ExtensionDataInit,
-    pub supports_openai_form_elicitation: bool,
+    pub client_mcp_extensions: ClientMcpExtensions,
 }
 
 impl StartThreadOptions {
@@ -227,7 +228,7 @@ impl StartThreadOptions {
             parent_trace: None,
             environments: None,
             thread_extension_init: ExtensionDataInit::default(),
-            supports_openai_form_elicitation: false,
+            client_mcp_extensions: ClientMcpExtensions::default(),
         }
     }
 }
@@ -873,7 +874,7 @@ impl ThreadManager {
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         Box::pin(self.resume_thread_with_history(
@@ -881,7 +882,7 @@ impl ThreadManager {
             initial_history,
             auth_manager,
             parent_trace,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
         ))
         .await
     }
@@ -893,7 +894,7 @@ impl ThreadManager {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let (session_source, thread_source) = initial_history
@@ -912,7 +913,7 @@ impl ThreadManager {
             session_source: Some(session_source),
             thread_source,
             parent_trace,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
         Box::pin(self.state.spawn_thread(ThreadSpawnRequest::new(
@@ -927,11 +928,11 @@ impl ThreadManager {
         &self,
         config: Config,
         user_shell_override: crate::shell::Shell,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let options = StartThreadOptions {
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -946,7 +947,7 @@ impl ThreadManager {
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
@@ -957,7 +958,7 @@ impl ThreadManager {
             initial_history,
             session_source: Some(session_source),
             thread_source,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
         let mut request = ThreadSpawnRequest::new(options, auth_manager, agent_control);
@@ -1046,7 +1047,7 @@ impl ThreadManager {
             history,
             thread_source,
             parent_trace,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
     }
@@ -1077,7 +1078,7 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
@@ -1091,7 +1092,7 @@ impl ThreadManager {
             },
             thread_source,
             parent_trace,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
         )
         .await
     }
@@ -1103,7 +1104,7 @@ impl ThreadManager {
         prepared: PreparedFork,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: prepared.source_thread_id,
@@ -1124,7 +1125,7 @@ impl ThreadManager {
                 },
                 thread_source,
                 parent_trace,
-                supports_openai_form_elicitation,
+                client_mcp_extensions,
             )
             .await;
         drop(prepared);
@@ -1137,7 +1138,7 @@ impl ThreadManager {
         fork_history: ForkHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let ForkHistory {
             snapshot,
@@ -1169,7 +1170,7 @@ impl ThreadManager {
             initial_history: history,
             thread_source,
             parent_trace,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1504,12 +1505,14 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
+        let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let options = StartThreadOptions {
             history_mode,
             session_source: Some(session_source),
             thread_source,
             metrics_service_name,
             environments,
+            client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1534,11 +1537,13 @@ impl ThreadManagerState {
             inherited_environments,
             inherited_exec_policy,
         } = options;
+        let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
         let options = StartThreadOptions {
             initial_history,
             session_source: Some(session_source),
             thread_source,
+            client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1565,6 +1570,7 @@ impl ThreadManagerState {
         environments: Option<Vec<TurnEnvironmentSelection>>,
         thread_extension_init: ExtensionDataInit,
     ) -> CodexResult<NewThread> {
+        let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let options = StartThreadOptions {
             initial_history,
             history_mode,
@@ -1572,6 +1578,7 @@ impl ThreadManagerState {
             thread_source,
             environments,
             thread_extension_init,
+            client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1581,6 +1588,19 @@ impl ThreadManagerState {
         request.inherited_environments = inherited_environments;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.spawn_thread(request)).await
+    }
+
+    async fn client_mcp_extensions_for_child(
+        &self,
+        parent_thread_id: Option<ThreadId>,
+    ) -> ClientMcpExtensions {
+        let Some(parent_thread_id) = parent_thread_id else {
+            return ClientMcpExtensions::default();
+        };
+        self.get_thread(parent_thread_id)
+            .await
+            .map(|parent| parent.session.services.client_mcp_extensions.clone())
+            .unwrap_or_default()
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
@@ -1608,7 +1628,7 @@ impl ThreadManagerState {
             parent_trace,
             environments,
             thread_extension_init,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
         } = options;
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
         let environments = environments.unwrap_or_else(|| {
@@ -1704,7 +1724,7 @@ impl ThreadManagerState {
             parent_trace,
             environment_selections: environments,
             thread_extension_init,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),

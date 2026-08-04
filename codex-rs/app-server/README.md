@@ -88,12 +88,33 @@ Clients must send a single `initialize` request per transport connection before 
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
-Clients that handle OpenAI extended MCP forms, including a fallback for
-unsupported field types, set
-`initialize.params.capabilities.mcpServerOpenaiFormElicitation` to `true`.
-App-server then advertises the downstream `openai/form` MCP extension for
-threads started, resumed, or forked by that connection. Clients that cannot
-handle the request envelope omit the field or set it to `false`.
+Clients declare supported MCP extensions during initialization. For OpenAI
+extended forms, clients must handle the request envelope, including a fallback
+for unsupported field types. `mcpServerOpenaiFormElicitation: true` remains a
+legacy alias for declaring the `openai/form` extension.
+
+```json
+{
+  "capabilities": {
+    "extensions": {
+      "openai/form": {},
+      "io.modelcontextprotocol/ui": {
+        "mimeTypes": ["text/html;profile=mcp-app"]
+      }
+    }
+  }
+}
+```
+
+App-server keeps the complete value under `io.modelcontextprotocol/ui`, rather
+than deriving a WebView boolean, so clients can advertise additional supported
+MIME types and future extension settings. The MCP extension profile is fixed
+when a Codex session is created by `thread/start`, `thread/resume`, or
+`thread/fork`. Codex advertises that profile in the downstream MCP
+`initialize` request; it is not repeated in individual tool-call metadata.
+Every turn and direct MCP tool call in that loaded session therefore uses the
+same initialized profile. A different app-server connection cannot change it
+by starting a later turn. Subagent sessions inherit the same extension profile.
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 

@@ -32,6 +32,7 @@ use codex_connectors::ConnectorSnapshot;
 use codex_connectors::connector_runtime_context_key;
 use codex_login::CodexAuth;
 use codex_model_provider::CHATGPT_CODEX_BASE_URL;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
@@ -343,7 +344,7 @@ pub async fn read_mcp_resource(
             codex_apps_tools_cache,
             tool_catalog_cache,
             codex_apps_tools_cache_key: connector_runtime_context_key(auth),
-            supports_openai_form_elicitation: false,
+            client_mcp_extensions: ClientMcpExtensions::default(),
             auth: auth.cloned(),
             codex_apps_auth_manager: None,
             elicitation_reviewer: None,
@@ -420,7 +421,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
             codex_apps_tools_cache,
             tool_catalog_cache,
             codex_apps_tools_cache_key: connector_runtime_context_key(auth),
-            supports_openai_form_elicitation: false,
+            client_mcp_extensions: ClientMcpExtensions::default(),
             auth: auth.cloned(),
             codex_apps_auth_manager: None,
             elicitation_reviewer: None,

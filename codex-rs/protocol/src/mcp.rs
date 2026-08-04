@@ -6,7 +6,45 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 use ts_rs::TS;
+
+/// Extension ID for OpenAI form elicitation.
+pub const OPENAI_FORM_EXTENSION_ID: &str = "openai/form";
+/// Extension ID for MCP App UI rendering.
+pub const MCP_APP_UI_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
+
+/// MCP extensions supplied by the client that created a Codex session.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ClientMcpExtensions {
+    extensions: HashMap<String, serde_json::Value>,
+}
+
+impl ClientMcpExtensions {
+    /// Creates a session extension set from trusted client declarations.
+    pub fn new(extensions: impl IntoIterator<Item = (String, serde_json::Value)>) -> Self {
+        Self {
+            extensions: extensions.into_iter().collect(),
+        }
+    }
+
+    /// Returns whether the client declared the given extension.
+    pub fn contains(&self, extension_id: &str) -> bool {
+        self.extensions.contains_key(extension_id)
+    }
+
+    /// Returns the client's settings for the given extension.
+    pub fn get(&self, extension_id: &str) -> Option<&serde_json::Value> {
+        self.extensions.get(extension_id)
+    }
+
+    /// Iterates over the extensions and their settings.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &serde_json::Value)> {
+        self.extensions
+            .iter()
+            .map(|(id, settings)| (id.as_str(), settings))
+    }
+}
 
 /// ID of a request, which can be either a string or an integer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]

@@ -4,6 +4,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_core::NewThread;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::WarningEvent;
@@ -50,7 +51,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
             InitialHistory::New,
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("spawn conversation");
@@ -100,7 +101,7 @@ async fn suppresses_warning_when_configured() {
             InitialHistory::New,
             auth_manager,
             /*parent_trace*/ None,
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         )
         .await
         .expect("spawn conversation");

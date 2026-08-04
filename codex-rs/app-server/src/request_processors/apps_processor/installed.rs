@@ -12,6 +12,7 @@ use codex_mcp::ToolInfo;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::tool_is_model_visible;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::PermissionProfile;
 
 #[cfg(test)]
@@ -101,7 +102,7 @@ impl AppsRequestProcessor {
                         codex_apps_tools_cache: mcp_manager.codex_apps_tools_cache(),
                         tool_catalog_cache: mcp_manager.tool_catalog_cache(),
                         codex_apps_tools_cache_key: cache_key.clone(),
-                        supports_openai_form_elicitation: false,
+                        client_mcp_extensions: ClientMcpExtensions::default(),
                         auth: auth.clone(),
                         codex_apps_auth_manager,
                         elicitation_reviewer: None,

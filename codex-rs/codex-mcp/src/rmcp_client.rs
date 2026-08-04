@@ -48,6 +48,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeContext;
 use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_exec_server::Environment;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -67,7 +68,6 @@ use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
-use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
 use tokio::time::Instant as TokioInstant;
@@ -83,8 +83,6 @@ pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 /// not use it. Its `cacheable: false` property disables sharing tool definitions across connections.
 const MCP_TOOL_CATALOG_CACHE_CAPABILITY: &str = "codex/tool-catalog-cache";
 const MCP_TOOL_CATALOG_CACHEABLE_PROPERTY: &str = "cacheable";
-pub const OPENAI_FORM_CAPABILITY: &str = "openai/form";
-
 pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
@@ -283,7 +281,7 @@ struct ManagedClientStartup {
     resolved_environment: std::result::Result<Option<Arc<Environment>>, String>,
     runtime_auth_provider: Option<SharedAuthProvider>,
     client_elicitation_capability: ElicitationCapability,
-    supports_openai_form_elicitation: bool,
+    client_mcp_extensions: ClientMcpExtensions,
     protocol_mode: McpProtocolMode,
     catalog_item_limit: usize,
     cancel_token: CancellationToken,
@@ -305,7 +303,7 @@ impl ManagedClientStartup {
             resolved_environment,
             runtime_auth_provider,
             client_elicitation_capability,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             protocol_mode,
             catalog_item_limit,
             cancel_token,
@@ -361,7 +359,7 @@ impl ManagedClientStartup {
                         tool_catalog_cache_context,
                         tool_catalog_fetch_ticket,
                         client_elicitation_capability,
-                        supports_openai_form_elicitation,
+                        client_mcp_extensions,
                         catalog_item_limit,
                     },
                 )
@@ -424,7 +422,7 @@ impl AsyncManagedClient {
         resolved_environment: std::result::Result<Option<Arc<Environment>>, String>,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
         protocol_mode: McpProtocolMode,
         catalog_item_limit: usize,
     ) -> Self {
@@ -452,7 +450,7 @@ impl AsyncManagedClient {
             resolved_environment,
             runtime_auth_provider,
             client_elicitation_capability,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             protocol_mode,
             catalog_item_limit,
             cancel_token: cancel_token.clone(),
@@ -855,13 +853,11 @@ async fn start_server_task(
         tool_catalog_cache_context,
         tool_catalog_fetch_ticket,
         client_elicitation_capability,
-        supports_openai_form_elicitation,
+        client_mcp_extensions,
         catalog_item_limit,
     } = params;
-    let params = mcp_initialize_request_params(
-        client_elicitation_capability,
-        supports_openai_form_elicitation,
-    );
+    let params =
+        mcp_initialize_request_params(client_elicitation_capability, client_mcp_extensions);
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
     let initialize_result = client
@@ -943,15 +939,21 @@ async fn start_server_task(
 
 fn mcp_initialize_request_params(
     client_elicitation_capability: ElicitationCapability,
-    supports_openai_form_elicitation: bool,
+    client_mcp_extensions: ClientMcpExtensions,
 ) -> InitializeRequestParams {
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(client_elicitation_capability);
-    if supports_openai_form_elicitation {
-        capabilities.extensions = Some(BTreeMap::from([(
-            OPENAI_FORM_CAPABILITY.to_string(),
-            JsonObject::new(),
-        )]));
+    let extensions = client_mcp_extensions
+        .iter()
+        .filter_map(|(id, settings)| {
+            settings
+                .as_object()
+                .cloned()
+                .map(|settings| (id.to_string(), settings))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if !extensions.is_empty() {
+        capabilities.extensions = Some(extensions);
     }
     InitializeRequestParams::new(
         capabilities,
@@ -989,7 +991,7 @@ struct StartServerTaskParams {
     tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,
     tool_catalog_fetch_ticket: Option<McpToolCatalogFetchTicket>,
     client_elicitation_capability: ElicitationCapability,
-    supports_openai_form_elicitation: bool,
+    client_mcp_extensions: ClientMcpExtensions,
     catalog_item_limit: usize,
 }
 
@@ -1103,6 +1105,8 @@ async fn make_rmcp_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
+    use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
     use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::MetaObject;
@@ -1157,23 +1161,33 @@ mod tests {
     }
 
     #[test]
-    fn mcp_initialize_advertises_openai_form_only_when_supported() {
+    fn mcp_initialize_advertises_client_extensions() {
         let unsupported = mcp_initialize_request_params(
             ElicitationCapability::default(),
-            /*supports_openai_form_elicitation*/ false,
+            ClientMcpExtensions::default(),
         );
         assert_eq!(unsupported.capabilities.extensions, None);
 
+        let app_ui = serde_json::json!({
+            "mimeTypes": ["text/html;profile=mcp-app"],
+            "futureField": {"preserved": true},
+        });
         let supported = mcp_initialize_request_params(
             ElicitationCapability::default(),
-            /*supports_openai_form_elicitation*/ true,
+            ClientMcpExtensions::new([
+                (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({})),
+                (MCP_APP_UI_EXTENSION_ID.to_string(), app_ui.clone()),
+            ]),
         );
         assert_eq!(
             supported.capabilities.extensions,
-            Some(BTreeMap::from([(
-                OPENAI_FORM_CAPABILITY.to_string(),
-                JsonObject::new(),
-            )]))
+            Some(BTreeMap::from([
+                (OPENAI_FORM_EXTENSION_ID.to_string(), JsonObject::new()),
+                (
+                    MCP_APP_UI_EXTENSION_ID.to_string(),
+                    app_ui.as_object().cloned().expect("app UI settings"),
+                ),
+            ]))
         );
     }
 

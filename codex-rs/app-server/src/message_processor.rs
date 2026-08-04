@@ -72,6 +72,7 @@ use codex_goal_extension::GoalService;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::StateDbHandle;
@@ -135,7 +136,7 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) app_server_client_name: String,
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
-    pub(crate) supports_openai_form_elicitation: bool,
+    pub(crate) client_mcp_extensions: ClientMcpExtensions,
 }
 
 impl Default for ConnectionSessionState {
@@ -187,10 +188,11 @@ impl ConnectionSessionState {
             .is_some_and(|session| session.request_attestation)
     }
 
-    pub(crate) fn supports_openai_form_elicitation(&self) -> bool {
+    pub(crate) fn client_mcp_extensions(&self) -> ClientMcpExtensions {
         self.initialized
             .get()
-            .is_some_and(|session| session.supports_openai_form_elicitation)
+            .map(|session| session.client_mcp_extensions.clone())
+            .unwrap_or_default()
     }
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
@@ -829,7 +831,7 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
-        let supports_openai_form_elicitation = session.supports_openai_form_elicitation();
+        let client_mcp_extensions = session.client_mcp_extensions();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -845,7 +847,7 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
-                        supports_openai_form_elicitation,
+                        client_mcp_extensions,
                     )
                     .await;
                 if let Err(error) = result {
@@ -875,7 +877,7 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -1039,7 +1041,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        supports_openai_form_elicitation,
+                        client_mcp_extensions.clone(),
                         request_context,
                     )
                     .await
@@ -1056,8 +1058,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        /*supports_openai_form_elicitation*/
-                        supports_openai_form_elicitation,
+                        client_mcp_extensions.clone(),
                     )
                     .await
             }
@@ -1068,8 +1069,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        /*supports_openai_form_elicitation*/
-                        supports_openai_form_elicitation,
+                        client_mcp_extensions.clone(),
                     )
                     .await
             }
@@ -1298,8 +1298,6 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        /*supports_openai_form_elicitation*/
-                        supports_openai_form_elicitation,
                     )
                     .await
             }

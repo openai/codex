@@ -138,10 +138,6 @@ impl Session {
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> McpRuntimeInput {
         let auth = desired.auth.clone();
-        let supports_openai_form_elicitation = self
-            .services
-            .supports_openai_form_elicitation
-            .load(std::sync::atomic::Ordering::Acquire);
         let McpRuntimeProjection {
             mut config,
             plugins_available,
@@ -186,7 +182,7 @@ impl Session {
             codex_apps_tools_cache: self.services.mcp_manager.codex_apps_tools_cache(),
             tool_catalog_cache: self.services.mcp_manager.tool_catalog_cache(),
             codex_apps_tools_cache_key: connector_runtime_context_key(auth.as_ref()),
-            supports_openai_form_elicitation,
+            client_mcp_extensions: self.services.client_mcp_extensions.clone(),
             auth,
             codex_apps_auth_manager,
             elicitation_reviewer,

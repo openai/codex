@@ -258,7 +258,7 @@ impl PreparedMcpCall {
     }
 
     /// Runs irreversible call preparation and execution under the authority of
-    /// this call's exact catalog revision.
+    /// this call's exact catalog revision and the extensions owned by the Codex session.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "catalog replacement must remain serialized with call preparation and execution"
@@ -288,7 +288,7 @@ impl PreparedMcpCall {
     }
 }
 
-fn call_tool_result_from_rmcp(result: rmcp::model::CallToolResult) -> CallToolResult {
+pub(crate) fn call_tool_result_from_rmcp(result: rmcp::model::CallToolResult) -> CallToolResult {
     let content = result
         .content
         .into_iter()

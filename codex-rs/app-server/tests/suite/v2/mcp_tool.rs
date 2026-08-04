@@ -9,8 +9,10 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use axum::Router;
 use codex_app_server_protocol::CapabilityRootLocation;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::EnvironmentAddResponse;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::McpElicitationSchema;
@@ -49,6 +51,8 @@ use rmcp::model::ContentBlock;
 use rmcp::model::ElicitRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
+use rmcp::model::InitializeRequestParams;
+use rmcp::model::InitializeResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::MetaObject;
@@ -133,6 +137,9 @@ async fn mcp_server_tool_call_returns_tool_result() -> Result<()> {
         Some(json!({
             "echoed": "hello from app",
             "threadId": thread_id,
+            "clientCapabilities": {
+                "extensions": {},
+            },
         }))
     );
     assert_eq!(response.is_error, Some(false));
@@ -146,6 +153,187 @@ async fn mcp_server_tool_call_returns_tool_result() -> Result<()> {
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_server_tool_call_uses_session_client_extensions() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
+    let codex_home = TempDir::new()?;
+    mcp_tool_config(&responses_server.uri(), &mcp_server_url, AUTO_COMPACT_LIMIT)
+        .write(codex_home.path())?;
+
+    let app_ui = json!({
+        "mimeTypes": [
+            "text/html;profile=mcp-app",
+            "text/x-dil;profile=mcp-app",
+        ],
+        "futureField": {"preserved": true},
+    });
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    mcp.initialize_with_capabilities(
+        ClientInfo {
+            name: "codex_test".to_string(),
+            title: None,
+            version: "0.1.0".to_string(),
+        },
+        Some(InitializeCapabilities {
+            experimental_api: true,
+            request_attestation: false,
+            mcp_server_openai_form_elicitation: true,
+            opt_out_notification_methods: None,
+            extensions: Some(std::collections::HashMap::from([(
+                "io.modelcontextprotocol/ui".to_string(),
+                app_ui.clone(),
+            )])),
+        }),
+    )
+    .await?;
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_id = thread.id;
+
+    let response: McpServerToolCallResponse = mcp
+        .request(|request_id| ClientRequest::McpServerToolCall {
+            request_id,
+            params: McpServerToolCallParams {
+                thread_id: thread_id.clone(),
+                server: TEST_SERVER_NAME.to_string(),
+                tool: TEST_TOOL_NAME.to_string(),
+                arguments: Some(json!({"message": "capabilities"})),
+                meta: None,
+            },
+        })
+        .await?;
+
+    assert_eq!(
+        response.structured_content,
+        Some(json!({
+            "echoed": "capabilities",
+            "threadId": thread_id,
+            "clientCapabilities": {
+                "extensions": {
+                    "openai/form": {},
+                    "io.modelcontextprotocol/ui": app_ui,
+                }
+            },
+        }))
+    );
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_mcp_tool_call_uses_session_client_extensions() -> Result<()> {
+    let call_id = "call-session-capabilities";
+    let namespace = format!("mcp__{TEST_SERVER_NAME}");
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-capabilities"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                TEST_TOOL_NAME,
+                &serde_json::to_string(&json!({"message": "capabilities"}))?,
+            ),
+            responses::ev_completed("resp-capabilities"),
+        ]),
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let responses_server = create_mock_responses_server_sequence(responses).await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
+    let codex_home = TempDir::new()?;
+    mcp_tool_config(&responses_server.uri(), &mcp_server_url, AUTO_COMPACT_LIMIT)
+        .write(codex_home.path())?;
+
+    let app_ui = json!({
+        "mimeTypes": [
+            "text/html;profile=mcp-app",
+            "text/x-dil;profile=mcp-app",
+        ],
+        "futureField": {"preserved": true},
+    });
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    mcp.initialize_with_capabilities(
+        ClientInfo {
+            name: "codex_test".to_string(),
+            title: None,
+            version: "0.1.0".to_string(),
+        },
+        Some(InitializeCapabilities {
+            experimental_api: true,
+            request_attestation: false,
+            mcp_server_openai_form_elicitation: true,
+            opt_out_notification_methods: None,
+            extensions: Some(std::collections::HashMap::from([(
+                "io.modelcontextprotocol/ui".to_string(),
+                app_ui.clone(),
+            )])),
+        }),
+    )
+    .await?;
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    mcp.request::<TurnStartResponse>(|request_id| ClientRequest::TurnStart {
+        request_id,
+        params: TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "Call the MCP tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        },
+    })
+    .await?;
+
+    let completed = wait_for_mcp_tool_call_completed(&mut mcp, call_id).await?;
+    let ThreadItem::McpToolCall {
+        result: Some(result),
+        ..
+    } = completed.item
+    else {
+        panic!("expected completed MCP tool call item");
+    };
+    assert_eq!(
+        result.structured_content,
+        Some(json!({
+            "echoed": "capabilities",
+            "threadId": thread.id,
+            "clientCapabilities": {
+                "extensions": {
+                    "openai/form": {},
+                    "io.modelcontextprotocol/ui": app_ui,
+                }
+            },
+        }))
+    );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
     Ok(())
 }
 
@@ -746,6 +934,15 @@ async fn mcp_tool_call_hint_survives_mid_call_thread_read_and_resume() -> Result
 struct ToolAppsMcpServer;
 
 impl ServerHandler for ToolAppsMcpServer {
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, rmcp::ErrorData> {
+        context.peer.set_peer_info(request);
+        Ok(self.get_info())
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
@@ -795,6 +992,11 @@ impl ServerHandler for ToolAppsMcpServer {
             .get("threadId")
             .and_then(|value| value.as_str())
             .unwrap_or_default();
+        let client_capabilities = context.peer.peer_info().map(|request| {
+            json!({
+                "extensions": request.capabilities.extensions.clone().unwrap_or_default(),
+            })
+        });
 
         let mut meta = MetaObject::new();
         meta.0.insert("calledBy".to_string(), json!("mcp-app"));
@@ -876,10 +1078,14 @@ impl ServerHandler for ToolAppsMcpServer {
             return Ok(CallToolResult::success(vec![ContentBlock::text(output)]).into());
         }
 
-        let mut result = CallToolResult::structured(json!({
+        let mut structured_content = json!({
             "echoed": message,
             "threadId": thread_id,
-        }));
+        });
+        if let Some(client_capabilities) = client_capabilities {
+            structured_content["clientCapabilities"] = client_capabilities;
+        }
+        let mut result = CallToolResult::structured(structured_content);
         result.content = vec![ContentBlock::text(format!("echo: {message}"))];
         result.meta = Some(meta);
         Ok(result.into())

@@ -15,6 +15,7 @@ use std::time::Duration;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_exec_server::Environment;
+use codex_protocol::mcp::ClientMcpExtensions;
 use lru::LruCache;
 use rmcp::model::ElicitationCapability;
 use sha1::Digest;
@@ -78,7 +79,7 @@ impl McpToolCatalogCache {
         runtime_context: &McpRuntimeContext,
         resolved_environment: Option<&Arc<Environment>>,
         client_elicitation_capability: &ElicitationCapability,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: &ClientMcpExtensions,
     ) -> Option<McpToolCatalogCacheContext> {
         let identity = ToolCatalogIdentity::new(
             server_name,
@@ -86,7 +87,7 @@ impl McpToolCatalogCache {
             runtime_context,
             resolved_environment,
             client_elicitation_capability,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
         )?;
         let entry = lock_unpoisoned(&self.entries)
             .get_or_insert(identity, || Arc::new(ToolCatalogCacheEntry::default()))
@@ -218,12 +219,12 @@ impl ToolCatalogIdentity {
         runtime_context: &McpRuntimeContext,
         environment: Option<&Arc<Environment>>,
         client_elicitation_capability: &ElicitationCapability,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: &ClientMcpExtensions,
     ) -> Option<Self> {
         let transport = ToolCatalogTransportIdentity::new(
             config,
             client_elicitation_capability,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
         )?;
         Some(Self {
             server_name: server_name.to_string(),
@@ -247,7 +248,7 @@ impl ToolCatalogTransportIdentity {
     fn new(
         config: &McpServerConfig,
         client_elicitation_capability: &ElicitationCapability,
-        supports_openai_form_elicitation: bool,
+        client_mcp_extensions: &ClientMcpExtensions,
     ) -> Option<Self> {
         let McpServerTransportConfig::Stdio {
             command,
@@ -282,7 +283,7 @@ impl ToolCatalogTransportIdentity {
                 cwd,
                 &config.environment_id,
                 client_elicitation_capability,
-                supports_openai_form_elicitation,
+                client_mcp_extensions.iter().collect::<BTreeMap<_, _>>(),
             ))
             .ok()?,
         );

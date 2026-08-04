@@ -28,6 +28,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::McpServerSource;
+use crate::binding::call_tool_result_from_rmcp;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -180,7 +181,7 @@ impl McpConnectionSet {
             codex_apps_tools_cache,
             tool_catalog_cache,
             codex_apps_tools_cache_key,
-            supports_openai_form_elicitation,
+            client_mcp_extensions,
             auth,
             codex_apps_auth_manager,
             elicitation_reviewer,
@@ -312,7 +313,7 @@ impl McpConnectionSet {
                 shares_codex_apps_tools_cache
                     .then(|| (codex_home.clone(), codex_apps_tools_cache_key.clone())),
                 client_elicitation_capability.clone(),
-                supports_openai_form_elicitation,
+                client_mcp_extensions.clone(),
             );
             let expected_protocol_mode = match &configured_config.transport {
                 McpServerTransportConfig::StreamableHttp { .. } => Some(protocol_mode),
@@ -371,7 +372,7 @@ impl McpConnectionSet {
                     &runtime_context,
                     environment.as_ref(),
                     &client_elicitation_capability,
-                    supports_openai_form_elicitation,
+                    &client_mcp_extensions,
                 )
             } else {
                 None
@@ -392,7 +393,7 @@ impl McpConnectionSet {
                 resolved_environment,
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
-                supports_openai_form_elicitation,
+                client_mcp_extensions.clone(),
                 protocol_mode,
                 catalog_item_limit,
             );
@@ -667,28 +668,13 @@ impl McpConnectionSet {
             .client()
             .await
             .context("failed to get client")?;
-
         let result: rmcp::model::CallToolResult = client
             .client
             .call_tool(tool.to_string(), arguments, meta, view.tool_timeout)
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 
-        let content = result
-            .content
-            .into_iter()
-            .map(|content| {
-                serde_json::to_value(content)
-                    .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
-            })
-            .collect();
-
-        Ok(CallToolResult {
-            content,
-            structured_content: result.structured_content,
-            is_error: result.is_error,
-            meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
-        })
+        Ok(call_tool_result_from_rmcp(result))
     }
 
     /// Returns presentation metadata from the current connection.

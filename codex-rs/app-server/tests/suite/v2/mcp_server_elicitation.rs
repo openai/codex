@@ -464,7 +464,8 @@ async fn initialize_websocket_client(
             },
             capabilities: Some(InitializeCapabilities {
                 experimental_api: true,
-                mcp_server_openai_form_elicitation: supports_openai_form_elicitation,
+                extensions: supports_openai_form_elicitation
+                    .then(|| HashMap::from([("openai/form".to_string(), serde_json::json!({}))])),
                 ..Default::default()
             }),
         })?),

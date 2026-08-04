@@ -558,26 +558,6 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn set_openai_form_elicitation_support(
-        &self,
-        supported: bool,
-    ) -> anyhow::Result<()> {
-        if self
-            .services
-            .supports_openai_form_elicitation
-            .load(std::sync::atomic::Ordering::Relaxed)
-            == supported
-        {
-            return Ok(());
-        }
-
-        self.services
-            .supports_openai_form_elicitation
-            .store(supported, std::sync::atomic::Ordering::Relaxed);
-        self.request_mcp_runtime_refresh();
-        Ok(())
-    }
-
     pub(crate) async fn refresh_mcp_servers_now(
         &self,
         turn_context: &TurnContext,

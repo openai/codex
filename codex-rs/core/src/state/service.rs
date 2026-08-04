@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use crate::SkillsService;
 use crate::agent::AgentControl;
@@ -35,6 +34,7 @@ use codex_mcp::McpRuntime;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout_trace::ThreadTraceContext;
 use codex_thread_store::LiveThread;
@@ -72,7 +72,8 @@ pub(crate) struct SessionServices {
     pub(crate) extensions: Arc<ExtensionRegistry<crate::config::Config>>,
     pub(crate) session_extension_data: ExtensionData,
     pub(crate) thread_extension_data: ExtensionData,
-    pub(crate) supports_openai_form_elicitation: AtomicBool,
+    /// MCP extensions fixed when this session is created.
+    pub(crate) client_mcp_extensions: ClientMcpExtensions,
     /// Raw capability selections for this thread. Each model step resolves them against its
     /// current executor environments before using them.
     pub(crate) selected_capability_roots: Vec<SelectedCapabilityRoot>,

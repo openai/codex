@@ -227,6 +227,9 @@ async fn existing_thread_loads_api_curated_mcp_after_auth_switch_sync() -> Resul
         Some(json!({
             "echoed": "available after sync",
             "threadId": thread_id,
+            "clientCapabilities": {
+                "extensions": {},
+            },
         }))
     );
 

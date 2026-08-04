@@ -24,6 +24,8 @@ use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::SessionSource;
@@ -112,7 +114,10 @@ pub async fn start_thread_with_user_shell_override(
         .start_thread_with_user_shell_override_for_tests(
             config,
             user_shell_override,
-            supports_openai_form_elicitation,
+            ClientMcpExtensions::new(
+                supports_openai_form_elicitation
+                    .then(|| (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({}))),
+            ),
         )
         .await
 }
@@ -131,7 +136,10 @@ pub async fn resume_thread_from_rollout_with_user_shell_override(
             rollout_path,
             auth_manager,
             user_shell_override,
-            supports_openai_form_elicitation,
+            ClientMcpExtensions::new(
+                supports_openai_form_elicitation
+                    .then(|| (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({}))),
+            ),
         )
         .await
 }
