@@ -27,6 +27,7 @@ futures = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing = { workspace = true }
 url = { workspace = true }
@@ -34,6 +35,9 @@ url = { workspace = true }
 [dev-dependencies]
 codex-models-manager = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
+insta = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

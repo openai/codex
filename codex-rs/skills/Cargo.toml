@@ -18,4 +18,9 @@ codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 include_dir = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

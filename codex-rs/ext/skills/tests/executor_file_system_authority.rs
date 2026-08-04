@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_core_skills::loader::SkillRoot;
+use codex_core_skills::loader::load_environment_skills_from_root as load_legacy_environment_skills_from_root;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
@@ -24,6 +25,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::catalog::SkillAuthority;
@@ -346,6 +348,295 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
             ),
         ]
     );
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+#[tokio::test]
+async fn executor_discovery_routes_produce_equivalent_catalog_metadata() {
+    let id = NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+    let test_root = std::env::temp_dir().join(format!(
+        "codex-executor-skill-parity-{}-{id}",
+        std::process::id()
+    ));
+    let plugin_manifest = test_root.join(".codex-plugin/plugin.json");
+    let deploy_skill = test_root.join("skills/deploy/SKILL.md");
+    let deploy_metadata = test_root.join("skills/deploy/agents/openai.yaml");
+    let excluded_skill = test_root.join("skills/excluded/SKILL.md");
+    let excluded_metadata = test_root.join("skills/excluded/agents/openai.yaml");
+    let repaired_skill = test_root.join("skills/repaired/SKILL.md");
+    let invalid_skill = test_root.join("skills/invalid/SKILL.md");
+    let invalid_metadata_skill = test_root.join("skills/invalid-metadata/SKILL.md");
+    let invalid_metadata = test_root.join("skills/invalid-metadata/agents/openai.yaml");
+    for path in [
+        &plugin_manifest,
+        &deploy_skill,
+        &deploy_metadata,
+        &excluded_skill,
+        &excluded_metadata,
+        &repaired_skill,
+        &invalid_skill,
+        &invalid_metadata_skill,
+        &invalid_metadata,
+    ] {
+        std::fs::create_dir_all(path.parent().expect("test file parent"))
+            .expect("create test directory");
+    }
+    std::fs::write(&plugin_manifest, r#"{"name":"catalog"}"#).expect("write plugin manifest");
+    std::fs::write(
+        &deploy_skill,
+        "---\nname: deploy\ndescription: Deploy the service.\nmetadata:\n  short-description: Deploy safely.\n---\n\nDeploy.\n",
+    )
+    .expect("write deploy skill");
+    std::fs::write(
+        &deploy_metadata,
+        "dependencies:\n  tools:\n    - type: mcp\n      value: deployer\n      description: Deployment server.\npolicy:\n  allow_implicit_invocation: false\n  products:\n    - codex\n",
+    )
+    .expect("write deploy metadata");
+    std::fs::write(
+        &excluded_skill,
+        "---\nname: excluded\ndescription: Excluded skill.\n---\n",
+    )
+    .expect("write excluded skill");
+    std::fs::write(&excluded_metadata, "policy:\n  products:\n    - chatgpt\n")
+        .expect("write excluded metadata");
+    std::fs::write(
+        &repaired_skill,
+        "---\ndescription: Build for AWS: ECS\n---\n",
+    )
+    .expect("write repaired skill");
+    std::fs::write(&invalid_skill, "---\nname: invalid\n---\n").expect("write invalid skill");
+    std::fs::write(
+        &invalid_metadata_skill,
+        "---\nname: invalid-metadata\ndescription: Invalid optional metadata.\n---\n",
+    )
+    .expect("write invalid metadata skill");
+    std::fs::write(
+        &invalid_metadata,
+        "interface: []\ndependencies:\n  tools:\n    - type: mcp\n      value: must-be-ignored\n",
+    )
+    .expect("write invalid metadata");
+
+    let manager = Arc::new(EnvironmentManager::default_for_tests());
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        Arc::clone(&manager),
+        Some(Product::Codex),
+    );
+    let executor_roots = vec![SelectedCapabilityRoot {
+        id: "parity-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "local".to_string(),
+            path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
+        },
+    }];
+    let query = |executor_capability_discovery| SkillListQuery {
+        turn_id: "turn-1".to_string(),
+        executor_roots: executor_roots.clone(),
+        resolved_executor_roots: Vec::new(),
+        host_snapshot: None,
+        include_host_skills: false,
+        include_bundled_skills: true,
+        include_orchestrator_skills: false,
+        mcp_resources: None,
+        executor_capability_discovery,
+    };
+
+    let legacy_file_system = manager
+        .get_environment("local")
+        .expect("local environment")
+        .get_filesystem();
+    let legacy = load_legacy_environment_skills_from_root(
+        legacy_file_system.as_ref(),
+        &PathUri::from_host_native_path(&test_root).expect("skill root URI"),
+        Some(Product::Codex),
+    )
+    .await;
+    let direct = provider
+        .list(query(None))
+        .await
+        .expect("list directly discovered executor skills");
+    let discovery = ExecutorCapabilityDiscoveryCache::new(manager)
+        .snapshot(&executor_roots, &Default::default())
+        .await;
+    let bundled = provider
+        .list(query(Some(discovery)))
+        .await
+        .expect("list bundled executor skills");
+
+    assert_eq!(bundled.warnings, direct.warnings);
+    let comparable_entries = |catalog: &codex_skills_extension::catalog::SkillCatalog| {
+        catalog
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.id.clone(),
+                    entry.authority.clone(),
+                    entry.name.clone(),
+                    entry.description.clone(),
+                    entry.short_description.clone(),
+                    entry.display_path.clone(),
+                    entry.dependencies.clone(),
+                    entry.enabled,
+                    entry.prompt_visible,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(comparable_entries(&bundled), comparable_entries(&direct));
+    assert_eq!(legacy.warnings, direct.warnings);
+    assert_eq!(direct.warnings.len(), 1);
+    assert!(direct.warnings[0].contains("missing field `description`"));
+    let legacy_metadata = legacy
+        .skills
+        .iter()
+        .map(|skill| {
+            (
+                skill.name.clone(),
+                skill.description.clone(),
+                skill.short_description.clone(),
+                skill.dependencies.clone(),
+                skill.allows_implicit_invocation(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let catalog_metadata = direct
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.name.clone(),
+                entry.description.clone(),
+                entry.short_description.clone(),
+                entry.dependencies.clone(),
+                entry.prompt_visible,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(catalog_metadata, legacy_metadata);
+    let entry = direct
+        .entries
+        .iter()
+        .find(|entry| entry.name == "catalog:deploy")
+        .expect("deploy skill");
+    assert_eq!(
+        entry
+            .dependencies
+            .as_ref()
+            .expect("skill dependencies")
+            .tools[0]
+            .value,
+        "deployer"
+    );
+    assert!(!entry.prompt_visible);
+    let repaired = direct
+        .entries
+        .iter()
+        .find(|entry| entry.name == "catalog:repaired")
+        .expect("repaired skill");
+    assert_eq!(repaired.description, "Build for AWS: ECS");
+    let invalid_metadata = direct
+        .entries
+        .iter()
+        .find(|entry| entry.name == "catalog:invalid-metadata")
+        .expect("invalid metadata skill");
+    assert_eq!(invalid_metadata.dependencies, None);
+
+    std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+#[tokio::test]
+async fn pre_discovered_executor_catalog_snapshot() {
+    let test_root = create_local_skill_root("snapshot").expect("create local skill root");
+    let manifest_dir = test_root.join(".codex-plugin");
+    let metadata_dir = test_root.join("skill/agents");
+    std::fs::create_dir_all(&manifest_dir).expect("create plugin manifest directory");
+    std::fs::create_dir_all(&metadata_dir).expect("create skill metadata directory");
+    std::fs::write(
+        manifest_dir.join("plugin.json"),
+        r#"{"name":"snapshot-plugin"}"#,
+    )
+    .expect("write plugin manifest");
+    std::fs::write(
+        metadata_dir.join("openai.yaml"),
+        "dependencies:\n  tools:\n    - type: mcp\n      value: deployer\n      description: Deployment server.\npolicy:\n  allow_implicit_invocation: false\n",
+    )
+    .expect("write skill metadata");
+
+    let manager = Arc::new(EnvironmentManager::default_for_tests());
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        Arc::clone(&manager),
+        /*restriction_product*/ None,
+    );
+    let executor_roots = vec![SelectedCapabilityRoot {
+        id: "snapshot-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "local".to_string(),
+            path: PathUri::from_host_native_path(&test_root).expect("skill root URI"),
+        },
+    }];
+    let executor_capability_discovery = ExecutorCapabilityDiscoveryCache::new(manager)
+        .snapshot(&executor_roots, &Default::default())
+        .await;
+    let catalog = provider
+        .list(SkillListQuery {
+            turn_id: "turn-1".to_string(),
+            executor_roots,
+            resolved_executor_roots: Vec::new(),
+            host_snapshot: None,
+            include_host_skills: false,
+            include_bundled_skills: true,
+            include_orchestrator_skills: false,
+            mcp_resources: None,
+            executor_capability_discovery: Some(executor_capability_discovery),
+        })
+        .await
+        .expect("list pre-discovered executor skills");
+
+    let mut snapshot = serde_json::json!({
+        "warnings": &catalog.warnings,
+        "entries": catalog
+            .entries
+            .iter()
+            .map(|entry| serde_json::json!({
+                "authority": {
+                    "kind": entry.authority.kind.to_string(),
+                    "id": &entry.authority.id,
+                },
+                "name": &entry.name,
+                "description": &entry.description,
+                "short_description": entry.short_description.as_deref(),
+                "dependencies": entry.dependencies.as_ref().map(|dependencies| {
+                    dependencies.tools.iter().map(|tool| serde_json::json!({
+                        "type": &tool.r#type,
+                        "value": &tool.value,
+                        "description": tool.description.as_deref(),
+                        "transport": tool.transport.as_deref(),
+                        "command": tool.command.as_deref(),
+                        "url": tool.url.as_deref(),
+                    })).collect::<Vec<_>>()
+                }),
+                "enabled": entry.enabled,
+                "prompt_visible": entry.prompt_visible,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    snapshot.sort_all_objects();
+    let snapshot_file = codex_utils_cargo_bin::find_resource!(
+        "tests/snapshots/executor_file_system_authority__pre_discovered_executor_catalog.snap"
+    )
+    .expect("resolve catalog snapshot");
+    let snapshot_dir = snapshot_file
+        .parent()
+        .unwrap_or_else(|| panic!("snapshot file has no parent: {}", snapshot_file.display()));
+    let mut settings = insta::Settings::clone_current();
+    settings.set_snapshot_path(snapshot_dir);
+    settings.bind(|| {
+        insta::assert_snapshot!(
+            "pre_discovered_executor_catalog",
+            serde_json::to_string_pretty(&snapshot).expect("serialize catalog snapshot")
+        );
+    });
 
     std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }

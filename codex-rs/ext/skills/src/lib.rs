@@ -4,6 +4,7 @@ mod config;
 mod dynamic_skill_selector;
 mod extension;
 mod fragments;
+mod loader;
 pub mod provider;
 mod render;
 mod render_observability;

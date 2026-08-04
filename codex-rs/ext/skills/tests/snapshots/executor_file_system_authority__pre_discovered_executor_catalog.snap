@@ -1,0 +1,30 @@
+---
+source: ext/skills/tests/executor_file_system_authority.rs
+expression: "serde_json::to_string_pretty(&snapshot).expect(\"serialize catalog snapshot\")"
+---
+{
+  "entries": [
+    {
+      "authority": {
+        "id": "snapshot-root",
+        "kind": "executor"
+      },
+      "dependencies": [
+        {
+          "command": null,
+          "description": "Deployment server.",
+          "transport": null,
+          "type": "mcp",
+          "url": null,
+          "value": "deployer"
+        }
+      ],
+      "description": "Synthetic executor skill.",
+      "enabled": true,
+      "name": "snapshot-plugin:synthetic",
+      "prompt_visible": false,
+      "short_description": null
+    }
+  ],
+  "warnings": []
+}
