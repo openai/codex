@@ -219,7 +219,8 @@ mod reload {
             layers,
             config.config_layer_stack.requirements().clone(),
             config.config_layer_stack.requirements_toml().clone(),
-        )?)
+        )?
+        .with_project_root(config.config_layer_stack.project_root().cloned()))
     }
 
     fn deserialize_effective_config(

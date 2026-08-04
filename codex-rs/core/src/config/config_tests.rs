@@ -9535,6 +9535,41 @@ async fn active_project_does_not_match_configured_alias_for_canonical_cwd() -> a
     Ok(())
 }
 
+#[tokio::test]
+async fn active_project_honors_custom_project_root_markers() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let project_root = codex_home.path().join("project");
+    let nested = project_root.join("nested");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(project_root.join(".hg"), "")?;
+    let project_key = project_root.display().to_string().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"project_root_markers = [".hg"]
+
+[projects."{project_key}"]
+trust_level = "untrusted"
+"#,
+        ),
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.active_project.trust_level,
+        Some(TrustLevel::Untrusted)
+    );
+    Ok(())
+}
+
 #[test]
 fn test_set_default_oss_provider() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -10478,6 +10513,10 @@ save_fields_resolved_from_model_catalog = false
 #[tokio::test]
 async fn debug_config_lockfile_load_path_loads_lock_from_nested_table() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
+    let project_root = codex_home.path().join("project");
+    let nested = project_root.join("nested");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(project_root.join(".hg"), "")?;
     let lock_path = codex_home.path().join("session.config.lock.toml");
     std::fs::write(
         &lock_path,
@@ -10493,7 +10532,9 @@ codex_version = "older-version"
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         format!(
-            r#"[debug.config_lockfile]
+            r#"project_root_markers = [".hg"]
+
+[debug.config_lockfile]
 load_path = '{}'
 allow_codex_version_mismatch = true
 save_fields_resolved_from_model_catalog = false
@@ -10504,10 +10545,14 @@ save_fields_resolved_from_model_catalog = false
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(nested))
         .build()
         .await?;
 
+    assert_eq!(
+        config.config_layer_stack.project_root(),
+        Some(&project_root.abs())
+    );
     assert!(config.config_lock_toml.is_some());
     assert!(config.config_lock_allow_codex_version_mismatch);
     assert!(!config.config_lock_save_fields_resolved_from_model_catalog);

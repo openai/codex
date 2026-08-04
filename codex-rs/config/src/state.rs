@@ -256,6 +256,9 @@ pub struct ConfigLayerStack {
     /// `None` means the loader did not check for stack-level warnings, while
     /// `Some(vec![])` means it checked and found nothing to report.
     startup_warnings: Option<Vec<String>>,
+
+    /// Project root resolved from the non-project config layers.
+    project_root: Option<AbsolutePathBuf>,
 }
 
 impl ConfigLayerStack {
@@ -272,7 +275,19 @@ impl ConfigLayerStack {
             requirements_toml,
             ignore_user_and_project_exec_policy_rules: false,
             startup_warnings: None,
+            project_root: None,
         })
+    }
+
+    /// Records the project root resolved while loading this stack.
+    pub fn with_project_root(mut self, project_root: Option<AbsolutePathBuf>) -> Self {
+        self.project_root = project_root;
+        self
+    }
+
+    /// Returns the project root resolved from the non-project layers.
+    pub fn project_root(&self) -> Option<&AbsolutePathBuf> {
+        self.project_root.as_ref()
     }
 
     pub fn with_user_and_project_exec_policy_rules_ignored(
@@ -401,6 +416,7 @@ impl ConfigLayerStack {
             ignore_user_and_project_exec_policy_rules: self
                 .ignore_user_and_project_exec_policy_rules,
             startup_warnings: self.startup_warnings.clone(),
+            project_root: self.project_root.clone(),
         })
     }
 
@@ -435,6 +451,7 @@ impl ConfigLayerStack {
             ignore_user_and_project_exec_policy_rules: self
                 .ignore_user_and_project_exec_policy_rules,
             startup_warnings: self.startup_warnings.clone(),
+            project_root: self.project_root.clone(),
         }
     }
 
