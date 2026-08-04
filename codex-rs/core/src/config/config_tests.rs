@@ -569,6 +569,36 @@ disable_in_process_fallback = true
 }
 
 #[tokio::test]
+async fn load_config_resolves_tool_registry_config() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+
+    for (config_toml, error_on_tool_collisions) in [
+        ("", false),
+        (
+            "[features.tool_registry]\nerror_on_tool_collisions = true\n",
+            true,
+        ),
+    ] {
+        let config_toml: ConfigToml =
+            toml::from_str(config_toml).expect("TOML deserialization should succeed");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            config.tool_registry.error_on_tool_collisions,
+            error_on_tool_collisions
+        );
+        assert!(!config.features.enabled(Feature::CodeMode));
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
     for (config_toml, expected) in [
         (

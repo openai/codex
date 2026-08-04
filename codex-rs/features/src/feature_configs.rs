@@ -6,6 +6,14 @@ use std::collections::BTreeMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ToolRegistryConfigToml {
+    /// Fail the turn when multiple tools share the same effective name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_on_tool_collisions: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CodeModeConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,

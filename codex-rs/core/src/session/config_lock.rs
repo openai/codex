@@ -11,6 +11,7 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::RolloutBudgetConfigToml;
 use codex_features::TokenBudgetConfigToml;
+use codex_features::ToolRegistryConfigToml;
 use codex_protocol::ThreadId;
 
 use crate::config::Config;
@@ -153,6 +154,11 @@ fn save_config_resolved_fields(
         .features
         .get_or_insert_with(FeaturesToml::default);
     features.materialize_resolved_enabled(config.features.get());
+    if config.tool_registry.error_on_tool_collisions || features.tool_registry.is_some() {
+        features.tool_registry = Some(ToolRegistryConfigToml {
+            error_on_tool_collisions: Some(config.tool_registry.error_on_tool_collisions),
+        });
+    }
     let mut multi_agent_v2: MultiAgentV2ConfigToml =
         resolved_config_to_toml(&config.multi_agent_v2, "features.multi_agent_v2")?;
     multi_agent_v2.enabled = Some(config.features.enabled(Feature::MultiAgentV2));
@@ -262,6 +268,7 @@ mod tests {
     async fn lock_contains_prompts_and_materializes_features() {
         let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
         let mut config = (*sc.original_config_do_not_use).clone();
+        config.tool_registry.error_on_tool_collisions = true;
         config.multi_agent_v2.subagent_developer_instructions =
             Some("Locked subagent developer instructions.".to_string());
         config.token_budget = Some(crate::config::TokenBudgetConfig {
@@ -318,6 +325,12 @@ mod tests {
             .features
             .as_ref()
             .expect("lock should materialize feature states");
+        assert_eq!(
+            features.tool_registry,
+            Some(ToolRegistryConfigToml {
+                error_on_tool_collisions: Some(true),
+            })
+        );
         let feature_entries = features.entries();
         for spec in codex_features::FEATURES {
             assert_eq!(
@@ -404,15 +417,17 @@ mod tests {
         sc.original_config_do_not_use = Arc::new(config);
 
         let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");
+        let features = lockfile
+            .config
+            .features
+            .as_ref()
+            .expect("lock should materialize feature states");
 
         assert_eq!(
-            lockfile
-                .config
-                .features
-                .as_ref()
-                .and_then(|features| features.token_budget.as_ref()),
+            features.token_budget.as_ref(),
             Some(&FeatureToml::Enabled(true))
         );
+        assert_eq!(features.tool_registry, None);
     }
 
     #[tokio::test]

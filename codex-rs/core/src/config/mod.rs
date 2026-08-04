@@ -1030,6 +1030,9 @@ pub struct Config {
     /// Whether to register the update_plan tool.
     pub update_plan_enabled: bool,
 
+    /// Policy for collecting and validating tool runtimes.
+    pub tool_registry: ToolRegistryConfig,
+
     /// Configuration for the experimental code-mode tool surface.
     pub code_mode: CodeModeConfig,
 
@@ -1090,6 +1093,12 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ToolRegistryConfig {
+    /// Fail the turn when multiple tools share the same effective name.
+    pub error_on_tool_collisions: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -3640,6 +3649,14 @@ impl Config {
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
         let update_plan_enabled = resolve_update_plan_enabled(&cfg);
+        let tool_registry = ToolRegistryConfig {
+            error_on_tool_collisions: cfg
+                .features
+                .as_ref()
+                .and_then(|features| features.tool_registry.as_ref())
+                .and_then(|config| config.error_on_tool_collisions)
+                .unwrap_or_default(),
+        };
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
@@ -4172,6 +4189,7 @@ impl Config {
             web_search_config,
             experimental_request_user_input_enabled,
             update_plan_enabled,
+            tool_registry,
             code_mode,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,

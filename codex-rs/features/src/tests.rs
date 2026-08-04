@@ -28,6 +28,22 @@ fn under_development_features_are_disabled_by_default() {
 }
 
 #[test]
+fn tool_registry_config_is_not_a_feature_toggle() {
+    let features: FeaturesToml =
+        toml::from_str("[tool_registry]\nerror_on_tool_collisions = true\n")
+            .expect("tool registry settings should deserialize");
+
+    assert_eq!(
+        features.tool_registry,
+        Some(crate::ToolRegistryConfigToml {
+            error_on_tool_collisions: Some(true),
+        })
+    );
+    assert!(features.entries().is_empty());
+    assert!(!crate::is_known_feature_key("tool_registry"));
+}
+
+#[test]
 fn executor_capability_discovery_is_an_opt_in_map_feature() {
     let mut features = Features::with_defaults();
     assert!(!features.enabled(Feature::ExecutorCapabilityDiscovery));
@@ -533,6 +549,9 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     features.enable(Feature::RespectSystemProxy);
 
     let mut features_toml = FeaturesToml {
+        tool_registry: Some(crate::ToolRegistryConfigToml {
+            error_on_tool_collisions: Some(true),
+        }),
         code_mode_host: Some(FeatureToml::Config(crate::CodeModeHostConfigToml {
             enabled: Some(false),
             disable_in_process_fallback: Some(true),
@@ -560,7 +579,14 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
 
     features_toml.materialize_resolved_enabled(&features);
 
+    assert_eq!(
+        features_toml.tool_registry,
+        Some(crate::ToolRegistryConfigToml {
+            error_on_tool_collisions: Some(true),
+        })
+    );
     let entries = features_toml.entries();
+    assert!(!entries.contains_key("tool_registry"));
     for spec in crate::FEATURES {
         assert_eq!(
             entries.get(spec.key),

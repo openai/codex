@@ -726,6 +726,9 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_registry": {
+              "$ref": "#/definitions/ToolRegistryConfigToml"
+            },
             "tool_search": {
               "type": "boolean"
             },
@@ -3154,6 +3157,16 @@
         }
       ]
     },
+    "ToolRegistryConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "error_on_tool_collisions": {
+          "description": "Fail the turn when multiple tools share the same effective name.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -5321,6 +5334,9 @@
         },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
+        },
+        "tool_registry": {
+          "$ref": "#/definitions/ToolRegistryConfigToml"
         },
         "tool_search": {
           "type": "boolean"

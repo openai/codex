@@ -295,6 +295,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         web_search_config: None,
         experimental_request_user_input_enabled: true,
         update_plan_enabled: true,
+        tool_registry: Default::default(),
         code_mode: Default::default(),
         use_experimental_unified_exec_tool: false,
         background_terminal_max_timeout: 300_000,
