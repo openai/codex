@@ -16,6 +16,7 @@ pub(super) struct McpDesiredState {
     pub(super) auth: Option<CodexAuth>,
     pub(super) submit_id: String,
     pub(super) originator: String,
+    pub(super) session_source: SessionSource,
     pub(super) environments: TurnEnvironmentSnapshot,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 }
@@ -74,6 +75,7 @@ impl Session {
             auth,
             submit_id: self.next_internal_sub_id(),
             originator: session_configuration.originator.clone(),
+            session_source: session_configuration.session_source.clone(),
             environments,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         }
@@ -95,6 +97,7 @@ impl Session {
             auth,
             submit_id: INITIAL_SUBMIT_ID.to_owned(),
             originator: session_configuration.originator.clone(),
+            session_source: session_configuration.session_source.clone(),
             environments: resolved_environments.clone(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         };

@@ -26,6 +26,7 @@ use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
 use codex_plugin::AppConnectorId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::SessionSource;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
@@ -34,6 +35,11 @@ const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 pub(crate) struct McpRuntimeProjection {
     pub(crate) config: McpConfig,
     pub(crate) plugins_available: bool,
+}
+
+pub(crate) struct McpThreadIdentity<'a> {
+    pub(crate) session_source: &'a SessionSource,
+    pub(crate) originator: &'a str,
 }
 
 enum OrderedMcpOverlay {
@@ -109,7 +115,7 @@ impl McpManager {
         config: &Config,
         thread_init: &ExtensionDataInit,
         thread_store: &ExtensionData,
-        originator: &str,
+        identity: McpThreadIdentity<'_>,
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         executor_capability_discovery: Option<&ExecutorCapabilityDiscoverySnapshot>,
     ) -> McpRuntimeProjection {
@@ -118,11 +124,12 @@ impl McpManager {
                 config,
                 thread_init,
                 thread_store,
-                originator,
+                identity.originator,
                 ready_selected_capability_roots,
                 executor_capability_discovery,
-            ),
-            Some(originator),
+            )
+            .with_session_source(identity.session_source),
+            Some(identity.originator),
         )
         .await
     }

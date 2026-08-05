@@ -739,6 +739,7 @@ impl Session {
         let mcp_thread_init_for_startup = &mcp_thread_init;
         let thread_extension_data_for_mcp = &thread_extension_data;
         let mcp_originator = session_configuration.originator.clone();
+        let mcp_session_source = session_configuration.session_source.clone();
         let mcp_runtime_cwd = session_configuration
             .environment_selections()
             .first()
@@ -752,7 +753,10 @@ impl Session {
                     &config_for_mcp,
                     mcp_thread_init_for_startup,
                     thread_extension_data_for_mcp,
-                    &mcp_originator,
+                    McpThreadIdentity {
+                        session_source: &mcp_session_source,
+                        originator: &mcp_originator,
+                    },
                     /*ready_selected_capability_roots*/ &[],
                     /*executor_capability_discovery*/ None,
                 )
@@ -1272,7 +1276,10 @@ impl Session {
                         config.as_ref(),
                         &sess.services.mcp_thread_init,
                         &sess.services.thread_extension_data,
-                        &session_configuration.originator,
+                        McpThreadIdentity {
+                            session_source: &session_configuration.session_source,
+                            originator: &session_configuration.originator,
+                        },
                         /*ready_selected_capability_roots*/ &[],
                         /*executor_capability_discovery*/ None,
                     )

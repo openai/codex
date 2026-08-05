@@ -2,6 +2,7 @@ use super::*;
 use crate::config::test_config;
 use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
+use crate::mcp::McpThreadIdentity;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::build_world_state_from_turn_context;
@@ -27,6 +28,7 @@ use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -666,7 +668,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() {
     struct InitialDataRecorder {
         lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
-        mcp_observed: Arc<std::sync::Mutex<Vec<String>>>,
+        mcp_observed: Arc<std::sync::Mutex<Vec<(String, SessionSource)>>>,
     }
 
     impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
@@ -712,7 +714,13 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 self.mcp_observed
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(selected_root.id.clone());
+                    .push((
+                        selected_root.id.clone(),
+                        context
+                            .session_source()
+                            .expect("thread-scoped MCP resolution should identify its source")
+                            .clone(),
+                    ));
                 let mut server = codex_mcp::codex_apps_mcp_server_config(
                     "https://selected.invalid",
                     /*apps_mcp_product_sku*/ None,
@@ -792,9 +800,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         })
         .await
         .expect("start first thread");
+    let second_session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let second_thread = manager
         .start_thread(StartThreadOptions {
             environments: Some(Vec::new()),
+            session_source: Some(second_session_source.clone()),
             thread_extension_init: selected_root_init("selected-b", "env-b"),
             ..StartThreadOptions::new(config.clone())
         })
@@ -809,7 +819,10 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             &config,
             &first_session.services.mcp_thread_init,
             &first_session.services.thread_extension_data,
-            &first_originator,
+            McpThreadIdentity {
+                session_source: &SessionSource::Exec,
+                originator: &first_originator,
+            },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,
         )
@@ -823,7 +836,10 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             &config,
             &second_session.services.mcp_thread_init,
             &second_session.services.thread_extension_data,
-            &second_originator,
+            McpThreadIdentity {
+                session_source: &second_session_source,
+                originator: &second_originator,
+            },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,
         )
@@ -846,10 +862,10 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
         vec![
-            "selected-a".to_string(),
-            "selected-b".to_string(),
-            "selected-a".to_string(),
-            "selected-b".to_string(),
+            ("selected-a".to_string(), SessionSource::Exec),
+            ("selected-b".to_string(), second_session_source.clone()),
+            ("selected-a".to_string(), SessionSource::Exec),
+            ("selected-b".to_string(), second_session_source),
         ]
     );
     let selected_servers = |config: &codex_mcp::McpConfig| {

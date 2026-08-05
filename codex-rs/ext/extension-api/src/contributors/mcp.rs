@@ -1,6 +1,7 @@
 use codex_config::McpServerConfig;
 use codex_exec_server_protocol::ExecutorCapabilityDiscoverySnapshot;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::SessionSource;
 
 use crate::ExtensionData;
 use crate::ExtensionDataInit;
@@ -17,6 +18,8 @@ pub struct McpServerContributionContext<'a, C> {
     thread_store: Option<&'a ExtensionData>,
     /// Stable host inputs for the active thread, when resolution is thread-scoped.
     thread_init: Option<&'a ExtensionDataInit>,
+    /// Source of the active thread, when supplied by the host runtime.
+    session_source: Option<&'a SessionSource>,
     /// Effective request originator for the active thread, when resolution is thread-scoped.
     originator: Option<&'a str>,
     /// Selected roots resolved against ready environments for this exact step.
@@ -40,6 +43,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
             config,
             thread_store: None,
             thread_init: None,
+            session_source: None,
             originator: None,
             ready_selected_capability_roots: None,
             executor_capability_discovery: None,
@@ -59,10 +63,17 @@ impl<'a, C> McpServerContributionContext<'a, C> {
             config,
             thread_store: Some(thread_store),
             thread_init: Some(thread_init),
+            session_source: None,
             originator: Some(originator),
             ready_selected_capability_roots: Some(ready_selected_capability_roots),
             executor_capability_discovery,
         }
+    }
+
+    /// Attaches the stable source of the active thread to this contribution.
+    pub fn with_session_source(mut self, session_source: &'a SessionSource) -> Self {
+        self.session_source = Some(session_source);
+        self
     }
 
     /// Returns the host configuration visible during resolution.
@@ -78,6 +89,11 @@ impl<'a, C> McpServerContributionContext<'a, C> {
     /// Returns stable host inputs when resolving for a running thread.
     pub fn thread_init(&self) -> Option<&'a ExtensionDataInit> {
         self.thread_init
+    }
+
+    /// Returns the active thread's source when supplied by the host runtime.
+    pub fn session_source(&self) -> Option<&'a SessionSource> {
+        self.session_source
     }
 
     /// Returns the effective request originator when resolving for a running thread.

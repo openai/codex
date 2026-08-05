@@ -95,12 +95,13 @@ impl Session {
         config: &Config,
     ) -> (McpConfig, McpRuntimeContext) {
         let originator = self.originator().await;
-        let windows_sandbox_level = self
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .windows_sandbox_level;
+        let (windows_sandbox_level, session_source) = {
+            let state = self.state.lock().await;
+            (
+                state.session_configuration.windows_sandbox_level,
+                state.session_configuration.session_source.clone(),
+            )
+        };
         let environments = self.services.turn_environments.snapshot().await;
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)
@@ -122,7 +123,10 @@ impl Session {
                 config,
                 &self.services.mcp_thread_init,
                 &self.services.thread_extension_data,
-                &originator,
+                McpThreadIdentity {
+                    session_source: &session_source,
+                    originator: &originator,
+                },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
             )
@@ -199,7 +203,10 @@ impl Session {
                     &desired.config,
                     &self.services.mcp_thread_init,
                     &self.services.thread_extension_data,
-                    &desired.originator,
+                    McpThreadIdentity {
+                        session_source: &desired.session_source,
+                        originator: &desired.originator,
+                    },
                     &ready_selected_capability_roots,
                     executor_capability_discovery.as_deref(),
                 )
@@ -253,7 +260,10 @@ impl Session {
                 &desired.config,
                 &self.services.mcp_thread_init,
                 &self.services.thread_extension_data,
-                &desired.originator,
+                McpThreadIdentity {
+                    session_source: &desired.session_source,
+                    originator: &desired.originator,
+                },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
             )
@@ -616,7 +626,10 @@ impl Session {
                 refresh_config,
                 &self.services.mcp_thread_init,
                 &self.services.thread_extension_data,
-                &turn_context.originator,
+                McpThreadIdentity {
+                    session_source: &turn_context.session_source,
+                    originator: &turn_context.originator,
+                },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
             )
