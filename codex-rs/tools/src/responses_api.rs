@@ -46,6 +46,8 @@ pub enum LoadableToolSpec {
     #[allow(dead_code)]
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
+    #[serde(rename = "custom")]
+    Custom(FreeformTool),
     #[serde(rename = "namespace")]
     Namespace(ResponsesApiNamespace),
 }
@@ -85,8 +87,8 @@ pub fn coalesce_loadable_tool_specs(
     let mut coalesced_specs = Vec::new();
     for spec in specs {
         match spec {
-            LoadableToolSpec::Function(tool) => {
-                coalesced_specs.push(LoadableToolSpec::Function(tool));
+            tool @ (LoadableToolSpec::Function(_) | LoadableToolSpec::Custom(_)) => {
+                coalesced_specs.push(tool);
             }
             LoadableToolSpec::Namespace(mut namespace) => {
                 if let Some(existing_namespace) =
@@ -96,7 +98,9 @@ pub fn coalesce_loadable_tool_specs(
                         {
                             Some(existing_namespace)
                         }
-                        LoadableToolSpec::Function(_) | LoadableToolSpec::Namespace(_) => None,
+                        LoadableToolSpec::Function(_)
+                        | LoadableToolSpec::Custom(_)
+                        | LoadableToolSpec::Namespace(_) => None,
                     })
                 {
                     existing_namespace.tools.append(&mut namespace.tools);

@@ -68,6 +68,7 @@ impl From<LoadableToolSpec> for ToolSpec {
     fn from(value: LoadableToolSpec) -> Self {
         match value {
             LoadableToolSpec::Function(tool) => ToolSpec::Function(tool),
+            LoadableToolSpec::Custom(tool) => ToolSpec::Freeform(tool),
             LoadableToolSpec::Namespace(namespace) => ToolSpec::Namespace(namespace),
         }
     }

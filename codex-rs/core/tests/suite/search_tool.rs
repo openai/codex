@@ -5,6 +5,10 @@ use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
+use codex_core::config::Config;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ToolContributor;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -20,6 +24,18 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
+use codex_tools::FunctionCallError;
+use codex_tools::JsonToolOutput;
+use codex_tools::ToolCall;
+use codex_tools::ToolExecutor;
+use codex_tools::ToolExecutorFuture;
+use codex_tools::ToolExposure;
+use codex_tools::ToolName;
+use codex_tools::ToolOutput;
+use codex_tools::ToolPayload;
+use codex_tools::ToolSpec;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI;
@@ -39,6 +55,7 @@ use core_test_support::apps_test_server::search_capable_apps_builder as configur
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
@@ -56,6 +73,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
@@ -915,6 +933,126 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     ));
     assert!(description.contains("### Designing delegated subtasks"));
     assert!(description.contains("### When to delegate vs. do the subtask yourself"));
+
+    Ok(())
+}
+
+struct DeferredCustomTool;
+
+impl ToolContributor for DeferredCustomTool {
+    fn tools(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        vec![Arc::new(Self)]
+    }
+}
+
+impl ToolExecutor<ToolCall> for DeferredCustomTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("custom_echo")
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Freeform(FreeformTool {
+            name: "custom_echo".to_string(),
+            description: "Echo a custom payload.".to_string(),
+            defer_loading: None,
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: /.+/".to_string(),
+            },
+        })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    fn handle(&self, call: ToolCall) -> ToolExecutorFuture<'_> {
+        Box::pin(async move {
+            let ToolPayload::Custom { input } = call.payload else {
+                return Err(FunctionCallError::Fatal(
+                    "expected custom tool payload".to_string(),
+                ));
+            };
+            Ok(Box::new(JsonToolOutput::new(json!({
+                "echo": input,
+                "namespace": call.tool_name.namespace,
+            }))) as Box<dyn ToolOutput>)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_search_returns_deferred_custom_tool_and_routes_follow_up_call() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call("search-1", &json!({ "query": "custom payload" })),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_custom_tool_call("custom-1", "custom_echo", "hello"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_contributor(Arc::new(DeferredCustomTool));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(configure_search_capable_model);
+    let test = builder.build_with_auto_env(&server).await?;
+    test.submit_turn("Find and run the custom echo tool")
+        .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+
+    let initial_tools = tool_names(&requests[0].body_json());
+    assert!(
+        initial_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME)
+    );
+    assert!(initial_tools.iter().all(|name| name != "custom_echo"));
+    assert_eq!(
+        tool_search_output_tools(&requests[1], "search-1"),
+        vec![json!({
+            "type": "custom",
+            "name": "custom_echo",
+            "description": "Echo a custom payload.",
+            "defer_loading": true,
+            "format": {
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": "start: /.+/",
+            },
+        })]
+    );
+    let output = requests[2].custom_tool_call_output("custom-1");
+    let output: Value = serde_json::from_str(
+        output["output"]
+            .as_str()
+            .expect("custom tool output should contain serialized JSON"),
+    )?;
+    assert_eq!(output, json!({ "echo": "hello", "namespace": null }));
 
     Ok(())
 }

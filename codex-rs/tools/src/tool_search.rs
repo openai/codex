@@ -38,6 +38,10 @@ impl ToolSearchInfo {
                 tool.output_schema = None;
                 LoadableToolSpec::Function(tool)
             }
+            ToolSpec::Freeform(mut tool) => {
+                tool.defer_loading = Some(true);
+                LoadableToolSpec::Custom(tool)
+            }
             ToolSpec::Namespace(mut namespace) => {
                 if namespace.description.trim().is_empty() {
                     namespace.description = default_namespace_description(&namespace.name);
@@ -55,7 +59,7 @@ impl ToolSearchInfo {
                 }
                 LoadableToolSpec::Namespace(namespace)
             }
-            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } | ToolSpec::Freeform(_) => {
+            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
                 return None;
             }
         };

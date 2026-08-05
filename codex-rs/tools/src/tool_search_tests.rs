@@ -3,6 +3,36 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 #[test]
+fn top_level_custom_tools_are_searchable() {
+    let custom_tool = crate::FreeformTool {
+        name: "apply_patch".to_string(),
+        description: "Apply a patch".to_string(),
+        defer_loading: None,
+        format: crate::FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: \"patch\"".to_string(),
+        },
+    };
+    let search_info = ToolSearchInfo::from_tool_spec(
+        ToolSpec::Freeform(custom_tool.clone()),
+        /*source_info*/ None,
+    )
+    .expect("top-level custom tool should be searchable");
+
+    assert_eq!(
+        (search_info.entry.search_text, search_info.entry.output),
+        (
+            "apply_patch Apply a patch lark".to_string(),
+            LoadableToolSpec::Custom(crate::FreeformTool {
+                defer_loading: Some(true),
+                ..custom_tool
+            }),
+        )
+    );
+}
+
+#[test]
 fn default_search_text_uses_model_visible_namespace_metadata_once() {
     let mut schedule_schema = JsonSchema::object(
         BTreeMap::from([(
