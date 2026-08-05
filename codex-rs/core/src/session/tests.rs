@@ -8592,6 +8592,52 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
 }
 
 #[tokio::test]
+async fn capability_discovery_uses_environment_permission_profile() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("unrestricted permission profile should be allowed");
+    let mut environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
+    let mut file_system_policy = PermissionProfile::read_only().file_system_sandbox_policy();
+    file_system_policy.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::Deny,
+        missing_path_behavior: None,
+    });
+    environment.config.permission_profile =
+        PermissionProfileSnapshot::legacy(PermissionProfile::from_runtime_permissions(
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ));
+    let expected_sandbox = turn_context
+        .file_system_sandbox_context(/*additional_permissions*/ None, &environment);
+    let environment_id = environment.environment_id.clone();
+    turn_context.environments.environments[0] = TurnEnvironmentState::Ready(environment);
+
+    let discovery = session
+        .executor_capability_discovery_for_step(
+            &turn_context.config,
+            /*ready_selected_capability_roots*/ &[],
+            &turn_context.environments,
+            turn_context.windows_sandbox_level,
+        )
+        .await
+        .expect("restricted environment should trigger capability discovery");
+
+    assert_eq!(
+        discovery.sandbox_contexts().get(&environment_id),
+        Some(&expected_sandbox)
+    );
+}
+
+#[tokio::test]
 async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
@@ -8784,6 +8830,70 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
         "{environment_update}"
     );
     assert!(!environment_update.contains("<environments>"));
+}
+
+#[tokio::test]
+async fn record_context_updates_use_environment_permission_profile_and_workspace_roots() {
+    let (session, mut previous_context) = make_session_and_context().await;
+    Arc::make_mut(&mut previous_context.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("unrestricted permission profile should be allowed");
+    let mut previous_environment = previous_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
+    previous_environment.config.permission_profile =
+        PermissionProfileSnapshot::legacy(PermissionProfile::Disabled);
+    previous_context.environments.environments[0] =
+        TurnEnvironmentState::Ready(previous_environment);
+    let previous_context = Arc::new(previous_context);
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    let environment = current_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .clone();
+    let cwd = environment.cwd().clone();
+    let workspace_root = current_context.config.cwd.join("selected-workspace");
+    let mut environment_config = environment.config;
+    environment_config.permission_profile =
+        PermissionProfileSnapshot::legacy(PermissionProfile::workspace_write());
+    current_context.environments.environments[0] =
+        TurnEnvironmentState::Ready(TurnEnvironment::new(
+            environment.environment_id,
+            environment.environment,
+            cwd,
+            vec![PathUri::from_abs_path(&workspace_root)],
+            environment.shell,
+            environment_config,
+        ));
+
+    let update_items =
+        record_context_update_items(&session, previous_context, current_context).await;
+    let permissions_update = developer_input_texts(&update_items)
+        .into_iter()
+        .find(|text| text.contains("<permissions instructions>"))
+        .expect("permissions update should be emitted");
+    assert!(
+        permissions_update.contains(workspace_root.to_string_lossy().as_ref()),
+        "selected workspace root should be visible in permissions: {permissions_update}"
+    );
+    let environment_update = user_input_texts(&update_items)
+        .into_iter()
+        .find(|text| text.contains("<environment_context>"))
+        .expect("environment update should be emitted");
+    assert!(
+        environment_update.contains("<permission_profile type=\"managed\">")
+            && environment_update.contains(workspace_root.to_string_lossy().as_ref()),
+        "selected environment permissions should be visible: {environment_update}"
+    );
 }
 
 #[tokio::test]

@@ -114,7 +114,24 @@ impl Session {
         ));
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
         if turn_context.config.include_permissions_instructions {
-            let permission_profile = turn_context.permission_profile();
+            let environment = step_context.environments.primary();
+            let permission_profile = environment
+                .map(|environment| {
+                    let workspace_roots = environment
+                        .workspace_roots()
+                        .iter()
+                        .filter_map(|workspace_root| workspace_root.to_abs_path().ok())
+                        .collect::<Vec<_>>();
+                    environment
+                        .permission_profile()
+                        .clone()
+                        .materialize_project_roots_with_workspace_roots(&workspace_roots)
+                })
+                .unwrap_or_else(|| turn_context.permission_profile());
+            #[allow(deprecated)]
+            let cwd = environment
+                .and_then(|environment| environment.cwd().to_abs_path().ok())
+                .unwrap_or_else(|| turn_context.cwd.clone());
             let model_messages = turn_context.model_info.model_messages.as_ref();
             let exec_policy = self.services.exec_policy.current();
             world_state.add_section(PermissionsState::new(
@@ -126,8 +143,7 @@ impl Session {
                     model_messages.and_then(|messages| messages.permissions.as_ref()),
                 ),
                 exec_policy.as_ref(),
-                #[allow(deprecated)]
-                &turn_context.cwd,
+                &cwd,
                 turn_context
                     .config
                     .features

@@ -317,10 +317,28 @@ impl Session {
         environments: &TurnEnvironmentSnapshot,
         windows_sandbox_level: WindowsSandboxLevel,
     ) -> Option<Arc<ExecutorCapabilityDiscoverySnapshot>> {
-        let restricted_file_system = !config
-            .permissions
-            .file_system_sandbox_policy()
-            .has_full_disk_read_access();
+        // Capability roots can currently be selected independently of turn environments, so a
+        // root may be ready when there is no primary `TurnEnvironment`. Keep using the thread
+        // policy in that case so restricted discovery fails closed below. Once every selected
+        // root belongs to a thread/environment attachment whose `EnvironmentConfig` is installed
+        // before the root becomes ready, discovery can use the root owner's policy and this
+        // fallback can be removed.
+        let restricted_file_system = environments.primary().map_or_else(
+            || {
+                !config
+                    .permissions
+                    .file_system_sandbox_policy()
+                    .has_full_disk_read_access()
+            },
+            |_| {
+                environments.turn_environments().any(|environment| {
+                    !environment
+                        .permission_profile()
+                        .file_system_sandbox_policy()
+                        .has_full_disk_read_access()
+                })
+            },
+        );
         if !restricted_file_system
             && !config
                 .features
@@ -333,7 +351,7 @@ impl Session {
                 .turn_environments()
                 .map(|environment| {
                     let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
-                        config.permissions.permission_profile().clone(),
+                        environment.permission_profile().clone(),
                         environment.cwd().clone(),
                     );
                     sandbox.workspace_roots = environment.workspace_roots().to_vec();
