@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -30,6 +32,20 @@ impl PluginSkillSnapshots {
         Self {
             snapshots_by_root: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+}
+
+impl PartialEq for PluginSkillSnapshots {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.snapshots_by_root, &other.snapshots_by_root)
+    }
+}
+
+impl Eq for PluginSkillSnapshots {}
+
+impl Hash for PluginSkillSnapshots {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.snapshots_by_root).hash(state);
     }
 }
 

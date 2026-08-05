@@ -203,13 +203,48 @@ async fn skills_for_config_refreshes_cache_when_remote_plugin_id_changes() {
         /*bundled_skills_enabled*/ true,
     );
 
-    skills_for_config_with_stack(
-        &skills_service,
-        &cwd,
-        &config_layer_stack,
-        &[plugin_skill_root.clone()],
+    let plugin_input = HostSkillsLoadInput::new(
+        cwd.path().abs(),
+        vec![plugin_skill_root.clone()],
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
     )
-    .await;
+    .with_plugin_skill_snapshots(Some(PluginSkillSnapshots::for_plugin_load()));
+    let plugin_snapshot = skills_service
+        .snapshot_for_config(&plugin_input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+    fs::write(
+        &skill_path,
+        "---\nname: sample-search\ndescription: updated sample data\n---\n\n# Body\n",
+    )
+    .expect("update plugin skill");
+    let listing_input = plugin_input
+        .clone()
+        .with_plugin_skill_snapshots(/*plugin_skill_snapshots*/ None);
+    let listing_snapshot = skills_service
+        .snapshot_for_cwd(
+            &listing_input,
+            /*force_reload*/ false,
+            Some(Arc::clone(&LOCAL_FS)),
+        )
+        .await;
+    assert_eq!(
+        (
+            plugin_snapshot
+                .outcome()
+                .skills
+                .iter()
+                .find(|skill| skill.name == "sample:sample-search")
+                .map(|skill| skill.description.as_str()),
+            listing_snapshot
+                .outcome()
+                .skills
+                .iter()
+                .find(|skill| skill.name == "sample:sample-search")
+                .map(|skill| skill.description.as_str()),
+        ),
+        (Some("search sample data"), Some("updated sample data"))
+    );
 
     plugin_skill_root.plugin_identity.remote_plugin_id = Some("plugins~Plugin_sample".to_string());
     let refreshed = skills_for_config_with_stack(
@@ -466,6 +501,12 @@ async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
         .collect::<HashSet<_>>();
     assert!(loaded_names.contains("user-skill"));
     assert!(loaded_names.contains("repo-skill"));
+    let other_file_system: Arc<dyn codex_exec_server::ExecutorFileSystem> =
+        Arc::new(codex_exec_server::LocalFileSystem::unsandboxed());
+    let other_snapshot = skills_service
+        .snapshot_for_config(&skills_input, Some(other_file_system))
+        .await;
+    assert!(!std::ptr::eq(snapshot.outcome(), other_snapshot.outcome()));
 }
 
 #[tokio::test]
@@ -570,20 +611,27 @@ async fn skills_for_cwd_uses_cached_result_until_force_reload() {
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
-    let _ = skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
     let base_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(&config_layer_stack),
     );
-    let snapshot_a = skills_service
-        .snapshot_for_cwd(
+    let config_input = base_input
+        .clone()
+        .with_plugin_skill_snapshots(Some(PluginSkillSnapshots::for_plugin_load()));
+    let (config_snapshot, snapshot_a) = tokio::join!(
+        skills_service.snapshot_for_config(&config_input, Some(Arc::clone(&LOCAL_FS))),
+        skills_service.snapshot_for_cwd(
             &base_input,
             /*force_reload*/ false,
             Some(Arc::clone(&LOCAL_FS)),
         )
-        .await;
+    );
+    assert!(std::ptr::eq(
+        config_snapshot.outcome(),
+        snapshot_a.outcome()
+    ));
     let outcome_a = snapshot_a.outcome();
     assert!(
         outcome_a

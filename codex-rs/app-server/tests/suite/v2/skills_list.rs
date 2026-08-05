@@ -365,7 +365,6 @@ enabled = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -380,7 +379,13 @@ enabled = true
     let initial_skills_list_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
-            force_reload: true,
+            force_reload: false,
+        })
+        .await?;
+    let thread_start_request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            cwd: Some(cwd.path().to_string_lossy().into_owned()),
+            ..Default::default()
         })
         .await?;
     let SkillsListResponse { data } = timeout(
@@ -394,6 +399,31 @@ enabled = true
             .iter()
             .any(|skill| skill.name == "google-calendar:meeting-prep")
     }));
+    let _: ThreadStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
+
+    std::fs::write(
+        codex_home.path().join(
+            "plugins/cache/openai-curated/google-calendar/local/skills/meeting-prep/SKILL.md",
+        ),
+        "---\nname: meeting-prep\ndescription: Updated meeting preparation\n---\n\n# Body\n",
+    )?;
+    for force_reload in [true, false] {
+        let request_id = mcp
+            .send_skills_list_request(SkillsListParams {
+                cwds: vec![cwd.path().to_path_buf()],
+                force_reload,
+            })
+            .await?;
+        let SkillsListResponse { data } =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+        assert!(data.iter().any(|entry| {
+            entry.skills.iter().any(|skill| {
+                skill.name == "google-calendar:meeting-prep"
+                    && skill.description == "Updated meeting preparation"
+            })
+        }));
+    }
 
     let enablement_request_id = mcp
         .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {

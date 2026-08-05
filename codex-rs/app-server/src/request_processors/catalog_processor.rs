@@ -506,6 +506,13 @@ impl CatalogRequestProcessor {
             .await;
         let skills_service = self.thread_manager.skills_service();
         let plugins_manager = self.thread_manager.plugins_manager();
+        if force_reload
+            && workspace_codex_plugins_enabled
+            && config.features.enabled(Feature::Plugins)
+        {
+            plugins_manager.clear_cache();
+            skills_service.clear_cache();
+        }
         let fs = self
             .thread_manager
             .environment_manager()
@@ -535,23 +542,38 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let effective_skill_roots = if workspace_codex_plugins_enabled {
-                        let plugins_input = config.plugins_config_input();
-                        plugins_manager
-                            .effective_skill_roots_for_layer_stack(
-                                &config_layer_stack,
-                                &plugins_input,
-                            )
-                            .await
-                    } else {
-                        Vec::new()
-                    };
+                    let (effective_skill_roots, plugin_skill_snapshots) =
+                        if workspace_codex_plugins_enabled {
+                            let plugins_input = config.plugins_config_input();
+                            if config_layer_stack == plugins_input.config_layer_stack {
+                                let plugins =
+                                    plugins_manager.plugins_for_config(&plugins_input).await;
+                                (
+                                    plugins.effective_plugin_skill_roots(),
+                                    plugins_manager
+                                        .plugin_skill_snapshots_for_config(&plugins_input),
+                                )
+                            } else {
+                                (
+                                    plugins_manager
+                                        .effective_skill_roots_for_layer_stack(
+                                            &config_layer_stack,
+                                            &plugins_input,
+                                        )
+                                        .await,
+                                    None,
+                                )
+                            }
+                        } else {
+                            (Vec::new(), None)
+                        };
                     let skills_input = codex_core::skills::HostSkillsLoadInput::new(
                         cwd_abs.clone(),
                         effective_skill_roots,
                         config_layer_stack,
                         config.bundled_skills_enabled(),
-                    );
+                    )
+                    .with_plugin_skill_snapshots(plugin_skill_snapshots);
                     let snapshot = skills_service
                         .snapshot_for_cwd(&skills_input, force_reload, fs)
                         .await;
