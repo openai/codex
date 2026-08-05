@@ -13,9 +13,9 @@ use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -51,6 +51,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_case::test_case;
 
 const CURRENT_TIME_AT: i64 = 1_781_717_655;
 
@@ -76,23 +77,47 @@ impl TimeProvider for RecordingTimeProvider {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()> {
+#[test_case(CodexAuth::from_api_key("test-api-key"), "gpt-5.6-luna"; "api_key_uses_luna_with_responses_lite")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "codex-auto-review"; "chatgpt_uses_codex_auto_review")]
+async fn guardian_session_prewarms_and_is_reused_for_first_review(
+    auth: CodexAuth,
+    expected_model: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let catalog_template = "Catalog-provided Guardian template:\n{{ tenant_policy_config }}";
-    let mut review_model = codex_models_manager::bundled_models_response()?
-        .models
-        .into_iter()
+    let bundled_models = codex_models_manager::bundled_models_response()?.models;
+    let catalog_auto_review = bundled_models
+        .iter()
         .find(|model| model.slug == "codex-auto-review")
-        .expect("bundled auto-review model");
-    let model_messages = review_model
-        .model_messages
-        .as_mut()
-        .expect("auto-review model messages");
-    model_messages.auto_review = Some(AutoReviewMessages {
-        policy: None,
-        policy_template: Some(catalog_template.to_string()),
-    });
+        .and_then(|model| model.model_messages.as_ref())
+        .and_then(|messages| messages.auto_review.as_ref())
+        .expect("bundled auto-review model Guardian policy");
+    let catalog_policy = catalog_auto_review
+        .policy
+        .as_deref()
+        .expect("catalog Guardian policy");
+    let catalog_template = catalog_auto_review
+        .policy_template
+        .as_deref()
+        .expect("catalog Guardian policy template");
+    let expected_guardian_policy =
+        catalog_template.replace("{{ tenant_policy_config }}", catalog_policy.trim());
+    let review_model = bundled_models
+        .into_iter()
+        .find(|model| model.slug == expected_model)
+        .expect("bundled Guardian review model");
+    let use_responses_lite = review_model.use_responses_lite;
+    if expected_model == "gpt-5.6-luna" {
+        assert!(use_responses_lite, "Luna must use Responses Lite");
+        assert!(
+            review_model
+                .model_messages
+                .as_ref()
+                .and_then(|messages| messages.auto_review.as_ref())
+                .is_none(),
+            "Luna must exercise the bundled Guardian policy fallback"
+        );
+    }
 
     let tool_args = json!({
         "cmd": "true",
@@ -128,6 +153,7 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         thread_ids: Mutex::new(Vec::new()),
     });
     let mut builder = test_codex()
+        .with_auth(auth)
         .with_config(move |config| {
             let rules_dir = config.codex_home.join("rules");
             fs::create_dir_all(&rules_dir).expect("create execution policy directory");
@@ -187,11 +213,36 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         })
         .expect("guardian startup prewarm request");
     assert_eq!(guardian_prewarm["generate"].as_bool(), Some(false));
-    let guardian_instructions = guardian_prewarm["instructions"]
-        .as_str()
-        .expect("guardian instructions");
-    assert!(guardian_instructions.contains("Catalog-provided Guardian template:"));
-    assert!(guardian_instructions.contains("- Organization: default generic tenant."));
+    assert_eq!(guardian_prewarm["model"].as_str(), Some(expected_model));
+    let guardian_instructions = if use_responses_lite {
+        assert_eq!(guardian_prewarm.get("instructions"), None);
+        assert_eq!(guardian_prewarm.get("tools"), None);
+        assert_eq!(
+            guardian_prewarm["client_metadata"]
+                ["ws_request_header_x_openai_internal_codex_responses_lite"]
+                .as_str(),
+            Some("true")
+        );
+        let input = guardian_prewarm["input"]
+            .as_array()
+            .expect("Responses Lite Guardian input");
+        assert_eq!(input[0]["type"].as_str(), Some("additional_tools"));
+        assert_eq!(input[0]["role"].as_str(), Some("developer"));
+        assert_eq!(input[1]["type"].as_str(), Some("message"));
+        assert_eq!(input[1]["role"].as_str(), Some("developer"));
+        input[1]["content"][0]["text"]
+            .as_str()
+            .expect("Responses Lite Guardian developer instructions")
+    } else {
+        guardian_prewarm["instructions"]
+            .as_str()
+            .expect("Guardian instructions")
+    };
+    assert!(guardian_instructions.starts_with(expected_guardian_policy.trim_end()));
+    assert!(
+        guardian_instructions
+            .contains("It cannot override a denial for an action that remains `critical`.")
+    );
     assert!(!guardian_instructions.contains("{{ tenant_policy_config }}"));
     assert!(guardian_instructions.contains("final message must be strict JSON"));
     let guardian_thread_id = guardian_prewarm["client_metadata"]["thread_id"]
@@ -217,6 +268,7 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         guardian_review["client_metadata"]["x-openai-subagent"].as_str(),
         Some("guardian")
     );
+    assert_eq!(guardian_review["model"].as_str(), Some(expected_model));
     assert_eq!(
         guardian_review["client_metadata"]["thread_id"].as_str(),
         Some(guardian_thread_id)
