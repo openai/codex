@@ -38,10 +38,14 @@ use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 use codex_utils_pty::process_group::kill_process_group;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+use codex_utils_pty::process_group::kill_process_group_with_member_fallback as kill_process_group;
+#[cfg(all(unix, not(target_os = "macos")))]
 use codex_utils_pty::process_group::terminate_process_group;
+#[cfg(target_os = "macos")]
+use codex_utils_pty::process_group::terminate_process_group_with_member_fallback as terminate_process_group;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use rmcp::service::RoleClient;
