@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+⚠ Cyber models default to "Approve for me" for safety reasons.

@@ -106,8 +106,7 @@ impl ChatWidget {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
                     .into(),
-                format!("The Windows sandbox cannot guarantee protection in {mode_label}.")
-                    .fg(Color::Red),
+                format!("The Windows sandbox cannot guarantee protection in {mode_label}.").red(),
             ])
         } else {
             Line::from(vec![

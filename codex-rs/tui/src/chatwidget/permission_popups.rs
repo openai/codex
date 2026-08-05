@@ -407,19 +407,45 @@ impl ChatWidget {
     ) {
         let selected_name = preset.label.to_string();
         let approval = AskForApproval::from(preset.approval);
-        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        let is_cyber_model = self.model_catalog.try_list_models().is_ok_and(|models| {
+            models.iter().any(|model| {
+                model.model == self.current_model()
+                    && model.model_specialty.as_deref() == Some("cyber")
+            })
+        });
         let title_line = Line::from("Enable full access?").bold();
-        let info_line = Line::from(vec![
-            "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
-                .into(),
-            "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
-                .fg(Color::Red),
-        ]);
-        header_children.push(Box::new(title_line));
-        header_children.push(Box::new(
-            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
-        ));
-        let header = ColumnRenderable::with(header_children);
+        let info_lines = if is_cyber_model {
+            let recommendation = if auto_review_available(&self.config) {
+                "We strongly recommend selecting \"Approve for me\" instead, and customizing the reviewer policy for your use case."
+            } else {
+                "We strongly recommend selecting \"Ask for approval\" instead."
+            };
+            vec![
+                Line::default(),
+                Line::from(
+                    "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval.",
+                ),
+                Line::default(),
+                Line::from(vec![
+                    "Cyber models carry a higher risk of dangerous actions.".red(),
+                    " Ensure proper safeguards are in place before granting full access. ".into(),
+                    recommendation.into(),
+                ]),
+            ]
+        } else {
+            vec![Line::from(vec![
+                "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
+                    .into(),
+                "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
+                    .red(),
+            ])]
+        };
+        let header = Paragraph::new(
+            std::iter::once(title_line)
+                .chain(info_lines)
+                .collect::<Vec<_>>(),
+        )
+        .wrap(Wrap { trim: false });
 
         let accept_actions = profile_selection.map_or_else(
             || {
