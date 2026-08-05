@@ -15,6 +15,9 @@ pub struct ImageGenerationItem {
     pub status: String,
     pub revised_prompt: Option<String>,
     pub result: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub transparent_background: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub saved_path: Option<AbsolutePathBuf>,

@@ -928,6 +928,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     status: image.status,
                     revised_prompt: image.revised_prompt,
                     result: image.result,
+                    transparent_background: None,
                     saved_path: image.saved_path,
                 })
             }

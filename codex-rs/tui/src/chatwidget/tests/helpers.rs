@@ -718,6 +718,7 @@ pub(super) fn handle_image_generation_end(
                 status: status.into(),
                 revised_prompt,
                 result: String::new(),
+                transparent_background: None,
                 saved_path,
             }),
         }),

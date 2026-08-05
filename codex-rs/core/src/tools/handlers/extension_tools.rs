@@ -472,6 +472,7 @@ mod tests {
             status: "in_progress".to_string(),
             revised_prompt: None,
             result: String::new(),
+            transparent_background: None,
             saved_path: None,
         });
         let expected_completed_item = ExtensionItem::ImageGeneration(ImageGenerationItem {
@@ -479,6 +480,7 @@ mod tests {
             status: "completed".to_string(),
             revised_prompt: Some("A tiny blue square".to_string()),
             result: "cG5n".to_string(),
+            transparent_background: Some(true),
             saved_path: Some(expected_path.clone()),
         });
         codex_tools::TurnItemEmitter::emit_started(
@@ -500,6 +502,7 @@ mod tests {
                     status: "completed".to_string(),
                     revised_prompt: Some("A tiny blue square".to_string()),
                     result: "cG5n".to_string(),
+                    transparent_background: Some(true),
                     saved_path: Some(expected_path.clone()),
                 })],
             },

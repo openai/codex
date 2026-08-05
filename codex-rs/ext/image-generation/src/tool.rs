@@ -96,6 +96,7 @@ fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
         status: item.status.clone(),
         revised_prompt: item.revised_prompt.clone(),
         result: item.result.clone(),
+        transparent_background: item.transparent_background,
         saved_path: item.saved_path.clone(),
     })
 }
@@ -142,6 +143,7 @@ impl ImageGenerationTool {
                     status: "in_progress".to_string(),
                     revised_prompt: None,
                     result: String::new(),
+                    transparent_background: None,
                     saved_path: None,
                 },
                 EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
@@ -155,14 +157,19 @@ impl ImageGenerationTool {
         }
         .map_err(|err| format!("image generation failed: {err}"))
         .and_then(|response| {
+            let transparent_background = match response.background {
+                Some(ImageBackground::Transparent) => Some(true),
+                Some(ImageBackground::Opaque) => Some(false),
+                Some(ImageBackground::Auto) | None => None,
+            };
             response
                 .data
                 .into_iter()
                 .next()
-                .map(|data| data.b64_json)
+                .map(|data| (data.b64_json, transparent_background))
                 .ok_or_else(|| "image generation returned no image data".to_string())
         });
-        let result = match result {
+        let (result, transparent_background) = match result {
             Ok(result) => result,
             Err(message) => {
                 let item = ImageGenerationItem {
@@ -170,6 +177,7 @@ impl ImageGenerationTool {
                     status: "failed".to_string(),
                     revised_prompt: Some(args.prompt),
                     result: String::new(),
+                    transparent_background: None,
                     saved_path: None,
                 };
                 let legacy_event = legacy_end_event(&item);
@@ -209,6 +217,7 @@ impl ImageGenerationTool {
             status: "completed".to_string(),
             revised_prompt: Some(args.prompt),
             result: result.clone(),
+            transparent_background,
             saved_path: saved_path.clone(),
         };
         let legacy_event = legacy_end_event(&item);
