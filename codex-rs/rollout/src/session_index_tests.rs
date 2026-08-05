@@ -20,6 +20,15 @@ fn write_index(path: &Path, lines: &[SessionIndexEntry]) -> std::io::Result<()> 
 }
 
 fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Result<()> {
+    write_rollout_with_source_and_provider(path, thread_id, SessionSource::Cli, "test-provider")
+}
+
+fn write_rollout_with_source_and_provider(
+    path: &Path,
+    thread_id: ThreadId,
+    source: SessionSource,
+    model_provider: &str,
+) -> std::io::Result<()> {
     let timestamp = "2024-01-01T00-00-00Z".to_string();
     let line = RolloutLine {
         timestamp: timestamp.clone(),
@@ -34,12 +43,12 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                source: SessionSource::Cli,
+                source,
                 thread_source: None,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-                model_provider: Some("test-provider".into()),
+                model_provider: Some(model_provider.to_string()),
                 base_instructions: None,
                 dynamic_tools: None,
                 selected_capability_roots: Vec::new(),
@@ -187,6 +196,78 @@ async fn find_thread_meta_by_name_str_ignores_historical_name_after_rename() -> 
     let found = find_thread_meta_by_name_str(temp.path(), "same", /*state_db_ctx*/ None).await?;
 
     assert_eq!(found.map(|(path, _)| path), Some(current_rollout_path));
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_thread_meta_candidates_filter_metadata_before_ranking() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let index_path = session_index_path(temp.path());
+    let allowed_id = ThreadId::new();
+    let other_id = ThreadId::new();
+    let noninteractive_id = ThreadId::new();
+    let rollout_dir = temp.path().join("sessions/2024/01/01");
+    let allowed_path = rollout_dir.join(format!("rollout-2024-01-01T00-00-00-{allowed_id}.jsonl"));
+    let other_path = rollout_dir.join(format!("rollout-2024-01-01T00-00-01-{other_id}.jsonl"));
+    let noninteractive_path = rollout_dir.join(format!(
+        "rollout-2024-01-01T00-00-02-{noninteractive_id}.jsonl"
+    ));
+    std::fs::create_dir_all(&rollout_dir)?;
+    write_rollout_with_metadata(&allowed_path, allowed_id)?;
+    write_rollout_with_source_and_provider(
+        &other_path,
+        other_id,
+        SessionSource::Cli,
+        "other-provider",
+    )?;
+    write_rollout_with_source_and_provider(
+        &noninteractive_path,
+        noninteractive_id,
+        SessionSource::Exec,
+        "test-provider",
+    )?;
+    write_index(
+        &index_path,
+        &[
+            SessionIndexEntry {
+                id: allowed_id,
+                thread_name: "same".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            SessionIndexEntry {
+                id: other_id,
+                thread_name: "same".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+            },
+            SessionIndexEntry {
+                id: noninteractive_id,
+                thread_name: "same".to_string(),
+                updated_at: "2024-01-03T00:00:00Z".to_string(),
+            },
+        ],
+    )?;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&allowed_path)?
+        .set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))?;
+    let allowed_model_providers = vec!["test-provider".to_string()];
+
+    let found = find_thread_meta_candidates_by_name_str(
+        temp.path(),
+        "same",
+        /*state_db_ctx*/ None,
+        &[SessionSource::Cli],
+        &allowed_model_providers,
+    )
+    .await?;
+
+    assert_eq!(
+        found
+            .into_iter()
+            .map(|(path, session_meta)| (path, session_meta.meta.id))
+            .collect::<Vec<_>>(),
+        vec![(allowed_path, allowed_id)],
+    );
     Ok(())
 }
 
