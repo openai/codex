@@ -15,6 +15,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -1227,6 +1228,144 @@ async fn unified_tool_runtimes_preserve_source_order_and_collision_priority() {
         panic!("expected exactly one MCP tool after the extension collision");
     };
     assert_eq!(tool.description, "lookup test tool");
+}
+
+#[tokio::test]
+async fn strict_tool_collisions_reject_external_and_synthetic_duplicates() {
+    let cases = [
+        (
+            "mcp__registry.lookup",
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "registry",
+                    "mcp__registry",
+                    "lookup",
+                    ToolExposure::Direct,
+                )],
+                extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+                    namespace: "mcp__registry",
+                    tool_name: "lookup",
+                })],
+                ..ToolPlanInputs::default()
+            },
+            false,
+            false,
+        ),
+        (
+            "functions.update_plan",
+            ToolPlanInputs {
+                dynamic_tools: vec![dynamic_tool(
+                    /*namespace*/ None,
+                    "update_plan",
+                    /*defer_loading*/ false,
+                )],
+                ..ToolPlanInputs::default()
+            },
+            false,
+            false,
+        ),
+        (
+            "functions.exec",
+            ToolPlanInputs {
+                dynamic_tools: vec![dynamic_tool(
+                    /*namespace*/ None,
+                    codex_code_mode::PUBLIC_TOOL_NAME,
+                    /*defer_loading*/ false,
+                )],
+                ..ToolPlanInputs::default()
+            },
+            true,
+            false,
+        ),
+        (
+            "functions.tool_search",
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "registry",
+                    "mcp__registry",
+                    "lookup",
+                    ToolExposure::Deferred,
+                )],
+                dynamic_tools: vec![dynamic_tool(
+                    /*namespace*/ None,
+                    codex_tools::TOOL_SEARCH_TOOL_NAME,
+                    /*defer_loading*/ false,
+                )],
+                ..ToolPlanInputs::default()
+            },
+            false,
+            true,
+        ),
+    ];
+
+    for (expected_name, inputs, code_mode_enabled, search_enabled) in cases {
+        let (_session, mut turn) = make_session_and_context().await;
+        update_config(&mut turn, |config| {
+            config.tool_registry.error_on_tool_collisions = true;
+        });
+        if code_mode_enabled {
+            set_feature(&mut turn, Feature::CodeMode, /*enabled*/ true);
+        }
+        turn.model_info.supports_search_tool = search_enabled;
+        let turn = Arc::new(turn);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
+        let mut registry = build_core_tool_registry(
+            step_context.turn.as_ref(),
+            &step_context.environments,
+            step_context.mcp.as_ref(),
+            inputs.tool_suggest_candidates.as_ref(),
+            inputs.wait_for_environment_tool_config.as_ref(),
+        );
+        let hosted_specs = append_source_tools(
+            step_context.turn.as_ref(),
+            &mut registry,
+            inputs.tool_runtimes,
+            inputs.extension_tool_executors,
+            &inputs.dynamic_tools,
+        );
+
+        let error = super::finalize_tool_router(
+            step_context.turn.as_ref(),
+            registry,
+            hosted_specs,
+            &Default::default(),
+        )
+        .err()
+        .expect("strict tool collision should fail tool planning");
+        assert!(matches!(
+            error.details(),
+            CodexErrorDetails::ToolCollision(name) if name == expected_name
+        ));
+        assert_eq!(
+            error.to_string(),
+            format!("duplicate tool: {expected_name}")
+        );
+    }
+}
+
+#[tokio::test]
+async fn strict_tool_collisions_allow_identical_names_in_different_namespaces() {
+    let plan = probe_with(
+        |turn| {
+            update_config(turn, |config| {
+                config.tool_registry.error_on_tool_collisions = true;
+            });
+            set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(Some("first"), "lookup", /*defer_loading*/ false),
+                dynamic_tool(Some("second"), "lookup", /*defer_loading*/ false),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_registered_contains(&[
+        &ToolName::namespaced("first", "lookup").to_string(),
+        &ToolName::namespaced("second", "lookup").to_string(),
+    ]);
 }
 
 #[tokio::test]

@@ -217,6 +217,7 @@ fn registry_preserves_external_winners_and_trusted_synthetic_order() {
 
     let mut registry = ToolRegistry::from_tools([Arc::clone(&first_handler)]);
     assert!(!registry.register_external(handler(first_name.clone())));
+    assert_eq!(registry.first_collision(), Some(&first_name));
     assert!(registry.register_external(handler(second_name.clone())));
     registry.prepend_trusted(handler(synthetic_name.clone()));
 
@@ -248,6 +249,7 @@ fn reserved_shell_command_rejects_external_runtimes_without_a_builtin() {
         ToolExposure::Direct,
     ));
     assert!(registry.tool(&shell_command_name).is_none());
+    assert_eq!(registry.first_collision(), None);
 
     let namespaced_handler = handler(namespaced_shell_command_name.clone());
     assert!(registry.register_external(Arc::clone(&namespaced_handler)));
@@ -256,6 +258,46 @@ fn reserved_shell_command_rejects_external_runtimes_without_a_builtin() {
             .tool(&namespaced_shell_command_name)
             .is_some_and(|runtime| Arc::ptr_eq(&runtime, &namespaced_handler))
     );
+}
+
+#[test]
+fn registry_preserves_explicit_functions_shell_command_without_a_collision() {
+    let tool_name = codex_tools::ToolName::namespaced("functions", "shell_command");
+    let runtime = Arc::new(TestHandler { tool_name });
+    let mut registry = ToolRegistry::default();
+
+    assert!(registry.register_external(runtime));
+    assert_eq!(registry.first_collision(), None);
+}
+
+#[test]
+fn registry_records_reserved_shell_command_when_a_matching_tool_exists() {
+    let tool_name = codex_tools::ToolName::plain("shell_command");
+    let trusted = Arc::new(TestHandler {
+        tool_name: tool_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let external = Arc::new(TestHandler {
+        tool_name: tool_name.clone(),
+    });
+    let mut registry = ToolRegistry::from_tools([trusted]);
+
+    assert!(!registry.register_external(external));
+    assert_eq!(registry.first_collision(), Some(&tool_name));
+}
+
+#[test]
+fn registry_allows_identical_names_in_different_namespaces() {
+    let handler = |tool_name| Arc::new(TestHandler { tool_name }) as Arc<dyn CoreToolRuntime>;
+    let mut registry = ToolRegistry::from_tools([handler(codex_tools::ToolName::namespaced(
+        "first", "lookup",
+    ))]);
+
+    assert!(
+        registry.register_external(handler(codex_tools::ToolName::namespaced(
+            "second", "lookup",
+        )))
+    );
+    assert_eq!(registry.first_collision(), None);
 }
 
 #[tokio::test]

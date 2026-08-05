@@ -3102,7 +3102,7 @@ impl Session {
             prepared_recommendations,
         )
         .or_cancel(cancellation_token)
-        .await?;
+        .await??;
         Ok(Arc::new(StepContext {
             turn: turn_context,
             environments,

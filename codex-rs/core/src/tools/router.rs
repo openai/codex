@@ -96,6 +96,7 @@ impl ToolRouter {
             hosted_specs,
             tool_search_handler_cache,
         )
+        .expect("test tool registry should not contain duplicate tools")
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {

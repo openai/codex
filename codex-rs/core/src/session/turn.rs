@@ -172,6 +172,9 @@ pub(crate) async fn run_turn(
             run_hooks_and_record_inputs(&sess, &turn_context, &input).await;
             return Err(err);
         }
+        if matches!(err.details(), CodexErrorDetails::ToolCollision(_)) {
+            return Err(err);
+        }
         let error = err.to_codex_protocol_error();
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
@@ -1474,7 +1477,7 @@ pub(crate) async fn built_tools(
     mcp: &codex_mcp::McpBinding,
     step_store: &ExtensionData,
     prepared_recommendations: PreparedToolRecommendations,
-) -> Arc<ToolRouter> {
+) -> CodexResult<Arc<ToolRouter>> {
     let all_mcp_tools = mcp.tools();
     let connector_snapshot = mcp.config().connector_snapshot.clone();
 
@@ -1535,7 +1538,7 @@ pub(crate) async fn built_tools(
             .instrument(trace_span!("built_tools.load_discoverable_tools"))
             .await
         };
-    Arc::new(build_tool_router(
+    Ok(Arc::new(build_tool_router(
         sess,
         turn_context,
         environments,
@@ -1543,7 +1546,7 @@ pub(crate) async fn built_tools(
         apps_enabled,
         step_store,
         tool_suggest_candidates.as_ref(),
-    ))
+    )?))
 }
 
 #[derive(Debug)]

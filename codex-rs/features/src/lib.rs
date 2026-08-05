@@ -654,9 +654,9 @@ pub fn canonical_feature_for_key(key: &str) -> Option<Feature> {
         .map(|spec| spec.id)
 }
 
-/// Returns `true` if the provided string matches a known feature toggle key.
+/// Returns `true` if the provided string matches a known `[features]` key.
 pub fn is_known_feature_key(key: &str) -> bool {
-    feature_for_key(key).is_some()
+    key == "tool_registry" || feature_for_key(key).is_some()
 }
 
 /// Deserializable features table for TOML.

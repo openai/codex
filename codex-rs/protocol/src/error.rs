@@ -120,6 +120,9 @@ pub enum CodexErrorDetails {
     /// Invalid request.
     #[error("{0}")]
     InvalidRequest(String),
+    /// Multiple registered tools share the same effective name.
+    #[error("duplicate tool: {0}")]
+    ToolCollision(String),
     /// Invalid image.
     #[error("Image poisoning")]
     InvalidImageRequest(),
@@ -367,6 +370,7 @@ impl CodexErr {
             | CodexErrorDetails::QuotaExceeded
             | CodexErrorDetails::InvalidImageRequest()
             | CodexErrorDetails::InvalidRequest(_)
+            | CodexErrorDetails::ToolCollision(_)
             | CodexErrorDetails::RefreshTokenFailed(_)
             | CodexErrorDetails::UnsupportedOperation(_)
             | CodexErrorDetails::Sandbox(_)

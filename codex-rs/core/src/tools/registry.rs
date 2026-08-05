@@ -259,14 +259,13 @@ pub(crate) struct RegisteredTool {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: IndexMap<ToolName, RegisteredTool>,
+    first_collision: Option<ToolName>,
 }
 
 impl ToolRegistry {
     #[cfg(test)]
     pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
-        let mut registry = Self {
-            tools: IndexMap::new(),
-        };
+        let mut registry = Self::default();
 
         for runtime in tools {
             registry.register_trusted(runtime);
@@ -335,6 +334,9 @@ impl ToolRegistry {
         let tool_name = runtime.tool_name();
         if tool_name.namespace.is_none() && tool_name.name == "shell_command" {
             tracing::warn!(tool_name = %tool_name, "skipping external tool with reserved name");
+            if self.tools.contains_key(&tool_name) {
+                self.record_collision(tool_name);
+            }
             return false;
         }
 
@@ -348,9 +350,19 @@ impl ToolRegistry {
                     tool_name = %entry.key(),
                     "skipping duplicate external tool that is already registered"
                 );
+                self.first_collision
+                    .get_or_insert_with(|| entry.key().clone());
                 false
             }
         }
+    }
+
+    pub(crate) fn record_collision(&mut self, tool_name: ToolName) {
+        self.first_collision.get_or_insert(tool_name);
+    }
+
+    pub(crate) fn first_collision(&self) -> Option<&ToolName> {
+        self.first_collision.as_ref()
     }
 
     pub(crate) fn remove(&mut self, tool_name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {

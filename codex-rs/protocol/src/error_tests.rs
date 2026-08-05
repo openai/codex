@@ -56,6 +56,10 @@ fn retryability_preserves_error_details_distinctions() {
             }),
             true,
         ),
+        (
+            CodexErrorDetails::ToolCollision("functions.update_plan".to_string()).into(),
+            false,
+        ),
         (CodexErr::InternalServerError, true),
     ];
 

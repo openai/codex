@@ -67,6 +67,8 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
@@ -121,7 +123,7 @@ pub(crate) fn build_tool_router(
     apps_enabled: bool,
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
-) -> ToolRouter {
+) -> CodexResult<ToolRouter> {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let wait_for_environment_tool_config = session
@@ -313,15 +315,21 @@ pub(crate) fn finalize_tool_router(
     mut registry: ToolRegistry,
     hosted_specs: Vec<ToolSpec>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
-) -> ToolRouter {
+) -> CodexResult<ToolRouter> {
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
     let code_mode_enabled = matches!(
         effective_tool_mode(turn_context),
         ToolMode::CodeMode | ToolMode::CodeModeOnly
     );
     if code_mode_enabled {
-        registry.remove(&ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
-        registry.remove(&ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
+        for tool_name in [
+            ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME),
+            ToolName::plain(codex_code_mode::WAIT_TOOL_NAME),
+        ] {
+            if registry.remove(&tool_name).is_some() {
+                registry.record_collision(tool_name);
+            }
+        }
     }
     let tool_search_name = ToolName::plain(TOOL_SEARCH_TOOL_NAME);
     if search_tool_enabled(turn_context)
@@ -331,15 +339,25 @@ pub(crate) fn finalize_tool_router(
                 && tool.runtime.search_info().is_some()
         })
     {
-        registry.remove(&tool_search_name);
+        if registry.remove(&tool_search_name).is_some() {
+            registry.record_collision(tool_search_name);
+        }
         append_tool_search_executor(turn_context, &mut registry, tool_search_handler_cache);
     }
 
     let code_mode_tool_names = register_code_mode_executors(turn_context, &mut registry);
 
+    if turn_context.config.tool_registry.error_on_tool_collisions
+        && let Some(tool_name) = registry.first_collision()
+    {
+        let namespace = tool_name.namespace.as_deref().unwrap_or("functions");
+        let name = format!("{namespace}.{}", tool_name.name);
+        return Err(CodexErrorDetails::ToolCollision(name).into());
+    }
+
     let model_visible_specs =
         build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs);
-    ToolRouter::from_parts(registry, model_visible_specs)
+    Ok(ToolRouter::from_parts(registry, model_visible_specs))
 }
 
 fn apply_direct_model_only_namespace_overrides(

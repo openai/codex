@@ -40,7 +40,8 @@ fn tool_registry_config_is_not_a_feature_toggle() {
         })
     );
     assert!(features.entries().is_empty());
-    assert!(!crate::is_known_feature_key("tool_registry"));
+    assert!(crate::is_known_feature_key("tool_registry"));
+    assert_eq!(feature_for_key("tool_registry"), None);
 }
 
 #[test]

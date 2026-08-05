@@ -159,7 +159,7 @@ fn push_unknown_feature_paths(
     for feature_key in features
         .keys()
         .map(String::as_str)
-        .filter(|key| *key != "tool_registry" && !is_known_feature_key(key))
+        .filter(|key| !is_known_feature_key(key))
     {
         let mut path = prefix
             .iter()

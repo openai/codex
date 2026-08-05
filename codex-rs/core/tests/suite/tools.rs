@@ -7,9 +7,12 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::StartThreadOptions;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -17,7 +20,10 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -25,6 +31,7 @@ use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_custom_tool_call_with_namespace;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -35,9 +42,12 @@ use core_test_support::skip_if_sandbox;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use test_case::test_case;
+use wiremock::ResponseTemplate;
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -54,6 +64,129 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[test_case(false; "normal sampling")]
+#[test_case(true; "pre sampling compaction")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn strict_tool_collisions_fail_the_turn_before_sampling(pre_compact: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        config.tool_registry.error_on_tool_collisions = true;
+        if pre_compact {
+            config.model_auto_compact_token_limit = Some(0);
+        }
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "update_plan".to_string(),
+                description: "Collides with the built-in planning tool.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+
+    thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "use the planning tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let EventMsg::Error(error) =
+        wait_for_event(&thread, |event| matches!(event, EventMsg::Error(_))).await
+    else {
+        unreachable!("event predicate guarantees an error");
+    };
+    assert_eq!(error.message, "duplicate tool: functions.update_plan");
+
+    let EventMsg::TurnComplete(completed) =
+        wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await
+    else {
+        unreachable!("event predicate guarantees turn completion");
+    };
+    assert_eq!(completed.error, Some(error));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("mock server should expose received requests")?
+            .iter()
+            .all(|request| request.url.path() != "/v1/responses"),
+        "a colliding turn should fail before making a model request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn strict_tool_collisions_do_not_duplicate_unrelated_compaction_errors() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let error = json!({
+        "error": {
+            "message": "compaction request is invalid",
+            "code": "invalid_request",
+        },
+    });
+    let compact_mock =
+        mount_response_once(&server, ResponseTemplate::new(400).set_body_json(&error)).await;
+    let mut builder = test_codex().with_config(|config| {
+        config.tool_registry.error_on_tool_collisions = true;
+        config.model_auto_compact_token_limit = Some(0);
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger compaction".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut errors = Vec::new();
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::Error(error) => {
+            errors.push(error.message.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert_eq!(
+        errors,
+        vec![format!("Error running remote compact task: {error}")]
+    );
+    assert_eq!(compact_mock.requests().len(), 1);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
