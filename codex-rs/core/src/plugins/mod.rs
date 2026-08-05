@@ -3,6 +3,9 @@ mod injection;
 mod mentions;
 mod render;
 #[cfg(test)]
+#[path = "skill_snapshot_tests.rs"]
+mod skill_snapshot_tests;
+#[cfg(test)]
 pub(crate) mod test_support;
 
 pub(crate) use codex_plugin::PluginCapabilitySummary;

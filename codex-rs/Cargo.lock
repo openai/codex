@@ -2877,7 +2877,6 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-skills",
- "codex-skills-extension",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-path",

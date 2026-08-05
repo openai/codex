@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::injection::HostSkillsCatalogInWorldState;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionEventSink;
@@ -9,6 +8,7 @@ use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_protocol::openai_models::ModelInfo;
 
+use crate::HostSkillsSnapshot;
 use crate::SkillsExtensionConfig;
 use crate::catalog::SkillCatalog;
 use crate::provider::SkillListQuery;

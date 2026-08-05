@@ -48,8 +48,6 @@ use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_skills::SkillConfigRules;
-use codex_skills_extension::HostSkillsLoadInput;
-use codex_skills_extension::HostSkillsService;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_plugins::SkillDiscoveryMode;
@@ -2880,7 +2878,7 @@ async fn plugin_cache_ignores_unrelated_session_overrides() {
 }
 
 #[tokio::test]
-async fn skill_snapshots_resolve_remote_plugin_identity_from_authoritative_source() {
+async fn skill_roots_resolve_remote_plugin_identity_from_authoritative_source() {
     let mut duplicate_plugin = remote_installed_plugin("sample");
     duplicate_plugin.id = "plugins~Plugin_duplicate".to_string();
 
@@ -2893,7 +2891,6 @@ async fn skill_snapshots_resolve_remote_plugin_identity_from_authoritative_sourc
         ),
     ] {
         let codex_home = TempDir::new().unwrap();
-        let codex_home_abs = codex_home.path().to_path_buf().abs();
         let plugin_root = codex_home
             .path()
             .join("plugins/cache/openai-curated-remote/sample/local");
@@ -2905,8 +2902,10 @@ async fn skill_snapshots_resolve_remote_plugin_identity_from_authoritative_sourc
             "sample/local",
             "sample",
         );
-        let skill_path = plugin_root.join("skills/SKILL.md");
-        write_file(&skill_path, "---\nname: search\ndescription: first\n---\n");
+        write_file(
+            &plugin_root.join("skills/SKILL.md"),
+            "---\nname: search\ndescription: first\n---\n",
+        );
         write_file(
             &codex_home.path().join(CONFIG_TOML_FILE),
             r#"[features]
@@ -2941,39 +2940,21 @@ enabled = true
                 .as_deref(),
             expected_remote_plugin_id
         );
-        write_file(&skill_path, "---\nname: search\ndescription: second\n---\n");
-
-        let skills_input = HostSkillsLoadInput::new(
-            codex_home_abs.clone(),
-            plugin_outcome.effective_plugin_skill_roots(),
-            config.config_layer_stack.clone(),
-            /*bundled_skills_enabled*/ false,
-        )
-        .with_plugin_skill_snapshots(manager.plugin_skill_snapshots_for_config(&config));
-        let skills_service =
-            HostSkillsService::new(codex_home_abs, /*bundled_skills_enabled*/ false);
-        let snapshot = skills_service
-            .snapshot_for_config(&skills_input, /*fs*/ None)
-            .await;
-
         assert_eq!(
-            snapshot
-                .outcome()
-                .skills
-                .iter()
-                .map(|skill| {
+            plugin_outcome
+                .effective_plugin_skill_roots()
+                .into_iter()
+                .map(|root| {
                     (
-                        skill.description.as_str(),
-                        skill.plugin_id.as_deref(),
-                        skill.remote_plugin_id.as_deref(),
+                        root.plugin_identity.plugin_id,
+                        root.plugin_identity.remote_plugin_id,
                     )
                 })
                 .collect::<Vec<_>>(),
             vec![(
-                "first",
-                Some("sample@openai-curated-remote"),
-                expected_remote_plugin_id,
-            )]
+                "sample@openai-curated-remote".to_string(),
+                expected_remote_plugin_id.map(str::to_string),
+            )],
         );
     }
 }
