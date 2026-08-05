@@ -4,7 +4,9 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::io;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
+use std::sync::PoisonError;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -141,7 +143,18 @@ enum TransportRecipe {
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
         redirect_mode: StreamableHttpRedirectMode,
+        initialize_deadline: Arc<StdMutex<Option<Instant>>>,
     },
+}
+
+struct InitializeDeadlineGuard {
+    deadline: Arc<StdMutex<Option<Instant>>>,
+}
+
+impl Drop for InitializeDeadlineGuard {
+    fn drop(&mut self) {
+        *self.deadline.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
 }
 
 #[derive(Clone)]
@@ -525,6 +538,7 @@ impl RmcpClient {
             http_client,
             auth_provider,
             redirect_mode,
+            initialize_deadline: Arc::new(StdMutex::new(None)),
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -948,6 +962,7 @@ impl RmcpClient {
                 http_client,
                 auth_provider,
                 redirect_mode,
+                initialize_deadline,
             } => {
                 let has_configured_headers = http_headers
                     .as_ref()
@@ -1018,6 +1033,7 @@ impl RmcpClient {
                         Arc::clone(http_client),
                         has_configured_headers,
                         *redirect_mode,
+                        Arc::clone(initialize_deadline),
                     )
                     .await
                     {
@@ -1051,6 +1067,7 @@ impl RmcpClient {
                                     /*auth_provider*/ None,
                                     has_configured_headers,
                                     *redirect_mode,
+                                    Arc::clone(initialize_deadline),
                                 ),
                                 http_config,
                             );
@@ -1072,6 +1089,7 @@ impl RmcpClient {
                             auth_provider,
                             has_configured_headers,
                             *redirect_mode,
+                            Arc::clone(initialize_deadline),
                         ),
                         http_config,
                     );
@@ -1090,6 +1108,21 @@ impl RmcpClient {
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
     )> {
+        let _initialize_deadline = match &self.transport_recipe {
+            TransportRecipe::StreamableHttp {
+                initialize_deadline,
+                ..
+            } => {
+                *initialize_deadline
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) =
+                    timeout.and_then(|duration| Instant::now().checked_add(duration));
+                Some(InitializeDeadlineGuard {
+                    deadline: Arc::clone(initialize_deadline),
+                })
+            }
+            TransportRecipe::InProcess { .. } | TransportRecipe::Stdio { .. } => None,
+        };
         let lifecycle = self.protocol_mode.client_lifecycle();
         let (transport, oauth_persistor) = match pending_transport {
             PendingTransport::InProcess { transport } => (
@@ -1389,6 +1422,7 @@ async fn create_oauth_transport_and_runtime(
     http_client: Arc<dyn HttpClient>,
     has_configured_headers: bool,
     redirect_mode: StreamableHttpRedirectMode,
+    initialize_deadline: Arc<StdMutex<Option<Instant>>>,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
@@ -1427,6 +1461,7 @@ async fn create_oauth_transport_and_runtime(
             /*auth_provider*/ None,
             has_configured_headers,
             redirect_mode,
+            initialize_deadline,
         ),
         manager,
     );

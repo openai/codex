@@ -10,6 +10,9 @@
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+use std::time::Instant;
 
 use bytes::Bytes;
 use codex_api::SharedAuthProvider;
@@ -76,6 +79,7 @@ pub(crate) struct StreamableHttpClientAdapter {
     auth_provider: Option<SharedAuthProvider>,
     has_configured_headers: bool,
     redirect_mode: StreamableHttpRedirectMode,
+    initialize_deadline: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +101,7 @@ impl StreamableHttpClientAdapter {
         auth_provider: Option<SharedAuthProvider>,
         has_configured_headers: bool,
         redirect_mode: StreamableHttpRedirectMode,
+        initialize_deadline: Arc<Mutex<Option<Instant>>>,
     ) -> Self {
         Self {
             http_client,
@@ -104,6 +109,7 @@ impl StreamableHttpClientAdapter {
             auth_provider,
             has_configured_headers,
             redirect_mode,
+            initialize_deadline,
         }
     }
 
@@ -168,6 +174,26 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         } else {
             self.redirect_policy(&headers)
         };
+        let timeout_ms = if matches!(
+            mcp_method.as_deref(),
+            Some("initialize" | "notifications/initialized")
+        ) || mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE)
+        {
+            self.initialize_deadline
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .map(|deadline| {
+                    u64::try_from(
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .as_millis(),
+                    )
+                    .unwrap_or(u64::MAX)
+                    .max(1)
+                })
+        } else {
+            None
+        };
 
         let body = serde_json::to_vec(&message).map_err(StreamableHttpError::Deserialize)?;
         let has_authorization_header = headers.contains_key(AUTHORIZATION);
@@ -178,7 +204,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                 url: uri.to_string(),
                 headers: protocol_headers(&headers),
                 body: Some(body.into()),
-                timeout_ms: None,
+                timeout_ms,
                 redirect_policy,
                 request_id: "buffered-request".to_string(),
                 stream_response: true,
