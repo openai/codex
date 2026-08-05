@@ -31,6 +31,7 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_sse_once;
@@ -162,6 +163,38 @@ fn write_sample_plugin_skill(plugin_root: std::path::PathBuf) -> std::path::Path
     )
     .expect("write plugin skill");
     skill_dir.join("SKILL.md")
+}
+
+fn write_agent_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
+    let plugin_root = home.path().join("plugins/cache/test/acme.tools/local");
+    let direct_skill = plugin_root.join("skills/review");
+    let nested_skill = plugin_root.join("skills/group/hidden");
+    std::fs::create_dir_all(&direct_skill).expect("create direct skill");
+    std::fs::create_dir_all(&nested_skill).expect("create nested skill");
+    std::fs::write(
+        plugin_root.join("plugin.json"),
+        r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"acme.tools","extensions":{"com.openai":{"interface":{"displayName":"Acme Developer Tools"}}}}"#,
+    )
+    .expect("write Agent Plugin manifest");
+    std::fs::write(
+        direct_skill.join("SKILL.md"),
+        format!(
+            "---\nname: review\ndescription: Review code\n---\n\n{}\nAGENT_SKILL_TRUNCATED_TAIL\n",
+            "x".repeat(9_000)
+        ),
+    )
+    .expect("write direct skill");
+    std::fs::write(
+        nested_skill.join("SKILL.md"),
+        "---\nname: hidden\ndescription: Hidden skill\n---\n\nHidden.\n",
+    )
+    .expect("write nested skill");
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[features]\nplugins = true\n\n[plugins.\"acme.tools@test\"]\nenabled = true\n",
+    )
+    .expect("write Agent Plugin config");
+    direct_skill.join("SKILL.md")
 }
 
 fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
@@ -482,6 +515,234 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         "expected namespaced plugin skill summary in developer message: {developer_messages:?}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_plugin_skills_use_shared_catalog_and_direct_child_discovery() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = std::fs::canonicalize(write_agent_plugin_skill_plugin(codex_home.as_ref()))?;
+    let test_codex = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_extensions(skills_extensions())
+        .build(&server)
+        .await?;
+
+    test_codex
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Skill {
+                name: "acme.tools:review".into(),
+                path: skill_path,
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    let warning = wait_for_event(&test_codex.codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::Warning(warning)
+                if warning.message.contains("main prompt context limit")
+        )
+    })
+    .await;
+    wait_for_event(&test_codex.codex, |ev| {
+        matches!(ev, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let developer_text = resp_mock
+        .single_request()
+        .message_input_texts("developer")
+        .join("\n");
+    assert!(developer_text.contains("acme.tools:review: Review code"));
+    assert!(!developer_text.contains("acme.tools:hidden"));
+    let user_text = resp_mock
+        .single_request()
+        .message_input_texts("user")
+        .join("\n");
+    assert!(user_text.contains("acme.tools:review"));
+    assert!(!user_text.contains("AGENT_SKILL_TRUNCATED_TAIL"));
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("wait_for_event matched an Agent skill truncation warning")
+    };
+    assert!(warning.message.contains("acme.tools:review"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_plugin_skill_prompt_remains_complete() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = write_plugin_skill_plugin(codex_home.as_ref());
+    let skill_contents = format!(
+        "---\nname: sample-search\ndescription: inspect sample data\n---\n\n{}\nLEGACY_SKILL_FULL_TAIL\n",
+        "x".repeat(9_000)
+    );
+    std::fs::write(&skill_path, &skill_contents)?;
+    let skill_path = std::fs::canonicalize(skill_path)?;
+    let test_codex = test_codex()
+        .with_home(codex_home)
+        .with_extensions(skills_extensions())
+        .build(&server)
+        .await?;
+
+    test_codex
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Skill {
+                name: "sample:sample-search".into(),
+                path: skill_path,
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test_codex.codex, |ev| {
+        matches!(ev, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let user_text = resp_mock
+        .single_request()
+        .message_input_texts("user")
+        .join("\n");
+    assert!(user_text.contains(&skill_contents));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_plugin_root_mcp_stdio_tool_round_trip_expands_reserved_paths() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let search_call_id = "search-agent-echo";
+    let tool_call_id = "call-agent-echo";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(search_call_id, &serde_json::json!({"query": "echo"})),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call_with_namespace(
+                    tool_call_id,
+                    "mcp__agent",
+                    "echo",
+                    r#"{"message":"ping"}"#,
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    write_agent_plugin_skill_plugin(codex_home.as_ref());
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache/test/acme.tools/local");
+    let stdio_server = match stdio_server_bin() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+    let stdio_server_name = format!("test_stdio_server{}", std::env::consts::EXE_SUFFIX);
+    std::fs::copy(stdio_server, plugin_root.join(&stdio_server_name))?;
+    let mcp_config = serde_json::json!({
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+        "mcpServers": {
+            "agent": {
+                "type": "stdio",
+                "command": format!("./{stdio_server_name}"),
+                "env": {"MCP_TEST_VALUE": "${PLUGIN_ROOT}|${PLUGIN_DATA}"}
+            }
+        }
+    });
+    std::fs::write(
+        plugin_root.join("mcp.json"),
+        serde_json::to_vec_pretty(&mcp_config)?,
+    )?;
+    let test_codex = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&test_codex.codex, "agent").await?;
+    let data_root = std::fs::read_dir(codex_home.path().join("plugins/data/agent-plugins"))?
+        .next()
+        .expect("Agent Plugin data root")?
+        .path()
+        .canonicalize()?;
+    let expected_env = format!(
+        "{}|{}",
+        plugin_root.canonicalize()?.display(),
+        data_root.display()
+    );
+
+    test_codex
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "call the Agent Plugin echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    let end = wait_for_event(&test_codex.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    wait_for_event(&test_codex.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let EventMsg::McpToolCallEnd(end) = end else {
+        unreachable!("wait_for_event matched an MCP tool end")
+    };
+    let result = end.result.as_ref().expect("Agent Plugin MCP tool result");
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|content| content.get("env"))
+            .and_then(serde_json::Value::as_str),
+        Some(expected_env.as_str())
+    );
+    let requests = mock.requests();
+    let search_output = requests[1].tool_search_output(search_call_id);
+    assert!(namespace_child_tool(&search_output, "mcp__agent", "echo").is_some());
+    assert!(requests[2].function_call_output(tool_call_id).is_object());
     Ok(())
 }
 

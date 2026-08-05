@@ -12,6 +12,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
+use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::perform_oauth_login;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -152,6 +153,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             &server_config.transport,
             Arc::clone(&http_client),
             discovery_timeout,
+            StreamableHttpRedirectMode::Legacy,
         )
         .await;
         let oauth_config = match login_support {

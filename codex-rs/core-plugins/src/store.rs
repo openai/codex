@@ -1,5 +1,6 @@
 use crate::command_migration::migrate_plugin_commands;
 use crate::manifest::PluginManifest;
+use crate::manifest::PluginManifestFormat;
 use crate::manifest::load_plugin_manifest;
 use crate::manifest::parse_plugin_manifest;
 use codex_plugin::PluginId;
@@ -24,6 +25,7 @@ use std::path::PathBuf;
 pub const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 pub const PLUGINS_DATA_DIR: &str = "plugins/data";
+const AGENT_PLUGINS_DATA_DIR: &str = "agent-plugins";
 const REMOTE_PLUGIN_INSTALL_METADATA_FILE: &str = ".codex-remote-plugin-install.json";
 const REMOTE_PLUGIN_INSTALL_METADATA_SCHEMA_VERSION: u8 = 1;
 const DEFAULT_AGENT_PLUGIN_VERSION: &str = "1.0.0";
@@ -141,6 +143,27 @@ impl PluginStore {
             "{}-{}",
             plugin_id.plugin_name, plugin_id.marketplace_name
         ))
+    }
+
+    pub(crate) fn agent_plugin_data_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
+        let mut digest = Sha256::new();
+        digest.update(plugin_id.marketplace_name.as_bytes());
+        digest.update([0]);
+        digest.update(plugin_id.plugin_name.as_bytes());
+        self.data_root
+            .join(AGENT_PLUGINS_DATA_DIR)
+            .join(hex_prefix(&digest.finalize(), /*count*/ 32))
+    }
+
+    pub(crate) fn mcp_data_root(
+        &self,
+        plugin_id: &PluginId,
+        manifest_format: PluginManifestFormat,
+    ) -> AbsolutePathBuf {
+        match manifest_format {
+            PluginManifestFormat::AgentPlugin => self.agent_plugin_data_root(plugin_id),
+            PluginManifestFormat::Legacy => self.plugin_data_root(plugin_id),
+        }
     }
 
     pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
@@ -745,16 +768,6 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreErr
         } else if file_type.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|err| PluginStoreError::io("failed to copy plugin file", err))?;
-        } else if file_type.is_symlink() {
-            return Err(PluginStoreError::Invalid(format!(
-                "plugin source contains unsupported symbolic link: {}",
-                source_path.display()
-            )));
-        } else {
-            return Err(PluginStoreError::Invalid(format!(
-                "plugin source contains unsupported file type: {}",
-                source_path.display()
-            )));
         }
     }
 

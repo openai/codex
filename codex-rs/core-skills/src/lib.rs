@@ -10,6 +10,12 @@ pub mod service;
 mod skill_instructions;
 pub mod system;
 
+/// Hard byte limit for one model-visible skill instruction body.
+///
+/// Both the legacy explicit-injection path and the skills extension use this
+/// limit so a skill cannot bypass context bounds by changing how it is loaded.
+pub const MAX_SKILL_PROMPT_BYTES: usize = 8_000;
+
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
 pub use invocation_utils::detect_implicit_skill_invocation_for_command;
 pub use mention_counts::build_skill_name_counts;

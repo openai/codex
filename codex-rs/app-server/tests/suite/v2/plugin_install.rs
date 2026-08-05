@@ -2927,7 +2927,7 @@ fn remote_plugin_bundle_tar_gz_bytes_with_entries(
     app_manifest: Option<&str>,
     mcp_config: Option<&str>,
 ) -> Result<Vec<u8>> {
-    let skill = "# Plan Work\n\nTrack work in Linear.\n";
+    let skill = "---\nname: plan-work\ndescription: Track work in Linear.\n---\n\n# Plan Work\n";
     let encoder = GzEncoder::new(Vec::new(), Compression::default());
     let mut tar = tar::Builder::new(encoder);
     let mut entries = vec![

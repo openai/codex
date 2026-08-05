@@ -63,11 +63,19 @@ const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 const LEGACY_HTTP_PREVALIDATION_ERROR_CODE: ErrorCode = ErrorCode(-32000);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamableHttpRedirectMode {
+    Legacy,
+    AgentPluginV1,
+}
+
 #[derive(Clone)]
 pub(crate) struct StreamableHttpClientAdapter {
     http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
     auth_provider: Option<SharedAuthProvider>,
+    has_configured_headers: bool,
+    redirect_mode: StreamableHttpRedirectMode,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -87,12 +95,20 @@ impl StreamableHttpClientAdapter {
         http_client: Arc<dyn HttpClient>,
         default_headers: HeaderMap,
         auth_provider: Option<SharedAuthProvider>,
+        has_configured_headers: bool,
+        redirect_mode: StreamableHttpRedirectMode,
     ) -> Self {
         Self {
             http_client,
             default_headers,
             auth_provider,
+            has_configured_headers,
+            redirect_mode,
         }
+    }
+
+    fn redirect_policy(&self, headers: &HeaderMap) -> HttpRedirectPolicy {
+        mcp_redirect_policy(self.redirect_mode, headers, self.has_configured_headers)
     }
 }
 
@@ -150,7 +166,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         let redirect_policy = if mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE) {
             HttpRedirectPolicy::Stop
         } else {
-            mcp_redirect_policy(&headers)
+            self.redirect_policy(&headers)
         };
 
         let body = serde_json::to_vec(&message).map_err(StreamableHttpError::Deserialize)?;
@@ -348,7 +364,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             session.to_string(),
             StreamableHttpClientAdapterError::Header,
         )?;
-        let redirect_policy = mcp_redirect_policy(&headers);
+        let redirect_policy = self.redirect_policy(&headers);
 
         let response = self
             .http_client
@@ -421,7 +437,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                 StreamableHttpClientAdapterError::Header,
             )?;
         }
-        let redirect_policy = mcp_redirect_policy(&headers);
+        let redirect_policy = self.redirect_policy(&headers);
 
         let (response, body_stream) = self
             .http_client
@@ -646,11 +662,17 @@ fn parse_json_rpc_error(body: &[u8]) -> Option<ServerJsonRpcMessage> {
     }
 }
 
-fn mcp_redirect_policy(headers: &HeaderMap) -> HttpRedirectPolicy {
+fn mcp_redirect_policy(
+    mode: StreamableHttpRedirectMode,
+    headers: &HeaderMap,
+    has_configured_headers: bool,
+) -> HttpRedirectPolicy {
     if headers
         .get(HEADER_MCP_PROTOCOL_VERSION)
         .and_then(|value| value.to_str().ok())
         == Some(ProtocolVersion::V_2026_07_28.as_str())
+        || (mode == StreamableHttpRedirectMode::AgentPluginV1
+            && (has_configured_headers || headers.contains_key(AUTHORIZATION)))
     {
         HttpRedirectPolicy::Stop
     } else {

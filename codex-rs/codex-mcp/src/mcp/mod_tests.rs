@@ -148,6 +148,7 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
             PluginCapabilitySummary {
                 config_name: "alpha@test".to_string(),
                 display_name: "alpha-plugin".to_string(),
+                plugin_namespace: None,
                 app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
                 mcp_server_names: vec!["alpha".to_string()],
                 ..PluginCapabilitySummary::default()
@@ -155,6 +156,7 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
             PluginCapabilitySummary {
                 config_name: "beta@test".to_string(),
                 display_name: "beta-plugin".to_string(),
+                plugin_namespace: None,
                 app_connector_ids: vec![
                     AppConnectorId("connector_example".to_string()),
                     AppConnectorId("connector_gmail".to_string()),
@@ -219,6 +221,7 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
             PluginCapabilitySummary {
                 config_name: "shared-plugin-id".to_string(),
                 display_name: "Local GitHub".to_string(),
+                plugin_namespace: None,
                 mcp_server_names: vec!["github".to_string()],
                 ..PluginCapabilitySummary::default()
             },

@@ -12,6 +12,7 @@ use codex_rmcp_client::McpLoginRequirement;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
+use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
 use codex_rmcp_client::determine_streamable_http_auth_status;
 use codex_rmcp_client::is_authentication_required_error;
@@ -297,6 +298,7 @@ async fn auth_status(server_url: &str) -> anyhow::Result<McpAuthState> {
         AuthKeyringBackendKind::default(),
         Environment::default_for_tests().get_http_client(),
         OAuthDiscoveryTimeout::LOCAL,
+        StreamableHttpRedirectMode::Legacy,
     )
     .await
 }

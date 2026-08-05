@@ -2920,6 +2920,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
+ "codex-utils-string",
  "dirs",
  "dunce",
  "futures",

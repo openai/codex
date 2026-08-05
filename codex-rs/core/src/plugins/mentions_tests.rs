@@ -18,6 +18,7 @@ fn plugin(config_name: &str, display_name: &str) -> PluginCapabilitySummary {
     PluginCapabilitySummary {
         config_name: config_name.to_string(),
         display_name: display_name.to_string(),
+        plugin_namespace: None,
         description: None,
         has_skills: true,
         mcp_server_names: Vec::new(),

@@ -1,9 +1,25 @@
 use crate::ToolDefinition;
 use crate::parse_tool_input_schema;
+use codex_utils_string::take_bytes_at_char_boundary;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
+const MAX_MCP_TOOL_DESCRIPTION_BYTES: usize = 1_000;
+
 pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_json::Error> {
+    parse_mcp_tool_with_description_limit(tool, /*description_limit*/ None)
+}
+
+pub fn parse_agent_plugin_mcp_tool(
+    tool: &rmcp::model::Tool,
+) -> Result<ToolDefinition, serde_json::Error> {
+    parse_mcp_tool_with_description_limit(tool, Some(MAX_MCP_TOOL_DESCRIPTION_BYTES))
+}
+
+fn parse_mcp_tool_with_description_limit(
+    tool: &rmcp::model::Tool,
+    description_limit: Option<usize>,
+) -> Result<ToolDefinition, serde_json::Error> {
     let mut serialized_input_schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
 
     // OpenAI models mandate the "properties" field in the schema. Some MCP
@@ -27,7 +43,14 @@ pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_
 
     Ok(ToolDefinition {
         name: tool.name.to_string(),
-        description: tool.description.clone().map(Into::into).unwrap_or_default(),
+        description: tool
+            .description
+            .as_deref()
+            .map(|description| match description_limit {
+                Some(limit) => take_bytes_at_char_boundary(description, limit).to_string(),
+                None => description.to_string(),
+            })
+            .unwrap_or_default(),
         input_schema,
         output_schema: Some(mcp_call_tool_result_output_schema(
             structured_content_schema,

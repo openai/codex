@@ -163,6 +163,28 @@ fn plugin_data_root_derives_path_from_key() {
 }
 
 #[test]
+fn agent_plugin_data_root_is_stable_and_unambiguous() {
+    let tmp = tempdir().unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let first = PluginId::new("a-b".to_string(), "c".to_string()).unwrap();
+    let second = PluginId::new("a".to_string(), "b-c".to_string()).unwrap();
+
+    let first_root = store.agent_plugin_data_root(&first);
+    let second_root = store.agent_plugin_data_root(&second);
+    let expected_parent = tmp.path().join("plugins/data/agent-plugins");
+
+    assert_ne!(first_root, second_root);
+    assert_eq!(
+        first_root.as_path(),
+        expected_parent.join("6920dd17774030852d11d1b94758fcaae4f894c7b2f36301ed174bc3b33e0743")
+    );
+    assert_eq!(
+        second_root.as_path(),
+        expected_parent.join("fa89b988ebbe54a68fdcbeb87fb913a5238d482084a3cee49a86288c2d45fa90")
+    );
+}
+
+#[test]
 fn install_with_version_uses_requested_cache_version() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
@@ -396,7 +418,7 @@ fn agent_plugin_install_does_not_migrate_commands() {
 
 #[cfg(unix)]
 #[test]
-fn agent_plugin_install_rejects_symlinked_skill_file() {
+fn agent_plugin_install_skips_symlinked_skill_file() {
     let tmp = tempdir().unwrap();
     let plugin_root = tmp.path().join("agent-plugin");
     let skill_root = plugin_root.join("skills/greet");
@@ -411,19 +433,17 @@ fn agent_plugin_install_rejects_symlinked_skill_file() {
     std::os::unix::fs::symlink(&outside_skill, skill_root.join("SKILL.md")).unwrap();
     let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
 
-    let err = PluginStore::new(tmp.path().to_path_buf())
+    let result = PluginStore::new(tmp.path().to_path_buf())
         .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
-        .expect_err("symlinked Agent Plugin skill should be rejected");
+        .expect("install Agent Plugin");
 
-    assert!(
-        err.to_string()
-            .contains("plugin source contains unsupported symbolic link")
-    );
+    assert!(result.installed_path.join("plugin.json").is_file());
+    assert!(!result.installed_path.join("skills/greet/SKILL.md").exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn agent_plugin_install_rejects_symlinked_executable() {
+fn agent_plugin_install_skips_symlinked_executable() {
     let tmp = tempdir().unwrap();
     let plugin_root = tmp.path().join("agent-plugin");
     let bin_root = plugin_root.join("bin");
@@ -438,14 +458,12 @@ fn agent_plugin_install_rejects_symlinked_executable() {
     std::os::unix::fs::symlink(&outside_executable, bin_root.join("tool")).unwrap();
     let plugin_id = PluginId::new("agent-plugin".to_string(), "debug".to_string()).unwrap();
 
-    let err = PluginStore::new(tmp.path().to_path_buf())
+    let result = PluginStore::new(tmp.path().to_path_buf())
         .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
-        .expect_err("symlinked Agent Plugin executable should be rejected");
+        .expect("install Agent Plugin");
 
-    assert!(
-        err.to_string()
-            .contains("plugin source contains unsupported symbolic link")
-    );
+    assert!(result.installed_path.join("plugin.json").is_file());
+    assert!(!result.installed_path.join("bin/tool").exists());
 }
 
 #[test]

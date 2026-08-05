@@ -458,6 +458,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::protocol::strip_user_message_prefix;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
+use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_rollout::is_persisted_rollout_item;
 use codex_rollout::state_db::StateDbHandle;

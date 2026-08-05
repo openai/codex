@@ -16,6 +16,9 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
+use codex_utils_string::take_bytes_at_char_boundary;
+
+use crate::MAX_SKILL_PROMPT_BYTES;
 
 #[derive(Debug, Default)]
 pub struct SkillInjections {
@@ -93,6 +96,18 @@ pub async fn build_skill_injections(
         let path = PathUri::from_abs_path(&skill.path_to_skills_md);
         match fs.read_file_text(&path, /*sandbox*/ None).await {
             Ok(contents) => {
+                let (contents, truncated) =
+                    if loaded_skills.is_some_and(|outcome| outcome.is_agent_plugin_skill(skill)) {
+                        bounded_skill_prompt_contents(&contents)
+                    } else {
+                        (contents, false)
+                    };
+                if truncated {
+                    result.warnings.push(format!(
+                        "Skill `{}` exceeded the main prompt context limit and was truncated.",
+                        skill.name
+                    ));
+                }
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {
                     skill_name: skill.name.clone(),
@@ -123,6 +138,11 @@ pub async fn build_skill_injections(
     analytics_client.track_skill_invocations(tracking, invocations);
 
     result
+}
+
+fn bounded_skill_prompt_contents(contents: &str) -> (String, bool) {
+    let bounded = take_bytes_at_char_boundary(contents, MAX_SKILL_PROMPT_BYTES);
+    (bounded.to_string(), bounded.len() < contents.len())
 }
 
 fn normalize_host_skill_path(path: &str) -> String {

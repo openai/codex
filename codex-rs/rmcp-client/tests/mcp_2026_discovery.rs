@@ -230,7 +230,7 @@ async fn modern_discovery_does_not_follow_redirects_with_sensitive_headers() -> 
 }
 
 #[tokio::test]
-async fn legacy_mcp_requests_preserve_existing_redirect_behavior() -> anyhow::Result<()> {
+async fn legacy_mcp_requests_follow_redirects_with_configured_headers() -> anyhow::Result<()> {
     let redirect_target = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/forwarded"))

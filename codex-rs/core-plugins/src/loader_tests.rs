@@ -1,5 +1,6 @@
 use super::*;
 use crate::manifest::load_plugin_manifest;
+use crate::manifest::load_plugin_manifest_with_format;
 use crate::test_support::write_file;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
@@ -7,6 +8,7 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_plugin::PluginId;
+use codex_utils_plugins::AGENT_PLUGIN_SCHEMA_URI;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -23,6 +25,177 @@ fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
         },
         toml::from_str(config).expect("user config toml"),
     )
+}
+
+#[tokio::test]
+async fn agent_plugin_overlay_apps_are_not_runtime_active() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    write_file(
+        &plugin_root.join("plugin.json"),
+        &format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"plugin"}}"#),
+    );
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"plugin","apps":"./.app.json"}"#,
+    );
+    write_file(
+        &plugin_root.join(".app.json"),
+        r#"{"apps":{"example":{"id":"connector_example"}}}"#,
+    );
+
+    assert!(load_plugin_apps(&plugin_root).await.is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_plugin_mcp_rejects_config_symlink_outside_plugin_root() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    let outside_config = temp_dir.path().join("outside-mcp.json");
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+    fs::write(
+        plugin_root.join("plugin.json"),
+        format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"plugin"}}"#),
+    )
+    .expect("write Agent Plugins manifest");
+    fs::write(
+        &outside_config,
+        r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"outside":{"type":"stdio","command":"echo"}}}"#,
+    )
+    .expect("write outside MCP config");
+    std::os::unix::fs::symlink(&outside_config, plugin_root.join("mcp.json"))
+        .expect("create MCP symlink");
+    let config_path = AbsolutePathBuf::from_absolute_path(plugin_root.join("mcp.json"))
+        .expect("absolute MCP path");
+
+    let discovered = load_mcp_servers_from_file(
+        &plugin_root,
+        /*plugin_data_root*/ None,
+        PluginManifestFormat::AgentPlugin,
+        &config_path,
+    )
+    .await;
+
+    assert!(discovered.mcp_servers.is_empty());
+}
+
+#[tokio::test]
+async fn agent_plugin_mcp_rejects_present_nonregular_config() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    let config_path = plugin_root.join("mcp.json");
+    fs::create_dir_all(&config_path).expect("create nonregular MCP config");
+
+    let discovered = load_mcp_servers_from_file(
+        &plugin_root,
+        /*plugin_data_root*/ None,
+        PluginManifestFormat::AgentPlugin,
+        &AbsolutePathBuf::from_absolute_path(config_path).expect("absolute MCP path"),
+    )
+    .await;
+
+    assert!(discovered.mcp_servers.is_empty());
+}
+
+#[tokio::test]
+async fn legacy_manifest_can_point_at_root_mcp_json() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest directory");
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"plugin","mcpServers":"./mcp.json"}"#,
+    )
+    .expect("write legacy manifest");
+    fs::write(
+        plugin_root.join("mcp.json"),
+        r#"{"mcpServers":{"legacy":{"command":"echo"}}}"#,
+    )
+    .expect("write legacy MCP config");
+    let manifest = load_plugin_manifest(&plugin_root).expect("load legacy manifest");
+
+    let discovered = load_plugin_mcp_servers_from_manifest_with_format(
+        &plugin_root,
+        &manifest.paths,
+        /*plugin_policy*/ None,
+        /*plugin_data_root*/ None,
+        PluginManifestFormat::Legacy,
+    )
+    .await;
+
+    assert_eq!(
+        discovered.keys().collect::<Vec<_>>(),
+        vec![&"legacy".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn installed_agent_plugin_uses_isolated_data_root_for_stdio_mcp() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugins/cache/c/a-b/local");
+    write_file(
+        &plugin_root.join("plugin.json"),
+        &format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"a-b"}}"#),
+    );
+    write_file(
+        &plugin_root.join("mcp.json"),
+        r#"{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "example": {
+      "type": "stdio",
+      "command": "echo"
+    }
+  }
+}"#,
+    );
+    let stack = ConfigLayerStack::new(
+        vec![user_layer(
+            user_config_path(&temp_dir, "config.toml"),
+            "[plugins.\"a-b@c\"]\nenabled = true\n",
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let store = PluginStore::new(temp_dir.path().to_path_buf());
+
+    let plugins = load_plugins_from_layer_stack(
+        &stack,
+        RemoteInstalledPluginsSnapshot::default(),
+        &store,
+        /*plugin_skill_snapshots*/ None,
+        Some(Product::Codex),
+        /*remote_global_catalog_active*/ false,
+        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+    )
+    .await;
+
+    let expected_data_root = temp_dir
+        .path()
+        .join("plugins")
+        .join("data")
+        .join("agent-plugins")
+        .join("6920dd17774030852d11d1b94758fcaae4f894c7b2f36301ed174bc3b33e0743");
+    let expected_data_root = AbsolutePathBuf::from_absolute_path(expected_data_root)
+        .expect("absolute Agent Plugin data root")
+        .canonicalize()
+        .expect("canonical Agent Plugin data root");
+    let server = plugins
+        .first()
+        .and_then(|plugin| plugin.mcp_servers.get("example"))
+        .expect("Agent plugin stdio MCP server");
+    let McpServerTransportConfig::Stdio { env, .. } = &server.transport else {
+        panic!("expected stdio MCP server");
+    };
+    assert_eq!(
+        env.as_ref()
+            .and_then(|env| env.get("PLUGIN_DATA"))
+            .map(String::as_str),
+        expected_data_root.as_path().to_str()
+    );
+    assert!(expected_data_root.as_path().is_dir());
 }
 
 #[test]
@@ -265,7 +438,8 @@ fn write_hook_file(plugin_root: &AbsolutePathBuf, relative_path: &str, event: &s
 }
 
 fn load_sources(plugin_root: &AbsolutePathBuf) -> (Vec<PluginHookSource>, Vec<String>) {
-    let manifest = load_plugin_manifest(plugin_root.as_path()).expect("manifest");
+    let loaded_manifest =
+        load_plugin_manifest_with_format(plugin_root.as_path()).expect("manifest");
     let plugin_data_root = AbsolutePathBuf::try_from(
         plugin_root
             .as_path()
@@ -278,7 +452,7 @@ fn load_sources(plugin_root: &AbsolutePathBuf) -> (Vec<PluginHookSource>, Vec<St
         plugin_root,
         &plugin_id(),
         &plugin_data_root,
-        &manifest.paths,
+        &loaded_manifest.manifest.paths,
     )
 }
 

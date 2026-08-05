@@ -24,6 +24,7 @@ pub use auth_status::determine_streamable_http_auth_status;
 pub use auth_status::determine_streamable_http_auth_status_from_credentials;
 pub use auth_status::discover_streamable_http_oauth;
 pub use codex_protocol::protocol::McpAuthStatus;
+pub use http_client_adapter::StreamableHttpRedirectMode;
 pub use in_process_transport::InProcessTransportFactory;
 pub use oauth::StoredOAuthTokens;
 pub use oauth::WrappedOAuthTokenResponse;
