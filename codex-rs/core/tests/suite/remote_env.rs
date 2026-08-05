@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_api::AuthProvider;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::WaitForEnvironmentToolConfig;
 use codex_core::compact::SUMMARIZATION_PROMPT;
@@ -11,18 +12,28 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecServerError;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::NoiseChannelPublicKey;
 use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+use codex_exec_server::RemoteEnvironmentConfig;
 use codex_exec_server::RemoveOptions;
+use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::RenderedWorldStateFragment;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::WorldStateContributionInput;
+use codex_extension_api::WorldStateSectionContribution;
 use codex_features::Feature;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
@@ -85,6 +96,7 @@ use core_test_support::wait_for_event_match;
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
+use http::HeaderMap;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -106,6 +118,11 @@ use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const WAIT_FOR_ENVIRONMENT_TEST_TOOL_DESCRIPTION: &str = "Test wait tool description";
 const WAIT_FOR_ENVIRONMENT_TEST_ENVIRONMENT_ID_DESCRIPTION: &str =
@@ -124,6 +141,35 @@ impl ThreadLifecycleContributor<Config> for WaitForEnvironmentTestExtension {
                 environment_id_description: WAIT_FOR_ENVIRONMENT_TEST_ENVIRONMENT_ID_DESCRIPTION
                     .to_string(),
             });
+        })
+    }
+}
+
+struct ReadyCapabilityRootsTestExtension;
+
+impl ContextContributor for ReadyCapabilityRootsTestExtension {
+    fn contribute_world_state<'a>(
+        &'a self,
+        input: WorldStateContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+        let root_ids = input
+            .ready_selected_capability_roots
+            .iter()
+            .map(|root| root.id.clone())
+            .collect::<Vec<_>>();
+        Box::pin(async move {
+            let body = root_ids.join(",");
+            vec![WorldStateSectionContribution::new(
+                "ready_capability_roots_test",
+                json!(root_ids),
+                move |_| {
+                    Some(RenderedWorldStateFragment::new(
+                        "user",
+                        ("<ready_capability_roots>", "</ready_capability_roots>"),
+                        body.clone(),
+                    ))
+                },
+            )]
         })
     }
 }
@@ -870,6 +916,33 @@ impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
     }
 }
 
+struct ReadyNoiseConnectProvider {
+    websocket_url: String,
+    executor_public_key: NoiseChannelPublicKey,
+}
+
+impl NoiseRendezvousConnectProvider for ReadyNoiseConnectProvider {
+    fn connect_bundle(
+        &self,
+        _: NoiseChannelPublicKey,
+    ) -> BoxFuture<'_, std::result::Result<NoiseRendezvousConnectBundle, ExecServerError>> {
+        let bundle = NoiseRendezvousConnectBundle {
+            websocket_url: self.websocket_url.clone(),
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            executor_registration_id: "ready-first-registration".to_string(),
+            executor_public_key: self.executor_public_key.clone(),
+            harness_key_authorization: "ready-first-authorization".to_string(),
+        };
+        Box::pin(async move { Ok(bundle) })
+    }
+}
+
+struct NoopRegistryAuthProvider;
+
+impl AuthProvider for NoopRegistryAuthProvider {
+    fn add_auth_headers(&self, _: &mut HeaderMap) {}
+}
+
 async fn wait_for_response_request_count(response_mock: &ResponseMock, expected_count: usize) {
     timeout(Duration::from_secs(5), async {
         while response_mock.requests().len() < expected_count {
@@ -880,31 +953,233 @@ async fn wait_for_response_request_count(response_mock: &ResponseMock, expected_
     .expect("timed out waiting for Responses API request");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_starts_noise_connection_after_registration() -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_before_selection_exposes_remote_tools_and_capability_context_after_wait()
+-> Result<()> {
+    const WAIT_CALL_ID: &str = "wait-ready-before-selection";
+
+    let rendezvous = TcpListener::bind("127.0.0.1:0").await?;
+    let rendezvous_url = format!("ws://{}", rendezvous.local_addr()?);
+    let registry = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/cloud/environment/{REMOTE_ENVIRONMENT_ID}/register"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "environment_id": REMOTE_ENVIRONMENT_ID,
+            "url": format!("{rendezvous_url}/relay?role=environment"),
+            "security_profile": "noise_hybrid_ik_v1",
+            "executor_registration_id": "ready-first-registration",
+        })))
+        .expect(1)
+        .mount(&registry)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/cloud/environment/{REMOTE_ENVIRONMENT_ID}/validate"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "valid": true })))
+        .expect(1)
+        .mount(&registry)
+        .await;
+
+    let runtime_paths = ExecServerRuntimePaths::new(
+        std::env::current_exe()?,
+        /*codex_linux_sandbox_exe*/ None,
+    )?;
+    let remote_config = RemoteEnvironmentConfig::new(
+        registry.uri(),
+        REMOTE_ENVIRONMENT_ID.to_string(),
+        Arc::new(NoopRegistryAuthProvider),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )?;
+    let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
+        remote_config,
+        runtime_paths,
+    ));
+    let (environment_socket, _) = timeout(Duration::from_secs(5), rendezvous.accept())
+        .await
+        .context("remote environment should reach rendezvous")??;
+    let environment_websocket = timeout(Duration::from_secs(5), accept_async(environment_socket))
+        .await
+        .context("remote environment websocket handshake should complete")??;
+    let executor_public_key = registry
+        .received_requests()
+        .await
+        .context("wiremock should retain registration requests")?
+        .iter()
+        .find(|request| request.url.path().ends_with("/register"))
+        .context("remote environment should register its public key")
+        .and_then(|request| {
+            serde_json::from_slice::<Value>(&request.body).context("registration request body")
+        })
+        .and_then(|body| {
+            serde_json::from_value(body["executor_public_key"].clone())
+                .context("registered executor public key")
+        })?;
+
     let server = start_mock_server().await;
-    let wait_call_id = "wait-for-startup";
     let response_mock = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
-                ev_response_created("resp-1"),
+                ev_response_created("ready-first-wait"),
                 ev_function_call(
-                    wait_call_id,
+                    WAIT_CALL_ID,
                     "wait_for_environment",
-                    &json!({
-                        "environment_id": REMOTE_ENVIRONMENT_ID,
-                    })
-                    .to_string(),
+                    &json!({ "environment_id": REMOTE_ENVIRONMENT_ID }).to_string(),
                 ),
-                ev_completed("resp-1"),
+                ev_completed("ready-first-wait"),
             ]),
             sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-2", "done"),
-                ev_completed("resp-2"),
+                ev_response_created("ready-first-done"),
+                ev_assistant_message("ready-first-message", "done"),
+                ev_completed("ready-first-done"),
             ]),
         ],
+    )
+    .await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(WaitForEnvironmentTestExtension));
+    extensions.prompt_contributor(Arc::new(ReadyCapabilityRootsTestExtension));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config.project_doc_max_bytes = 0;
+            config.use_experimental_unified_exec_tool = true;
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+        });
+    let test = builder.build(&server).await?;
+    let ready_root = SelectedCapabilityRoot {
+        id: "ready-first-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            path: PathUri::parse("file:///ready-first-root")?,
+        },
+    };
+    let environment = test
+        .thread_manager
+        .environment_manager()
+        .report_environment_provisioning_status(
+            REMOTE_ENVIRONMENT_ID.to_string(),
+            Ok(EnvironmentReadyInfo {
+                selected_capability_roots: vec![ready_root],
+            }),
+            Arc::new(ReadyNoiseConnectProvider {
+                websocket_url: format!("{rendezvous_url}/relay?role=harness"),
+                executor_public_key,
+            }),
+        )?
+        .context("Ready-first report should create the environment")?;
+
+    assert!(!environment.startup_finished());
+    let relay = tokio::spawn(async move {
+        let (harness_socket, _) = timeout(Duration::from_secs(5), rendezvous.accept())
+            .await
+            .context("selecting the ready environment should start its Noise connection")??;
+        let harness_websocket = timeout(Duration::from_secs(5), accept_async(harness_socket))
+            .await
+            .context("harness websocket handshake should complete")??;
+        let mut environment_websocket = environment_websocket;
+        let mut harness_websocket = harness_websocket;
+        loop {
+            tokio::select! {
+                message = environment_websocket.next() => {
+                    let Some(message) = message else {
+                        break;
+                    };
+                    harness_websocket.send(message?).await?;
+                }
+                message = harness_websocket.next() => {
+                    let Some(message) = message else {
+                        break;
+                    };
+                    environment_websocket.send(message?).await?;
+                }
+            }
+        }
+        anyhow::Ok(())
+    });
+
+    test.submit_turn_with_environments(
+        "use the ready environment",
+        Some(vec![TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&test.config.cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+        }]),
+    )
+    .await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    // Provisioning was reported ready before selection, but selection materialization remains
+    // nonblocking while the transport starts.
+    // The first request may legally see either Starting or Ready; the wait makes step two ready.
+    let first_tools = tool_names(&requests[0].body_json());
+    assert!(first_tools.contains(&"wait_for_environment".to_string()));
+    let first_user_context = requests[0].message_input_texts("user");
+    let first_environment_context = first_user_context
+        .iter()
+        .rfind(|text| text.contains("<environment_context>"))
+        .context("initial environment context should be model visible")?;
+    let first_has_ready_root = first_user_context
+        .iter()
+        .any(|text| text.contains("<ready_capability_roots>ready-first-root"));
+    if first_tools.contains(&"exec_command".to_string()) {
+        assert!(!first_environment_context.contains("<status>starting</status>"));
+        assert!(first_environment_context.contains("<shell>"));
+        assert!(first_has_ready_root);
+    } else {
+        assert!(first_environment_context.contains("<status>starting</status>"));
+        assert!(!first_has_ready_root);
+    }
+
+    let (_, wait_succeeded) = requests[1]
+        .function_call_output_content_and_success(WAIT_CALL_ID)
+        .context("wait_for_environment output should be model visible")?;
+    assert_ne!(wait_succeeded, Some(false));
+    assert!(tool_names(&requests[1].body_json()).contains(&"exec_command".to_string()));
+    let user_context = requests[1].message_input_texts("user");
+    let environment_context = user_context
+        .iter()
+        .rfind(|text| text.contains("<environment_context>"))
+        .context("ready environment context should be model visible")?;
+    assert!(!environment_context.contains("status=\"unavailable\""));
+    assert!(!environment_context.contains("<status>starting</status>"));
+    assert!(environment_context.contains("<shell>"));
+    assert!(
+        user_context
+            .iter()
+            .any(|text| text.contains("<ready_capability_roots>ready-first-root"))
+    );
+
+    relay.abort();
+    remote_environment.abort();
+    let _ = relay.await;
+    let _ = remote_environment.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_stays_pending_after_materialization() -> Result<()> {
+    let server = start_mock_server().await;
+    let wait_call_id = "wait-for-startup";
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                wait_call_id,
+                "wait_for_environment",
+                &json!({
+                    "environment_id": REMOTE_ENVIRONMENT_ID,
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-1"),
+        ])],
     )
     .await;
     let mut builder = test_codex_with_wait_for_environment().with_config(|config| {
@@ -917,8 +1192,10 @@ async fn deferred_executor_starts_noise_connection_after_registration() -> Resul
         .context("thread startup should not wait for the remote environment")??;
     let environment_manager = test.thread_manager.environment_manager();
     let provider = Arc::new(FailingNoiseConnectProvider::default());
-    let registration = environment_manager
-        .register_deferred_noise_environment(REMOTE_ENVIRONMENT_ID.to_string(), provider.clone())?;
+    environment_manager.materialize_pending_noise_environment(
+        REMOTE_ENVIRONMENT_ID.to_string(),
+        provider.clone(),
+    )?;
 
     test.codex
         .submit(Op::UserInput {
@@ -943,17 +1220,10 @@ async fn deferred_executor_starts_noise_connection_after_registration() -> Resul
         })
         .await?;
     wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
-    assert_eq!(response_mock.requests().len(), 1);
     assert_eq!(provider.calls.load(Ordering::Relaxed), 0);
-    registration.complete(Ok(EnvironmentReadyInfo::default()))?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 1);
     let starting_request_body = requests[0].body_json();
     let starting_tools = tool_names(&starting_request_body);
     assert!(starting_tools.contains(&"wait_for_environment".to_string()));
@@ -974,14 +1244,12 @@ async fn deferred_executor_starts_noise_connection_after_registration() -> Resul
         wait_tool["parameters"]["properties"]["environment_id"]["description"].as_str(),
         Some(WAIT_FOR_ENVIRONMENT_TEST_ENVIRONMENT_ID_DESCRIPTION)
     );
-    let (wait_output, _) = requests[1]
-        .function_call_output_content_and_success(wait_call_id)
-        .context("wait_for_environment output should be present")?;
-    assert!(
-        wait_output
-            .context("wait output should contain text")?
-            .contains("failed to start")
-    );
+
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
 
     Ok(())
 }
@@ -1224,102 +1492,6 @@ fn environment_instructions_occurrences(request: &ResponsesRequest) -> usize {
         .iter()
         .filter(|text| text.contains(ENVIRONMENTS_INSTRUCTIONS_OPEN_TAG))
         .count()
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
-    let server = start_mock_server().await;
-    let wait_call_id = "wait-for-failure";
-    let response_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_function_call(
-                    wait_call_id,
-                    "wait_for_environment",
-                    &json!({
-                        "environment_id": REMOTE_ENVIRONMENT_ID,
-                    })
-                    .to_string(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-2", "done"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-    let mut builder = test_codex_with_wait_for_environment().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
-        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-        assert!(config.features.enable(Feature::UnifiedExec).is_ok());
-    });
-    let test = timeout(Duration::from_secs(5), builder.build(&server))
-        .await
-        .context("thread startup should not wait for the remote environment")??;
-    let environment_manager = test.thread_manager.environment_manager();
-    let registration = environment_manager.register_deferred_noise_environment(
-        REMOTE_ENVIRONMENT_ID.to_string(),
-        Arc::new(FailingNoiseConnectProvider::default()),
-    )?;
-
-    test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "wait for the environment".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
-                    test.config.cwd.clone(),
-                    vec![TurnEnvironmentSelection {
-                        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                        cwd: PathUri::from_abs_path(&test.config.cwd),
-                        workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
-                    }],
-                )),
-                ..Default::default()
-            },
-        })
-        .await?;
-    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
-    assert_eq!(response_mock.requests().len(), 1);
-    registration.complete(Err("CCA provisioning failed".to_string()))?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
-    let starting_tools = tool_names(&requests[0].body_json());
-    let failed_tools = tool_names(&requests[1].body_json());
-    assert!(starting_tools.contains(&"wait_for_environment".to_string()));
-    assert!(!starting_tools.contains(&"exec_command".to_string()));
-    assert!(failed_tools.contains(&"wait_for_environment".to_string()));
-    assert!(!failed_tools.contains(&"exec_command".to_string()));
-    let (wait_output, _) = requests[1]
-        .function_call_output_content_and_success(wait_call_id)
-        .context("wait_for_environment output should be present")?;
-    assert_eq!(
-        wait_output.as_deref(),
-        Some("Environment `remote` failed to start and is unavailable. Continue without it.")
-    );
-    assert!(
-        requests[1]
-            .message_input_texts("user")
-            .iter()
-            .any(|text| text.contains("status=\"unavailable\""))
-    );
-
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

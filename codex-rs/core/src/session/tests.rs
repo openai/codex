@@ -8525,20 +8525,19 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
             environment_id,
             ..
         } = &selected_root.location;
-        let registration = environment_manager
-            .register_deferred_noise_environment(
-                environment_id.clone(),
-                Arc::new(PendingNoiseConnectProvider),
-            )
-            .expect("register deferred environment");
+        let provider = Arc::new(PendingNoiseConnectProvider);
         let environment = environment_manager
-            .get_environment(environment_id)
-            .expect("deferred environment");
-        registration
-            .complete(Ok(codex_exec_server::EnvironmentReadyInfo {
-                selected_capability_roots: vec![selected_root.clone()],
-            }))
-            .expect("complete deferred environment");
+            .materialize_pending_noise_environment(environment_id.clone(), provider.clone())
+            .expect("materialize deferred environment");
+        environment_manager
+            .report_environment_provisioning_status(
+                environment_id.clone(),
+                Ok(codex_exec_server::EnvironmentReadyInfo {
+                    selected_capability_roots: vec![selected_root.clone()],
+                }),
+                provider,
+            )
+            .expect("report environment ready");
         turn_environments.push(TurnEnvironment::new(
             environment_id.clone(),
             environment,
