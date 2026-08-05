@@ -1,5 +1,4 @@
 use super::mcp_refresh::McpRefresh;
-use super::turn_context::EnvironmentConfig;
 use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
@@ -4871,17 +4870,15 @@ async fn resolved_environments_for_configuration(
     let turn_environments = ThreadEnvironments::new(
         Arc::clone(&environment_manager),
         default_user_shell(),
-        EnvironmentConfig {
-            allow_login_shell: session_configuration
-                .original_config_do_not_use
-                .permissions
-                .allow_login_shell,
-        },
+        session_configuration.environment_config(),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     );
-    turn_environments.update_selections(session_configuration.environment_selections());
+    turn_environments.update_selections(
+        session_configuration.environment_selections(),
+        &session_configuration.environment_config(),
+    );
     (environment_manager, turn_environments.snapshot().await)
 }
 
@@ -5364,6 +5361,61 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
 }
 
 #[tokio::test]
+async fn permission_profile_updates_apply_to_next_turn_environment() {
+    for apply_on_turn_start in [false, true] {
+        let (session, active_turn) = make_session_and_context().await;
+        let active_environment_config = active_turn
+            .environments
+            .primary()
+            .expect("active turn environment")
+            .config
+            .clone();
+        let profile_root = active_turn.config.cwd.join("profile-root");
+        let active_profile = ActivePermissionProfile::read_only();
+        let updates = SessionSettingsUpdate {
+            permission_profile: Some(PermissionProfile::read_only()),
+            active_permission_profile: Some(active_profile.clone()),
+            profile_workspace_roots: Some(vec![profile_root.clone()]),
+            ..Default::default()
+        };
+
+        let next_turn = if apply_on_turn_start {
+            session
+                .new_turn_with_sub_id("permission-profile-update".to_string(), updates)
+                .await
+                .expect("turn permission profile update should succeed")
+        } else {
+            session
+                .update_settings(updates)
+                .await
+                .expect("permission profile update should succeed");
+            session.new_default_turn().await
+        };
+        let next_environment = next_turn
+            .environments
+            .primary()
+            .expect("next turn environment");
+        let mut expected_environment_config = active_environment_config.clone();
+        expected_environment_config.permission_profile =
+            PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                PermissionProfile::read_only(),
+                active_profile,
+                vec![profile_root],
+            );
+
+        assert_eq!(next_environment.config, expected_environment_config);
+        assert_eq!(
+            active_turn
+                .environments
+                .primary()
+                .expect("active turn environment")
+                .config,
+            active_environment_config
+        );
+    }
+}
+
+#[tokio::test]
 async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
     let (session, _turn_context) = make_session_and_context().await;
     let original_cwd = {
@@ -5681,9 +5733,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
-        EnvironmentConfig {
-            allow_login_shell: config.permissions.allow_login_shell,
-        },
+        session_configuration.environment_config(),
         ShellSnapshot::disabled(),
         resolved_environments,
         /*non_blocking_snapshots*/ false,
@@ -7077,14 +7127,18 @@ async fn turn_environments_set_primary_environment() {
 
 #[tokio::test]
 async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_environments() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, initial_turn, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
         AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
-    session
-        .services
-        .turn_environments
-        .update_selections(&[local(selected_cwd.clone())]);
+    session.services.turn_environments.update_selections(
+        &[local(selected_cwd.clone())],
+        &initial_turn
+            .environments
+            .primary()
+            .expect("initial turn environment")
+            .config,
+    );
     {
         let mut state = session.state.lock().await;
         state.session_configuration.environments.environments = vec![local(selected_cwd.clone())];
@@ -7113,10 +7167,17 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
 
 #[tokio::test]
 async fn default_turn_honors_empty_stored_thread_environments() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (session, initial_turn, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
 
-    session.services.turn_environments.update_selections(&[]);
+    session.services.turn_environments.update_selections(
+        &[],
+        &initial_turn
+            .environments
+            .primary()
+            .expect("initial turn environment")
+            .config,
+    );
     {
         let mut state = session.state.lock().await;
         state.session_configuration.environments.environments = Vec::new();
@@ -7888,9 +7949,7 @@ where
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
-        EnvironmentConfig {
-            allow_login_shell: config.permissions.allow_login_shell,
-        },
+        session_configuration.environment_config(),
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
         /*non_blocking_snapshots*/ false,

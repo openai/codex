@@ -271,6 +271,12 @@ impl PermissionProfileState {
         self.resolved_permission_profile.get().permission_profile()
     }
 
+    pub(crate) fn snapshot(&self) -> PermissionProfileSnapshot {
+        PermissionProfileSnapshot {
+            resolved_permission_profile: self.resolved_permission_profile.get().clone(),
+        }
+    }
+
     pub(crate) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
         self.resolved_permission_profile
             .get()

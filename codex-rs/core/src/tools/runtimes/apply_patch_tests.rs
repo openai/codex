@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::PermissionProfileSnapshot;
 use crate::session::turn_context::EnvironmentConfig;
 use crate::tools::sandboxing::SandboxAttempt;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -24,6 +25,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
         /*shell*/ None,
         EnvironmentConfig {
             allow_login_shell: true,
+            permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
         },
     )
 }

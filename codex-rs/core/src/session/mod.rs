@@ -1531,10 +1531,15 @@ impl Session {
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
             let mcp_inputs_changed = state.session_configuration.mcp_inputs_differ(&updated);
+            let environment_config = updated.environment_config();
             if updates.environments.is_some() {
                 self.services
                     .turn_environments
-                    .update_selections(updated.environment_selections());
+                    .update_selections(updated.environment_selections(), &environment_config);
+            } else if state.session_configuration.environment_config() != environment_config {
+                self.services
+                    .turn_environments
+                    .update_environment_configs(&environment_config);
             }
             state.session_configuration = updated;
             if mcp_inputs_changed {

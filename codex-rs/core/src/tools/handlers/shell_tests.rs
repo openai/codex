@@ -114,6 +114,11 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         Some(selected_shell),
         EnvironmentConfig {
             allow_login_shell: true,
+            permission_profile: turn_context
+                .config
+                .permissions
+                .permission_profile_state()
+                .snapshot(),
         },
     );
     let mut expected_env = create_env(

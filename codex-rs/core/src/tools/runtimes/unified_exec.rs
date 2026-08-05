@@ -550,11 +550,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PermissionProfileSnapshot;
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
     use crate::session::turn_context::EnvironmentConfig;
     use crate::tools::sandboxing::ToolRuntime;
     use codex_exec_server::Environment;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+    use codex_protocol::models::PermissionProfile;
     use codex_tools::ZshForkConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
@@ -571,6 +573,9 @@ mod tests {
             /*shell*/ None,
             EnvironmentConfig {
                 allow_login_shell: true,
+                permission_profile: PermissionProfileSnapshot::legacy(
+                    PermissionProfile::read_only(),
+                ),
             },
         )
     }

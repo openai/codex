@@ -1,6 +1,8 @@
 use super::*;
+use crate::config::PermissionProfileSnapshot;
 use crate::session::turn_context::EnvironmentConfig;
 use codex_exec_server::Environment;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -19,6 +21,9 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
             /*shell*/ None,
             EnvironmentConfig {
                 allow_login_shell: true,
+                permission_profile: PermissionProfileSnapshot::legacy(
+                    PermissionProfile::read_only(),
+                ),
             },
         ),
         shell_type: None,

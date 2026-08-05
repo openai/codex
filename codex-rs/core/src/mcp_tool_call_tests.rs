@@ -1104,6 +1104,11 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
             /*shell*/ None,
             EnvironmentConfig {
                 allow_login_shell: true,
+                permission_profile: turn_context
+                    .config
+                    .permissions
+                    .permission_profile_state()
+                    .snapshot(),
             },
         )));
 

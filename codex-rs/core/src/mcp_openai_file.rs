@@ -217,7 +217,6 @@ mod tests {
     use super::*;
     use crate::environment_selection::TurnEnvironmentState;
     use crate::session::tests::make_session_and_context;
-    use crate::session::turn_context::EnvironmentConfig;
     use crate::session::turn_context::TurnContext;
     use crate::session::turn_context::TurnEnvironment;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -316,22 +315,21 @@ mod tests {
             .await
             .expect("write local file");
         set_primary_environment_cwd(&mut turn_context, dir.path());
-        let selection = turn_context
+        let environment = turn_context
             .environments
             .primary()
-            .expect("ready primary environment")
-            .selection();
+            .expect("ready primary environment");
+        let selection = environment.selection();
+        let environment_config = environment.config.clone();
         let environments = crate::environment_selection::ThreadEnvironments::new(
             session.services.turn_environments.environment_manager(),
             crate::shell::default_user_shell(),
-            EnvironmentConfig {
-                allow_login_shell: turn_context.config.permissions.allow_login_shell,
-            },
+            environment_config.clone(),
             crate::shell_snapshot::ShellSnapshot::disabled(),
             Default::default(),
             /*non_blocking_snapshots*/ true,
         );
-        environments.update_selections(std::slice::from_ref(&selection));
+        environments.update_selections(std::slice::from_ref(&selection), &environment_config);
         turn_context.environments = environments.snapshot().await;
         turn_context
             .environments

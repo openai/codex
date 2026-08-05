@@ -156,6 +156,16 @@ impl SessionConfiguration {
         &self.permission_profile_state
     }
 
+    pub(super) fn environment_config(&self) -> EnvironmentConfig {
+        EnvironmentConfig {
+            allow_login_shell: self
+                .original_config_do_not_use
+                .permissions
+                .allow_login_shell,
+            permission_profile: self.permission_profile_state.snapshot(),
+        }
+    }
+
     pub(super) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile_state.permission_profile().clone()
     }
@@ -944,14 +954,15 @@ impl Session {
                 environment_manager,
                 default_shell.clone(),
                 // Temporary: preserve thread-level behavior until environments supply config.
-                EnvironmentConfig {
-                    allow_login_shell: config.permissions.allow_login_shell,
-                },
+                session_configuration.environment_config(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
-            turn_environments.update_selections(session_configuration.environment_selections());
+            turn_environments.update_selections(
+                session_configuration.environment_selections(),
+                &session_configuration.environment_config(),
+            );
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
             let plugin_skill_warmup = warm_plugins_and_skills_for_session_init(

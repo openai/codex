@@ -29,6 +29,7 @@ pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSn
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EnvironmentConfig {
     pub(crate) allow_login_shell: bool,
+    pub(crate) permission_profile: PermissionProfileSnapshot,
 }
 
 #[derive(Clone)]
@@ -611,10 +612,16 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
+                    let environment_config = next.environment_config();
                     if updates.environments.is_some() {
                         self.services
                             .turn_environments
-                            .update_selections(next.environment_selections());
+                            .update_selections(next.environment_selections(), &environment_config);
+                    } else if state.session_configuration.environment_config() != environment_config
+                    {
+                        self.services
+                            .turn_environments
+                            .update_environment_configs(&environment_config);
                     }
                     if mcp_inputs_changed {
                         self.mark_mcp_runtime_dirty();
