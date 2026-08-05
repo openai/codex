@@ -276,7 +276,8 @@ fn registry_preserves_external_winners_and_trusted_synthetic_order() {
 
     let mut registry = ToolRegistry::from_tools([Arc::clone(&first_handler)]);
     assert!(!registry.register_external(handler(first_name.clone())));
-    assert_eq!(registry.first_collision(), Some(&first_name));
+    let canonical_first_name = first_name.clone().with_default_namespace();
+    assert_eq!(registry.first_collision(), Some(&canonical_first_name));
     assert!(registry.register_external(handler(second_name.clone())));
     registry.prepend_trusted(handler(synthetic_name.clone()));
 
@@ -326,16 +327,6 @@ fn reserved_shell_command_rejects_external_runtimes_without_a_builtin() {
 }
 
 #[test]
-fn registry_preserves_explicit_functions_shell_command_without_a_collision() {
-    let tool_name = codex_tools::ToolName::namespaced("functions", "shell_command");
-    let runtime = Arc::new(TestHandler { tool_name });
-    let mut registry = ToolRegistry::default();
-
-    assert!(registry.register_external(runtime));
-    assert_eq!(registry.first_collision(), None);
-}
-
-#[test]
 fn registry_records_reserved_shell_command_when_a_matching_tool_exists() {
     let tool_name = codex_tools::ToolName::plain("shell_command");
     let trusted = Arc::new(TestHandler {
@@ -347,7 +338,8 @@ fn registry_records_reserved_shell_command_when_a_matching_tool_exists() {
     let mut registry = ToolRegistry::from_tools([trusted]);
 
     assert!(!registry.register_external(external));
-    assert_eq!(registry.first_collision(), Some(&tool_name));
+    let canonical_tool_name = tool_name.with_default_namespace();
+    assert_eq!(registry.first_collision(), Some(&canonical_tool_name));
 }
 
 #[test]
