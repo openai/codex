@@ -63,3 +63,53 @@ async fn host_catalog_entries_carry_their_render_metadata() -> Result<(), Box<dy
     std::fs::remove_dir_all(root.as_path())?;
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn host_catalog_preserves_symlinked_skill_discovery_paths()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let source = tempfile::tempdir()?;
+    let source_skill_dir = source.path().join("linked-skill");
+    std::fs::create_dir_all(&source_skill_dir)?;
+    std::fs::write(
+        source_skill_dir.join("SKILL.md"),
+        "---\nname: linked-skill\ndescription: Linked skill.\n---\n# Linked skill\n",
+    )?;
+    std::os::unix::fs::symlink(&source_skill_dir, root.path().join("linked-skill"))?;
+
+    let root = AbsolutePathBuf::try_from(std::fs::canonicalize(root.path())?)?;
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: root.clone(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_identity: None,
+            plugin_namespace: None,
+            plugin_root: None,
+            discovery_mode: Default::default(),
+        }],
+        /*plugin_skill_snapshots*/ None,
+        Arc::new(Semaphore::new(1)),
+    )
+    .await;
+    let catalog = catalog_from_outcome(&outcome);
+    let canonical_path = std::fs::canonicalize(source_skill_dir.join("SKILL.md"))?;
+    let discovery_path = root.join("linked-skill/SKILL.md");
+
+    assert_eq!(catalog.entries.len(), 1);
+    assert_eq!(
+        (
+            catalog.entries[0].main_prompt.as_str(),
+            catalog.entries[0].display_path.as_deref(),
+            catalog.entries[0].display_path_root(),
+        ),
+        (
+            canonical_path.to_string_lossy().as_ref(),
+            Some(discovery_path.to_string_lossy().as_ref()),
+            Some(root.to_string_lossy().as_ref()),
+        )
+    );
+
+    Ok(())
+}

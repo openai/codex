@@ -28,6 +28,7 @@ pub struct SkillLoadOutcome {
     pub disabled_paths: HashSet<AbsolutePathBuf>,
     pub(crate) skill_roots: Vec<AbsolutePathBuf>,
     pub(crate) skill_root_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+    pub(crate) skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
     pub(crate) agent_plugin_skill_paths: HashSet<AbsolutePathBuf>,
     pub(crate) file_systems_by_skill_path: SkillFileSystemsByPath,
     pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
@@ -79,6 +80,14 @@ impl SkillLoadOutcome {
     /// Returns the discovery root that supplied a loaded skill path.
     pub fn skill_root_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
         self.skill_root_by_path.get(path)
+    }
+
+    /// Returns the logical path used to discover a canonical skill path.
+    pub fn skill_discovery_path_for_path(
+        &self,
+        path: &AbsolutePathBuf,
+    ) -> Option<&AbsolutePathBuf> {
+        self.skill_discovery_path_by_path.get(path)
     }
 
     /// Returns loaded skill roots in discovery order.
@@ -177,6 +186,14 @@ pub fn filter_skill_load_outcome_for_product(
             .iter()
             .filter(|(path, _)| retained_paths.contains(*path))
             .map(|(path, root)| (path.clone(), root.clone()))
+            .collect(),
+    );
+    outcome.skill_discovery_path_by_path = Arc::new(
+        outcome
+            .skill_discovery_path_by_path
+            .iter()
+            .filter(|(path, _)| retained_paths.contains(*path))
+            .map(|(path, discovery_path)| (path.clone(), discovery_path.clone()))
             .collect(),
     );
     outcome

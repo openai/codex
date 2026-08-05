@@ -5,6 +5,7 @@ use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 fn make_skill(name: &str, path: &str) -> SkillMetadata {
     SkillMetadata {
@@ -51,7 +52,26 @@ fn collect_mentions(
     disabled_paths: &HashSet<AbsolutePathBuf>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
-    collect_explicit_skill_mentions(inputs, skills, disabled_paths, connector_slug_counts)
+    let loaded_skills = SkillLoadOutcome {
+        skills: skills.to_vec(),
+        disabled_paths: disabled_paths.clone(),
+        ..Default::default()
+    };
+    collect_explicit_skill_mentions(inputs, &loaded_skills, connector_slug_counts)
+}
+
+fn skill_outcome_with_discovery_path(
+    skill: SkillMetadata,
+    discovery_path: &str,
+) -> SkillLoadOutcome {
+    SkillLoadOutcome {
+        skill_discovery_path_by_path: Arc::new(HashMap::from([(
+            skill.path_to_skills_md.clone(),
+            test_path_buf(discovery_path).abs(),
+        )])),
+        skills: vec![skill],
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -178,6 +198,61 @@ fn collect_explicit_skill_mentions_prioritizes_structured_inputs() {
     let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
 
     assert_eq!(selected, vec![beta, alpha]);
+}
+
+#[test]
+fn collect_explicit_skill_mentions_accepts_structured_discovery_path() {
+    let skill = make_skill("linked-skill", "/tmp/shared/linked-skill/SKILL.md");
+    let loaded_skills = skill_outcome_with_discovery_path(
+        skill.clone(),
+        "/tmp/project/.agents/skills/linked-skill/SKILL.md",
+    );
+    let inputs = vec![UserInput::Skill {
+        name: "linked-skill".to_string(),
+        path: test_path_buf("/tmp/project/.agents/skills/linked-skill/SKILL.md"),
+    }];
+
+    let selected = collect_explicit_skill_mentions(&inputs, &loaded_skills, &HashMap::new());
+
+    assert_eq!(selected, vec![skill]);
+}
+
+#[test]
+fn collect_explicit_skill_mentions_accepts_linked_discovery_path() {
+    let skill = make_skill("linked-skill", "/tmp/shared/linked-skill/SKILL.md");
+    let loaded_skills = skill_outcome_with_discovery_path(
+        skill.clone(),
+        "/tmp/project/.agents/skills/linked-skill/SKILL.md",
+    );
+    let inputs = vec![UserInput::Text {
+        text: linked_skill_mention(
+            "linked-skill",
+            "/tmp/project/.agents/skills/linked-skill/SKILL.md",
+        ),
+        text_elements: Vec::new(),
+    }];
+
+    let selected = collect_explicit_skill_mentions(&inputs, &loaded_skills, &HashMap::new());
+
+    assert_eq!(selected, vec![skill]);
+}
+
+#[test]
+fn collect_explicit_skill_mentions_rejects_disabled_discovery_path() {
+    let skill = make_skill("linked-skill", "/tmp/shared/linked-skill/SKILL.md");
+    let mut loaded_skills = skill_outcome_with_discovery_path(
+        skill.clone(),
+        "/tmp/project/.agents/skills/linked-skill/SKILL.md",
+    );
+    loaded_skills.disabled_paths.insert(skill.path_to_skills_md);
+    let inputs = vec![UserInput::Skill {
+        name: "linked-skill".to_string(),
+        path: test_path_buf("/tmp/project/.agents/skills/linked-skill/SKILL.md"),
+    }];
+
+    let selected = collect_explicit_skill_mentions(&inputs, &loaded_skills, &HashMap::new());
+
+    assert_eq!(selected, Vec::new());
 }
 
 #[test]

@@ -39,6 +39,7 @@ use futures::FutureExt;
 use futures::StreamExt;
 use namespace::SkillNamespaceResolver;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -165,6 +166,7 @@ pub(crate) struct SkillRootSnapshot {
     pub(crate) root: AbsolutePathBuf,
     pub(crate) is_agent_plugin: bool,
     pub(crate) skills: Vec<SkillMetadata>,
+    pub(crate) skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
     pub(crate) errors: Vec<SkillError>,
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
 }
@@ -178,6 +180,7 @@ pub(crate) async fn load_skill_root(root: SkillRoot) -> SkillRootSnapshot {
         root: canonical_root,
         is_agent_plugin: root.discovery_mode == SkillDiscoveryMode::DirectChildren,
         skills: outcome.skills,
+        skill_discovery_path_by_path: outcome.skill_discovery_path_by_path,
         errors: outcome.errors,
         file_system: root.file_system,
     }
@@ -324,6 +327,11 @@ async fn load_skills_under_root(
         .map(|skill| {
             let plugin_root = plugin_root.as_ref();
             async move {
+                let discovery_path = skill
+                    .skill
+                    .path
+                    .to_abs_path()
+                    .unwrap_or_else(|_| skill.path.clone());
                 let result = parse_skill_file(
                     fs,
                     &skill.skill,
@@ -335,14 +343,14 @@ async fn load_skills_under_root(
                 )
                 .await
                 .map_err(|err| err.to_string());
-                (skill.path, skill.path_uri, result)
+                (skill.path, skill.path_uri, discovery_path, result)
             }
         })
         .buffered(MAX_CONCURRENT_SKILL_LOADS)
         .collect::<Vec<_>>()
         .boxed();
     let (namespace_resolver, skill_results) = tokio::join!(namespace_resolver, skill_results);
-    for (path, path_uri, result) in skill_results {
+    for (path, path_uri, discovery_path, result) in skill_results {
         let result = result.and_then(|mut skill| {
             skill.name = namespace_resolver
                 .for_skill(&root_uri, &path_uri)
@@ -352,7 +360,11 @@ async fn load_skills_under_root(
             Ok(skill)
         });
         match result {
-            Ok(skill) => outcome.skills.push(skill),
+            Ok(skill) => {
+                Arc::make_mut(&mut outcome.skill_discovery_path_by_path)
+                    .insert(skill.path_to_skills_md.clone(), discovery_path);
+                outcome.skills.push(skill);
+            }
             Err(err) if skill_root.scope != SkillScope::System => {
                 outcome.errors.push(SkillError { path, message: err })
             }

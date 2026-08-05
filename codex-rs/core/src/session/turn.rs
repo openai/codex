@@ -691,12 +691,8 @@ async fn required_mcp_servers_for_input(
     };
     let skills_snapshot = turn_context.skills_snapshot();
     let skills_outcome = skills_snapshot.outcome();
-    let mentioned_skills = collect_explicit_skill_mentions(
-        user_input,
-        &skills_outcome.skills,
-        &skills_outcome.disabled_paths,
-        &connector_slug_counts,
-    );
+    let mentioned_skills =
+        collect_explicit_skill_mentions(user_input, skills_outcome, &connector_slug_counts);
     for skill in mentioned_skills {
         if let Some(dependencies) = skill.dependencies {
             required_servers.extend(
@@ -771,12 +767,8 @@ async fn build_skills_and_plugins(
             .await?;
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
-    let mentioned_skills = collect_explicit_skill_mentions(
-        user_input,
-        &skills_outcome.skills,
-        &skills_outcome.disabled_paths,
-        &connector_slug_counts,
-    );
+    let mentioned_skills =
+        collect_explicit_skill_mentions(user_input, skills_outcome, &connector_slug_counts);
     maybe_prompt_and_install_mcp_dependencies(
         sess,
         turn_context,

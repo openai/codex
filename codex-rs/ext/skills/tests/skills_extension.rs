@@ -1615,6 +1615,16 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
             ),
         )?;
     }
+    #[cfg(unix)]
+    {
+        let source_skill_dir = test_root.join("shared-skills/linked-skill");
+        std::fs::create_dir_all(&source_skill_dir)?;
+        std::fs::write(
+            source_skill_dir.join("SKILL.md"),
+            "---\nname: linked-skill\ndescription: Linked skill.\n---\n# Linked skill\n",
+        )?;
+        std::os::unix::fs::symlink(&source_skill_dir, root.join("linked-skill"))?;
+    }
     let root = AbsolutePathBuf::try_from(std::fs::canonicalize(root)?)?;
     let rendered_root = root.to_string_lossy().replace('\\', "/");
     let outcome = load_skills_from_roots(
@@ -1632,7 +1642,7 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
     )
     .await;
     assert_eq!(outcome.errors, Vec::new());
-    assert_eq!(outcome.skills.len(), 12);
+    assert_eq!(outcome.skills.len(), 12 + usize::from(cfg!(unix)));
 
     let mut builder = ExtensionRegistryBuilder::new();
     install(&mut builder, skills_extension_config);
@@ -1687,6 +1697,8 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
     );
     assert!(catalog.contains("(file: r0/skill-00/SKILL.md)"));
     assert!(catalog.contains("(file: r0/skill-11/SKILL.md)"));
+    #[cfg(unix)]
+    assert!(catalog.contains("(file: r0/linked-skill/SKILL.md)"));
     assert!(!catalog.contains("additional skills omitted"));
 
     std::fs::remove_dir_all(test_root)?;

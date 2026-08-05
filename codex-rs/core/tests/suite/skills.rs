@@ -3,14 +3,19 @@
 
 use anyhow::Result;
 use codex_core::TurnInput;
+use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_skills_extension::SkillsExtensionConfig;
+use codex_skills_extension::install;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use core_test_support::create_directory_symlink;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -18,6 +23,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
 use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -130,6 +136,106 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
                 && text.contains(skill_path_str.as_ref())
         }),
         "expected skill instructions in user input, got {user_texts:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_selects_symlinked_skill_by_advertised_discovery_path() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "remote filesystems do not expose directory symlink creation"
+    );
+
+    let server = start_mock_server().await;
+    let skill_body = "instructions from the canonical linked skill";
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install(&mut extensions, |config: &Config| SkillsExtensionConfig {
+        include_instructions: config.include_skill_instructions,
+        bundled_skills_enabled: false,
+        orchestrator_skills_enabled: false,
+        shadow_selection_enabled: false,
+    });
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_workspace_setup(move |cwd, _fs| async move {
+            let source_skill_dir = cwd.join("shared-skills/linked-demo");
+            let discovery_root = cwd.join(".agents/skills");
+            std::fs::create_dir_all(source_skill_dir.as_path())?;
+            std::fs::create_dir_all(discovery_root.as_path())?;
+            std::fs::write(
+                source_skill_dir.join("SKILL.md"),
+                format!(
+                    "---\nname: linked-demo\ndescription: Linked demo skill\n---\n\n{skill_body}\n"
+                ),
+            )?;
+            create_directory_symlink(
+                source_skill_dir.as_path(),
+                discovery_root.join("linked-demo").as_path(),
+            );
+            Ok(())
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let discovery_root = test.config.cwd.join(".agents/skills").canonicalize()?;
+    let discovery_path = discovery_root.join("linked-demo/SKILL.md");
+    let canonical_path = discovery_path.canonicalize()?;
+    let discovery_path_display = discovery_path.display();
+    let canonical_path_display = canonical_path.display();
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("linked-skill-response"),
+            ev_assistant_message("linked-skill-message", "done"),
+            ev_completed("linked-skill-response"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .try_start_turn_if_idle(vec![TurnInput::UserInput {
+            content: vec![
+                UserInput::Text {
+                    text: format!("please use [$linked-demo]({discovery_path_display})"),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Skill {
+                    name: "linked-demo".to_string(),
+                    path: discovery_path.to_path_buf(),
+                },
+            ],
+            client_id: Some("linked-skill-user-message".to_string()),
+        }])
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("linked skill input was rejected: {:?}", error.reason())
+        })?;
+
+    core_test_support::wait_for_event(test.codex.as_ref(), |event| {
+        matches!(event, codex_protocol::protocol::EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = mock.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    let advertised_path = format!("(file: {discovery_path_display})");
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains(&advertised_path)),
+        "expected symlink discovery path in the skill catalog, got {developer_texts:?}"
+    );
+
+    let user_texts = request.message_input_texts("user");
+    let canonical_identity = format!("<path>{canonical_path_display}</path>");
+    assert!(
+        user_texts.iter().any(|text| {
+            text.contains("<skill>\n<name>linked-demo</name>")
+                && text.contains(&canonical_identity)
+                && text.contains(skill_body)
+        }),
+        "expected canonical skill instructions selected by discovery path, got {user_texts:?}"
     );
 
     Ok(())

@@ -174,24 +174,23 @@ fn emit_skill_injected_metric(
 ///
 /// Structured `UserInput::Skill` selections are resolved first by path against
 /// enabled skills. Text inputs are then scanned to extract `$skill-name` tokens, and we
-/// iterate `skills` in their existing order to preserve prior ordering semantics.
-/// Explicit links are resolved by path and plain names are only used when the match
-/// is unambiguous.
+/// iterate loaded skills in their existing order to preserve prior ordering semantics.
+/// Explicit paths match either a skill's canonical identity or its logical discovery
+/// path, and plain names are only used when the match is unambiguous.
 ///
 /// Complexity: `O(T + (N_s + N_t) * S)` time, `O(S + M)` space, where:
 /// `S` = number of skills, `T` = total text length, `N_s` = number of structured skill inputs,
 /// `N_t` = number of text inputs, `M` = max mentions parsed from a single text input.
 pub fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
-    skills: &[SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    loaded_skills: &SkillLoadOutcome,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
-    let skill_name_counts = build_skill_name_counts(skills, disabled_paths).0;
+    let skill_name_counts =
+        build_skill_name_counts(&loaded_skills.skills, &loaded_skills.disabled_paths).0;
 
     let selection_context = SkillSelectionContext {
-        skills,
-        disabled_paths,
+        loaded_skills,
         skill_name_counts: &skill_name_counts,
         connector_slug_counts,
     };
@@ -207,19 +206,25 @@ pub fn collect_explicit_skill_mentions(
                 continue;
             };
 
-            if selection_context.disabled_paths.contains(&path) || seen_paths.contains(&path) {
+            let Some(skill) = selection_context.loaded_skills.skills.iter().find(|skill| {
+                skill.path_to_skills_md == path
+                    || selection_context
+                        .loaded_skills
+                        .skill_discovery_path_for_path(&skill.path_to_skills_md)
+                        .is_some_and(|discovery_path| discovery_path == &path)
+            }) else {
+                continue;
+            };
+
+            if !selection_context.loaded_skills.is_skill_enabled(skill)
+                || seen_paths.contains(&skill.path_to_skills_md)
+            {
                 continue;
             }
 
-            if let Some(skill) = selection_context
-                .skills
-                .iter()
-                .find(|skill| skill.path_to_skills_md == path)
-            {
-                seen_paths.insert(skill.path_to_skills_md.clone());
-                seen_names.insert(skill.name.clone());
-                selected.push(skill.clone());
-            }
+            seen_paths.insert(skill.path_to_skills_md.clone());
+            seen_names.insert(skill.name.clone());
+            selected.push(skill.clone());
         }
     }
 
@@ -241,8 +246,7 @@ pub fn collect_explicit_skill_mentions(
 }
 
 struct SkillSelectionContext<'a> {
-    skills: &'a [SkillMetadata],
-    disabled_paths: &'a HashSet<AbsolutePathBuf>,
+    loaded_skills: &'a SkillLoadOutcome,
     skill_name_counts: &'a HashMap<String, usize>,
     connector_slug_counts: &'a HashMap<String, usize>,
 }
@@ -400,7 +404,7 @@ fn select_skills_from_mentions(
         return;
     }
 
-    let mention_skill_paths: HashSet<&str> = mentions
+    let mention_skill_paths: HashSet<String> = mentions
         .paths()
         .filter(|path| {
             !matches!(
@@ -408,30 +412,34 @@ fn select_skills_from_mentions(
                 ToolMentionKind::App | ToolMentionKind::Mcp | ToolMentionKind::Plugin
             )
         })
-        .map(normalize_skill_path)
+        .map(normalize_host_skill_path)
         .collect();
 
-    for skill in selection_context.skills {
-        if selection_context
-            .disabled_paths
-            .contains(&skill.path_to_skills_md)
+    for skill in &selection_context.loaded_skills.skills {
+        if !selection_context.loaded_skills.is_skill_enabled(skill)
             || seen_paths.contains(&skill.path_to_skills_md)
         {
             continue;
         }
 
-        let path_str = skill.path_to_skills_md.to_string_lossy();
-        if mention_skill_paths.contains(path_str.as_ref()) {
+        let canonical_path = normalize_host_skill_path(&skill.path_to_skills_md.to_string_lossy());
+        let matches_discovery_path = selection_context
+            .loaded_skills
+            .skill_discovery_path_for_path(&skill.path_to_skills_md)
+            .is_some_and(|discovery_path| {
+                mention_skill_paths.contains(&normalize_host_skill_path(
+                    &discovery_path.to_string_lossy(),
+                ))
+            });
+        if mention_skill_paths.contains(&canonical_path) || matches_discovery_path {
             seen_paths.insert(skill.path_to_skills_md.clone());
             seen_names.insert(skill.name.clone());
             selected.push(skill.clone());
         }
     }
 
-    for skill in selection_context.skills {
-        if selection_context
-            .disabled_paths
-            .contains(&skill.path_to_skills_md)
+    for skill in &selection_context.loaded_skills.skills {
+        if !selection_context.loaded_skills.is_skill_enabled(skill)
             || seen_paths.contains(&skill.path_to_skills_md)
         {
             continue;

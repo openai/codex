@@ -623,6 +623,21 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
             remote_plugin_id: None,
         }]
     );
+    let canonical_skill_path = normalized(&shared_skill_path);
+    let discovery_path = outcome
+        .skill_root_for_path(&canonical_skill_path)
+        .expect("symlinked skill should retain its discovery root")
+        .join("shared/demo/SKILL.md");
+    assert_eq!(
+        outcome.skill_discovery_path_for_path(&canonical_skill_path),
+        Some(&discovery_path)
+    );
+    let filtered_outcome =
+        crate::filter_skill_load_outcome_for_product(outcome, Some(Product::Codex));
+    assert_eq!(
+        filtered_outcome.skill_discovery_path_for_path(&canonical_skill_path),
+        Some(&discovery_path)
+    );
 }
 
 // Directory symlinks on Windows can require Developer Mode or administrator privileges.
@@ -794,6 +809,15 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
             plugin_id: None,
             remote_plugin_id: None,
         }]
+    );
+    let canonical_skill_path = normalized(&linked_skill_path);
+    let discovery_path = outcome
+        .skill_root_for_path(&canonical_skill_path)
+        .expect("repo skill should retain its discovery root")
+        .join("shared/demo/SKILL.md");
+    assert_eq!(
+        outcome.skill_discovery_path_for_path(&canonical_skill_path),
+        Some(&discovery_path)
     );
 }
 
@@ -1877,6 +1901,41 @@ async fn deduplicates_by_path_preferring_first_root() {
             plugin_id: None,
             remote_plugin_id: None,
         }]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn deduplicated_symlinked_skill_preserves_first_discovery_path() {
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let first_root = tempfile::tempdir().expect("first tempdir");
+    let second_root = tempfile::tempdir().expect("second tempdir");
+    let skill_path = write_skill_at(source_root.path(), "demo", "demo", "shared skill");
+    symlink_dir(
+        &source_root.path().join("demo"),
+        &first_root.path().join("first-link"),
+    );
+    symlink_dir(
+        &source_root.path().join("demo"),
+        &second_root.path().join("second-link"),
+    );
+
+    let outcome = load_skills_for_test([
+        local_skill_root(first_root.path(), SkillScope::Repo),
+        local_skill_root(second_root.path(), SkillScope::User),
+    ])
+    .await;
+    let canonical_skill_path = normalized(&skill_path);
+    let expected_root = normalized(first_root.path());
+    let expected_discovery_path = expected_root.join("first-link/SKILL.md");
+
+    assert_eq!(outcome.skills.len(), 1);
+    assert_eq!(
+        (
+            outcome.skill_root_for_path(&canonical_skill_path),
+            outcome.skill_discovery_path_for_path(&canonical_skill_path),
+        ),
+        (Some(&expected_root), Some(&expected_discovery_path))
     );
 }
 
