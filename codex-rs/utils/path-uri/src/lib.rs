@@ -10,7 +10,10 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use std::borrow::Cow;
 use std::fmt;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -45,18 +48,52 @@ const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 ///
 /// Like [VS Code resources], path operations use `/` URI separators on every
 /// host. Lexical path operations preserve a URL authority without interpreting
-/// Windows drive or UNC roots from path text. Native path normalization,
-/// filesystem aliases, symlinks, case sensitivity, and Unicode normalization
-/// are not resolved.
+/// Windows drive or UNC roots from path text. Windows path equality and hashing
+/// ignore ASCII case, while POSIX paths remain case-sensitive. Native path
+/// normalization, filesystem aliases, symlinks, and Unicode normalization are
+/// not resolved.
 ///
 /// Serde represents a `PathUri` as its canonical URI string. Deserialization
 /// accepts only valid `file:` URI strings. These strings round-trip through
 /// their canonical URL form, including encoded non-UTF-8 path bytes.
 ///
 /// [VS Code resources]: https://github.com/microsoft/vscode/blob/main/src/vs/base/common/resources.ts
-#[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
+#[derive(Clone, Debug, TS)]
 #[ts(type = "string")]
 pub struct PathUri(Url);
+
+impl PartialEq for PathUri {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0 == other.0 {
+            return true;
+        }
+        let (Some(path), Some(other_path)) = (
+            self.windows_identity_path_bytes(),
+            other.windows_identity_path_bytes(),
+        ) else {
+            return false;
+        };
+        self.0.host_str() == other.0.host_str() && path.eq_ignore_ascii_case(&other_path)
+    }
+}
+
+impl Eq for PathUri {}
+
+impl Hash for PathUri {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Preserve URL hashing for POSIX paths; Windows paths must hash the
+        // same decoded, ASCII-folded identity that `PartialEq` compares.
+        let Some(path) = self.windows_identity_path_bytes() else {
+            self.0.hash(state);
+            return;
+        };
+        self.0.host_str().hash(state);
+        path.len().hash(state);
+        for byte in path.as_ref() {
+            byte.to_ascii_lowercase().hash(state);
+        }
+    }
+}
 
 impl PathUri {
     /// Parses and validates a `file:` URI.
@@ -134,6 +171,22 @@ impl PathUri {
     /// `file://server/share/file.rs` has the path `/share/file.rs`.
     pub fn encoded_path(&self) -> &str {
         self.0.path()
+    }
+
+    fn windows_identity_path_bytes(&self) -> Option<Cow<'_, [u8]>> {
+        if self.infer_path_convention() != Some(PathConvention::Windows)
+            || self.opaque_fallback_bytes().is_some()
+            || self.0.path_segments()?.any(|segment| {
+                urlencoding::decode_binary(segment.as_bytes())
+                    .iter()
+                    .any(|byte| matches!(byte, b'/' | b'\\'))
+            })
+        {
+            return None;
+        }
+        // Decode equivalent URI spellings here; comparisons and hashing apply
+        // ASCII case folding to these shared Windows identity bytes.
+        Some(urlencoding::decode_binary(self.0.path().as_bytes()))
     }
 
     fn opaque_fallback_bytes(&self) -> Option<Vec<u8>> {
@@ -251,10 +304,11 @@ impl PathUri {
     /// Returns true when this URI is lexically equal to or below `base`.
     ///
     /// Containment is computed using URI authority and path-segment boundaries,
-    /// without consulting the host filesystem. Percent-encoded native path
-    /// separators fail closed because native path conversion may interpret them
-    /// as segment boundaries. Opaque fallback URIs created by
-    /// [`Self::from_abs_path`] only contain themselves.
+    /// without consulting the host filesystem. Windows path segments are
+    /// compared ASCII-case-insensitively; POSIX path segments remain case-sensitive.
+    /// Percent-encoded native path separators fail closed because native path
+    /// conversion may interpret them as segment boundaries. Opaque fallback
+    /// URIs created by [`Self::from_abs_path`] only contain themselves.
     pub fn starts_with(&self, base: &Self) -> bool {
         if self == base {
             return true;
@@ -266,29 +320,27 @@ impl PathUri {
             return false;
         }
 
-        let Some(path_segments) = containment_path_segments(
-            &self.0,
-            self.infer_path_convention()
-                .unwrap_or(PathConvention::Posix),
-        ) else {
+        let convention = self.infer_path_convention();
+        if convention != base.infer_path_convention() {
+            return false;
+        }
+        let convention = convention.unwrap_or(PathConvention::Posix);
+        let Some(path_segments) = containment_path_segments(&self.0, convention) else {
             return false;
         };
-        let Some(base_segments) = containment_path_segments(
-            &base.0,
-            base.infer_path_convention()
-                .unwrap_or(PathConvention::Posix),
-        ) else {
+        let Some(base_segments) = containment_path_segments(&base.0, convention) else {
             return false;
         };
-        path_segments.starts_with(&base_segments)
+        native_path_segments_start_with(&path_segments, &base_segments, convention)
     }
 
     /// Returns the decoded relative path from `base` to this URI.
     ///
     /// The result uses the separators of the inferred path convention,
     /// independently of the current host. Both URIs must use the same inferred
-    /// path convention and authority, and this URI must be lexically equal to
-    /// or below `base`. Percent-encoded native path separators fail closed.
+    /// path convention and authority, and this URI must be equal to or below
+    /// `base` under that convention's case sensitivity. Percent-encoded native
+    /// path separators fail closed.
     /// Opaque fallback URIs created by [`Self::from_abs_path`] are only relative
     /// to themselves.
     pub fn relative_path_from(&self, base: &Self) -> Option<String> {
@@ -306,7 +358,10 @@ impl PathUri {
         let convention = self.infer_path_convention()?;
         let path_segments = containment_path_segments(&self.0, convention)?;
         let base_segments = containment_path_segments(&base.0, convention)?;
-        let relative_segments = path_segments.strip_prefix(base_segments.as_slice())?;
+        if !native_path_segments_start_with(&path_segments, &base_segments, convention) {
+            return None;
+        }
+        let relative_segments = &path_segments[base_segments.len()..];
         let separator = match convention {
             PathConvention::Posix => "/",
             PathConvention::Windows => "\\",
@@ -646,6 +701,23 @@ fn containment_path_segments(url: &Url, convention: PathConvention) -> Option<Ve
             .any(|byte| *byte == b'/' || (convention == PathConvention::Windows && *byte == b'\\'))
     }))
     .then_some(segments)
+}
+
+fn native_path_segments_start_with(
+    path_segments: &[&str],
+    base_segments: &[&str],
+    convention: PathConvention,
+) -> bool {
+    match convention {
+        PathConvention::Posix => path_segments.starts_with(base_segments),
+        PathConvention::Windows => {
+            path_segments.len() >= base_segments.len()
+                && path_segments.iter().zip(base_segments).all(|(path, base)| {
+                    path.eq_ignore_ascii_case(base)
+                        || decode_uri_path(path).eq_ignore_ascii_case(&decode_uri_path(base))
+                })
+        }
+    }
 }
 
 fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {

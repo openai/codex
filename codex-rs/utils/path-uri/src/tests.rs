@@ -81,6 +81,35 @@ fn file_uri_normalizes_windows_drive_letter_case() {
 }
 
 #[test]
+fn path_uri_equality_and_hashing_follow_path_convention() {
+    for (left, right, expected) in [
+        ("file:///C:/Users/Alice", "file:///c:/users/ALICE", true),
+        (
+            "file://SERVER/SHARE/Project",
+            "file://server/share/project",
+            true,
+        ),
+        ("file:///home/Alice", "file:///home/alice", false),
+        ("file:///C:/plugins/ǈ", "file:///C:/plugins/Ǉ", false),
+        ("file:///C:/plugins/%41", "file:///C:/plugins/a", true),
+        ("file:///C:/plugins/a%2Fb", "file:///C:/plugins/a/b", false),
+        ("file:///%00/bad/path/YQ", "file:///%00/bad/path/yQ", false),
+    ] {
+        let left = PathUri::parse(left).expect("valid left URI");
+        let right = PathUri::parse(right).expect("valid right URI");
+
+        assert_eq!(
+            (
+                left == right,
+                std::collections::HashSet::from([left]).contains(&right),
+            ),
+            (expected, expected),
+            "comparing {right}"
+        );
+    }
+}
+
+#[test]
 fn infers_path_conventions_from_uri_shape() {
     for (uri, expected) in [
         ("file:///", Some(PathConvention::Posix)),
@@ -188,7 +217,17 @@ fn relative_path_from_is_host_independent() {
             Some(r"src\main.rs"),
         ),
         (
+            "file:///C:/USERS/%C3%84/PROJECT/src/main.rs",
+            "file:///c:/users/%C3%A4/project",
+            None,
+        ),
+        (
             "file://server/share/project/src/main.rs",
+            "file://server/share/project",
+            Some(r"src\main.rs"),
+        ),
+        (
+            "file://SERVER/SHARE/PROJECT/src/main.rs",
             "file://server/share/project",
             Some(r"src\main.rs"),
         ),
@@ -202,6 +241,7 @@ fn relative_path_from_is_host_independent() {
             "file:///home/alice/project",
             None,
         ),
+        ("file:///HOME/alice/project", "file:///home", None),
         (
             "file://other/share/project/main.rs",
             "file://server/share/project",
@@ -1008,6 +1048,17 @@ fn starts_with_uses_uri_segment_boundaries() {
             "file:///C:/plugins/foo",
             true,
         ),
+        ("file:///C:/project/secret", "file:///%63%3A/project", false),
+        (
+            "file:///C:/PLUGINS/%C3%84/assets/icon.svg",
+            "file:///c:/plugins/%C3%A4",
+            false,
+        ),
+        (
+            "file:///C:/plugins/ǈ/assets/icon.svg",
+            "file:///C:/plugins/Ǉ",
+            false,
+        ),
         (
             "file:///C:/plugins/foo2/assets/icon.svg",
             "file:///C:/plugins/foo",
@@ -1018,6 +1069,12 @@ fn starts_with_uses_uri_segment_boundaries() {
             "file://server/share/plugins/foo",
             true,
         ),
+        (
+            "file://SERVER/SHARE/PLUGINS/FOO/icon.svg",
+            "file://server/share/plugins/foo",
+            true,
+        ),
+        ("file:///WORKSPACE/plugin", "file:///workspace", false),
         (
             "file://other/share/plugins/foo/icon.svg",
             "file://server/share/plugins/foo",

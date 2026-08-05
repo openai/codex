@@ -18,9 +18,10 @@
  *
  * Like [VS Code resources], path operations use `/` URI separators on every
  * host. Lexical path operations preserve a URL authority without interpreting
- * Windows drive or UNC roots from path text. Native path normalization,
- * filesystem aliases, symlinks, case sensitivity, and Unicode normalization
- * are not resolved.
+ * Windows drive or UNC roots from path text. Windows path equality and hashing
+ * ignore ASCII case, while POSIX paths remain case-sensitive. Native path
+ * normalization, filesystem aliases, symlinks, and Unicode normalization are
+ * not resolved.
  *
  * Serde represents a `PathUri` as its canonical URI string. Deserialization
  * accepts only valid `file:` URI strings. These strings round-trip through
