@@ -538,9 +538,9 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           BINARIES: ${{ matrix.binaries }}
-          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_AKV_KEY_NAME: ${{ secrets.AKV_NOTARIZATION_KEY_NAME }}
+          APPLE_NOTARIZATION_AKV_KEY_VERSION: ${{ secrets.AKV_NOTARIZATION_KEY_VERSION }}
         run: |
           set -euo pipefail
 
@@ -579,7 +579,7 @@ jobs:
             rcodesign print-signature-info "$signed_path" \
               >"${report_dir}/${binary}/signature-info.yaml"
 
-            .github/scripts/macos-signing/notarize_macos_binary_with_rcodesign.sh \
+            .github/scripts/macos-signing/notarize_macos_binary_with_akv.sh \
               --binary "$signed_path" \
               --report-dir "${report_dir}/${binary}"
           done
@@ -589,9 +589,9 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_AKV_KEY_NAME: ${{ secrets.AKV_NOTARIZATION_KEY_NAME }}
+          APPLE_NOTARIZATION_AKV_KEY_VERSION: ${{ secrets.AKV_NOTARIZATION_KEY_VERSION }}
         run: |
           set -euo pipefail
 
@@ -636,7 +636,7 @@ jobs:
             rcodesign print-signature-info "$binary" \
               >"${report_dir}/signature-info.yaml"
 
-            .github/scripts/macos-signing/notarize_macos_binary_with_rcodesign.sh \
+            .github/scripts/macos-signing/notarize_macos_binary_with_akv.sh \
               --binary "$binary" \
               --report-dir "$report_dir"
           done
@@ -923,9 +923,9 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_AKV_KEY_NAME: ${{ secrets.AKV_NOTARIZATION_KEY_NAME }}
+          APPLE_NOTARIZATION_AKV_KEY_VERSION: ${{ secrets.AKV_NOTARIZATION_KEY_VERSION }}
         run: |
           set -euo pipefail
 
@@ -946,7 +946,7 @@ jobs:
           rcodesign print-signature-info "$dmg_path" \
             >"${report_dir}/signature-info-before-notarization.yaml"
 
-          .github/scripts/macos-signing/notarize_macos_dmg_with_rcodesign.sh \
+          .github/scripts/macos-signing/notarize_macos_dmg_with_akv.sh \
             --dmg "$dmg_path" \
             --report-dir "$report_dir"
 

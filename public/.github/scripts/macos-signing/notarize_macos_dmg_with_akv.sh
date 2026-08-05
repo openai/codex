@@ -1,21 +1,17 @@
 #!/usr/bin/env bash
 
-# Notarizes and staples a signed macOS DMG through rcodesign.
-#
-# This is the Linux-compatible notarization path for the AKV/PKCS#11 signing
-# flow. It records notarization inputs and logs so workflow artifacts can be
-# audited without exposing the App Store Connect private key.
+# Notarize a signed disk image and staple its ticket.
 
 set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: notarize_macos_dmg_with_rcodesign.sh --dmg PATH [--report-dir PATH] [--max-wait-seconds SECONDS]
+Usage: notarize_macos_dmg_with_akv.sh --dmg PATH [--report-dir PATH] [--max-wait-seconds SECONDS]
 
 Options:
   --dmg PATH                    Signed DMG to submit to Apple notarization.
   --report-dir PATH             Directory for notarization logs.
-  --max-wait-seconds SECONDS    Maximum rcodesign notarization wait time.
+  --max-wait-seconds SECONDS    Maximum Apple notarization wait time.
 EOF
 }
 
@@ -73,11 +69,11 @@ fi
 missing_environment=0
 for variable_name in \
   APPLE_NOTARIZATION_ISSUER_ID \
-  APPLE_NOTARIZATION_KEY_ID \
-  APPLE_NOTARIZATION_KEY_P8
+  APPLE_NOTARIZATION_AKV_KEY_NAME \
+  AZURE_KEYVAULT_NAME
 do
   if [[ -z "${!variable_name:-}" ]]; then
-    echo "$variable_name must be set from CI secrets before notarizing a DMG." >&2
+    echo "$variable_name must be configured before notarizing a DMG." >&2
     missing_environment=1
   fi
 done
@@ -88,37 +84,18 @@ fi
 
 mkdir -p "$report_dir"
 
-notarization_temp_dir="$(mktemp -d)"
-trap 'rm -rf "$notarization_temp_dir" > /dev/null' EXIT
-
-private_key_path="$notarization_temp_dir/AuthKey_${APPLE_NOTARIZATION_KEY_ID}.p8"
-if ! printf '%s' "$APPLE_NOTARIZATION_KEY_P8" | base64 --decode > "$private_key_path" 2> /dev/null; then
-  if ! printf '%s' "$APPLE_NOTARIZATION_KEY_P8" | base64 -D > "$private_key_path" 2> /dev/null; then
-    echo "APPLE_NOTARIZATION_KEY_P8 must be a base64-encoded .p8 private key." >&2
-    exit 2
-  fi
-fi
-chmod 600 "$private_key_path"
-
-api_key_path="$notarization_temp_dir/app-store-connect-api-key.json"
-rcodesign encode-app-store-connect-api-key \
-  --output-path "$api_key_path" \
-  "$APPLE_NOTARIZATION_ISSUER_ID" \
-  "$APPLE_NOTARIZATION_KEY_ID" \
-  "$private_key_path" \
-  > "$report_dir/encode-app-store-connect-api-key.log" 2>&1
-
 notarization_log="$report_dir/dmg-notarization.log"
-rcodesign notarize \
-  --api-key-file "$api_key_path" \
+python3 "$(dirname "$0")/notarize_with_akv.py" \
+  --file "$dmg_path" \
+  --report-log "$report_dir/dmg-notarization-developer-log.json" \
   --max-wait-seconds "$max_wait_seconds" \
-  --staple \
-  "$dmg_path" \
   2>&1 | tee "$notarization_log"
+
+rcodesign staple "$dmg_path" 2>&1 | tee -a "$notarization_log"
 
 {
   echo "dmg_path=$dmg_path"
   echo "max_wait_seconds=$max_wait_seconds"
   echo "dmg_sha256=$(shasum -a 256 "$dmg_path" | awk '{ print $1 }')"
-  echo "rcodesign_notarize_staple=completed"
+  echo "notarization_staple=completed"
 } > "$report_dir/dmg-notarization-summary.txt"
