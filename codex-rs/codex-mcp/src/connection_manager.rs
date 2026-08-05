@@ -598,7 +598,7 @@ impl McpConnectionSet {
         let Some(view) = self.servers.get(server_name) else {
             return false;
         };
-        view.connection.client().await.is_ok()
+        view.connection.client.ready_transport().is_some() || view.connection.client().await.is_ok()
     }
 
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.

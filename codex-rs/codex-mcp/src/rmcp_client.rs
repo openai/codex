@@ -492,6 +492,24 @@ impl AsyncManagedClient {
         self.client.clone().await
     }
 
+    pub(crate) fn ready_transport(&self) -> Option<Arc<RmcpClient>> {
+        let recovered = self.startup_reconnect.as_ref().and_then(|reconnect| {
+            reconnect
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .current_client
+                .as_ref()
+                .map(|client| Arc::clone(&client.client))
+        });
+        recovered.or_else(|| {
+            self.client
+                .peek()
+                .and_then(|result| result.as_ref().ok())
+                .map(|client| Arc::clone(&client.client))
+        })
+    }
+
     pub(crate) async fn reconnect_failed_startup(&self) {
         let Some(startup_reconnect) = self.startup_reconnect.as_ref() else {
             return;

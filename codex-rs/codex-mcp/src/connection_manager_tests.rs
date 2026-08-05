@@ -1911,6 +1911,7 @@ async fn capture_binding_skips_pending_optional_servers_after_one_shared_startup
     }
 
     let manager = Arc::new(manager);
+    assert_eq!(manager.stable_catalog_revision().await, None);
     let binding = tokio::time::timeout(Duration::from_millis(1500), capture_binding(&manager))
         .await
         .expect("all optional servers should share a single startup grace");
@@ -1951,6 +1952,39 @@ async fn capture_binding_skips_pending_optional_servers_after_one_shared_startup
     )
     .await;
     assert!(binding.is_err(), "explicitly requested servers must wait");
+}
+
+#[tokio::test]
+async fn stable_catalog_revision_ignores_terminal_optional_server_failures() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionSet::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let ready = create_ready_async_managed_client(vec![create_test_tool("ready", "echo")]).await;
+    assert!(ready.client().await.is_ok());
+    let mut failed = ready.clone();
+    manager.insert_test_client("ready", ready);
+    failed.client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
+        StartupOutcomeError::Failed {
+            error: "optional startup failed".to_string(),
+            is_authentication_required: false,
+        },
+    ))
+    .boxed()
+    .shared();
+    assert!(failed.client().await.is_err());
+    manager.insert_test_client("failed", failed);
+
+    assert_eq!(manager.stable_catalog_revision().await, Some(0));
+    manager.required_servers.push("failed".to_string());
+    assert_eq!(manager.stable_catalog_revision().await, None);
+    manager.required_servers.clear();
+
+    let binding = capture_binding(&Arc::new(manager)).await;
+    assert!(binding.prepare_call("ready", "echo").is_some());
 }
 
 #[tokio::test(start_paused = true)]
@@ -2519,6 +2553,7 @@ async fn list_all_tools_reconnects_failed_codex_apps_startup_and_reuses_client()
     };
     let manager = Arc::new(manager);
 
+    assert_eq!(manager.stable_catalog_revision().await, None);
     let reconnect_finished_wait = reconnect_finished.notified();
     let tools = manager.list_all_tools().await;
     assert!(tools.is_empty());
@@ -2533,6 +2568,7 @@ async fn list_all_tools_reconnects_failed_codex_apps_startup_and_reuses_client()
         vec!["drive_search"]
     );
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(manager.stable_catalog_revision().await, Some(0));
 
     let step = capture_binding(&manager).await;
     let prepared = step

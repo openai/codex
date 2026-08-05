@@ -1,4 +1,4 @@
-//! Immutable MCP state bound to one model sampling request.
+//! Immutable MCP catalog and execution handles.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -26,7 +26,7 @@ use crate::rmcp_client::ManagedClient;
 use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
 
-/// The exact tool catalog and execution handles for one model sampling request.
+/// The exact tool catalog and execution handles shared by compatible sampling steps.
 pub struct McpBinding {
     connections: Arc<McpConnectionSet>,
     clients: Arc<McpBindingClients>,
@@ -75,7 +75,7 @@ impl McpBinding {
         self.plugins_available
     }
 
-    /// Returns the frozen catalog advertised for this sampling request.
+    /// Returns the frozen catalog captured for this binding.
     pub fn tools(&self) -> &[ToolInfo] {
         &self.tools
     }

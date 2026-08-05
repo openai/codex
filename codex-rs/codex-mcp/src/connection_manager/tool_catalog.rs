@@ -58,6 +58,32 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 }
 
 impl McpConnectionSet {
+    pub(crate) async fn stable_catalog_revision(&self) -> Option<u64> {
+        for (server_name, view) in &self.servers {
+            if !view
+                .connection
+                .client
+                .startup_complete
+                .load(Ordering::Acquire)
+            {
+                return None;
+            }
+            let Some(client) = view.connection.client.ready_transport() else {
+                if !view.connection.client.is_codex_apps_mcp_server
+                    && self.required_servers.binary_search(server_name).is_err()
+                    && matches!(view.connection.client.client.peek(), Some(Err(_)))
+                {
+                    continue;
+                }
+                return None;
+            };
+            if client.is_closed().await {
+                return None;
+            }
+        }
+        Some(*self.tool_catalog_revision.read().await)
+    }
+
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.servers.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {

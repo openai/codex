@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -84,6 +85,12 @@ struct PublishedMcpRuntime {
     auth_token: Option<String>,
     plugins_available: bool,
     ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    cached_binding: Mutex<Option<CachedMcpBinding>>,
+}
+
+struct CachedMcpBinding {
+    catalog_revision: u64,
+    binding: Arc<McpBinding>,
 }
 
 struct McpReconnectGuard<'a> {
@@ -148,6 +155,7 @@ impl McpRuntime {
                 auth_token: None,
                 plugins_available: false,
                 ready_selected_capability_roots: Vec::new(),
+                cached_binding: Mutex::new(None),
             }),
             reconnect_pending: AtomicBool::new(false),
             elicitation_router: ElicitationRequestRouter::default(),
@@ -204,6 +212,7 @@ impl McpRuntime {
             auth_token,
             plugins_available,
             ready_selected_capability_roots,
+            cached_binding: Mutex::new(None),
         }));
         let _ = publish.send(true);
     }
@@ -223,14 +232,51 @@ impl McpRuntime {
         &self,
         required_servers: &[String],
     ) -> Option<Arc<McpBinding>> {
-        let current = self.current.load_full();
+        Self::binding_from_published_runtime(self.current.load_full(), required_servers).await
+    }
+
+    async fn binding_from_published_runtime(
+        current: Arc<PublishedMcpRuntime>,
+        required_servers: &[String],
+    ) -> Option<Arc<McpBinding>> {
         let config = Arc::clone(current.config.as_ref()?);
-        Some(Arc::new(
+        let stable_catalog_revision = current.connections.stable_catalog_revision().await;
+        if let Some(catalog_revision) = stable_catalog_revision {
+            let cached = current
+                .cached_binding
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(cached) = cached.as_ref()
+                && cached.catalog_revision == catalog_revision
+            {
+                return Some(Arc::clone(&cached.binding));
+            }
+        }
+
+        let binding = Arc::new(
             current
                 .connections
                 .capture_binding_with_metadata(config, current.plugins_available, required_servers)
                 .await,
-        ))
+        );
+        if let Some(catalog_revision) = stable_catalog_revision
+            && current.connections.stable_catalog_revision().await == Some(catalog_revision)
+        {
+            let mut cached = current
+                .cached_binding
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(cached) = cached.as_ref()
+                && cached.catalog_revision == catalog_revision
+            {
+                return Some(Arc::clone(&cached.binding));
+            }
+            *cached = Some(CachedMcpBinding {
+                catalog_revision,
+                binding: Arc::clone(&binding),
+            });
+        }
+        Some(binding)
     }
 
     /// Returns whether the published snapshot still belongs to the current credentials.
@@ -261,16 +307,11 @@ impl McpRuntime {
     /// Captures the current runtime after its selected server has finished startup.
     pub async fn current_binding_for_call(&self, server: &str) -> Option<Arc<McpBinding>> {
         let current = self.current.load_full();
-        let config = Arc::clone(current.config.as_ref()?);
+        current.config.as_ref()?;
         if !current.connections.wait_for_server_startup(server).await {
             return None;
         }
-        Some(Arc::new(
-            current
-                .connections
-                .capture_binding_with_metadata(config, current.plugins_available, &[])
-                .await,
-        ))
+        Self::binding_from_published_runtime(current, /*required_servers*/ &[]).await
     }
 
     /// Returns the latest published configuration without waiting for clients.
@@ -511,6 +552,45 @@ mod tests {
         let (publish, gate) = McpPublicationGate::pending();
         drop(publish);
         assert!(!gate.wait().await);
+    }
+
+    #[tokio::test]
+    async fn cached_bindings_are_scoped_to_the_published_runtime() {
+        let published = Arc::new(PublishedMcpRuntime {
+            connections: Arc::new(McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true)),
+            config: Some(Arc::new(crate::mcp::tests::test_mcp_config(
+                std::env::temp_dir(),
+            ))),
+            auth: None,
+            auth_token: None,
+            plugins_available: false,
+            ready_selected_capability_roots: Vec::new(),
+            cached_binding: Mutex::new(None),
+        });
+        let first = McpRuntime::binding_from_published_runtime(
+            Arc::clone(&published),
+            /*required_servers*/ &[],
+        )
+        .await
+        .expect("first binding");
+        let repeated = McpRuntime::binding_from_published_runtime(
+            Arc::clone(&published),
+            /*required_servers*/ &[],
+        )
+        .await
+        .expect("repeated binding");
+        assert!(Arc::ptr_eq(&first, &repeated));
+
+        let previous = Arc::into_inner(published).expect("published runtime has no other owners");
+        let republished = Arc::new(PublishedMcpRuntime {
+            cached_binding: Mutex::new(None),
+            ..previous
+        });
+        let refreshed =
+            McpRuntime::binding_from_published_runtime(republished, /*required_servers*/ &[])
+                .await
+                .expect("republished binding");
+        assert!(!Arc::ptr_eq(&first, &refreshed));
     }
 
     fn http_server(environment_id: &str) -> McpServerConfig {
