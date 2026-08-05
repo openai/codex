@@ -81,6 +81,25 @@ impl TurnEnvironment {
         &self.workspace_roots
     }
 
+    pub(crate) fn permission_profile(&self) -> &PermissionProfile {
+        self.config.permission_profile.permission_profile()
+    }
+
+    pub(crate) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.config.permission_profile.active_permission_profile()
+    }
+
+    pub(crate) fn permission_profile_with_workspace_roots(&self) -> PermissionProfile {
+        let workspace_roots = self
+            .workspace_roots()
+            .iter()
+            .filter_map(|workspace_root| workspace_root.to_abs_path().ok())
+            .collect::<Vec<_>>();
+        self.permission_profile()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&workspace_roots)
+    }
+
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
@@ -333,7 +352,7 @@ impl TurnContext {
         environment: &TurnEnvironment,
     ) -> FileSystemSandboxContext {
         let permissions = effective_permission_profile(
-            self.config.permissions.permission_profile(),
+            environment.permission_profile(),
             additional_permissions.as_ref(),
         );
         FileSystemSandboxContext {

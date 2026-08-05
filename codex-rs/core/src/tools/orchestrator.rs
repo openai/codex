@@ -35,7 +35,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
-use codex_utils_path_uri::PathUri;
 use std::time::Instant;
 
 pub(crate) struct ToolOrchestrator {
@@ -152,15 +151,10 @@ impl ToolOrchestrator {
         // 1) Approval
         let mut already_approved = false;
 
-        let workspace_roots = tool.workspace_roots(req);
-        let permission_profile = turn_ctx.config.permissions.permission_profile();
-        let materialized_workspace_roots = workspace_roots
-            .iter()
-            .filter_map(|workspace_root| workspace_root.to_abs_path().ok())
-            .collect::<Vec<_>>();
-        let permissions = permission_profile
-            .clone()
-            .materialize_project_roots_with_workspace_roots(&materialized_workspace_roots);
+        let environment = tool.turn_environment(req);
+        let workspace_roots = environment.workspace_roots();
+        let permission_profile = environment.permission_profile();
+        let permissions = environment.permission_profile_with_workspace_roots();
         let file_system_sandbox_policy = permissions.file_system_sandbox_policy();
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
@@ -247,11 +241,10 @@ impl ToolOrchestrator {
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.config.features.use_legacy_landlock();
-        #[allow(deprecated)]
         let sandbox_policy_cwd = tool
             .sandbox_cwd(req)
             .cloned()
-            .unwrap_or_else(|| PathUri::from_abs_path(&turn_ctx.cwd));
+            .unwrap_or_else(|| environment.cwd().clone());
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             sandbox_requested,

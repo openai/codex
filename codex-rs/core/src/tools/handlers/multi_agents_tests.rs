@@ -3,6 +3,8 @@ use crate::StartThreadOptions;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
+use crate::config::PermissionProfileSnapshot;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
 use crate::local_agent_graph_store_from_state_db;
@@ -2264,7 +2266,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     config
         .permissions
-        .set_permission_profile(expected_permission_profile.clone())
+        .set_permission_profile(PermissionProfile::Disabled)
         .expect("test setup should allow updating permission profile");
     set_turn_config(&mut turn, config);
     let role_name = install_role_with_model_override(&mut turn).await;
@@ -2272,10 +2274,25 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     crate::agent::role::apply_role_to_config(&mut role_config, Some(role_name.as_str()))
         .await
         .expect("non-empty role config should apply");
+    let TurnEnvironmentState::Ready(environment) = turn
+        .environments
+        .environments
+        .first_mut()
+        .expect("parent environment should exist")
+    else {
+        panic!("parent environment should be ready");
+    };
+    environment.config.permission_profile =
+        PermissionProfileSnapshot::legacy(expected_permission_profile.clone());
     assert_ne!(
         role_config.permissions.effective_permission_profile(),
         expected_permission_profile,
         "role config must discard the runtime permission override before it is reapplied"
+    );
+    assert_ne!(
+        expected_permission_profile,
+        turn.permission_profile(),
+        "test requires an environment profile that differs from the thread profile"
     );
 
     let invocation = invocation(
@@ -4446,6 +4463,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
     );
+    turn.environments.environments.clear();
     Arc::make_mut(&mut turn.config)
         .permissions
         .set_permission_profile(permission_profile)
@@ -4456,7 +4474,8 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+    let config = build_agent_spawn_config(&base_instructions, &turn, turn.environments.primary())
+        .expect("spawn config");
     let mut expected = (*turn.config).clone();
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
@@ -4491,8 +4510,25 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
+    let environment_permission_profile =
+        if turn.permission_profile() == PermissionProfile::read_only() {
+            PermissionProfile::workspace_write()
+        } else {
+            PermissionProfile::read_only()
+        };
+    let TurnEnvironmentState::Ready(environment) = turn
+        .environments
+        .environments
+        .first_mut()
+        .expect("parent environment should exist")
+    else {
+        panic!("parent environment should be ready");
+    };
+    environment.config.permission_profile =
+        PermissionProfileSnapshot::legacy(environment_permission_profile.clone());
 
-    let config = build_agent_resume_config(&turn).expect("resume config");
+    let config =
+        build_agent_resume_config(&turn, turn.environments.primary()).expect("resume config");
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;
@@ -4512,7 +4548,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .expect("approval policy set");
     expected
         .permissions
-        .set_permission_profile(turn.permission_profile())
+        .set_permission_profile(environment_permission_profile)
         .expect("permission profile set");
     assert_eq!(config, expected);
 }

@@ -12,6 +12,7 @@ use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
@@ -254,17 +255,24 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
 }
 
 fn parent_turn_denied_reads_context(turn: &TurnContext) -> Option<String> {
+    // TODO(sayan): Pass StepContext through Guardian so it sees environments that become ready mid-turn.
+    let environment = turn.environments.primary();
     #[allow(deprecated)]
-    let cwd = &turn.cwd;
-    let file_system_policy = turn.file_system_sandbox_policy();
+    let cwd = environment
+        .and_then(|environment| environment.cwd().to_abs_path().ok())
+        .unwrap_or_else(|| turn.cwd.clone());
+    let permission_profile = environment
+        .map(TurnEnvironment::permission_profile_with_workspace_roots)
+        .unwrap_or_else(|| turn.permission_profile());
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
     let mut entries = file_system_policy
-        .get_unreadable_roots_with_cwd(cwd)
+        .get_unreadable_roots_with_cwd(&cwd)
         .into_iter()
         .map(|root| format!("- path `{}`", root.to_string_lossy()))
         .collect::<Vec<_>>();
     entries.extend(
         file_system_policy
-            .get_unreadable_globs_with_cwd(cwd)
+            .get_unreadable_globs_with_cwd(&cwd)
             .into_iter()
             .map(|glob| format!("- glob `{glob}`")),
     );

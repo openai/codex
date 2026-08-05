@@ -265,8 +265,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
-    fn workspace_roots<'b>(&self, req: &'b UnifiedExecRequest) -> &'b [PathUri] {
-        req.turn_environment.workspace_roots()
+    fn turn_environment<'b>(&self, req: &'b UnifiedExecRequest) -> &'b TurnEnvironment {
+        &req.turn_environment
     }
 
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b PathUri> {
@@ -278,7 +278,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         req: &UnifiedExecRequest,
         ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
-        let file_system_sandbox_policy = ctx.turn.file_system_sandbox_policy();
+        let file_system_sandbox_policy = req
+            .turn_environment
+            .permission_profile()
+            .file_system_sandbox_policy();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
             &file_system_sandbox_policy,
@@ -300,6 +303,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             },
             command: req.hook_command.clone(),
             environment_id: req.turn_environment.environment_id.clone(),
+            permission_profile: req.turn_environment.permission_profile().clone(),
         })
     }
 

@@ -259,8 +259,7 @@ fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
 
 async fn effective_patch_permissions(
     session: &Session,
-    turn: &TurnContext,
-    environment_id: &str,
+    environment: &TurnEnvironment,
     action: &ApplyPatchAction,
     cwd: &PathUri,
 ) -> std::io::Result<(
@@ -268,6 +267,7 @@ async fn effective_patch_permissions(
     crate::tools::handlers::EffectiveAdditionalPermissions,
     codex_protocol::permissions::FileSystemSandboxPolicy,
 )> {
+    let environment_id = environment.environment_id.as_str();
     let file_paths = file_paths_for_action(action);
     let native_cwd = cwd.to_abs_path()?;
     let granted_permissions = merge_permission_profiles(
@@ -280,7 +280,9 @@ async fn effective_patch_permissions(
             .await
             .as_ref(),
     );
-    let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
+    let base_file_system_sandbox_policy = environment
+        .permission_profile_with_workspace_roots()
+        .file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
         &base_file_system_sandbox_policy,
         granted_permissions.as_ref(),
@@ -527,17 +529,12 @@ async fn execute_verified_patch(
     tool_ctx: ToolCtx,
 ) -> Result<String, FunctionCallError> {
     let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
-        effective_patch_permissions(
-            tool_ctx.session.as_ref(),
-            tool_ctx.turn.as_ref(),
-            &turn_environment.environment_id,
-            &action,
-            cwd,
-        )
-        .await
-        .unwrap_or_else(|_| patch_permissions_without_path_matching(&action));
+        effective_patch_permissions(tool_ctx.session.as_ref(), &turn_environment, &action, cwd)
+            .await
+            .unwrap_or_else(|_| patch_permissions_without_path_matching(&action));
     let apply = apply_patch::prepare_apply_patch(
         tool_ctx.turn.as_ref(),
+        turn_environment.permission_profile(),
         &file_system_sandbox_policy,
         action,
     )?;

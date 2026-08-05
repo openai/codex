@@ -81,8 +81,8 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
     Arc::make_mut(&mut turn_context.config)
         .permissions
         .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
-            permission_profile,
-            ActivePermissionProfile::new("test-profile"),
+            permission_profile.clone(),
+            ActivePermissionProfile::new("thread-profile"),
         ))
         .expect("set active permission profile");
 
@@ -100,6 +100,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
     let expected_command = selected_shell.derive_exec_args(&command, /*use_login_shell*/ true);
     let selected_cwd = turn_context.config.cwd.join("selected-environment");
     let expected_cwd = selected_cwd.join("subdir");
+    let active_permission_profile = ActivePermissionProfile::new("selected-profile");
     let selected_environment = TurnEnvironment::new(
         "selected-environment".to_string(),
         Arc::clone(
@@ -114,19 +115,17 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         Some(selected_shell),
         EnvironmentConfig {
             allow_login_shell: true,
-            permission_profile: turn_context
-                .config
-                .permissions
-                .permission_profile_state()
-                .snapshot(),
+            permission_profile: PermissionProfileSnapshot::active(
+                permission_profile,
+                active_permission_profile.clone(),
+            ),
         },
     );
     let mut expected_env = create_env(
         &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
-    let active_permission_profile = turn_context.config.permissions.active_permission_profile();
-    inject_permission_profile_env(&mut expected_env, active_permission_profile.as_ref());
+    inject_permission_profile_env(&mut expected_env, Some(&active_permission_profile));
 
     let params = ShellCommandToolCallParams {
         command,
@@ -154,9 +153,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
     assert_eq!(exec_params.env, expected_env);
     assert_eq!(
         exec_params.env.get(CODEX_PERMISSION_PROFILE_ENV_VAR),
-        active_permission_profile
-            .as_ref()
-            .map(|profile| &profile.id)
+        Some(&active_permission_profile.id)
     );
     assert_eq!(exec_params.network, turn_context.network);
     assert_eq!(

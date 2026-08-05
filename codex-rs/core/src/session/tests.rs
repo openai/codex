@@ -1195,16 +1195,16 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         enforce_managed_network: Vec<bool>,
     }
 
-    impl crate::tools::sandboxing::Approvable<()> for ProbeToolRuntime {
+    impl crate::tools::sandboxing::Approvable<TurnEnvironment> for ProbeToolRuntime {
         type ApprovalKey = String;
 
-        fn approval_keys(&self, _req: &()) -> Vec<Self::ApprovalKey> {
+        fn approval_keys(&self, _req: &TurnEnvironment) -> Vec<Self::ApprovalKey> {
             vec!["probe".to_string()]
         }
 
         fn start_approval_async<'a>(
             &'a mut self,
-            _req: &'a (),
+            _req: &'a TurnEnvironment,
             _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
         ) -> futures::future::BoxFuture<'a, ReviewDecision> {
             Box::pin(async { ReviewDecision::Approved })
@@ -1212,7 +1212,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
 
         fn approval_action(
             &self,
-            _req: &(),
+            _req: &TurnEnvironment,
             ctx: &crate::tools::sandboxing::ApprovalCtx<'_>,
         ) -> std::io::Result<crate::tools::sandboxing::ApprovalAction> {
             Ok(crate::tools::sandboxing::ApprovalAction::Shell {
@@ -1234,14 +1234,14 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         }
     }
 
-    impl crate::tools::sandboxing::ToolRuntime<(), ()> for ProbeToolRuntime {
-        fn workspace_roots<'a>(&self, _req: &'a ()) -> &'a [PathUri] {
-            &[]
+    impl crate::tools::sandboxing::ToolRuntime<TurnEnvironment, ()> for ProbeToolRuntime {
+        fn turn_environment<'a>(&self, req: &'a TurnEnvironment) -> &'a TurnEnvironment {
+            req
         }
 
         async fn run(
             &mut self,
-            _req: &(),
+            _req: &TurnEnvironment,
             attempt: &crate::tools::sandboxing::SandboxAttempt<'_>,
             _ctx: &crate::tools::sandboxing::ToolCtx,
         ) -> Result<(), crate::tools::sandboxing::ToolError> {
@@ -1305,7 +1305,9 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
     orchestrator
         .run(
             &mut tool,
-            &(),
+            turn.environments
+                .primary()
+                .expect("turn should have a primary environment"),
             &tool_ctx,
             turn.as_ref(),
             AskForApproval::Never,

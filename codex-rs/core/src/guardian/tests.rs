@@ -4,7 +4,9 @@ use crate::config::ConfigOverrides;
 use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
+use crate::config::PermissionProfileSnapshot;
 use crate::config::test_config;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY;
 use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
@@ -12,6 +14,7 @@ use crate::guardian::prompt::guardian_policy_prompt_with_config_and_template;
 use crate::guardian::review::guardian_review_session_config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::ConfigLayerStack;
@@ -55,6 +58,7 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use core_test_support::context_snapshot;
@@ -544,9 +548,12 @@ async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::
 async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Result<()> {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.thread_id = fixed_guardian_parent_session_id();
-    let denied_root = test_path_buf("/repo/private").abs();
+    let workspace_root = test_path_buf("/repo").abs();
+    let second_workspace_root = test_path_buf("/another-repo").abs();
+    let denied_root = workspace_root.join("private");
+    let second_denied_root = second_workspace_root.join("private");
     let denied_glob = test_path_buf("/repo/private/**").display().to_string();
-    let permission_profile = PermissionProfile::from_runtime_permissions(
+    let environment_permission_profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -556,8 +563,10 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
                 missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: denied_root.clone(),
+                path: FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(Some(
+                        "private".to_string(),
+                    )),
                 },
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
@@ -572,10 +581,22 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
         ]),
         NetworkSandboxPolicy::Restricted,
     );
-    Arc::make_mut(&mut turn.config)
-        .permissions
-        .set_permission_profile(permission_profile)
-        .expect("test setup should allow updating permission profile");
+    let TurnEnvironmentState::Ready(environment) = &mut turn.environments.environments[0] else {
+        panic!("parent environment should be ready");
+    };
+    environment.config.permission_profile =
+        PermissionProfileSnapshot::legacy(environment_permission_profile);
+    *environment = TurnEnvironment::new(
+        environment.environment_id.clone(),
+        Arc::clone(&environment.environment),
+        environment.cwd().clone(),
+        vec![
+            PathUri::from_abs_path(&workspace_root),
+            PathUri::from_abs_path(&second_workspace_root),
+        ],
+        environment.shell.clone(),
+        environment.config.clone(),
+    );
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;
@@ -603,6 +624,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     assert!(text.contains("PARENT TURN PERMISSION CONTEXT START"));
     assert!(text.contains("do not approve escalation whose purpose is to read them"));
     assert!(text.contains(denied_root.to_string_lossy().as_ref()));
+    assert!(text.contains(second_denied_root.to_string_lossy().as_ref()));
     assert!(text.contains(&format!("glob `{denied_glob}`")));
 
     Ok(())

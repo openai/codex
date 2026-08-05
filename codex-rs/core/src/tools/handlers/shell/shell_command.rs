@@ -105,7 +105,7 @@ impl ShellCommandHandler {
             &turn_context.config.permissions.shell_environment_policy,
             Some(session.thread_id),
         );
-        let active_permission_profile = turn_context.config.permissions.active_permission_profile();
+        let active_permission_profile = turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let sandbox_permissions = resolve_sandbox_permissions(
             params.sandbox_permissions,

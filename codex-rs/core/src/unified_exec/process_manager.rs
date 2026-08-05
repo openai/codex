@@ -1175,7 +1175,7 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
-        let active_permission_profile = context.turn.config.permissions.active_permission_profile();
+        let active_permission_profile = request.turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
@@ -1193,7 +1193,7 @@ impl UnifiedExecProcessManager {
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
                 approval_policy: context.turn.approval_policy(),
-                permission_profile: context.turn.permission_profile(),
+                permission_profile: request.turn_environment.permission_profile().clone(),
                 windows_sandbox_level: context.turn.windows_sandbox_level,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault

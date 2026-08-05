@@ -474,10 +474,10 @@ async fn register_call_with_default_shell_trigger(
 ) -> CancellationToken {
     let cancellation_token = CancellationToken::new();
     service
-        .register_call(
-            registration_id.to_string(),
-            "turn-1".to_string(),
-            GuardianNetworkAccessTrigger {
+        .register_call(ActiveNetworkApprovalCall {
+            registration_id: registration_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            trigger: GuardianNetworkAccessTrigger {
                 call_id: "call-1".to_string(),
                 tool_name: "shell_command".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
@@ -487,10 +487,11 @@ async fn register_call_with_default_shell_trigger(
                 justification: None,
                 tty: None,
             },
-            "curl https://example.com".to_string(),
-            "local".to_string(),
-            cancellation_token.clone(),
-        )
+            command: "curl https://example.com".to_string(),
+            environment_id: "local".to_string(),
+            permission_profile: PermissionProfile::workspace_write(),
+            cancellation_token: cancellation_token.clone(),
+        })
         .await;
     cancellation_token
 }
@@ -510,14 +511,15 @@ async fn active_call_preserves_triggering_command_context() {
     };
 
     service
-        .register_call(
-            "registration-1".to_string(),
-            "turn-1".to_string(),
-            expected.clone(),
-            "curl https://example.com".to_string(),
-            "remote".to_string(),
-            CancellationToken::new(),
-        )
+        .register_call(ActiveNetworkApprovalCall {
+            registration_id: "registration-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            trigger: expected.clone(),
+            command: "curl https://example.com".to_string(),
+            environment_id: "remote".to_string(),
+            permission_profile: PermissionProfile::workspace_write(),
+            cancellation_token: CancellationToken::new(),
+        })
         .await;
 
     let call = service
