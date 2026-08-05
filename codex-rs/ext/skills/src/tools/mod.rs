@@ -88,8 +88,8 @@ impl SkillToolContext {
                 }
                 self.thread_state
                     .orchestrator_catalog_snapshot(
-                        self.mcp_resources.as_deref(),
-                        self.providers.list_orchestrator_for_turn(SkillListQuery {
+                        &self.providers,
+                        SkillListQuery {
                             turn_id: turn_id.to_string(),
                             executor_roots: Vec::new(),
                             resolved_executor_roots: Vec::new(),
@@ -99,7 +99,7 @@ impl SkillToolContext {
                             include_orchestrator_skills: true,
                             mcp_resources: self.mcp_resources.clone(),
                             executor_capability_discovery: None,
-                        }),
+                        },
                     )
                     .await
             }

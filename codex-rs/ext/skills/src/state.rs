@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -16,7 +15,6 @@ use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillPackageId;
-use crate::catalog::SkillProviderError;
 use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
@@ -175,18 +173,31 @@ impl SkillsThreadState {
         discovered
     }
 
+    #[tracing::instrument(
+        name = "skills.orchestrator.catalog_snapshot",
+        level = "info",
+        skip_all
+    )]
     pub(crate) async fn orchestrator_catalog_snapshot(
         &self,
-        mcp_resources: Option<&McpResourceClient>,
-        initialize: impl Future<Output = Result<SkillCatalog, SkillProviderError>> + Send,
+        providers: &SkillProviders,
+        query: SkillListQuery,
     ) -> SkillCatalog {
-        self.orchestrator_cache(mcp_resources)
+        if !query.include_orchestrator_skills {
+            return SkillCatalog::default();
+        }
+
+        let cache = self.orchestrator_cache(query.mcp_resources.as_deref());
+        cache
             .catalog
             .get_or_init(|| async {
-                initialize.await.unwrap_or_else(|err| SkillCatalog {
-                    warnings: vec![err.message],
-                    ..Default::default()
-                })
+                providers
+                    .list_orchestrator_for_turn(query)
+                    .await
+                    .unwrap_or_else(|err| SkillCatalog {
+                        warnings: vec![err.message],
+                        ..Default::default()
+                    })
             })
             .await
             .clone()

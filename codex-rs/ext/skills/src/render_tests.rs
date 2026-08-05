@@ -448,9 +448,10 @@ fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
         warnings: Vec::new(),
     };
 
-    let (host, executor) = render_combined_available_skills(
-        &host_catalog,
+    let RenderedSkillCatalogs { host, executor, .. } = render_combined_available_skills(
         &executor_catalog,
+        &SkillCatalog::default(),
+        &host_catalog,
         SkillMetadataBudget::Tokens(28),
     );
     let host = host.expect("host catalog should render");
@@ -520,14 +521,34 @@ fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
         ],
         warnings: Vec::new(),
     };
+    let orchestrator_resource = "skill://orchestrator/one";
+    let orchestrator_catalog = SkillCatalog {
+        entries: vec![
+            SkillCatalogEntry::new(
+                SkillPackageId("o1".to_string()),
+                SkillAuthority::new(SkillSourceKind::Orchestrator, "codex_apps"),
+                "o1",
+                "",
+                SkillResourceId::new(orchestrator_resource),
+            )
+            .with_display_path(orchestrator_resource),
+        ],
+        warnings: Vec::new(),
+    };
 
-    let (host, executor) = render_combined_available_skills(
-        &host_catalog,
+    let RenderedSkillCatalogs {
+        host,
+        executor,
+        orchestrator,
+    } = render_combined_available_skills(
         &executor_catalog,
+        &orchestrator_catalog,
+        &host_catalog,
         SkillMetadataBudget::Tokens(74),
     );
     let host = host.expect("host catalog should render");
     let executor = executor.expect("executor catalog should render");
+    let orchestrator = orchestrator.expect("orchestrator catalog should render");
 
     assert_eq!(
         executor.report,
@@ -549,6 +570,7 @@ fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
             truncated_description_count: 0,
         }
     );
+    assert_eq!(orchestrator.report.total_count, 1);
     assert_eq!(host.skill_root_lines, Vec::<String>::new());
 }
 

@@ -19,6 +19,7 @@ mod state;
 mod tools;
 mod warnings;
 mod world_state;
+mod world_state_catalogs;
 
 pub use config::SkillsExtensionConfig;
 pub use extension::install;

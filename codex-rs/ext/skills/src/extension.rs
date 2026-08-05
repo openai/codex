@@ -52,17 +52,14 @@ use crate::render::SkillCatalogRenderPolicy;
 use crate::render::SkillMetadataBudget;
 use crate::render::SkillRenderReport;
 use crate::render::render_available_skills;
-use crate::render::render_combined_available_skills;
 use crate::render::skill_metadata_budget;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_render;
-use crate::render_observability::trace_catalog_budget_pressure;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
-use crate::state::EmittedCatalogBudgetWarnings;
 use crate::state::ExecutorSkillsStepState;
 use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
@@ -71,9 +68,8 @@ use crate::state::SkillsTurnState;
 use crate::tools::SkillToolAuthority;
 use crate::tools::skill_tools;
 use crate::warnings::bounded_warnings;
-use crate::world_state::HostSkillsWarningEmitter;
-use crate::world_state::executor_skills_world_state_section;
-use crate::world_state::host_skills_world_state_section;
+use crate::world_state_catalogs::CatalogContext;
+use crate::world_state_catalogs::CatalogStatus;
 
 struct SkillsExtension<C> {
     providers: SkillProviders,
@@ -206,7 +202,7 @@ where
                         host_snapshot: None,
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
-                        include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
+                        include_orchestrator_skills: false,
                         mcp_resources: session_store
                             .get::<SkillsSessionState>()
                             .and_then(|state| state.mcp_resources.clone()),
@@ -248,186 +244,19 @@ where
         input: WorldStateContributionInput<'a>,
     ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
         Box::pin(async move {
-            let Some(thread_state) = input.thread_store.get::<SkillsThreadState>() else {
+            let Some(context) =
+                CatalogContext::new(&self.providers, Arc::clone(&self.event_sink), input)
+            else {
                 return Vec::new();
             };
-            let config = thread_state.config();
-            let catalog = thread_state
-                .executor_catalog_snapshot(
-                    &self.providers,
-                    SkillListQuery {
-                        turn_id: input.turn_id.to_string(),
-                        executor_roots: input.ready_selected_capability_roots.to_vec(),
-                        resolved_executor_roots: Vec::new(),
-                        host_snapshot: None,
-                        include_host_skills: false,
-                        include_bundled_skills: config.bundled_skills_enabled,
-                        include_orchestrator_skills: false,
-                        mcp_resources: input
-                            .session_store
-                            .get::<SkillsSessionState>()
-                            .and_then(|state| state.mcp_resources.clone()),
-                        executor_capability_discovery: input.executor_capability_discovery.cloned(),
-                    },
-                )
-                .await;
-            input
-                .turn_store
-                .insert(ExecutorSkillsStepState(catalog.clone()));
-            let model_info = input.thread_store.get::<ModelInfo>();
-            let include_usage = model_info
-                .as_deref()
-                .is_some_and(|model_info| model_info.include_skills_usage_instructions);
-            let context_window = model_info
-                .as_deref()
-                .and_then(ModelInfo::resolved_context_window);
-            let metadata_budget = skill_metadata_budget(context_window);
-            let extension_metrics = input.extension_metrics.clone();
-            let host_snapshot = input.turn_store.get::<HostSkillsSnapshot>();
-            let needs_host_catalog = config.include_instructions || config.shadow_selection_enabled;
-            let host_catalog = if needs_host_catalog
-                && let Some(host_snapshot) = host_snapshot.as_ref()
-                && self.providers.has_host_provider()
-            {
-                Some(
-                    self.providers
-                        .list_host_for_turn(SkillListQuery {
-                            turn_id: input.turn_id.to_string(),
-                            executor_roots: Vec::new(),
-                            resolved_executor_roots: Vec::new(),
-                            host_snapshot: Some(Arc::clone(host_snapshot)),
-                            include_host_skills: true,
-                            include_bundled_skills: false,
-                            include_orchestrator_skills: false,
-                            mcp_resources: None,
-                            executor_capability_discovery: None,
-                        })
-                        .await,
-                )
-            } else {
-                None
-            };
-            if let Some(host_catalog) = host_catalog.as_ref() {
-                input
-                    .turn_store
-                    .insert(HostSkillsStepState(host_catalog.clone()));
-            }
-            let host_catalog_for_rendering = if config.include_instructions {
-                host_catalog.as_ref()
-            } else {
-                None
-            };
-            let shared_rendered = host_catalog_for_rendering.and_then(|host_catalog| {
-                (host_catalog
-                    .entries
-                    .iter()
-                    .any(SkillCatalogEntry::is_model_visible)
-                    && catalog
-                        .entries
-                        .iter()
-                        .any(SkillCatalogEntry::is_model_visible))
-                .then(|| render_combined_available_skills(host_catalog, &catalog, metadata_budget))
-            });
-            let (rendered, rendered_host) =
-                if let Some((host_rendered, executor_rendered)) = shared_rendered {
-                    if let Some(host_rendered) = host_rendered.as_ref() {
-                        trace_catalog_budget_pressure(metadata_budget, &host_rendered.report);
-                    }
-                    (
-                        render_prepared_catalog(
-                            extension_metrics.as_deref(),
-                            CatalogSurface::ExecutorWorldState,
-                            include_usage,
-                            metadata_budget,
-                            executor_rendered,
-                        ),
-                        host_rendered,
-                    )
-                } else {
-                    let rendered_host = host_catalog_for_rendering.and_then(|host_catalog| {
-                        render_available_skills(
-                            host_catalog,
-                            SkillCatalogRenderPolicy::CoreCompatible,
-                            metadata_budget,
-                        )
-                    });
-                    if let Some(rendered_host) = rendered_host.as_ref() {
-                        trace_catalog_budget_pressure(metadata_budget, &rendered_host.report);
-                    }
-                    (
-                        if config.include_instructions {
-                            render_catalog(
-                                extension_metrics.as_deref(),
-                                CatalogSurface::ExecutorWorldState,
-                                &catalog,
-                                include_usage,
-                                SkillCatalogRenderPolicy::ExtensionCompatible,
-                                metadata_budget,
-                            )
-                        } else {
-                            RenderedCatalog::default()
-                        },
-                        rendered_host,
-                    )
-                };
-            let host_warning_message = rendered_host
-                .as_ref()
-                .and_then(|rendered_host| rendered_host.report.warning_message());
-            let host_render_metrics = config.include_instructions.then(|| {
-                rendered_host
-                    .as_ref()
-                    .map(|rendered_host| {
-                        let report = &rendered_host.report;
-                        (
-                            report.total_count,
-                            report.included_count,
-                            report.omitted_count,
-                            report.truncated_description_chars,
-                        )
-                    })
-                    .unwrap_or_default()
-            });
-            let host_body = rendered_host
-                .and_then(|rendered_host| rendered_host.into_fragment(include_usage))
-                .map(|fragment| fragment.body());
-            let executor_body = rendered.fragment.map(|fragment| fragment.body());
-            let mut sections = vec![executor_skills_world_state_section(
-                executor_body,
-                config.include_instructions,
-            )];
-            let emitted_warnings = input
-                .turn_store
-                .get_or_init(EmittedCatalogBudgetWarnings::default);
-            if host_snapshot.is_some() && self.providers.has_host_provider() {
-                input.turn_store.insert(HostSkillsCatalogInWorldState);
-                let event_sink = Arc::clone(&self.event_sink);
-                let emitted_warnings = Arc::clone(&emitted_warnings);
-                let thread_id = input.thread_store.level_id().to_string();
-                let turn_id = input.turn_id.to_string();
-                let warning_emitter: HostSkillsWarningEmitter = Arc::new(move |message| {
-                    if emitted_warnings.insert(&message) {
-                        event_sink.emit_warning(ExtensionWarning {
-                            thread_id: thread_id.clone(),
-                            turn_id: Some(turn_id.clone()),
-                            message,
-                        });
-                    }
-                });
-                sections.push(host_skills_world_state_section(
-                    host_body,
-                    config.include_instructions,
-                    host_render_metrics,
-                    extension_metrics,
-                    host_warning_message,
-                    warning_emitter,
-                ));
-            }
-            if let Some(message) = rendered.warning_message
-                && emitted_warnings.insert(&message)
-            {
-                self.emit_warning(input.thread_store.level_id(), Some(input.turn_id), message);
-            }
-            sections
+            let catalogs = context.discover_catalogs().await;
+
+            context
+                .render_catalogs(catalogs)
+                .into_iter()
+                .filter(|catalog| catalog.status != CatalogStatus::Unavailable)
+                .map(|catalog| context.build_world_state_section(catalog))
+                .collect()
         })
     }
 }
@@ -738,17 +567,12 @@ impl<C> SkillsExtension<C> {
     ) -> SkillCatalog {
         let include_orchestrator_skills = query.include_orchestrator_skills;
         let orchestrator_query = query.clone();
-        let mcp_resources = orchestrator_query.mcp_resources.clone();
         query.include_orchestrator_skills = false;
 
         let mut catalog = self.providers.list_for_turn(query).await;
         if include_orchestrator_skills {
             let orchestrator_catalog = thread_state
-                .orchestrator_catalog_snapshot(
-                    mcp_resources.as_deref(),
-                    self.providers
-                        .list_orchestrator_for_turn(orchestrator_query),
-                )
+                .orchestrator_catalog_snapshot(&self.providers, orchestrator_query)
                 .await;
             catalog.extend(orchestrator_catalog);
         }

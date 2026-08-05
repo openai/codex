@@ -6,6 +6,7 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_core::StartThreadOptions;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -66,7 +67,7 @@ struct StaticSkillProvider {
     main_prompt_contents: Option<String>,
 }
 
-struct ExecutorSkillProvider {
+struct CatalogSkillProvider {
     catalog: SkillCatalog,
 }
 
@@ -128,7 +129,7 @@ impl SkillProvider for StaticSkillProvider {
     }
 }
 
-impl SkillProvider for ExecutorSkillProvider {
+impl SkillProvider for CatalogSkillProvider {
     fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
         Box::pin(async { Ok(self.catalog.clone()) })
     }
@@ -239,7 +240,7 @@ fn catalog_extensions(
     let mut extensions =
         ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
     let mut providers =
-        SkillProviders::new().with_executor_provider(Arc::new(ExecutorSkillProvider {
+        SkillProviders::new().with_executor_provider(Arc::new(CatalogSkillProvider {
             catalog: executor_catalog,
         }));
     if include_host_provider {
@@ -1106,6 +1107,107 @@ async fn production_turn_keeps_full_executor_only_catalog_when_it_fits() -> Resu
     let executor_lines = skill_lines(catalog_text(&developer_texts, "exec"), "exec");
 
     assert_full_descriptions(&executor_lines, &EXECUTOR_CATALOG);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_keeps_orchestrator_world_state_incremental_across_turns() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_sequence(
+        &server,
+        ["resp-1", "resp-2"]
+            .into_iter()
+            .map(|response_id| {
+                sse(vec![
+                    ev_response_created(response_id),
+                    ev_completed(response_id),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+    let skill_name = "orchestrator-search";
+    let skill_description = "Search available company knowledge.";
+    let skill_resource = "skill://codex_apps/orchestrator-search/SKILL.md";
+    let catalog = SkillCatalog {
+        entries: vec![
+            SkillCatalogEntry::new(
+                SkillPackageId("orchestrator/orchestrator-search".to_string()),
+                SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME),
+                skill_name,
+                skill_description,
+                SkillResourceId::new(skill_resource),
+            )
+            .with_display_path(skill_resource),
+        ],
+        warnings: Vec::new(),
+    };
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new()
+            .with_orchestrator_provider(Arc::new(CatalogSkillProvider { catalog })),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: false,
+            orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+            shadow_selection_enabled: false,
+        },
+    );
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            configure_catalog_test(config);
+            config.orchestrator_skills_enabled = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let orchestrator_thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+
+    for prompt in [
+        "Inspect the available skills.",
+        "Inspect the available skills again.",
+    ] {
+        orchestrator_thread
+            .thread
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
+        core_test_support::wait_for_event(&orchestrator_thread.thread, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    let expected_line =
+        format!("- {skill_name}: {skill_description} (orchestrator resource: {skill_resource})");
+    for (index, request) in requests.iter().enumerate() {
+        let developer_texts = request.message_input_texts("developer");
+        let occurrences = developer_texts
+            .iter()
+            .map(|text| text.matches(&expected_line).count())
+            .sum::<usize>();
+        assert_eq!(
+            occurrences, 1,
+            "request {index} should contain the orchestrator catalog exactly once: {developer_texts:?}"
+        );
+    }
 
     Ok(())
 }
