@@ -6,7 +6,6 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use tokio::sync::Notify;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -54,7 +53,6 @@ use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
-use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
@@ -211,11 +209,7 @@ fn exec_server_params_for_request(
 /// Borrowed process state prepared for a `write_stdin` or poll operation.
 struct PreparedProcessHandles {
     process: Arc<UnifiedExecProcess>,
-    output_buffer: OutputBuffer,
-    output_notify: Arc<Notify>,
-    output_closed: Arc<AtomicBool>,
-    output_closed_notify: Arc<Notify>,
-    cancellation_token: CancellationToken,
+    output: OutputHandles,
     pause_state: Option<watch::Receiver<bool>>,
     session: Option<Arc<crate::session::session::Session>>,
     network_approval: Option<DeferredNetworkApproval>,
@@ -502,20 +496,9 @@ impl UnifiedExecProcessManager {
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
         // the tool response body.
-        let OutputHandles {
-            output_buffer,
-            output_notify,
-            output_closed,
-            output_closed_notify,
-            cancellation_token,
-        } = process.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
         let collected_output = Self::collect_output_until_deadline(
-            &output_buffer,
-            &output_notify,
-            &output_closed,
-            &output_closed_notify,
-            &cancellation_token,
+            process.output_handles(),
             Some(context.session.subscribe_elicitation_pause_state()),
             deadline,
         )
@@ -700,11 +683,7 @@ impl UnifiedExecProcessManager {
 
         let PreparedProcessHandles {
             process,
-            output_buffer,
-            output_notify,
-            output_closed,
-            output_closed_notify,
-            cancellation_token,
+            output,
             pause_state,
             session,
             network_approval,
@@ -760,16 +739,8 @@ impl UnifiedExecProcessManager {
         };
         let start = Instant::now();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected_output = Self::collect_output_until_deadline(
-            &output_buffer,
-            &output_notify,
-            &output_closed,
-            &output_closed_notify,
-            &cancellation_token,
-            pause_state,
-            deadline,
-        )
-        .await;
+        let collected_output =
+            Self::collect_output_until_deadline(&output, pause_state, deadline).await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let original_token_count = usize::try_from(approx_tokens_from_byte_count(
@@ -911,13 +882,7 @@ impl UnifiedExecProcessManager {
             return Err(UnifiedExecError::UnknownProcessId { process_id });
         }
         entry.last_used = Instant::now();
-        let OutputHandles {
-            output_buffer,
-            output_notify,
-            output_closed,
-            output_closed_notify,
-            cancellation_token,
-        } = entry.process.output_handles();
+        let output = entry.process.output_handles().clone();
         let pause_state = entry
             .session
             .upgrade()
@@ -926,11 +891,7 @@ impl UnifiedExecProcessManager {
 
         Ok(PreparedProcessHandles {
             process: Arc::clone(&entry.process),
-            output_buffer,
-            output_notify,
-            output_closed,
-            output_closed_notify,
-            cancellation_token,
+            output,
             pause_state,
             session,
             network_approval: entry.network_approval.clone(),
@@ -1264,16 +1225,19 @@ impl UnifiedExecProcessManager {
     }
 
     pub(super) async fn collect_output_until_deadline(
-        output_buffer: &OutputBuffer,
-        output_notify: &Arc<Notify>,
-        output_closed: &Arc<AtomicBool>,
-        output_closed_notify: &Arc<Notify>,
-        cancellation_token: &CancellationToken,
+        output: &OutputHandles,
         mut pause_state: Option<watch::Receiver<bool>>,
         mut deadline: Instant,
     ) -> HeadTailBuffer {
         const POST_EXIT_CLOSE_WAIT_CAP: Duration = Duration::from_millis(50);
 
+        let OutputHandles {
+            output_buffer,
+            output_notify,
+            output_closed,
+            output_closed_notify,
+            cancellation_token,
+        } = output;
         let mut collected = HeadTailBuffer::default();
         let mut exit_signal_received = cancellation_token.is_cancelled();
         let mut post_exit_deadline: Option<Instant> = None;

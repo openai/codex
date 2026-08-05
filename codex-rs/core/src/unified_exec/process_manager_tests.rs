@@ -2,6 +2,7 @@ use super::*;
 use crate::unified_exec::clamp_yield_time;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use pretty_assertions::assert_eq;
+use tokio::sync::Notify;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -258,13 +259,16 @@ async fn output_collection_stays_bounded_across_repeated_drains() {
     let output_closed = Arc::new(AtomicBool::new(false));
     let output_closed_notify = Arc::new(Notify::new());
     let cancellation_token = CancellationToken::new();
+    let output = OutputHandles {
+        output_buffer: Arc::clone(&output_buffer),
+        output_notify: Arc::clone(&output_notify),
+        output_closed: Arc::clone(&output_closed),
+        output_closed_notify: Arc::clone(&output_closed_notify),
+        cancellation_token: cancellation_token.clone(),
+    };
 
     let collect = UnifiedExecProcessManager::collect_output_until_deadline(
-        &output_buffer,
-        &output_notify,
-        &output_closed,
-        &output_closed_notify,
-        &cancellation_token,
+        &output,
         /*pause_state*/ None,
         Instant::now() + Duration::from_secs(5),
     );
@@ -323,13 +327,16 @@ async fn output_collection_preserves_omissions_from_drained_buffer() {
     let output_closed_notify = Arc::new(Notify::new());
     let cancellation_token = CancellationToken::new();
     cancellation_token.cancel();
+    let output = OutputHandles {
+        output_buffer,
+        output_notify,
+        output_closed,
+        output_closed_notify,
+        cancellation_token,
+    };
 
     let collected = UnifiedExecProcessManager::collect_output_until_deadline(
-        &output_buffer,
-        &output_notify,
-        &output_closed,
-        &output_closed_notify,
-        &cancellation_token,
+        &output,
         /*pause_state*/ None,
         Instant::now() + Duration::from_secs(1),
     )
