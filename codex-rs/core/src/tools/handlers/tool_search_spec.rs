@@ -5,7 +5,7 @@ use codex_tools::ToolSpec;
 use codex_utils_string::take_bytes_at_char_boundary;
 use std::collections::BTreeMap;
 
-const MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES: usize = 4 * 1024;
+const MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolSearchSourceListing {
@@ -176,10 +176,11 @@ mod tests {
 
     #[test]
     fn create_tool_search_tool_bounds_aggregate_source_descriptions() {
+        let long_description = "🦀".repeat(20_000);
         let sources = (0..8)
             .map(|index| ToolSearchSourceInfo {
                 name: format!("source-{index:02}"),
-                description: Some("🦀".repeat(300)),
+                description: Some(long_description.clone()),
             })
             .collect::<Vec<_>>();
         let ToolSpec::ToolSearch { description, .. } = create_tool_search_tool(
@@ -198,6 +199,7 @@ mod tests {
             .expect("tool search should retain its discovery instructions");
         assert!(source_descriptions.len() <= MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES);
         assert!(source_descriptions.starts_with("- source-00: 🦀"));
+        assert!(source_descriptions.contains(&long_description));
         let advertised_names = source_descriptions
             .lines()
             .map(|line| {
