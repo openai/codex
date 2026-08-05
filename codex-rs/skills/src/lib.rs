@@ -5,6 +5,7 @@ mod model;
 mod name_counts;
 mod parser;
 mod policy;
+mod selection;
 
 pub use interface::SkillInterfaceAssetPolicy;
 pub use interface::SkillInterfaceFile;
@@ -33,6 +34,8 @@ pub use parser::ParsedSkillFrontmatter;
 pub use parser::SkillParseError;
 pub use parser::parse_skill_frontmatter_metadata;
 pub use policy::resolve_disabled_skill_paths;
+pub use selection::ExplicitSkillLookup;
+pub use selection::collect_explicit_skill_mentions;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use include_dir::Dir;

@@ -5,7 +5,27 @@ use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
+
+#[derive(Default)]
+struct TestLookup {
+    skills: Vec<SkillMetadata>,
+    disabled_paths: HashSet<AbsolutePathBuf>,
+    skill_discovery_path_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf>,
+}
+
+impl ExplicitSkillLookup for TestLookup {
+    fn skills(&self) -> &[SkillMetadata] {
+        &self.skills
+    }
+
+    fn disabled_paths(&self) -> &HashSet<AbsolutePathBuf> {
+        &self.disabled_paths
+    }
+
+    fn skill_discovery_path_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
+        self.skill_discovery_path_by_path.get(path)
+    }
+}
 
 fn make_skill(name: &str, path: &str) -> SkillMetadata {
     SkillMetadata {
@@ -22,16 +42,6 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
     }
 }
 
-#[test]
-fn skill_prompt_contents_are_bounded_at_utf8_boundaries() {
-    let contents = format!("{}é", "a".repeat(MAX_SKILL_PROMPT_BYTES - 1));
-
-    let (bounded, truncated) = bounded_skill_prompt_contents(&contents);
-
-    assert_eq!(bounded.len(), MAX_SKILL_PROMPT_BYTES - 1);
-    assert_eq!(truncated, true);
-}
-
 fn linked_skill_mention(name: &str, unix_path: &str) -> String {
     format!("[${name}]({})", test_path_buf(unix_path).display())
 }
@@ -42,7 +52,7 @@ fn collect_mentions(
     disabled_paths: &HashSet<AbsolutePathBuf>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
-    let loaded_skills = SkillLoadOutcome {
+    let loaded_skills = TestLookup {
         skills: skills.to_vec(),
         disabled_paths: disabled_paths.clone(),
         ..Default::default()
@@ -50,15 +60,12 @@ fn collect_mentions(
     collect_explicit_skill_mentions(inputs, &loaded_skills, connector_slug_counts)
 }
 
-fn skill_outcome_with_discovery_path(
-    skill: SkillMetadata,
-    discovery_path: &str,
-) -> SkillLoadOutcome {
-    SkillLoadOutcome {
-        skill_discovery_path_by_path: Arc::new(HashMap::from([(
+fn skill_outcome_with_discovery_path(skill: SkillMetadata, discovery_path: &str) -> TestLookup {
+    TestLookup {
+        skill_discovery_path_by_path: HashMap::from([(
             skill.path_to_skills_md.clone(),
             test_path_buf(discovery_path).abs(),
-        )])),
+        )]),
         skills: vec![skill],
         ..Default::default()
     }
