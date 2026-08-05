@@ -1,0 +1,8 @@
+---
+source: tui/src/bottom_pane/textarea.rs
+expression: "format!(\"scroll: {}\\ncursor: {:?}\\n{}\", state.scroll,\nt.cursor_pos_with_state(area, state), terminal.backend())"
+---
+scroll: 1
+cursor: Some((0, 1))
+"efgh"
+"    "

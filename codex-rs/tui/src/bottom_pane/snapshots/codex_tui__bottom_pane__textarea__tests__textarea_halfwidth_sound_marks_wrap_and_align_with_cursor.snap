@@ -1,6 +1,6 @@
 ---
 source: tui/src/bottom_pane/textarea.rs
-expression: "format!(\"dakuten\\n{dakuten}\\n\\nhandakuten\\n{handakuten}\\n\\nstandalone\\n{standalone}\")"
+expression: "snapshots.join(\"\\n\\n\")"
 ---
 dakuten
 cursor: Some((1, 1))
@@ -9,12 +9,14 @@ cursor: Some((1, 1))
 
 
 handakuten
-cursor: Some((3, 1))
+cursor: Some((0, 2))
 "ab "
 "ﾊﾟc" Hidden by multi-width symbols: [(1, " ")]
+"   "
 
 
 standalone
-cursor: Some((2, 1))
+cursor: Some((0, 2))
 "a "
 "ﾞb"
+"  "
