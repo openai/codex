@@ -1,7 +1,7 @@
 //! Shared approvals and sandboxing traits used by tool runtimes.
 //!
 //! Consolidates the approval flow primitives (`ApprovalDecision`, `ApprovalStore`,
-//! `ApprovalCtx`, `Approvable`) together with the sandbox orchestration traits
+//! `Approvable`) together with the sandbox orchestration traits
 //! and helpers (`Sandboxable`, `ToolRuntime`, `SandboxAttempt`, etc.).
 
 use crate::sandboxing::ExecOptions;
@@ -15,7 +15,6 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
-use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -30,11 +29,8 @@ use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_tools::ToolName;
 use codex_utils_path_uri::PathUri;
 use futures::Future;
-use futures::future::BoxFuture;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -121,16 +117,6 @@ where
 pub(crate) struct ApprovalRequestReasons {
     pub(crate) approval: Option<String>,
     pub(crate) retry: Option<String>,
-}
-
-#[derive(Clone)]
-pub(crate) struct ApprovalCtx<'a> {
-    pub session: &'a Arc<Session>,
-    pub turn: &'a Arc<TurnContext>,
-    pub call_id: &'a str,
-    pub tool_name: &'a ToolName,
-    pub reasons: ApprovalRequestReasons,
-    pub network_approval_context: Option<NetworkApprovalContext>,
 }
 
 pub(crate) use super::approvals::ApprovalAction;
@@ -318,17 +304,6 @@ pub(crate) fn managed_network_for_sandbox_permissions(
 }
 
 pub(crate) trait Approvable<Req> {
-    type ApprovalKey: Hash + Eq + Clone + Debug + Serialize;
-
-    // In most cases (shell, unified_exec), a request will have a single approval key.
-    //
-    // However, apply_patch needs session "Allow, don't ask again" semantics that
-    // apply to multiple atomic targets (e.g., apply_patch approves per file path). Returning
-    // a list of keys lets the runtime treat the request as approved-for-session only if
-    // *all* keys are already approved, while still caching approvals per-key so future
-    // requests touching a subset can be auto-approved.
-    fn approval_keys(&self, req: &Req) -> Vec<Self::ApprovalKey>;
-
     /// Return per-request sandbox permissions for first-attempt sandbox
     /// selection. Most tools use the ambient sandbox policy unchanged.
     fn sandbox_permissions(&self, _req: &Req) -> SandboxPermissions {
@@ -349,12 +324,6 @@ pub(crate) trait Approvable<Req> {
         None
     }
 
-    /// Return hook input for approval-time policy hooks when this runtime wants
-    /// hook evaluation to run before guardian or user approval.
-    fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
-        None
-    }
-
     /// Decide we can request an approval for no-sandbox execution.
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
@@ -365,13 +334,7 @@ pub(crate) trait Approvable<Req> {
         }
     }
 
-    fn start_approval_async<'a>(
-        &'a mut self,
-        req: &'a Req,
-        ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision>;
-
-    fn approval_action(&self, req: &Req, ctx: &ApprovalCtx<'_>) -> std::io::Result<ApprovalAction>;
+    fn approval_action(&self, req: &Req, call_id: &str) -> std::io::Result<ApprovalAction>;
 }
 
 pub(crate) trait Sandboxable {

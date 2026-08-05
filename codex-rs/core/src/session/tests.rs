@@ -1196,34 +1196,21 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
     }
 
     impl crate::tools::sandboxing::Approvable<TurnEnvironment> for ProbeToolRuntime {
-        type ApprovalKey = String;
-
-        fn approval_keys(&self, _req: &TurnEnvironment) -> Vec<Self::ApprovalKey> {
-            vec!["probe".to_string()]
-        }
-
-        fn start_approval_async<'a>(
-            &'a mut self,
-            _req: &'a TurnEnvironment,
-            _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
-        ) -> futures::future::BoxFuture<'a, ReviewDecision> {
-            Box::pin(async { ReviewDecision::Approved })
-        }
-
         fn approval_action(
             &self,
             _req: &TurnEnvironment,
-            ctx: &crate::tools::sandboxing::ApprovalCtx<'_>,
+            call_id: &str,
         ) -> std::io::Result<crate::tools::sandboxing::ApprovalAction> {
             Ok(crate::tools::sandboxing::ApprovalAction::Shell {
-                id: ctx.call_id.to_string(),
+                id: call_id.to_string(),
                 environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                 command: Vec::new(),
-                #[allow(deprecated)]
-                cwd: PathUri::from_abs_path(&ctx.turn.cwd),
+                hook_command: String::new(),
+                cwd: PathUri::from_abs_path(&std::env::temp_dir().abs()),
                 sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
                 additional_permissions: None,
                 justification: None,
+                proposed_execpolicy_amendment: None,
             })
         }
     }

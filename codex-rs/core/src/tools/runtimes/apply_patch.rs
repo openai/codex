@@ -5,18 +5,14 @@
 //! sandboxing enforced by the explicit filesystem sandbox context.
 use crate::exec::is_likely_sandbox_denied;
 use crate::session::turn_context::TurnEnvironment;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalAction;
-use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
-use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
 use codex_exec_server::FileSystemSandboxContext;
@@ -27,20 +23,19 @@ use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_sandboxing::record_filesystem_sandbox_violation;
 use codex_utils_path_uri::PathUri;
-use futures::future::BoxFuture;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize)]
 pub(crate) struct ApplyPatchApprovalKey {
-    environment_id: String,
-    path: PathUri,
+    pub(crate) environment_id: String,
+    pub(crate) path: PathUri,
 }
 
 #[derive(Debug)]
@@ -48,7 +43,7 @@ pub struct ApplyPatchRequest {
     pub turn_environment: TurnEnvironment,
     pub action: ApplyPatchAction,
     pub file_paths: Vec<PathUri>,
-    pub changes: std::collections::HashMap<PathBuf, FileChange>,
+    pub changes: Arc<std::collections::HashMap<PathBuf, FileChange>>,
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     pub permissions_preapproved: bool,
@@ -81,6 +76,8 @@ impl ApplyPatchRuntime {
             cwd: req.action.cwd.clone(),
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
+            changes: Arc::clone(&req.changes),
+            permissions_preapproved: req.permissions_preapproved,
         }
     }
 
@@ -118,69 +115,12 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = ApplyPatchApprovalKey;
-
-    fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
-        req.file_paths
-            .iter()
-            .cloned()
-            .map(|path| ApplyPatchApprovalKey {
-                environment_id: req.turn_environment.environment_id.clone(),
-                path,
-            })
-            .collect()
-    }
-
-    fn start_approval_async<'a>(
-        &'a mut self,
-        req: &'a ApplyPatchRequest,
-        ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision> {
-        let session = ctx.session;
-        let turn = ctx.turn;
-        let call_id = ctx.call_id.to_string();
-        let approval_reason = ctx.reasons.approval.clone();
-        let retry_reason = ctx.reasons.retry.clone();
-        let approval_keys = self.approval_keys(req);
-        let changes = req.changes.clone();
-        Box::pin(async move {
-            if req.permissions_preapproved && approval_reason.is_none() && retry_reason.is_none() {
-                return ReviewDecision::Approved;
-            }
-            if let Some(reason) = retry_reason.or(approval_reason) {
-                return session
-                    .request_patch_approval(
-                        turn,
-                        call_id,
-                        changes.clone(),
-                        Some(reason),
-                        /*grant_root*/ None,
-                    )
-                    .await;
-            }
-
-            with_cached_approval(
-                &session.services,
-                "apply_patch",
-                approval_keys,
-                || async move {
-                    session
-                        .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
-                        )
-                        .await
-                },
-            )
-            .await
-        })
-    }
-
     fn approval_action(
         &self,
         req: &ApplyPatchRequest,
-        ctx: &ApprovalCtx<'_>,
+        call_id: &str,
     ) -> std::io::Result<ApprovalAction> {
-        Ok(ApplyPatchRuntime::build_approval_action(req, ctx.call_id))
+        Ok(ApplyPatchRuntime::build_approval_action(req, call_id))
     }
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
@@ -201,16 +141,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         req: &ApplyPatchRequest,
     ) -> Option<ExecApprovalRequirement> {
         Some(req.exec_approval_requirement.clone())
-    }
-
-    fn permission_request_payload(
-        &self,
-        req: &ApplyPatchRequest,
-    ) -> Option<PermissionRequestPayload> {
-        Some(PermissionRequestPayload {
-            tool_name: HookToolName::apply_patch(),
-            tool_input: serde_json::json!({ "command": req.action.patch }),
-        })
     }
 }
 
