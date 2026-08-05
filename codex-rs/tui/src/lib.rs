@@ -75,6 +75,7 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 pub use token_usage::TokenUsage;
 use tracing::error;
@@ -226,6 +227,7 @@ pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
 const TUI_LOG_FILE_NAME: &str = "codex-tui.log";
+const INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 500);
 
 #[cfg(unix)]
 const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
@@ -1296,7 +1298,7 @@ pub async fn run_main(
         .with(otel_tracing_layer)
         .try_init();
 
-    run_ratatui_app(
+    let app_result = run_ratatui_app(
         cli,
         arg0_paths,
         loader_overrides,
@@ -1314,7 +1316,17 @@ pub async fn run_main(
         environment_manager,
     )
     .await
-    .map_err(|err| std::io::Error::other(err.to_string()))
+    .map_err(|err| std::io::Error::other(err.to_string()));
+
+    if let Some(otel) = otel
+        && let Err(err) = otel
+            .shutdown_with_timeout(INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT)
+            .await
+    {
+        warn!(error = %err, "failed to finish interactive telemetry shutdown");
+    }
+
+    app_result
 }
 
 #[allow(clippy::too_many_arguments)]

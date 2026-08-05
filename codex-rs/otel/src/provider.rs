@@ -39,6 +39,8 @@ use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProces
 use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::io;
+use std::mem::ManuallyDrop;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -63,6 +65,11 @@ pub struct OtelProvider {
     shutdown_started: AtomicBool,
 }
 
+struct ShutdownWorker {
+    provider: ManuallyDrop<OtelProvider>,
+    completed_tx: tokio::sync::oneshot::Sender<()>,
+}
+
 impl OtelProvider {
     /// Flushes and shuts down configured exporters at most once.
     pub fn shutdown(&self) {
@@ -78,6 +85,51 @@ impl OtelProvider {
         }
         if let Some(logger) = &self.logger {
             let _ = logger.shutdown();
+        }
+    }
+
+    /// Shuts down exporters on a detached thread within an external time budget.
+    pub async fn shutdown_with_timeout(self, timeout: Duration) -> io::Result<()> {
+        self.shutdown_with_timeout_and_spawner(timeout, |worker| {
+            std::thread::Builder::new()
+                .name("codex-otel-shutdown".to_string())
+                .spawn(move || {
+                    let provider = ManuallyDrop::into_inner(worker.provider);
+                    provider.shutdown();
+                    drop(provider);
+                    let _ = worker.completed_tx.send(());
+                })
+        })
+        .await
+    }
+
+    async fn shutdown_with_timeout_and_spawner<F>(
+        self,
+        timeout: Duration,
+        spawn: F,
+    ) -> io::Result<()>
+    where
+        F: FnOnce(ShutdownWorker) -> io::Result<std::thread::JoinHandle<()>>,
+    {
+        let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+        // A failed spawn drops its closure on the caller. Keep the provider
+        // from synchronously running its potentially blocking destructor.
+        let worker = ShutdownWorker {
+            provider: ManuallyDrop::new(self),
+            completed_tx,
+        };
+        let _shutdown_worker = spawn(worker)?;
+
+        match tokio::time::timeout(timeout, completed_rx).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "telemetry shutdown worker stopped before completing",
+            )),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "telemetry shutdown exceeded its time budget",
+            )),
         }
     }
 

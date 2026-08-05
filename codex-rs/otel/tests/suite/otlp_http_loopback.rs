@@ -529,7 +529,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
+async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_tokio_runtime()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let _trace_context_config_guard = TRACE_CONTEXT_CONFIG_LOCK
         .lock()
@@ -598,7 +598,10 @@ async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
         let _guard = span.enter();
         tracing::info!("trace loopback event from tokio runtime");
     });
-    otel.shutdown();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(otel.shutdown_with_timeout(Duration::from_secs(/*secs*/ 2)))
+    })?;
 
     server.join().expect("server join");
     let captured = rx.recv_timeout(Duration::from_secs(1)).expect("captured");
@@ -629,6 +632,84 @@ async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
     );
 
     Ok(())
+}
+
+#[test]
+fn otlp_http_exporter_times_out_when_collector_stalls_during_bounded_shutdown() {
+    let _trace_context_config_guard = TRACE_CONTEXT_CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    let (request_started_tx, request_started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept trace request");
+        let (path, _, _) = read_http_request(&mut stream).expect("read trace request");
+        request_started_tx.send(path).expect("request started");
+        release_rx
+            .recv_timeout(Duration::from_secs(/*secs*/ 2))
+            .expect("collector released");
+        write_http_response(&mut stream, "202 Accepted").expect("write trace response");
+    });
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    let (result, elapsed) = runtime.block_on(async move {
+        let otel = OtelProvider::from(&OtelSettings {
+            environment: "test".to_string(),
+            service_name: "codex-cli".to_string(),
+            service_version: env!("CARGO_PKG_VERSION").to_string(),
+            codex_home: PathBuf::from("."),
+            exporter: OtelExporter::None,
+            trace_exporter: OtelExporter::OtlpHttp {
+                endpoint: format!("http://{addr}/v1/traces"),
+                headers: HashMap::new(),
+                protocol: OtelHttpProtocol::Json,
+                tls: None,
+            },
+            metrics_exporter: OtelExporter::None,
+            runtime_metrics: false,
+            span_attributes: BTreeMap::new(),
+            tracestate: BTreeMap::new(),
+        })
+        .expect("build otel provider")
+        .expect("otel provider");
+        let tracing_layer = otel.tracing_layer().expect("tracing layer");
+        let subscriber = tracing_subscriber::registry().with(tracing_layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("trace-loopback-stalled");
+            let _guard = span.enter();
+            tracing::info!("trace loopback event for stalled collector");
+        });
+
+        let started = Instant::now();
+        let result = otel
+            .shutdown_with_timeout(Duration::from_millis(/*millis*/ 50))
+            .await;
+        (result, started.elapsed())
+    });
+
+    let path = request_started_rx
+        .recv_timeout(Duration::from_secs(/*secs*/ 1))
+        .expect("trace request reached collector");
+    release_tx.send(()).expect("release collector");
+    server.join().expect("server join");
+    runtime.shutdown_timeout(Duration::from_secs(/*secs*/ 1));
+
+    assert_eq!(path, "/v1/traces");
+    assert_eq!(
+        result.as_ref().map_err(std::io::Error::kind),
+        Err(std::io::ErrorKind::TimedOut)
+    );
+    assert!(
+        elapsed < Duration::from_secs(/*secs*/ 1),
+        "bounded shutdown blocked for {elapsed:?}"
+    );
 }
 
 #[test]
