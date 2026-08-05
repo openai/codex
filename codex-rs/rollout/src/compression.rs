@@ -344,6 +344,16 @@ mod worker {
     }
 
     pub(super) async fn run(codex_home: PathBuf) -> io::Result<()> {
+        let Some(_maintenance_guard) =
+            crate::try_acquire_rollout_maintenance_lock(codex_home.as_path())?
+        else {
+            metrics::run("skipped_maintenance");
+            debug!(
+                "rollout maintenance is already running for {}",
+                codex_home.display()
+            );
+            return Ok(());
+        };
         let marker = match CompressionRunMarker::try_claim(codex_home.as_path()) {
             Ok(Some(marker)) => marker,
             Ok(None) => {

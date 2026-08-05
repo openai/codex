@@ -4262,6 +4262,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "codex-utils-path-uri",
  "futures",
  "pretty_assertions",
  "pulldown-cmark",

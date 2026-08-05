@@ -1,0 +1,812 @@
+//! Orchestrates legacy rollout migration into paginated history.
+//!
+//! This is the high-level migration state machine: find rollout files, decide whether each one is
+//! eligible, take the maintenance and writer locks, canonicalize into a staged JSONL file,
+//! project that staged file into SQLite, verify the projection, then atomically publish it.
+//!
+//! The important invariant is that we always leave behind either the original legacy rollout or a
+//! recoverable paginated rollout. Once the rollout path is replaced, the durable `.pending`
+//! journal must be enough for a later migration run to finish SQLite recovery safely.
+
+use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use chrono::DateTime;
+use codex_app_server_protocol::project_rollout_line;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSource;
+use serde::Serialize;
+use tokio::fs::File;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio::io::BufWriter;
+use tokio::time::Instant;
+
+use super::LocalThreadStore;
+use super::thread_history;
+use super::thread_history::ProjectedRolloutLine;
+use super::thread_history::RolloutProjectionStep;
+use crate::ThreadStoreError;
+use crate::ThreadStoreResult;
+
+mod canonicalizer;
+mod legacy_event;
+mod line_parser;
+mod publish;
+
+use canonicalizer::LegacyRolloutCanonicalizer;
+use publish::compress_rollout_to_path;
+use publish::compressed_staged_rollout_path;
+use publish::decompress_rollout_to_path;
+use publish::decompressed_staged_rollout_path;
+use publish::migration_journal_path;
+use publish::pending_migration_thread_ids;
+use publish::remove_file_if_present;
+use publish::staged_rollout_path;
+use publish::sync_parent_directory;
+use publish::write_migration_journal;
+
+const PROJECTION_BATCH_BYTES: u64 = 256 * 1024;
+const MAX_ROLLOUT_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+struct CanonicalizationSource<'a> {
+    thread_id: ThreadId,
+    source_path: &'a Path,
+    staged_path: &'a Path,
+    source_permissions: &'a std::fs::Permissions,
+    canonical_session_meta: &'a RolloutLine,
+}
+
+/// Controls whether eligible rollouts are reported or migrated.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RolloutMigrationMode {
+    /// Report eligible files without modifying local storage.
+    #[default]
+    DryRun,
+    /// Publish paginated rollouts and materialize their SQLite history.
+    Apply,
+}
+
+/// Selection and throughput limits for a local rollout migration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RolloutMigrationOptions {
+    pub mode: RolloutMigrationMode,
+    pub thread_ids: Vec<ThreadId>,
+    pub max_mib_per_second: u64,
+}
+
+impl Default for RolloutMigrationOptions {
+    fn default() -> Self {
+        Self {
+            mode: RolloutMigrationMode::DryRun,
+            thread_ids: Vec::new(),
+            max_mib_per_second: 8,
+        }
+    }
+}
+
+/// The observable result of inspecting one local rollout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RolloutMigrationStatus {
+    Eligible,
+    Migrated,
+    AlreadyPaginated,
+    SkippedSubagent,
+    SkippedBusy,
+    Failed,
+}
+
+/// The per-thread result of a rollout migration run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RolloutMigrationOutcome {
+    pub thread_id: Option<ThreadId>,
+    pub rollout_path: PathBuf,
+    pub status: RolloutMigrationStatus,
+    pub bytes_processed: u64,
+    pub message: Option<String>,
+}
+
+/// The complete result of scanning active rollout files.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RolloutMigrationReport {
+    pub outcomes: Vec<RolloutMigrationOutcome>,
+}
+
+struct RolloutMigrationRateLimiter {
+    started_at: Instant,
+    bytes_processed: u64,
+    bytes_per_second: u64,
+    bytes_since_yield: u64,
+}
+
+struct RolloutRecord {
+    line: Option<RolloutLine>,
+    byte_count: u64,
+}
+
+impl RolloutMigrationRateLimiter {
+    fn new(max_mib_per_second: u64) -> ThreadStoreResult<Self> {
+        let bytes_per_second = max_mib_per_second
+            .checked_mul(1024 * 1024)
+            .filter(|rate| *rate > 0)
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: "--max-mib-per-second must be a positive supported integer".to_string(),
+            })?;
+        Ok(Self {
+            started_at: Instant::now(),
+            bytes_processed: 0,
+            bytes_per_second,
+            bytes_since_yield: 0,
+        })
+    }
+
+    async fn account(&mut self, bytes: u64) {
+        self.bytes_processed = self.bytes_processed.saturating_add(bytes);
+        self.bytes_since_yield = self.bytes_since_yield.saturating_add(bytes);
+        if self.bytes_since_yield < PROJECTION_BATCH_BYTES {
+            return;
+        }
+        self.bytes_since_yield = 0;
+        let expected =
+            Duration::from_secs_f64(self.bytes_processed as f64 / self.bytes_per_second as f64);
+        if let Some(remaining) = expected.checked_sub(self.started_at.elapsed()) {
+            tokio::time::sleep(remaining).await;
+        } else {
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+impl LocalThreadStore {
+    /// Inspect or migrate eligible legacy rollout files beneath active sessions.
+    pub async fn migrate_rollouts(
+        &self,
+        options: RolloutMigrationOptions,
+    ) -> ThreadStoreResult<RolloutMigrationReport> {
+        let mut limiter = RolloutMigrationRateLimiter::new(options.max_mib_per_second)?;
+        let _maintenance_guard = match options.mode {
+            RolloutMigrationMode::DryRun => None,
+            RolloutMigrationMode::Apply => Some(
+                codex_rollout::try_acquire_rollout_maintenance_lock(&self.config.codex_home)
+                    .map_err(migration_error)?
+                    .ok_or_else(|| ThreadStoreError::Conflict {
+                        message: "rollout compression or another migration is already running"
+                            .to_string(),
+                    })?,
+            ),
+        };
+        let mut paths =
+            find_rollout_paths(&self.config.codex_home.join(codex_rollout::SESSIONS_SUBDIR))
+                .await?;
+        if options.mode == RolloutMigrationMode::Apply {
+            let pending_thread_ids = pending_migration_thread_ids(&self.config.codex_home).await?;
+            paths.sort_by_key(|path| {
+                !thread_id_from_rollout_filename(path)
+                    .is_some_and(|thread_id| pending_thread_ids.contains(&thread_id))
+            });
+        }
+        let mut report = RolloutMigrationReport::default();
+
+        for path in paths {
+            let metadata = match codex_rollout::read_session_meta_line(&path).await {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    let thread_id = thread_id_from_rollout_filename(&path);
+                    if matches_selection(&options.thread_ids, thread_id) {
+                        report.outcomes.push(RolloutMigrationOutcome {
+                            thread_id,
+                            rollout_path: path,
+                            status: RolloutMigrationStatus::Failed,
+                            bytes_processed: 0,
+                            message: Some(error.to_string()),
+                        });
+                    }
+                    continue;
+                }
+            };
+            let thread_id = metadata.meta.id;
+            if !matches_selection(&options.thread_ids, Some(thread_id)) {
+                continue;
+            }
+            if metadata.meta.source.is_non_root_agent()
+                || matches!(
+                    metadata.meta.thread_source,
+                    Some(ThreadSource::Subagent | ThreadSource::MemoryConsolidation)
+                )
+            {
+                report.outcomes.push(RolloutMigrationOutcome {
+                    thread_id: Some(thread_id),
+                    rollout_path: path,
+                    status: RolloutMigrationStatus::SkippedSubagent,
+                    bytes_processed: 0,
+                    message: None,
+                });
+                continue;
+            }
+
+            let journal_path = migration_journal_path(&self.config.codex_home, thread_id);
+            if metadata.meta.history_mode == ThreadHistoryMode::Paginated {
+                let bytes_before = limiter.bytes_processed;
+                let result = if options.mode == RolloutMigrationMode::Apply
+                    && tokio::fs::try_exists(&journal_path)
+                        .await
+                        .map_err(migration_error)?
+                {
+                    match self
+                        .recover_published_migration(thread_id, &path, &journal_path, &mut limiter)
+                        .await
+                    {
+                        Ok(()) => Ok(RolloutMigrationStatus::Migrated),
+                        Err(ThreadStoreError::Conflict { message }) => {
+                            let bytes_processed =
+                                limiter.bytes_processed.saturating_sub(bytes_before);
+                            report.outcomes.push(skipped_busy_outcome(
+                                thread_id,
+                                path,
+                                message,
+                                bytes_processed,
+                            ));
+                            continue;
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    Ok(RolloutMigrationStatus::AlreadyPaginated)
+                };
+                let bytes_processed = limiter.bytes_processed.saturating_sub(bytes_before);
+                report
+                    .outcomes
+                    .push(migration_outcome(thread_id, path, result, bytes_processed));
+                continue;
+            }
+
+            if options.mode == RolloutMigrationMode::DryRun {
+                report.outcomes.push(RolloutMigrationOutcome {
+                    thread_id: Some(thread_id),
+                    rollout_path: path,
+                    status: RolloutMigrationStatus::Eligible,
+                    bytes_processed: 0,
+                    message: None,
+                });
+                continue;
+            }
+
+            let writer_guard = match self.writer_lock_coordinator.acquire(thread_id) {
+                Ok(guard) => guard,
+                Err(ThreadStoreError::Conflict { message }) => {
+                    report.outcomes.push(skipped_busy_outcome(
+                        thread_id, path, message, /*bytes_processed*/ 0,
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    report.outcomes.push(migration_outcome(
+                        thread_id,
+                        path,
+                        Err(error),
+                        /*bytes_processed*/ 0,
+                    ));
+                    continue;
+                }
+            };
+            let bytes_before = limiter.bytes_processed;
+            let result = match self
+                .migrate_one_rollout(thread_id, &path, &journal_path, &mut limiter)
+                .await
+            {
+                Ok(()) => Ok(RolloutMigrationStatus::Migrated),
+                Err(error) => {
+                    if let Err(cleanup_error) = self
+                        .cleanup_failed_unpublished_migration(thread_id, &path, &journal_path)
+                        .await
+                    {
+                        Err(migration_error(format!(
+                            "{error}; failed to clean up unpublished migration: {cleanup_error}"
+                        )))
+                    } else {
+                        Err(error)
+                    }
+                }
+            };
+            drop(writer_guard);
+            let bytes_processed = limiter.bytes_processed.saturating_sub(bytes_before);
+            let outcome = match result {
+                Err(ThreadStoreError::Conflict { message }) => {
+                    skipped_busy_outcome(thread_id, path, message, bytes_processed)
+                }
+                result => migration_outcome(thread_id, path, result, bytes_processed),
+            };
+            report.outcomes.push(outcome);
+        }
+
+        Ok(report)
+    }
+
+    async fn migrate_one_rollout(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: &Path,
+        journal_path: &Path,
+        limiter: &mut RolloutMigrationRateLimiter,
+    ) -> ThreadStoreResult<()> {
+        if let Some(state_db) = &self.state_db
+            && state_db
+                .get_thread(thread_id)
+                .await
+                .map_err(migration_error)?
+                .is_none()
+        {
+            return Err(migration_error(format!(
+                "thread {thread_id} is missing its SQLite metadata"
+            )));
+        }
+
+        let compressed = rollout_path_is_compressed(rollout_path);
+        let staged_path = staged_rollout_path(rollout_path)?;
+        let decompressed_path = compressed
+            .then(|| decompressed_staged_rollout_path(rollout_path))
+            .transpose()?;
+        thread_history::delete_thread(self, thread_id).await?;
+        write_migration_journal(journal_path).await?;
+
+        let source_metadata = tokio::fs::metadata(rollout_path)
+            .await
+            .map_err(migration_error)?;
+        let source_modified = source_metadata.modified().ok();
+        let source_permissions = source_metadata.permissions();
+        let source_path = if let Some(decompressed_path) = decompressed_path.as_ref() {
+            decompress_rollout_to_path(rollout_path, decompressed_path).await?;
+            let decompressed_bytes = tokio::fs::metadata(decompressed_path)
+                .await
+                .map_err(migration_error)?
+                .len();
+            limiter
+                .account(source_metadata.len().saturating_add(decompressed_bytes))
+                .await;
+            decompressed_path.as_path()
+        } else {
+            rollout_path
+        };
+        let source_file = File::open(source_path).await.map_err(migration_error)?;
+        let mut source = BufReader::with_capacity(PROJECTION_BATCH_BYTES as usize, source_file);
+        let mut bytes = Vec::new();
+
+        // Paginated rollouts always keep their canonical SessionMeta at ordinal zero. Legacy
+        // readers tolerate a pre-header prefix, so find that metadata before replaying the source
+        // instead of buffering the prefix in memory.
+        let canonical_session_meta = loop {
+            let record = read_rollout_record(&mut source, &mut bytes)
+                .await?
+                .ok_or_else(|| migration_error("rollout contains no session metadata"))?;
+            limiter.account(record.byte_count).await;
+            let Some(line) = record.line else {
+                continue;
+            };
+            if matches!(&line.item, RolloutItem::SessionMeta(_)) {
+                break line;
+            }
+        };
+        drop(source);
+
+        let canonicalization_source = CanonicalizationSource {
+            thread_id,
+            source_path,
+            staged_path: &staged_path,
+            source_permissions: &source_permissions,
+            canonical_session_meta: &canonical_session_meta,
+        };
+        let (expected_length, expected_ordinal) =
+            Self::write_canonical_rollout(&canonicalization_source, limiter).await?;
+
+        // SQLite projection only starts after every staged-file mutation is durable.
+        let modified_at = source_modified;
+        let path = staged_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new().write(true).open(path)?;
+            if let Some(modified_at) = modified_at {
+                file.set_times(std::fs::FileTimes::new().set_modified(modified_at))?;
+            }
+            file.sync_all()
+        })
+        .await
+        .map_err(migration_error)?
+        .map_err(migration_error)?;
+
+        self.project_rollout_in_batches(thread_id, &staged_path, limiter)
+            .await?;
+        let projection = thread_history::projection_state(self, thread_id)
+            .await?
+            .ok_or_else(|| migration_error("completed rollout has no SQLite projection"))?;
+        if projection.next_byte_offset != expected_length
+            || projection.next_ordinal != expected_ordinal
+        {
+            return Err(migration_error(
+                "SQLite projection does not cover the complete staged rollout",
+            ));
+        }
+
+        let compressed_staged_path = if compressed {
+            let path = compressed_staged_rollout_path(rollout_path)?;
+            compress_rollout_to_path(&staged_path, &path, source_permissions, source_modified)
+                .await?;
+            Some(path)
+        } else {
+            None
+        };
+
+        // Older writers do not know about migration locks. Keep the legacy path visible if its
+        // append-only source changed while the replacement rollout was being staged.
+        let current_source_metadata = tokio::fs::metadata(rollout_path)
+            .await
+            .map_err(migration_error)?;
+        if current_source_metadata.len() != source_metadata.len()
+            || current_source_metadata.modified().ok() != source_modified
+        {
+            return Err(ThreadStoreError::Conflict {
+                message: "rollout changed while migration was staging it; close older Codex processes and retry".to_string(),
+            });
+        }
+
+        if let Some(compressed_staged_path) = compressed_staged_path {
+            tokio::fs::rename(compressed_staged_path, rollout_path)
+                .await
+                .map_err(migration_error)?;
+            remove_file_if_present(&staged_path).await?;
+            if let Some(decompressed_path) = decompressed_path.as_ref() {
+                remove_file_if_present(decompressed_path).await?;
+            }
+        } else {
+            tokio::fs::rename(&staged_path, rollout_path)
+                .await
+                .map_err(migration_error)?;
+        }
+        sync_parent_directory(rollout_path).await?;
+        self.finish_published_migration(thread_id, journal_path)
+            .await
+    }
+
+    async fn write_canonical_rollout(
+        input: &CanonicalizationSource<'_>,
+        limiter: &mut RolloutMigrationRateLimiter,
+    ) -> ThreadStoreResult<(u64, u64)> {
+        let source_file = File::open(input.source_path)
+            .await
+            .map_err(migration_error)?;
+        let staged_file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(input.staged_path)
+            .await
+            .map_err(migration_error)?;
+        staged_file
+            .set_permissions(input.source_permissions.clone())
+            .await
+            .map_err(migration_error)?;
+        let mut source = BufReader::with_capacity(PROJECTION_BATCH_BYTES as usize, source_file);
+        let mut staged = BufWriter::with_capacity(PROJECTION_BATCH_BYTES as usize, staged_file);
+        let mut bytes = Vec::new();
+        let mut canonicalizer = LegacyRolloutCanonicalizer::new(input.thread_id);
+        let written = canonicalizer
+            .write_head_session_meta(input.canonical_session_meta.clone(), &mut staged)
+            .await?;
+        limiter.account(written).await;
+        let mut last_timestamp = input.canonical_session_meta.timestamp.clone();
+
+        while let Some(record) = read_rollout_record(&mut source, &mut bytes).await? {
+            limiter.account(record.byte_count).await;
+            let Some(line) = record.line else {
+                continue;
+            };
+            if matches!(
+                &line.item,
+                RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::ThreadRolledBack(_))
+            ) {
+                return Err(migration_error("legacy rollout contains a rollback marker"));
+            }
+            last_timestamp = line.timestamp.clone();
+            let written = canonicalizer.process_line(line, &mut staged).await?;
+            limiter.account(written).await;
+        }
+
+        let written = canonicalizer.finish(&mut staged, &last_timestamp).await?;
+        limiter.account(written).await;
+        staged.flush().await.map_err(migration_error)?;
+        Ok((
+            canonicalizer.output_byte_offset(),
+            canonicalizer.next_ordinal(),
+        ))
+    }
+
+    async fn recover_published_migration(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: &Path,
+        journal_path: &Path,
+        limiter: &mut RolloutMigrationRateLimiter,
+    ) -> ThreadStoreResult<()> {
+        let _writer_guard = self.writer_lock_coordinator.acquire(thread_id)?;
+        let decompressed_path = rollout_path_is_compressed(rollout_path)
+            .then(|| decompressed_staged_rollout_path(rollout_path))
+            .transpose()?;
+        let projection_path = if let Some(decompressed_path) = decompressed_path.as_ref() {
+            decompress_rollout_to_path(rollout_path, decompressed_path).await?;
+            let decompressed_bytes = tokio::fs::metadata(decompressed_path)
+                .await
+                .map_err(migration_error)?
+                .len();
+            limiter
+                .account(
+                    tokio::fs::metadata(rollout_path)
+                        .await
+                        .map_err(migration_error)?
+                        .len()
+                        .saturating_add(decompressed_bytes),
+                )
+                .await;
+            decompressed_path.as_path()
+        } else {
+            rollout_path
+        };
+        let expected_length = tokio::fs::metadata(projection_path)
+            .await
+            .map_err(migration_error)?
+            .len();
+        let projection = thread_history::projection_state(self, thread_id).await?;
+        if projection.is_none_or(|state| state.next_byte_offset != expected_length) {
+            thread_history::delete_thread(self, thread_id).await?;
+            self.project_rollout_in_batches(thread_id, projection_path, limiter)
+                .await?;
+        }
+        remove_file_if_present(&staged_rollout_path(rollout_path)?).await?;
+        remove_file_if_present(&compressed_staged_rollout_path(rollout_path)?).await?;
+        if let Some(decompressed_path) = decompressed_path.as_ref() {
+            remove_file_if_present(decompressed_path).await?;
+        }
+        self.finish_published_migration(thread_id, journal_path)
+            .await
+    }
+
+    async fn cleanup_failed_unpublished_migration(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: &Path,
+        journal_path: &Path,
+    ) -> ThreadStoreResult<()> {
+        let Ok(metadata) = codex_rollout::read_session_meta_line(rollout_path).await else {
+            return Ok(());
+        };
+        if metadata.meta.history_mode == ThreadHistoryMode::Paginated {
+            return Ok(());
+        }
+
+        thread_history::delete_thread(self, thread_id).await?;
+        remove_file_if_present(&staged_rollout_path(rollout_path)?).await?;
+        remove_file_if_present(&compressed_staged_rollout_path(rollout_path)?).await?;
+        remove_file_if_present(&decompressed_staged_rollout_path(rollout_path)?).await?;
+        remove_file_if_present(journal_path).await?;
+        sync_parent_directory(journal_path).await
+    }
+
+    async fn finish_published_migration(
+        &self,
+        thread_id: ThreadId,
+        journal_path: &Path,
+    ) -> ThreadStoreResult<()> {
+        if let Some(state_db) = &self.state_db
+            && !state_db
+                .mark_thread_paginated(thread_id)
+                .await
+                .map_err(migration_error)?
+        {
+            return Err(migration_error(format!(
+                "thread {thread_id} is missing its SQLite metadata"
+            )));
+        }
+        tokio::fs::remove_file(journal_path)
+            .await
+            .map_err(migration_error)?;
+        sync_parent_directory(journal_path).await
+    }
+
+    async fn project_rollout_in_batches(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: &Path,
+        limiter: &mut RolloutMigrationRateLimiter,
+    ) -> ThreadStoreResult<()> {
+        let file = File::open(rollout_path).await.map_err(migration_error)?;
+        let mut reader = BufReader::with_capacity(PROJECTION_BATCH_BYTES as usize, file);
+        let mut line_bytes = Vec::new();
+        let mut batch = Vec::new();
+        let mut batch_start = 0_u64;
+        let mut offset = 0_u64;
+
+        while let Some(record) = read_rollout_record(&mut reader, &mut line_bytes).await? {
+            let next_offset = offset
+                .checked_add(record.byte_count)
+                .ok_or_else(|| migration_error("staged rollout byte offset overflow"))?;
+            limiter.account(record.byte_count).await;
+            let Some(line) = record.line else {
+                offset = next_offset;
+                continue;
+            };
+            let ordinal = line
+                .ordinal
+                .ok_or_else(|| migration_error("staged rollout line is missing its ordinal"))?;
+            let fallback_created_at_ms = DateTime::parse_from_rfc3339(&line.timestamp)
+                .map_err(migration_error)?
+                .timestamp_millis();
+            batch.push(RolloutProjectionStep::Line(ProjectedRolloutLine {
+                ordinal,
+                start_byte_offset: offset,
+                end_byte_offset: next_offset,
+                fallback_created_at_ms: Some(fallback_created_at_ms),
+                changes: project_rollout_line(&line),
+            }));
+            offset = next_offset;
+
+            if offset.saturating_sub(batch_start) >= PROJECTION_BATCH_BYTES {
+                thread_history::apply_projection(
+                    self,
+                    thread_id,
+                    batch_start,
+                    offset,
+                    /*initial_ordinal*/ 0,
+                    std::mem::take(&mut batch),
+                )
+                .await?;
+                batch_start = offset;
+            }
+        }
+
+        if batch_start != offset {
+            thread_history::apply_projection(
+                self,
+                thread_id,
+                batch_start,
+                offset,
+                /*initial_ordinal*/ 0,
+                batch,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+async fn read_rollout_record(
+    reader: &mut BufReader<File>,
+    bytes: &mut Vec<u8>,
+) -> ThreadStoreResult<Option<RolloutRecord>> {
+    bytes.clear();
+    let byte_count = reader
+        .take((MAX_ROLLOUT_LINE_BYTES + 1) as u64)
+        .read_until(b'\n', bytes)
+        .await
+        .map_err(migration_error)?;
+    if byte_count == 0 {
+        return Ok(None);
+    }
+    if byte_count > MAX_ROLLOUT_LINE_BYTES {
+        return Err(migration_error(
+            "rollout contains an oversized JSONL record",
+        ));
+    }
+    let line = line_parser::parse_legacy_rollout_line(bytes).map_err(migration_error)?;
+    Ok(Some(RolloutRecord {
+        line,
+        byte_count: byte_count as u64,
+    }))
+}
+
+async fn find_rollout_paths(root: &Path) -> ThreadStoreResult<Vec<PathBuf>> {
+    let mut directories = vec![root.to_path_buf()];
+    let mut paths = Vec::new();
+
+    while let Some(directory) = directories.pop() {
+        let mut entries = match tokio::fs::read_dir(&directory).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(migration_error(error)),
+        };
+        while let Some(entry) = entries.next_entry().await.map_err(migration_error)? {
+            let kind = entry.file_type().await.map_err(migration_error)?;
+            if kind.is_dir() {
+                directories.push(entry.path());
+                continue;
+            }
+            if !kind.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.starts_with("rollout-")
+                && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
+            {
+                paths.push(entry.path());
+            }
+        }
+    }
+
+    paths.sort_by(|left, right| right.cmp(left));
+    Ok(paths)
+}
+
+fn matches_selection(selected: &[ThreadId], actual: Option<ThreadId>) -> bool {
+    selected.is_empty() || actual.is_some_and(|thread_id| selected.contains(&thread_id))
+}
+
+fn thread_id_from_rollout_filename(path: &Path) -> Option<ThreadId> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name
+        .strip_suffix(".jsonl.zst")
+        .or_else(|| name.strip_suffix(".jsonl"))?;
+    let start = stem.len().checked_sub(36)?;
+    ThreadId::from_string(stem.get(start..)?).ok()
+}
+
+fn rollout_path_is_compressed(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zst"))
+}
+
+fn migration_outcome(
+    thread_id: ThreadId,
+    rollout_path: PathBuf,
+    result: ThreadStoreResult<RolloutMigrationStatus>,
+    bytes_processed: u64,
+) -> RolloutMigrationOutcome {
+    match result {
+        Ok(status) => RolloutMigrationOutcome {
+            thread_id: Some(thread_id),
+            rollout_path,
+            status,
+            bytes_processed,
+            message: None,
+        },
+        Err(error) => RolloutMigrationOutcome {
+            thread_id: Some(thread_id),
+            rollout_path,
+            status: RolloutMigrationStatus::Failed,
+            bytes_processed,
+            message: Some(error.to_string()),
+        },
+    }
+}
+
+fn skipped_busy_outcome(
+    thread_id: ThreadId,
+    rollout_path: PathBuf,
+    message: String,
+    bytes_processed: u64,
+) -> RolloutMigrationOutcome {
+    RolloutMigrationOutcome {
+        thread_id: Some(thread_id),
+        rollout_path,
+        status: RolloutMigrationStatus::SkippedBusy,
+        bytes_processed,
+        message: Some(message),
+    }
+}
+
+fn migration_error(error: impl std::fmt::Display) -> ThreadStoreError {
+    ThreadStoreError::Internal {
+        message: format!("rollout migration failed: {error}"),
+    }
+}
+
+#[cfg(test)]
+#[path = "rollout_migration_tests.rs"]
+mod tests;
