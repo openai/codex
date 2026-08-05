@@ -264,18 +264,6 @@ fn trim_git_suffix(value: &str) -> &str {
     value.strip_suffix(".git").unwrap_or(value)
 }
 
-pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
-    let git = Path::new("git");
-    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output =
-        run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(!output.stdout.is_empty())
-}
-
 fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
     let mut remotes = BTreeMap::new();
     for line in stdout.lines() {
@@ -411,12 +399,15 @@ impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
     }
 }
 
-async fn detect_local_fsmonitor_override(git: &Path, cwd: &Path) -> crate::FsmonitorOverride {
+pub(crate) async fn detect_local_fsmonitor_override(
+    git: &Path,
+    cwd: &Path,
+) -> crate::FsmonitorOverride {
     let mut runner = LocalFsmonitorProbeRunner { git, cwd };
     crate::detect_fsmonitor_override(&mut runner).await
 }
 
-async fn run_git_command_with_timeout_from(
+pub(crate) async fn run_git_command_with_timeout_from(
     git: &Path,
     args: &[&str],
     cwd: &Path,

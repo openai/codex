@@ -12,7 +12,7 @@ use codex_exec_server::RemoveOptions;
 use codex_git_utils::GitInfo;
 use codex_git_utils::GitSha;
 use codex_git_utils::collect_git_info;
-use codex_git_utils::get_has_changes;
+use codex_git_utils::get_has_changes_in_repo;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::recent_commits;
 use codex_git_utils::resolve_root_git_project_for_trust;
@@ -425,14 +425,20 @@ async fn test_collect_git_info_with_branch() {
 #[tokio::test]
 async fn test_get_has_changes_non_git_directory_returns_none() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    assert_eq!(get_has_changes(temp_dir.path()).await, None);
+    assert_eq!(
+        get_has_changes_in_repo(temp_dir.path(), temp_dir.path()).await,
+        None
+    );
 }
 
 #[tokio::test]
 async fn test_get_has_changes_clean_repo_returns_false() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let repo_path = create_test_git_repo(&temp_dir).await;
-    assert_eq!(get_has_changes(&repo_path).await, Some(false));
+    assert_eq!(
+        get_has_changes_in_repo(&repo_path, &repo_path).await,
+        Some(false)
+    );
 }
 
 #[tokio::test]
@@ -441,7 +447,10 @@ async fn test_get_has_changes_with_tracked_change_returns_true() {
     let repo_path = create_test_git_repo(&temp_dir).await;
 
     fs::write(repo_path.join("test.txt"), "updated tracked file").expect("write tracked file");
-    assert_eq!(get_has_changes(&repo_path).await, Some(true));
+    assert_eq!(
+        get_has_changes_in_repo(&repo_path, &repo_path).await,
+        Some(true)
+    );
 }
 
 #[tokio::test]
@@ -450,7 +459,10 @@ async fn test_get_has_changes_with_untracked_change_returns_true() {
     let repo_path = create_test_git_repo(&temp_dir).await;
 
     fs::write(repo_path.join("new_file.txt"), "untracked").expect("write untracked file");
-    assert_eq!(get_has_changes(&repo_path).await, Some(true));
+    assert_eq!(
+        get_has_changes_in_repo(&repo_path, &repo_path).await,
+        Some(true)
+    );
 }
 
 #[cfg(unix)]
@@ -490,7 +502,10 @@ async fn test_get_has_changes_ignores_configured_hooks_path() {
 
     fs::write(repo_path.join("test.txt"), "test content").expect("refresh tracked file");
 
-    assert_eq!(get_has_changes(&repo_path).await, Some(false));
+    assert_eq!(
+        get_has_changes_in_repo(&repo_path, &repo_path).await,
+        Some(false)
+    );
     assert!(
         !marker_path.exists(),
         "metadata collection should not invoke configured hook directories"

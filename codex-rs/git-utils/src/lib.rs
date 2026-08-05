@@ -7,6 +7,7 @@ mod git_process;
 mod info;
 mod operations;
 mod platform;
+mod status;
 
 /// Git configuration that rejects implicitly discovered bare repositories while
 /// preserving repositories selected explicitly through `GIT_DIR` or `--git-dir`.
@@ -40,10 +41,10 @@ pub use info::default_branch_name;
 pub use info::get_git_remote_urls;
 pub use info::get_git_remote_urls_assume_git_repo;
 pub use info::get_git_repo_root;
-pub use info::get_has_changes;
 pub use info::get_head_commit_hash;
 pub use info::git_diff_to_remote;
 pub use info::local_git_branches;
 pub use info::recent_commits;
 pub use info::resolve_root_git_project_for_trust;
 pub use platform::create_symlink;
+pub use status::get_has_changes_in_repo;
