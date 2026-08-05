@@ -261,6 +261,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         supports_search_tool: false,
         use_responses_lite: false,
         auto_review_model_override: Some(review_model.to_string()),
+        model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
         priority: 1,

@@ -87,6 +87,8 @@ pub struct Model {
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub display_name: String,
     pub description: String,
+    #[serde(default)]
+    pub model_specialty: Option<String>,
     pub hidden: bool,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,

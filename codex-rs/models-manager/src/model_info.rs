@@ -175,6 +175,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         supports_search_tool: false,
         use_responses_lite: false,
         auto_review_model_override: None,
+        model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
     }

@@ -1363,6 +1363,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         supports_search_tool: false,
         use_responses_lite: false,
         auto_review_model_override: None,
+        model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
         priority: 1,
