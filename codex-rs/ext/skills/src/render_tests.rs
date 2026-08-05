@@ -1,11 +1,11 @@
 use super::*;
+use crate::HostSkillsSnapshot;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillPackageId;
 use crate::catalog::SkillResourceId;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillProvider;
-use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::LOCAL_FS;

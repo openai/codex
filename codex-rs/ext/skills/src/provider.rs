@@ -6,7 +6,7 @@ mod executor;
 mod host;
 mod orchestrator;
 
-use codex_core_skills::HostSkillsSnapshot;
+use crate::HostSkillsSnapshot;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;

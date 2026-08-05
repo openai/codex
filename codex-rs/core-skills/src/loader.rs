@@ -2,6 +2,7 @@ mod discovery;
 mod environment;
 mod namespace;
 
+pub use crate::root_loader::load_skill_root_snapshot;
 pub use environment::EnvironmentSkillLoadOutcome;
 pub use environment::EnvironmentSkillMetadata;
 pub use environment::load_environment_skills_from_root;
@@ -161,14 +162,37 @@ where
         .await
 }
 
+/// One loaded skill root and the filesystem that supplied it.
+///
+/// This is exposed temporarily while host discovery moves out of `core-skills`; callers should
+/// combine snapshots through [`SkillLoadOutcome::from_root_snapshots`].
 #[derive(Clone)]
-pub(crate) struct SkillRootSnapshot {
+pub struct SkillRootSnapshot {
     pub(crate) root: AbsolutePathBuf,
     pub(crate) is_agent_plugin: bool,
     pub(crate) skills: Vec<SkillMetadata>,
     pub(crate) skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
     pub(crate) errors: Vec<SkillError>,
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
+}
+
+impl SkillRootSnapshot {
+    pub fn new(
+        root: AbsolutePathBuf,
+        skills: Vec<SkillMetadata>,
+        skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+        errors: Vec<SkillError>,
+        file_system: Arc<dyn ExecutorFileSystem>,
+    ) -> Self {
+        Self {
+            root,
+            is_agent_plugin: false,
+            skills,
+            skill_discovery_path_by_path,
+            errors,
+            file_system,
+        }
+    }
 }
 
 pub(crate) async fn load_skill_root(root: SkillRoot) -> SkillRootSnapshot {

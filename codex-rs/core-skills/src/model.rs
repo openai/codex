@@ -102,27 +102,18 @@ impl SkillLoadOutcome {
         self.file_systems_by_skill_path
             .get(&skill.path_to_skills_md)
     }
-}
 
-/// Immutable snapshot of host-owned skills and the filesystem mapping needed
-/// to read each skill through the environment that discovered it.
-#[derive(Debug, Clone)]
-pub struct HostSkillsSnapshot {
-    outcome: Arc<SkillLoadOutcome>,
-}
-
-impl HostSkillsSnapshot {
-    pub fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
-        Self { outcome }
+    /// Builds the legacy aggregate from independently loaded roots.
+    ///
+    /// This is a temporary migration boundary while host root loading moves to the skills
+    /// extension. It deliberately reuses the existing merge, precedence, and deduplication logic.
+    pub fn from_root_snapshots(snapshots: Vec<crate::loader::SkillRootSnapshot>) -> Self {
+        crate::root_loader::merge_skill_root_snapshots(snapshots)
     }
 
-    pub fn outcome(&self) -> &SkillLoadOutcome {
-        self.outcome.as_ref()
-    }
-
+    /// Reads one loaded skill through the filesystem that discovered it.
     pub async fn read_skill_text(&self, skill: &SkillMetadata) -> io::Result<String> {
         let fs = self
-            .outcome
             .file_system_for_skill(skill)
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
         let path = PathUri::from_abs_path(&skill.path_to_skills_md);

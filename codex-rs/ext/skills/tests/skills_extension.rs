@@ -4,7 +4,6 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
@@ -45,6 +44,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_skills::SkillMetadata;
 use codex_skills_extension::HostSkillProvider;
+use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;

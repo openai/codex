@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_environment_skills_from_root as load_legacy_environment_skills_from_root;
@@ -28,6 +27,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_skills_extension::ExecutorSkillProvider;
+use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::catalog::SkillAuthority;
 use codex_skills_extension::catalog::SkillPackageId;
 use codex_skills_extension::catalog::SkillResourceId;

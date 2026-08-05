@@ -393,6 +393,12 @@ async fn follows_directory_symlinks_for_user_but_not_system_scope() {
     assert_eq!(user_snapshot.errors, Vec::new());
     assert_eq!(user_snapshot.skills.len(), 1);
     assert_eq!(user_snapshot.skills[0].path_to_skills_md, target_skill);
+    assert_eq!(
+        user_snapshot
+            .skill_discovery_path_by_path
+            .get(&target_skill),
+        Some(&user_snapshot.root.join("alias/SKILL.md"))
+    );
     assert_eq!(system_snapshot.errors, Vec::new());
     assert_eq!(system_snapshot.skills, Vec::new());
 }

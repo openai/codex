@@ -71,48 +71,7 @@ where
                 .acquire()
                 .await
                 .unwrap_or_else(|_| unreachable!());
-            let cache_key = match (
-                root.plugin_identity.clone(),
-                root.plugin_namespace.clone(),
-                root.plugin_root.clone(),
-            ) {
-                (Some(plugin_identity), Some(plugin_namespace), Some(plugin_root)) => {
-                    Some(PluginSkillRoot {
-                        path: root.path.clone(),
-                        plugin_identity,
-                        plugin_namespace,
-                        plugin_root,
-                        discovery_mode: root.discovery_mode,
-                    })
-                }
-                _ => None,
-            };
-            let cached_snapshot = cache_key.as_ref().and_then(|cache_key| {
-                let plugin_skill_snapshots = plugin_skill_snapshots?;
-                plugin_skill_snapshots
-                    .snapshots_by_root
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(cache_key)
-                    .cloned()
-            });
-
-            let snapshot = match cached_snapshot {
-                Some(snapshot) => snapshot,
-                None => {
-                    let snapshot = load_skill_root(root).await;
-                    if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
-                        && let Some(cache_key) = cache_key
-                    {
-                        plugin_skill_snapshots
-                            .snapshots_by_root
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .insert(cache_key, snapshot.clone());
-                    }
-                    snapshot
-                }
-            };
+            let snapshot = load_skill_root_snapshot(root, plugin_skill_snapshots).await;
             (root_index, snapshot)
         })
         // Keep each load's scan queue bounded while avoiding head-of-line blocking.
@@ -129,7 +88,59 @@ where
     merge_skill_root_snapshots(root_snapshots)
 }
 
-fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOutcome {
+/// Loads one root while preserving the existing plugin-loader snapshot reuse.
+///
+/// This is a temporary migration boundary for callers that load non-plugin roots elsewhere but
+/// still need plugin roots to use the legacy preload cache.
+pub async fn load_skill_root_snapshot(
+    root: SkillRoot,
+    plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
+) -> SkillRootSnapshot {
+    let cache_key = match (
+        root.plugin_identity.clone(),
+        root.plugin_namespace.clone(),
+        root.plugin_root.clone(),
+    ) {
+        (Some(plugin_identity), Some(plugin_namespace), Some(plugin_root)) => {
+            Some(PluginSkillRoot {
+                path: root.path.clone(),
+                plugin_identity,
+                plugin_namespace,
+                plugin_root,
+                discovery_mode: root.discovery_mode,
+            })
+        }
+        _ => None,
+    };
+    let cached_snapshot = cache_key.as_ref().and_then(|cache_key| {
+        let plugin_skill_snapshots = plugin_skill_snapshots?;
+        plugin_skill_snapshots
+            .snapshots_by_root
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(cache_key)
+            .cloned()
+    });
+
+    match cached_snapshot {
+        Some(snapshot) => snapshot,
+        None => {
+            let snapshot = load_skill_root(root).await;
+            if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
+                && let Some(cache_key) = cache_key
+            {
+                plugin_skill_snapshots
+                    .snapshots_by_root
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(cache_key, snapshot.clone());
+            }
+            snapshot
+        }
+    }
+}
+
+pub(crate) fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOutcome {
     fn scope_rank(scope: codex_protocol::protocol::SkillScope) -> u8 {
         use codex_protocol::protocol::SkillScope;
 

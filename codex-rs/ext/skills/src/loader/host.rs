@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_exec_server::ExecutorFileSystem;
@@ -46,6 +47,7 @@ pub struct HostSkillError {
 pub struct HostSkillRootSnapshot {
     pub root: AbsolutePathBuf,
     pub skills: Vec<SkillMetadata>,
+    pub skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
     pub errors: Vec<HostSkillError>,
     pub file_system: Arc<dyn ExecutorFileSystem>,
 }
@@ -59,10 +61,12 @@ struct ResolvedDiscoveredSkill {
 pub async fn load_host_skill_root(root: HostSkillRoot) -> HostSkillRootSnapshot {
     let canonical_root =
         canonicalize_for_skill_identity(root.file_system.as_ref(), &root.path).await;
-    let (skills, errors) = load_skills_under_root(&root, &canonical_root).await;
+    let (skills, skill_discovery_path_by_path, errors) =
+        load_skills_under_root(&root, &canonical_root).await;
     HostSkillRootSnapshot {
         root: canonical_root,
         skills,
+        skill_discovery_path_by_path,
         errors,
         file_system: root.file_system,
     }
@@ -71,7 +75,11 @@ pub async fn load_host_skill_root(root: HostSkillRoot) -> HostSkillRootSnapshot 
 async fn load_skills_under_root(
     skill_root: &HostSkillRoot,
     root: &AbsolutePathBuf,
-) -> (Vec<SkillMetadata>, Vec<HostSkillError>) {
+) -> (
+    Vec<SkillMetadata>,
+    Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+    Vec<HostSkillError>,
+) {
     let file_system = skill_root.file_system.as_ref();
     let plugin_root = match skill_root.plugin_root.as_ref() {
         Some(plugin_root) => Some(canonicalize_for_skill_identity(file_system, plugin_root).await),
@@ -99,7 +107,7 @@ async fn load_skills_under_root(
         error!("{warning}");
     }
     if skills.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Arc::default(), Vec::new());
     }
 
     let root_uri = PathUri::from_abs_path(root);
@@ -146,6 +154,11 @@ async fn load_skills_under_root(
         .map(|skill| {
             let plugin_root = plugin_root.as_ref();
             async move {
+                let discovery_path = skill
+                    .skill
+                    .path
+                    .to_abs_path()
+                    .unwrap_or_else(|_| skill.path.clone());
                 let result = parse_skill_file(
                     file_system,
                     &skill.skill,
@@ -155,7 +168,7 @@ async fn load_skills_under_root(
                     plugin_root,
                 )
                 .await;
-                (skill.path, skill.path_uri, result)
+                (skill.path, skill.path_uri, discovery_path, result)
             }
         })
         .buffered(MAX_CONCURRENT_SKILL_LOADS)
@@ -163,8 +176,9 @@ async fn load_skills_under_root(
     let (namespace_resolver, skill_results) = tokio::join!(namespace_resolver, skill_results);
 
     let mut loaded_skills = Vec::new();
+    let mut skill_discovery_path_by_path = HashMap::new();
     let mut errors = Vec::new();
-    for (path, path_uri, result) in skill_results {
+    for (path, path_uri, discovery_path, result) in skill_results {
         let result = result.and_then(|mut skill| {
             skill.name = namespace_resolver
                 .for_skill(&root_uri, &path_uri)
@@ -174,14 +188,22 @@ async fn load_skills_under_root(
             Ok(skill)
         });
         match result {
-            Ok(skill) => loaded_skills.push(skill),
+            Ok(skill) => {
+                skill_discovery_path_by_path
+                    .insert(skill.path_to_skills_md.clone(), discovery_path);
+                loaded_skills.push(skill);
+            }
             Err(message) if skill_root.scope != SkillScope::System => {
                 errors.push(HostSkillError { path, message });
             }
             Err(_) => {}
         }
     }
-    (loaded_skills, errors)
+    (
+        loaded_skills,
+        Arc::new(skill_discovery_path_by_path),
+        errors,
+    )
 }
 
 async fn parse_skill_file(

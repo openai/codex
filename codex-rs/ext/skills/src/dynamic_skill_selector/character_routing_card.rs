@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use codex_core_skills::HostSkillsSnapshot;
+use crate::HostSkillsSnapshot;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillSourceKind;
