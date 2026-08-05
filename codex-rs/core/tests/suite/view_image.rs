@@ -7,6 +7,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
@@ -66,6 +67,12 @@ use wiremock::MockServer;
 
 const VIEW_IMAGE_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Clone, Copy)]
+enum ResizeNoticeExpectation {
+    Disabled,
+    Enabled,
+}
+
 fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
@@ -116,6 +123,29 @@ fn image_messages(body: &Value) -> Vec<&Value> {
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     image_messages(body).into_iter().next()
+}
+
+fn message_has_text_with_prefix(item: &Value, prefix: &str) -> bool {
+    item.get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|content| {
+            content.iter().any(|span| {
+                span.get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.starts_with(prefix))
+            })
+        })
+}
+
+fn assert_developer_text_message(item: &Value, expected_text: &str) {
+    assert_eq!(item.get("role").and_then(Value::as_str), Some("developer"));
+    assert_eq!(
+        item.get("content").and_then(Value::as_array),
+        Some(&vec![json!({
+            "type": "input_text",
+            "text": expected_text,
+        })])
+    );
 }
 
 fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> {
@@ -174,10 +204,17 @@ async fn write_workspace_png(
 async fn assert_user_turn_local_image_resizes_to(
     original_dimensions: (u32, u32),
     expected_dimensions: (u32, u32),
+    resize_notice_expectation: ResizeNoticeExpectation,
 ) -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
-    let mut builder = test_codex();
+    let builder = test_codex();
+    let mut builder = match resize_notice_expectation {
+        ResizeNoticeExpectation::Disabled => builder,
+        ResizeNoticeExpectation::Enabled => builder.with_config(|config| {
+            let _ = config.features.enable(Feature::ImageResizeNotice);
+        }),
+    };
     let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
@@ -220,8 +257,42 @@ async fn assert_user_turn_local_image_resizes_to(
     .await;
 
     let body = mock.single_request().body_json();
+    let input = body
+        .get("input")
+        .and_then(Value::as_array)
+        .context("request input")?;
     let image_message =
         find_image_message(&body).context("pending input image message not included in request")?;
+    let image_message_index = input
+        .iter()
+        .position(|item| std::ptr::eq(item, image_message))
+        .context("image message index")?;
+    let resize_notice_indices = input
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            message_has_text_with_prefix(item, "<image_resize_notice>").then_some(index)
+        })
+        .collect::<Vec<_>>();
+    match resize_notice_expectation {
+        ResizeNoticeExpectation::Disabled => {
+            assert_eq!(resize_notice_indices, Vec::<usize>::new());
+        }
+        ResizeNoticeExpectation::Enabled => {
+            assert_eq!(resize_notice_indices, vec![image_message_index + 1]);
+            assert_developer_text_message(
+                &input[image_message_index + 1],
+                &format!(
+                    concat!(
+                        "<image_resize_notice>\n",
+                        "Image 1 of 1 in the preceding user message was resized from {}x{} to {}x{} pixels.\n",
+                        "</image_resize_notice>"
+                    ),
+                    original_width, original_height, expected_dimensions.0, expected_dimensions.1
+                ),
+            );
+        }
+    }
     let image_url = image_message
         .get("content")
         .and_then(Value::as_array)
@@ -255,21 +326,36 @@ async fn assert_user_turn_local_image_resizes_to(
 async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to((2304, 864), (2048, 768)).await
+    assert_user_turn_local_image_resizes_to(
+        (2304, 864),
+        (2048, 768),
+        ResizeNoticeExpectation::Disabled,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_vertical_local_image_resizes_to_square_bounds() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to((1024, 4096), (512, 2048)).await
+    assert_user_turn_local_image_resizes_to(
+        (1024, 4096),
+        (512, 2048),
+        ResizeNoticeExpectation::Disabled,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_local_image_applies_patch_budget() -> anyhow::Result<()> {
+async fn user_turn_local_image_applies_patch_budget_and_reports_resize() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to((2048, 2048), (1600, 1600)).await
+    assert_user_turn_local_image_resizes_to(
+        (2048, 2048),
+        (1600, 1600),
+        ResizeNoticeExpectation::Enabled,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -277,7 +363,9 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::ImageResizeNotice);
+    });
     let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
@@ -394,12 +482,31 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     assert_eq!(
         output_items.len(),
         1,
-        "view_image should return only the image content item (no tag/label text)"
+        "view_image tool output should remain unchanged apart from image preparation"
     );
     assert_eq!(
         output_items[0].get("type").and_then(Value::as_str),
         Some("input_image"),
-        "view_image should return only an input_image content item"
+        "view_image should return only its input_image content item"
+    );
+    let input = body
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("request input");
+    let function_output_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+        .expect("function call output index");
+    assert_developer_text_message(
+        &input[function_output_index + 1],
+        concat!(
+            "<image_resize_notice>\n",
+            "Image 1 of 1 in the preceding tool output was resized from 2304x864 to 2048x768 pixels.\n",
+            "</image_resize_notice>"
+        ),
     );
     let image_url = output_items[0]
         .get("image_url")

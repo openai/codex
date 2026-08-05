@@ -1,11 +1,10 @@
 use std::borrow::Borrow;
 
+use crate::context::ContextualUserFragment;
+use crate::context::ImageResizeNotice;
 use crate::context_manager::estimate_item_token_count;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-
-const ATTACHED_NOTICE_MARKERS: &[(&str, &str)] =
-    &[("<image_resize_notice>", "</image_resize_notice>")];
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HistoryItemGroup<T> {
@@ -51,9 +50,7 @@ fn is_attached_notice(notice: &ResponseItem) -> bool {
                 && matches!(
                     content.as_slice(),
                     [ContentItem::InputText { text }]
-                        if ATTACHED_NOTICE_MARKERS.iter().any(|(opening, closing)| {
-                            text.starts_with(opening) && text.ends_with(closing)
-                        })
+                        if ImageResizeNotice::matches_text(text)
                 )
     )
 }

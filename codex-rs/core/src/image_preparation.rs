@@ -1,3 +1,7 @@
+use crate::context::ContextualUserFragment;
+use crate::context::ImageResizeNotice;
+use crate::context::ImageResizeNoticeSource;
+use crate::context::ResizedImage;
 use codex_analytics::ImageDetailSetting;
 use codex_analytics::ImagePreparationMetadata;
 use codex_protocol::models::ContentItem;
@@ -33,6 +37,20 @@ struct ImageOrigin<'a> {
     item_id: Option<&'a str>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImageResizeNoticeMode {
+    Disabled,
+    Enabled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedImageResize {
+    source_width: u32,
+    source_height: u32,
+    prepared_width: u32,
+    prepared_height: u32,
+}
+
 #[derive(Debug, thiserror::Error)]
 enum ImagePreparationError {
     #[error("remote image URLs are not supported")]
@@ -56,37 +74,51 @@ impl ImagePreparationError {
     }
 }
 
-pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) -> Vec<ImagePreparationMetadata> {
+pub(crate) fn prepare_response_items(
+    items: &mut Vec<ResponseItem>,
+    resize_notice_mode: ImageResizeNoticeMode,
+) -> Vec<ImagePreparationMetadata> {
     let mut metadata = Vec::new();
-    for item in items {
-        match item {
+    let mut prepared_items = Vec::with_capacity(items.len());
+    for mut item in std::mem::take(items) {
+        let resize_notice = match &mut item {
             ResponseItem::Message { role, content, .. } => {
-                prepare_message_content(
+                let resized_images = prepare_message_content(
                     content,
                     ImageOrigin {
                         message_role: Some(role),
                         item_id: None,
                     },
+                    if role == "user" {
+                        resize_notice_mode
+                    } else {
+                        ImageResizeNoticeMode::Disabled
+                    },
                     &mut metadata,
                 );
+                (!resized_images.is_empty()).then(|| {
+                    ImageResizeNotice::new(ImageResizeNoticeSource::UserMessage, resized_images)
+                })
             }
             ResponseItem::FunctionCallOutput {
                 call_id, output, ..
             }
             | ResponseItem::CustomToolCallOutput {
                 call_id, output, ..
-            } => {
-                if let Some(content) = output.content_items_mut() {
-                    prepare_tool_output_content(
-                        content,
-                        ImageOrigin {
-                            message_role: None,
-                            item_id: Some(call_id),
-                        },
-                        &mut metadata,
-                    );
-                }
-            }
+            } => output.content_items_mut().and_then(|content| {
+                let resized_images = prepare_tool_output_content(
+                    content,
+                    ImageOrigin {
+                        message_role: None,
+                        item_id: Some(call_id),
+                    },
+                    resize_notice_mode,
+                    &mut metadata,
+                );
+                (!resized_images.is_empty()).then(|| {
+                    ImageResizeNotice::new(ImageResizeNoticeSource::ToolOutput, resized_images)
+                })
+            }),
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }
@@ -100,44 +132,93 @@ pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) -> Vec<ImagePre
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other => {}
+            | ResponseItem::Other => None,
+        };
+        prepared_items.push(item);
+        if let Some(resize_notice) = resize_notice {
+            prepared_items.push(ContextualUserFragment::into(resize_notice));
         }
     }
+    *items = prepared_items;
     metadata
 }
 
 fn prepare_message_content(
     items: &mut [ContentItem],
     origin: ImageOrigin<'_>,
+    resize_notice_mode: ImageResizeNoticeMode,
     metadata: &mut Vec<ImagePreparationMetadata>,
-) {
+) -> Vec<ResizedImage> {
+    let image_count = items
+        .iter()
+        .filter(|item| matches!(item, ContentItem::InputImage { .. }))
+        .count();
+    let mut image_number = 0;
+    let mut resized_images = Vec::new();
     for item in items {
-        if let ContentItem::InputImage { image_url, detail } = item
-            && let Err(error) = prepare_image(image_url, *detail, origin, metadata)
-        {
-            warn!(%error, "failed to prepare message image");
-            *item = ContentItem::InputText {
-                text: error.placeholder().to_string(),
-            };
+        if let ContentItem::InputImage { image_url, detail } = item {
+            image_number += 1;
+            match prepare_image(image_url, *detail, origin, metadata) {
+                Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
+                    resized_images.push(ResizedImage {
+                        image_number,
+                        image_count,
+                        source_width: resize.source_width,
+                        source_height: resize.source_height,
+                        prepared_width: resize.prepared_width,
+                        prepared_height: resize.prepared_height,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(%error, "failed to prepare message image");
+                    *item = ContentItem::InputText {
+                        text: error.placeholder().to_string(),
+                    };
+                }
+            }
         }
     }
+    resized_images
 }
 
 fn prepare_tool_output_content(
     items: &mut [FunctionCallOutputContentItem],
     origin: ImageOrigin<'_>,
+    resize_notice_mode: ImageResizeNoticeMode,
     metadata: &mut Vec<ImagePreparationMetadata>,
-) {
+) -> Vec<ResizedImage> {
+    let image_count = items
+        .iter()
+        .filter(|item| matches!(item, FunctionCallOutputContentItem::InputImage { .. }))
+        .count();
+    let mut image_number = 0;
+    let mut resized_images = Vec::new();
     for item in items {
-        if let FunctionCallOutputContentItem::InputImage { image_url, detail } = item
-            && let Err(error) = prepare_image(image_url, *detail, origin, metadata)
-        {
-            warn!(%error, "failed to prepare tool output image");
-            *item = FunctionCallOutputContentItem::InputText {
-                text: error.placeholder().to_string(),
-            };
+        if let FunctionCallOutputContentItem::InputImage { image_url, detail } = item {
+            image_number += 1;
+            match prepare_image(image_url, *detail, origin, metadata) {
+                Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
+                    resized_images.push(ResizedImage {
+                        image_number,
+                        image_count,
+                        source_width: resize.source_width,
+                        source_height: resize.source_height,
+                        prepared_width: resize.prepared_width,
+                        prepared_height: resize.prepared_height,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(%error, "failed to prepare tool output image");
+                    *item = FunctionCallOutputContentItem::InputText {
+                        text: error.placeholder().to_string(),
+                    };
+                }
+            }
         }
     }
+    resized_images
 }
 
 fn is_remote_image_url(image_url: &str) -> bool {
@@ -157,12 +238,12 @@ fn prepare_image(
     detail: Option<ImageDetail>,
     origin: ImageOrigin<'_>,
     metadata: &mut Vec<ImagePreparationMetadata>,
-) -> Result<(), ImagePreparationError> {
+) -> Result<Option<PreparedImageResize>, ImagePreparationError> {
     if is_remote_image_url(image_url) {
         return Err(ImagePreparationError::RemoteUrlUnsupported);
     }
     if !is_data_url(image_url) {
-        return Ok(());
+        return Ok(None);
     }
 
     let (effective_detail, limits) = match detail {
@@ -182,8 +263,15 @@ fn prepare_image(
         prepared_width: image.width,
         prepared_height: image.height,
     });
+    let resize = ((image.source_width, image.source_height) != (image.width, image.height))
+        .then_some(PreparedImageResize {
+            source_width: image.source_width,
+            source_height: image.source_height,
+            prepared_width: image.width,
+            prepared_height: image.height,
+        });
     *image_url = image.into_data_url();
-    Ok(())
+    Ok(resize)
 }
 
 #[cfg(test)]
