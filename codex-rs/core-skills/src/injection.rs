@@ -13,9 +13,16 @@ use codex_exec_server::LOCAL_FS;
 use codex_otel::SessionTelemetry;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::user_input::UserInput;
+pub use codex_skills::ToolMentionKind;
+pub use codex_skills::ToolMentions;
+pub use codex_skills::app_id_from_path;
+pub use codex_skills::extract_tool_mentions;
+pub use codex_skills::extract_tool_mentions_with_sigil;
+pub use codex_skills::normalize_skill_path;
+pub use codex_skills::plugin_config_name_from_path;
+pub use codex_skills::tool_kind_for_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 use codex_utils_string::take_bytes_at_char_boundary;
 
 use crate::MAX_SKILL_PROMPT_BYTES;
@@ -251,146 +258,6 @@ struct SkillSelectionContext<'a> {
     connector_slug_counts: &'a HashMap<String, usize>,
 }
 
-pub struct ToolMentions<'a> {
-    names: HashSet<&'a str>,
-    paths: HashSet<&'a str>,
-    plain_names: HashSet<&'a str>,
-}
-
-impl<'a> ToolMentions<'a> {
-    fn is_empty(&self) -> bool {
-        self.names.is_empty() && self.paths.is_empty()
-    }
-
-    pub fn plain_names(&self) -> impl Iterator<Item = &'a str> + '_ {
-        self.plain_names.iter().copied()
-    }
-
-    pub fn paths(&self) -> impl Iterator<Item = &'a str> + '_ {
-        self.paths.iter().copied()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolMentionKind {
-    App,
-    Mcp,
-    Plugin,
-    Skill,
-    Other,
-}
-
-const APP_PATH_PREFIX: &str = "app://";
-const MCP_PATH_PREFIX: &str = "mcp://";
-const PLUGIN_PATH_PREFIX: &str = "plugin://";
-const SKILL_PATH_PREFIX: &str = "skill://";
-const SKILL_FILENAME: &str = "SKILL.md";
-
-pub fn tool_kind_for_path(path: &str) -> ToolMentionKind {
-    if path.starts_with(APP_PATH_PREFIX) {
-        ToolMentionKind::App
-    } else if path.starts_with(MCP_PATH_PREFIX) {
-        ToolMentionKind::Mcp
-    } else if path.starts_with(PLUGIN_PATH_PREFIX) {
-        ToolMentionKind::Plugin
-    } else if path.starts_with(SKILL_PATH_PREFIX) || is_skill_filename(path) {
-        ToolMentionKind::Skill
-    } else {
-        ToolMentionKind::Other
-    }
-}
-
-fn is_skill_filename(path: &str) -> bool {
-    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    file_name.eq_ignore_ascii_case(SKILL_FILENAME)
-}
-
-pub fn app_id_from_path(path: &str) -> Option<&str> {
-    path.strip_prefix(APP_PATH_PREFIX)
-        .filter(|value| !value.is_empty())
-}
-
-pub fn plugin_config_name_from_path(path: &str) -> Option<&str> {
-    path.strip_prefix(PLUGIN_PATH_PREFIX)
-        .filter(|value| !value.is_empty())
-}
-
-pub(crate) fn normalize_skill_path(path: &str) -> &str {
-    path.strip_prefix(SKILL_PATH_PREFIX).unwrap_or(path)
-}
-
-/// Extract `$tool-name` mentions from a single text input.
-///
-/// Supports explicit resource links in the form `[$tool-name](resource path)`. When a
-/// resource path is present, it is captured for exact path matching while also tracking
-/// the name for fallback matching.
-pub fn extract_tool_mentions(text: &str) -> ToolMentions<'_> {
-    extract_tool_mentions_with_sigil(text, TOOL_MENTION_SIGIL)
-}
-
-pub fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions<'_> {
-    let text_bytes = text.as_bytes();
-    let mut mentioned_names: HashSet<&str> = HashSet::new();
-    let mut mentioned_paths: HashSet<&str> = HashSet::new();
-    let mut plain_names: HashSet<&str> = HashSet::new();
-
-    let mut index = 0;
-    while index < text_bytes.len() {
-        let byte = text_bytes[index];
-        if byte == b'['
-            && let Some((name, path, end_index)) =
-                parse_linked_tool_mention(text, text_bytes, index, sigil)
-        {
-            if !is_common_env_var(name) {
-                if !matches!(
-                    tool_kind_for_path(path),
-                    ToolMentionKind::App | ToolMentionKind::Mcp | ToolMentionKind::Plugin
-                ) {
-                    mentioned_names.insert(name);
-                }
-                mentioned_paths.insert(path);
-            }
-            index = end_index;
-            continue;
-        }
-
-        if byte != sigil as u8 {
-            index += 1;
-            continue;
-        }
-
-        let name_start = index + 1;
-        let Some(first_name_byte) = text_bytes.get(name_start) else {
-            index += 1;
-            continue;
-        };
-        if !is_mention_name_char(*first_name_byte) {
-            index += 1;
-            continue;
-        }
-
-        let mut name_end = name_start + 1;
-        while let Some(next_byte) = text_bytes.get(name_end)
-            && is_mention_name_char(*next_byte)
-        {
-            name_end += 1;
-        }
-
-        let name = &text[name_start..name_end];
-        if !is_common_env_var(name) {
-            mentioned_names.insert(name);
-            plain_names.insert(name);
-        }
-        index = name_end;
-    }
-
-    ToolMentions {
-        names: mentioned_names,
-        paths: mentioned_paths,
-        plain_names,
-    }
-}
-
 /// Select mentioned skills while preserving the order of `skills`.
 fn select_skills_from_mentions(
     selection_context: &SkillSelectionContext<'_>,
@@ -448,7 +315,7 @@ fn select_skills_from_mentions(
         if blocked_plain_names.contains(skill.name.as_str()) {
             continue;
         }
-        if !mentions.plain_names.contains(skill.name.as_str()) {
+        if !mentions.contains_plain_name(skill.name.as_str()) {
             continue;
         }
 
@@ -471,117 +338,6 @@ fn select_skills_from_mentions(
             selected.push(skill.clone());
         }
     }
-}
-
-fn parse_linked_tool_mention<'a>(
-    text: &'a str,
-    text_bytes: &[u8],
-    start: usize,
-    sigil: char,
-) -> Option<(&'a str, &'a str, usize)> {
-    let sigil_index = start + 1;
-    if text_bytes.get(sigil_index) != Some(&(sigil as u8)) {
-        return None;
-    }
-
-    let name_start = sigil_index + 1;
-    let first_name_byte = text_bytes.get(name_start)?;
-    if !is_mention_name_char(*first_name_byte) {
-        return None;
-    }
-
-    let mut name_end = name_start + 1;
-    while let Some(next_byte) = text_bytes.get(name_end)
-        && is_mention_name_char(*next_byte)
-    {
-        name_end += 1;
-    }
-
-    if text_bytes.get(name_end) != Some(&b']') {
-        return None;
-    }
-
-    let mut path_start = name_end + 1;
-    while let Some(next_byte) = text_bytes.get(path_start)
-        && next_byte.is_ascii_whitespace()
-    {
-        path_start += 1;
-    }
-    if text_bytes.get(path_start) != Some(&b'(') {
-        return None;
-    }
-
-    let mut path_end = path_start + 1;
-    while let Some(next_byte) = text_bytes.get(path_end)
-        && *next_byte != b')'
-    {
-        path_end += 1;
-    }
-    if text_bytes.get(path_end) != Some(&b')') {
-        return None;
-    }
-
-    let path = text[path_start + 1..path_end].trim();
-    if path.is_empty() {
-        return None;
-    }
-
-    let name = &text[name_start..name_end];
-    Some((name, path, path_end + 1))
-}
-
-fn is_common_env_var(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    matches!(
-        upper.as_str(),
-        "PATH"
-            | "HOME"
-            | "USER"
-            | "SHELL"
-            | "PWD"
-            | "TMPDIR"
-            | "TEMP"
-            | "TMP"
-            | "LANG"
-            | "TERM"
-            | "XDG_CONFIG_HOME"
-    )
-}
-
-#[cfg(test)]
-fn text_mentions_skill(text: &str, skill_name: &str) -> bool {
-    if skill_name.is_empty() {
-        return false;
-    }
-
-    let text_bytes = text.as_bytes();
-    let skill_bytes = skill_name.as_bytes();
-
-    for (index, byte) in text_bytes.iter().copied().enumerate() {
-        if byte != b'$' {
-            continue;
-        }
-
-        let name_start = index + 1;
-        let Some(rest) = text_bytes.get(name_start..) else {
-            continue;
-        };
-        if !rest.starts_with(skill_bytes) {
-            continue;
-        }
-
-        let after_index = name_start + skill_bytes.len();
-        let after = text_bytes.get(after_index).copied();
-        if after.is_none_or(|b| !is_mention_name_char(b)) {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn is_mention_name_char(byte: u8) -> bool {
-    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b':')
 }
 
 #[cfg(test)]

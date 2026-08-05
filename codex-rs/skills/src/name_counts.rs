@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use super::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
+
+use crate::SkillMetadata;
 
 /// Counts how often each skill name appears (exact and ASCII-lowercase), excluding disabled paths.
 pub fn build_skill_name_counts(

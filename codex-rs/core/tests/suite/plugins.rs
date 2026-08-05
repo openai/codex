@@ -1312,15 +1312,43 @@ async fn explicit_plugin_skill_invocation_tracks_remote_plugin_id() -> Result<()
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ImplicitPluginSkillInvocation {
+    SkillDocumentRead,
+    SkillScriptRun,
+}
+
+#[test_case(ImplicitPluginSkillInvocation::SkillDocumentRead; "skill document read")]
+#[test_case(ImplicitPluginSkillInvocation::SkillScriptRun; "skill script run")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn implicit_plugin_skill_invocation_tracks_remote_plugin_id() -> Result<()> {
+async fn implicit_plugin_skill_invocation_tracks_remote_plugin_id(
+    invocation: ImplicitPluginSkillInvocation,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let codex_home = Arc::new(TempDir::new()?);
     let skill_path = write_remote_plugin_skill_plugin(codex_home.as_ref());
     persist_sample_remote_plugin_id(codex_home.as_ref());
+    let command = match invocation {
+        ImplicitPluginSkillInvocation::SkillDocumentRead => {
+            format!("cat {}", skill_path.display())
+        }
+        ImplicitPluginSkillInvocation::SkillScriptRun => {
+            let script_path = skill_path
+                .parent()
+                .expect("skill path should have a parent")
+                .join("scripts/test.sh");
+            std::fs::create_dir_all(
+                script_path
+                    .parent()
+                    .expect("script path should have a parent"),
+            )?;
+            std::fs::write(&script_path, "echo skill script invoked\n")?;
+            format!("bash {}", script_path.display())
+        }
+    };
     let command_args = serde_json::json!({
-        "command": format!("cat {}", skill_path.display()),
+        "command": command,
         "login": false,
     })
     .to_string();

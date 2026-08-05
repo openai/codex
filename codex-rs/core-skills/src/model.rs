@@ -121,6 +121,16 @@ impl SkillLoadOutcome {
     }
 }
 
+impl codex_skills::ImplicitSkillLookup for SkillLoadOutcome {
+    fn implicit_skill_for_scripts_dir(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata> {
+        self.implicit_skills_by_scripts_dir.get(path)
+    }
+
+    fn implicit_skill_for_doc_path(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata> {
+        self.implicit_skills_by_doc_path.get(path)
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct SkillFileSystemsByPath {
     values: Arc<HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>>,

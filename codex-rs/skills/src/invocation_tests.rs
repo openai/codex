@@ -1,15 +1,27 @@
-use super::SkillLoadOutcome;
-use super::SkillMetadata;
-use super::canonicalize_if_exists;
-use super::detect_skill_doc_read;
-use super::detect_skill_script_run;
-use super::script_run_token;
+use std::collections::HashMap;
+
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use super::*;
+
+#[derive(Default)]
+struct TestLookup {
+    by_scripts_dir: HashMap<AbsolutePathBuf, SkillMetadata>,
+    by_doc_path: HashMap<AbsolutePathBuf, SkillMetadata>,
+}
+
+impl ImplicitSkillLookup for TestLookup {
+    fn implicit_skill_for_scripts_dir(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata> {
+        self.by_scripts_dir.get(path)
+    }
+
+    fn implicit_skill_for_doc_path(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata> {
+        self.by_doc_path.get(path)
+    }
+}
 
 fn test_skill_metadata(skill_doc_path: AbsolutePathBuf) -> SkillMetadata {
     SkillMetadata {
@@ -38,7 +50,7 @@ fn script_run_detection_matches_runner_plus_extension() {
         "scripts/fetch_comments.py".to_string(),
     ];
 
-    assert_eq!(script_run_token(&tokens).is_some(), true);
+    assert!(script_run_token(&tokens).is_some());
 }
 
 #[test]
@@ -49,7 +61,7 @@ fn script_run_detection_excludes_python_c() {
         "print(1)".to_string(),
     ];
 
-    assert_eq!(script_run_token(&tokens).is_some(), false);
+    assert!(script_run_token(&tokens).is_none());
 }
 
 #[test]
@@ -57,18 +69,17 @@ fn skill_doc_read_detection_matches_absolute_path() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let normalized_skill_doc_path = canonicalize_if_exists(&skill_doc_path);
     let skill = test_skill_metadata(skill_doc_path);
-    let outcome = SkillLoadOutcome {
-        implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
-        implicit_skills_by_doc_path: Arc::new(HashMap::from([(normalized_skill_doc_path, skill)])),
+    let outcome = TestLookup {
+        by_doc_path: HashMap::from([(normalized_skill_doc_path, skill)]),
         ..Default::default()
     };
-
     let tokens = vec![
         "cat".to_string(),
         test_path_display("/tmp/skill-test/SKILL.md"),
         "|".to_string(),
         "head".to_string(),
     ];
+
     let found = detect_skill_doc_read(&outcome, &tokens, &test_path_buf("/tmp").abs());
 
     assert_eq!(
@@ -82,17 +93,16 @@ fn skill_doc_read_detection_matches_shared_read_parser() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let normalized_skill_doc_path = canonicalize_if_exists(&skill_doc_path);
     let skill = test_skill_metadata(skill_doc_path);
-    let outcome = SkillLoadOutcome {
-        implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
-        implicit_skills_by_doc_path: Arc::new(HashMap::from([(normalized_skill_doc_path, skill)])),
+    let outcome = TestLookup {
+        by_doc_path: HashMap::from([(normalized_skill_doc_path, skill)]),
         ..Default::default()
     };
-
     let tokens = vec![
         "nl".to_string(),
         "-ba".to_string(),
         test_path_display("/tmp/skill-test/SKILL.md"),
     ];
+
     let found = detect_skill_doc_read(&outcome, &tokens, &test_path_buf("/tmp").abs());
 
     assert_eq!(
@@ -106,9 +116,8 @@ fn skill_script_run_detection_matches_relative_path_from_skill_root() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let scripts_dir = canonicalize_if_exists(&test_path_buf("/tmp/skill-test/scripts").abs());
     let skill = test_skill_metadata(skill_doc_path);
-    let outcome = SkillLoadOutcome {
-        implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
-        implicit_skills_by_doc_path: Arc::new(HashMap::new()),
+    let outcome = TestLookup {
+        by_scripts_dir: HashMap::from([(scripts_dir, skill)]),
         ..Default::default()
     };
     let tokens = vec![
@@ -129,9 +138,8 @@ fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let scripts_dir = canonicalize_if_exists(&test_path_buf("/tmp/skill-test/scripts").abs());
     let skill = test_skill_metadata(skill_doc_path);
-    let outcome = SkillLoadOutcome {
-        implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
-        implicit_skills_by_doc_path: Arc::new(HashMap::new()),
+    let outcome = TestLookup {
+        by_scripts_dir: HashMap::from([(scripts_dir, skill)]),
         ..Default::default()
     };
     let tokens = vec![

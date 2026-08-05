@@ -1,0 +1,117 @@
+use std::path::Path;
+
+use codex_protocol::parse_command::ParsedCommand;
+use codex_shell_command::parse_command::parse_command_impl;
+use codex_utils_absolute_path::AbsolutePathBuf;
+
+use crate::SkillMetadata;
+
+/// Provides the indexed skill lookups used to recognize implicit invocations.
+pub trait ImplicitSkillLookup {
+    fn implicit_skill_for_scripts_dir(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata>;
+
+    fn implicit_skill_for_doc_path(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata>;
+}
+
+pub fn detect_implicit_skill_invocation_for_command(
+    outcome: &impl ImplicitSkillLookup,
+    command: &str,
+    workdir: &AbsolutePathBuf,
+) -> Option<SkillMetadata> {
+    let workdir = canonicalize_if_exists(workdir);
+    let tokens = tokenize_command(command);
+
+    if let Some(candidate) = detect_skill_script_run(outcome, tokens.as_slice(), &workdir) {
+        return Some(candidate);
+    }
+
+    detect_skill_doc_read(outcome, tokens.as_slice(), &workdir)
+}
+
+fn tokenize_command(command: &str) -> Vec<String> {
+    shlex::split(command)
+        .unwrap_or_else(|| command.split_whitespace().map(str::to_string).collect())
+}
+
+fn script_run_token(tokens: &[String]) -> Option<&str> {
+    const RUNNERS: [&str; 10] = [
+        "python", "python3", "bash", "zsh", "sh", "node", "deno", "ruby", "perl", "pwsh",
+    ];
+    const SCRIPT_EXTENSIONS: [&str; 7] = [".py", ".sh", ".js", ".ts", ".rb", ".pl", ".ps1"];
+
+    let runner_token = tokens.first()?;
+    let runner = command_basename(runner_token).to_ascii_lowercase();
+    let runner = runner.strip_suffix(".exe").unwrap_or(&runner);
+    if !RUNNERS.contains(&runner) {
+        return None;
+    }
+
+    let mut script_token = None;
+    for token in tokens.iter().skip(1) {
+        if token == "--" || token.starts_with('-') {
+            continue;
+        }
+        script_token = Some(token.as_str());
+        break;
+    }
+    let script_token = script_token?;
+    if SCRIPT_EXTENSIONS
+        .iter()
+        .any(|extension| script_token.to_ascii_lowercase().ends_with(extension))
+    {
+        return Some(script_token);
+    }
+
+    None
+}
+
+fn detect_skill_script_run(
+    outcome: &impl ImplicitSkillLookup,
+    tokens: &[String],
+    workdir: &AbsolutePathBuf,
+) -> Option<SkillMetadata> {
+    let script_token = script_run_token(tokens)?;
+    let script_path = Path::new(script_token);
+    let script_path = canonicalize_if_exists(&workdir.join(script_path));
+
+    for path in script_path.ancestors() {
+        if let Some(candidate) = outcome.implicit_skill_for_scripts_dir(&path) {
+            return Some(candidate.clone());
+        }
+    }
+
+    None
+}
+
+fn detect_skill_doc_read(
+    outcome: &impl ImplicitSkillLookup,
+    tokens: &[String],
+    workdir: &AbsolutePathBuf,
+) -> Option<SkillMetadata> {
+    for command in parse_command_impl(tokens) {
+        if let ParsedCommand::Read { path, .. } = command {
+            let candidate_path = canonicalize_if_exists(&workdir.join(path.as_path()));
+            if let Some(candidate) = outcome.implicit_skill_for_doc_path(&candidate_path) {
+                return Some(candidate.clone());
+            }
+        }
+    }
+
+    None
+}
+
+fn command_basename(command: &str) -> String {
+    Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command)
+        .to_string()
+}
+
+fn canonicalize_if_exists(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.clone())
+}
+
+#[cfg(test)]
+#[path = "invocation_tests.rs"]
+mod tests;

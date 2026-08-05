@@ -2,7 +2,6 @@ pub mod config_rules;
 pub mod injection;
 pub(crate) mod invocation_utils;
 pub mod loader;
-mod mention_counts;
 pub mod model;
 pub mod remote;
 mod root_loader;
@@ -14,9 +13,10 @@ mod skill_instructions;
 /// limit so a skill cannot bypass context bounds by changing how it is loaded.
 pub const MAX_SKILL_PROMPT_BYTES: usize = 8_000;
 
+pub use codex_skills::ImplicitSkillLookup;
+pub use codex_skills::build_skill_name_counts;
+pub use codex_skills::detect_implicit_skill_invocation_for_command;
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
-pub use invocation_utils::detect_implicit_skill_invocation_for_command;
-pub use mention_counts::build_skill_name_counts;
 pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;

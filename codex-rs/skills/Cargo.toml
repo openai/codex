@@ -15,11 +15,13 @@ workspace = true
 
 [dependencies]
 codex-protocol = { workspace = true }
+codex-shell-command = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 include_dir = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_yaml = { workspace = true }
+shlex = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
