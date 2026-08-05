@@ -204,7 +204,11 @@ impl Session {
             } else {
                 false
             };
-        world_state.add_section(AppsInstructionsState::new(apps_available));
+        let apps_usage_instructions_available =
+            apps_available && turn_context.model_info.include_apps_usage_instructions;
+        world_state.add_section(AppsInstructionsState::new(
+            apps_usage_instructions_available,
+        ));
         let plugins_usage_instructions_available = step_context.mcp.plugins_available()
             && turn_context.model_info.include_plugin_usage_instructions;
         world_state.add_section(PluginsInstructionsState::new(
