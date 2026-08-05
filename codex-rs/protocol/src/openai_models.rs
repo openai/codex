@@ -210,6 +210,8 @@ pub struct ModelPreset {
     pub display_name: String,
     /// Short human description shown in UIs.
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_specialty: Option<String>,
     /// Reasoning effort applied when none is explicitly chosen.
     pub default_reasoning_effort: ReasoningEffort,
     /// Supported reasoning effort options.
@@ -437,6 +439,8 @@ pub struct ModelInfo {
     pub use_responses_lite: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_review_model_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_specialty: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -612,6 +616,7 @@ impl From<ModelInfo> for ModelPreset {
             model: info.slug.clone(),
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
+            model_specialty: info.model_specialty,
             default_reasoning_effort: info
                 .default_reasoning_level
                 .unwrap_or(ReasoningEffort::None),
@@ -737,6 +742,7 @@ mod tests {
             supports_search_tool: false,
             use_responses_lite: false,
             auto_review_model_override: None,
+            model_specialty: None,
             tool_mode: None,
             multi_agent_version: None,
         }

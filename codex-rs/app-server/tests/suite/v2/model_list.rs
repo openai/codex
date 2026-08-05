@@ -43,6 +43,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         availability_nux: preset.availability_nux.clone().map(Into::into),
         display_name: preset.display_name.clone(),
         description: preset.description.clone(),
+        model_specialty: preset.model_specialty.clone(),
         hidden: !preset.show_in_picker,
         supported_reasoning_efforts: preset
             .supported_reasoning_efforts
@@ -156,6 +157,7 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         "slug": "chatgpt-remote-only",
         "display_name": "ChatGPT Remote Only",
         "description": "Remote-only model for app-server model/list coverage",
+        "model_specialty": "cyber",
         "default_reasoning_level": "max",
         "supported_reasoning_levels": [
             {"effort": "max", "description": "Maximum"},

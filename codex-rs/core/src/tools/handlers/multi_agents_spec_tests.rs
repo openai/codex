@@ -14,6 +14,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         model: format!("{id}-model"),
         display_name: format!("{id} display"),
         description: format!("{id} description"),
+        model_specialty: None,
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
