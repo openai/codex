@@ -611,6 +611,10 @@ pub enum ExecServerError {
     HttpRequest(String),
     #[error("exec-server protocol error: {0}")]
     Protocol(String),
+    #[error(
+        "environment `{environment_id}` is already registered with a different provisioning mode"
+    )]
+    ProvisioningModeConflict { environment_id: String },
     #[error("exec-server rejected request ({code}): {message}")]
     Server { code: i64, message: String },
     #[error("environment registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]

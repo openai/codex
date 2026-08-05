@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use codex_http_client::HttpClientFactory;
 use futures::future::BoxFuture;
-use futures::future::Shared;
-use tokio::sync::oneshot;
+use tokio::sync::watch;
 
 use crate::ExecServerError;
 use crate::HttpRequestParams;
@@ -93,7 +92,7 @@ pub(crate) struct StdioExecServerCommand {
     pub cwd: Option<PathBuf>,
 }
 
-pub(crate) type DeferredEnvironmentReadiness = Shared<oneshot::Receiver<Result<(), String>>>;
+pub(crate) type DeferredEnvironmentReadiness = watch::Receiver<Option<Result<(), String>>>;
 
 #[derive(Clone)]
 pub(crate) struct Deferred<T> {

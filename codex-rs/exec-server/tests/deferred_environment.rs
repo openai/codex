@@ -84,6 +84,65 @@ async fn deferred_environment_waits_before_connecting() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn deferred_registration_replaces_an_ordinary_noise_environment() -> anyhow::Result<()> {
+    let manager = environment_manager_without_environments();
+    manager.upsert_noise_environment(
+        "tools".to_string(),
+        Arc::new(FailingNoiseConnectProvider::default()),
+    )?;
+    let ordinary = manager
+        .get_environment("tools")
+        .expect("ordinary environment");
+    let deferred_provider = Arc::new(FailingNoiseConnectProvider::default());
+
+    let registration = manager
+        .register_deferred_noise_environment("tools".to_string(), deferred_provider.clone())?;
+    let deferred = manager
+        .get_environment("tools")
+        .expect("deferred environment");
+    assert!(!Arc::ptr_eq(&ordinary, &deferred));
+    let mut readiness = Box::pin(deferred.wait_until_ready());
+    assert!(poll!(&mut readiness).is_pending());
+
+    registration.complete(Ok(ready_info("selected-root", "tools")?))?;
+    let error = readiness.await.unwrap_err();
+    assert!(error.to_string().contains("test Noise provider called"));
+    assert_eq!(deferred_provider.calls(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordinary_noise_environment_replaces_a_deferred_registration() -> anyhow::Result<()> {
+    let manager = environment_manager_without_environments();
+    let deferred_provider = Arc::new(FailingNoiseConnectProvider::default());
+    let registration = manager
+        .register_deferred_noise_environment("tools".to_string(), deferred_provider.clone())?;
+    let deferred = manager
+        .get_environment("tools")
+        .expect("deferred environment");
+    let ordinary_provider = Arc::new(FailingNoiseConnectProvider::default());
+
+    manager.upsert_noise_environment("tools".to_string(), ordinary_provider.clone())?;
+    let ordinary = manager
+        .get_environment("tools")
+        .expect("ordinary environment");
+    assert!(!Arc::ptr_eq(&deferred, &ordinary));
+
+    drop(registration);
+    let error = deferred.wait_until_ready().await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("registration ended before completion")
+    );
+    assert_eq!(deferred_provider.calls(), 0);
+    let error = ordinary.wait_until_ready().await.unwrap_err();
+    assert!(error.to_string().contains("test Noise provider called"));
+    assert_eq!(ordinary_provider.calls(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn existing_environment_publishes_readiness_without_replacement() -> anyhow::Result<()> {
     let manager = environment_manager_without_environments();
     let existing_provider = Arc::new(FailingNoiseConnectProvider::default());
@@ -353,5 +412,176 @@ async fn eager_noise_environment_connects_without_registration() -> anyhow::Resu
     let error = environment.wait_until_ready().await.unwrap_err();
     assert!(error.to_string().contains("test Noise provider called"));
     assert_eq!(provider.calls(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn readiness_before_materialization_creates_the_stable_environment() -> anyhow::Result<()> {
+    let manager = environment_manager_without_environments();
+    let readiness_provider = Arc::new(FailingNoiseConnectProvider::default());
+    let materialization_provider = Arc::new(FailingNoiseConnectProvider::default());
+    let selected = ready_info("selected-root", "tools")?;
+
+    let ready = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Ok(selected.clone()),
+            readiness_provider.clone(),
+        )?
+        .expect("readiness report should create the environment");
+    let materialized = manager.materialize_pending_noise_environment(
+        "tools".to_string(),
+        materialization_provider.clone(),
+    )?;
+
+    assert!(Arc::ptr_eq(&ready, &materialized));
+    assert_eq!(
+        ready.selected_capability_roots(),
+        selected.selected_capability_roots
+    );
+    let error = ready.wait_until_ready().await.unwrap_err();
+    assert!(error.to_string().contains("test Noise provider called"));
+    assert_eq!(readiness_provider.calls(), 1);
+    assert_eq!(materialization_provider.calls(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn materialize_then_report_ready_reuses_the_pending_environment() -> anyhow::Result<()> {
+    let manager = environment_manager_without_environments();
+    let pending_provider = Arc::new(FailingNoiseConnectProvider::default());
+    let pending = manager
+        .materialize_pending_noise_environment("tools".to_string(), pending_provider.clone())?;
+    let mut pending_readiness = Box::pin(pending.wait_until_ready());
+    assert!(poll!(&mut pending_readiness).is_pending());
+    let ready = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Ok(ready_info("selected-root", "tools")?),
+            Arc::new(FailingNoiseConnectProvider::default()),
+        )?
+        .expect("provisioning report should apply to the pending environment");
+
+    assert!(Arc::ptr_eq(&pending, &ready));
+    let error = pending_readiness.await.unwrap_err();
+    assert!(error.to_string().contains("test Noise provider called"));
+    assert_eq!(pending_provider.calls(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn failure_before_materialization_is_terminal_without_connecting() -> anyhow::Result<()> {
+    let manager = environment_manager_without_environments();
+    let provider = Arc::new(FailingNoiseConnectProvider::default());
+
+    let failed = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Err("provisioning failed".to_string()),
+            provider.clone(),
+        )?
+        .expect("failure report should create the environment");
+    let materialized = manager.materialize_pending_noise_environment(
+        "tools".to_string(),
+        Arc::new(FailingNoiseConnectProvider::default()),
+    )?;
+
+    assert!(Arc::ptr_eq(&failed, &materialized));
+    let error = failed.wait_until_ready().await.unwrap_err();
+    assert!(error.to_string().ends_with("provisioning failed"));
+    assert_eq!(provider.calls(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn failure_releases_the_existing_pending_environment_without_connecting() -> anyhow::Result<()>
+{
+    let manager = environment_manager_without_environments();
+    let provider = Arc::new(FailingNoiseConnectProvider::default());
+    let pending =
+        manager.materialize_pending_noise_environment("tools".to_string(), provider.clone())?;
+
+    let reported = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Err("provisioning failed".to_string()),
+            provider.clone(),
+        )?
+        .expect("failure report should apply to the pending environment");
+
+    assert!(Arc::ptr_eq(&pending, &reported));
+    let error = pending.wait_until_ready().await.unwrap_err();
+    assert!(error.to_string().ends_with("provisioning failed"));
+    assert_eq!(provider.calls(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn repeated_failure_preserves_the_first_error_and_rejects_ready() -> anyhow::Result<()> {
+    let manager = environment_manager_without_environments();
+    let provider = Arc::new(FailingNoiseConnectProvider::default());
+    let failed = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Err("first failure".to_string()),
+            provider.clone(),
+        )?
+        .expect("failure report should create the environment");
+
+    let repeated = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Err("different failure".to_string()),
+            provider.clone(),
+        )?
+        .expect("repeated failure should be idempotent");
+    assert!(Arc::ptr_eq(&failed, &repeated));
+
+    let error = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Ok(ready_info("selected-root", "other")?),
+            provider.clone(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("first failure"));
+
+    let error = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Ok(ready_info("selected-root", "tools")?),
+            provider.clone(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("first failure"));
+    assert!(failed.selected_capability_roots().is_empty());
+    let error = failed.wait_until_ready().await.unwrap_err();
+    assert!(error.to_string().ends_with("first failure"));
+    assert_eq!(provider.calls(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ready_environment_rejects_a_later_failure() -> anyhow::Result<()> {
+    let manager = environment_manager_without_environments();
+    let provider = Arc::new(FailingNoiseConnectProvider::default());
+    let ready = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Ok(ready_info("selected-root", "tools")?),
+            provider.clone(),
+        )?
+        .expect("ready report should create the environment");
+
+    let error = manager
+        .report_environment_provisioning_status(
+            "tools".to_string(),
+            Err("late failure".to_string()),
+            provider,
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("already ready"));
+    assert_eq!(ready.selected_capability_roots().len(), 1);
     Ok(())
 }
