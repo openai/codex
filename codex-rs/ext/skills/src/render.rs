@@ -5,6 +5,7 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_core_skills::MAX_SKILL_PROMPT_BYTES;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_string::approx_token_count;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -17,7 +18,6 @@ use crate::fragments::AvailableSkillsInstructions;
 
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
-const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
 const MAX_CATALOG_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
 const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
@@ -1083,7 +1083,7 @@ pub(crate) fn truncate_catalog_skill_description(description: &str) -> Cow<'_, s
 }
 
 pub(crate) fn truncate_main_prompt_contents(contents: &str) -> (String, bool) {
-    truncate_utf8_to_bytes(contents, MAX_MAIN_PROMPT_BYTES)
+    truncate_utf8_to_bytes(contents, MAX_SKILL_PROMPT_BYTES)
 }
 
 pub(crate) fn truncate_utf8_to_bytes(contents: &str, max_bytes: usize) -> (String, bool) {

@@ -1524,6 +1524,7 @@ pub async fn resolve_remote_plugin_uninstall_target(
     let fallback_capability_summary = PluginCapabilitySummary {
         config_name: plugin_id.as_key(),
         display_name: plugin.release.display_name,
+        plugin_namespace: Some(plugin_id.plugin_name.clone()),
         description: prompt_safe_plugin_description(Some(&plugin.release.description)),
         has_skills: !plugin.release.skills.is_empty(),
         mcp_server_names,

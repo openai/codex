@@ -1310,6 +1310,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         .set_plugin_mentions(Some(vec![codex_plugin::PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "Sample Plugin".to_string(),
+            plugin_namespace: None,
             description: None,
             has_skills: true,
             mcp_server_names: Vec::new(),

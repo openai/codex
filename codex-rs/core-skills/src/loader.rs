@@ -95,7 +95,7 @@ const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_METADATA_DIR: &str = "agents";
 const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
 const MAX_NAME_LEN: usize = 64;
-const MAX_QUALIFIED_NAME_LEN: usize = 128;
+const MAX_QUALIFIED_NAME_LEN: usize = MAX_NAME_LEN * 2 + 1;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_DEPENDENCY_TYPE_LEN: usize = MAX_NAME_LEN;
 const MAX_DEPENDENCY_TRANSPORT_LEN: usize = MAX_NAME_LEN;
@@ -163,6 +163,7 @@ where
 #[derive(Clone)]
 pub(crate) struct SkillRootSnapshot {
     pub(crate) root: AbsolutePathBuf,
+    pub(crate) is_agent_plugin: bool,
     pub(crate) skills: Vec<SkillMetadata>,
     pub(crate) errors: Vec<SkillError>,
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
@@ -175,6 +176,7 @@ pub(crate) async fn load_skill_root(root: SkillRoot) -> SkillRootSnapshot {
     load_skills_under_root(&root, &canonical_root, &mut outcome).await;
     SkillRootSnapshot {
         root: canonical_root,
+        is_agent_plugin: root.discovery_mode == SkillDiscoveryMode::DirectChildren,
         skills: outcome.skills,
         errors: outcome.errors,
         file_system: root.file_system,

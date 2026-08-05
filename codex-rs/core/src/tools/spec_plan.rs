@@ -150,6 +150,7 @@ pub(crate) fn build_tool_router(
             mcp.tools(),
             &turn_context.config,
             apps_enabled,
+            &mcp.config().mcp_server_catalog,
             search_tool_enabled(turn_context),
             &mut registry,
         );

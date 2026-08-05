@@ -163,6 +163,28 @@ fn plugin_data_root_derives_path_from_key() {
 }
 
 #[test]
+fn agent_plugin_data_root_is_stable_and_unambiguous() {
+    let tmp = tempdir().unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let first = PluginId::new("a-b".to_string(), "c".to_string()).unwrap();
+    let second = PluginId::new("a".to_string(), "b-c".to_string()).unwrap();
+
+    let first_root = store.agent_plugin_data_root(&first);
+    let second_root = store.agent_plugin_data_root(&second);
+    let expected_parent = tmp.path().join("plugins/data/agent-plugins");
+
+    assert_ne!(first_root, second_root);
+    assert_eq!(
+        first_root.as_path(),
+        expected_parent.join("6920dd17774030852d11d1b94758fcaae4f894c7b2f36301ed174bc3b33e0743")
+    );
+    assert_eq!(
+        second_root.as_path(),
+        expected_parent.join("fa89b988ebbe54a68fdcbeb87fb913a5238d482084a3cee49a86288c2d45fa90")
+    );
+}
+
+#[test]
 fn install_with_version_uses_requested_cache_version() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "sample-plugin", "sample-plugin");

@@ -1700,10 +1700,17 @@ impl Config {
         {
             let mut plugin_mcp_servers = plugin.mcp_servers.clone();
             self.apply_plugin_mcp_server_requirements(&plugin.config_name, &mut plugin_mcp_servers);
-            let attribution = McpPluginAttribution::new(
-                plugin.config_name.clone(),
-                plugin.display_name().to_string(),
-            );
+            let attribution = if plugin.is_agent_plugin() {
+                McpPluginAttribution::agent_plugin(
+                    plugin.config_name.clone(),
+                    plugin.display_name().to_string(),
+                )
+            } else {
+                McpPluginAttribution::new(
+                    plugin.config_name.clone(),
+                    plugin.display_name().to_string(),
+                )
+            };
             for (name, plugin_server) in plugin_mcp_servers {
                 catalog.register(McpServerRegistration::from_plugin(
                     name,

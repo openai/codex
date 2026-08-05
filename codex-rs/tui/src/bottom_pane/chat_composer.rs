@@ -6721,6 +6721,7 @@ mod tests {
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "Sample Plugin".to_string(),
+            plugin_namespace: None,
             description: None,
             has_skills: true,
             mcp_server_names: vec!["sample".to_string()],
@@ -6773,6 +6774,7 @@ mod tests {
         PluginCapabilitySummary {
             config_name: format!("{name}@test"),
             display_name: name.to_string(),
+            plugin_namespace: None,
             description: Some(description.to_string()),
             has_skills: false,
             mcp_server_names: vec![name.to_string()],
@@ -7445,6 +7447,7 @@ mod tests {
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "google-calendar@debug".to_string(),
             display_name: "Google Calendar".to_string(),
+            plugin_namespace: None,
             description: Some(
                 "Connect Google Calendar for scheduling, availability, and event management."
                     .to_string(),
@@ -7497,6 +7500,7 @@ mod tests {
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                     config_name: "sample@test".to_string(),
                     display_name: "Sample Plugin".to_string(),
+                    plugin_namespace: None,
                     description: Some(
                         "Plugin that includes the Figma MCP server and Skills for common workflows"
                             .to_string(),
@@ -7522,6 +7526,7 @@ mod tests {
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                     config_name: "sample@test".to_string(),
                     display_name: "Sample Plugin".to_string(),
+                    plugin_namespace: None,
                     description: Some("Plugin with skills and an MCP server".to_string()),
                     has_skills: true,
                     mcp_server_names: vec!["sample".to_string()],
@@ -7629,6 +7634,7 @@ mod tests {
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "google-calendar@debug".to_string(),
                 display_name: "Google Calendar".to_string(),
+                plugin_namespace: None,
                 description: Some(
                     "Connect Google Calendar for scheduling, availability, and event management."
                         .to_string(),
@@ -8197,6 +8203,7 @@ mod tests {
             composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "sample@test".to_string(),
                 display_name: "sample".to_string(),
+                plugin_namespace: None,
                 description: None,
                 has_skills: true,
                 mcp_server_names: vec!["sample".to_string()],

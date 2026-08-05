@@ -27,6 +27,7 @@ use urlencoding::decode;
 
 use crate::StoredOAuthTokens;
 use crate::WrappedOAuthTokenResponse;
+use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::oauth::compute_expires_at_millis;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::save_oauth_tokens;
@@ -38,6 +39,7 @@ struct OAuthHttpContext {
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     http_client: Arc<dyn HttpClient>,
+    redirect_mode: StreamableHttpRedirectMode,
 }
 
 struct CallbackServerGuard {
@@ -109,6 +111,7 @@ pub async fn perform_oauth_login(
         callback_url,
         http_client,
         /*emit_browser_url*/ true,
+        StreamableHttpRedirectMode::Legacy,
     )
     .await
 }
@@ -127,6 +130,7 @@ pub async fn perform_oauth_login_silent(
     callback_port: Option<u16>,
     callback_url: Option<&str>,
     http_client: Arc<dyn HttpClient>,
+    redirect_mode: StreamableHttpRedirectMode,
 ) -> Result<()> {
     perform_oauth_login_with_browser_output(
         server_name,
@@ -142,6 +146,7 @@ pub async fn perform_oauth_login_silent(
         callback_url,
         http_client,
         /*emit_browser_url*/ false,
+        redirect_mode,
     )
     .await
 }
@@ -161,11 +166,13 @@ async fn perform_oauth_login_with_browser_output(
     callback_url: Option<&str>,
     http_client: Arc<dyn HttpClient>,
     emit_browser_url: bool,
+    redirect_mode: StreamableHttpRedirectMode,
 ) -> Result<()> {
     let http_context = OAuthHttpContext {
         http_headers,
         env_http_headers,
         http_client,
+        redirect_mode,
     };
     OauthLoginFlow::new(
         server_name,
@@ -201,11 +208,13 @@ pub async fn perform_oauth_login_return_url(
     callback_port: Option<u16>,
     callback_url: Option<&str>,
     http_client: Arc<dyn HttpClient>,
+    redirect_mode: StreamableHttpRedirectMode,
 ) -> Result<OauthLoginHandle> {
     let http_context = OAuthHttpContext {
         http_headers,
         env_http_headers,
         http_client,
+        redirect_mode,
     };
     let flow = OauthLoginFlow::new(
         server_name,
@@ -515,9 +524,21 @@ impl OauthLoginFlow {
             http_headers,
             env_http_headers,
             http_client,
+            redirect_mode,
         } = http_context;
+        let has_configured_headers = http_headers
+            .as_ref()
+            .is_some_and(|headers| !headers.is_empty())
+            || env_http_headers
+                .as_ref()
+                .is_some_and(|headers| !headers.is_empty());
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
-        let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new(http_client, default_headers));
+        let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new_with_redirect_mode(
+            http_client,
+            default_headers,
+            has_configured_headers,
+            redirect_mode,
+        ));
 
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
         let oauth_state = start_authorization(
@@ -728,6 +749,7 @@ mod tests {
     use super::CallbackOutcome;
     use super::OAuthHttpClientAdapter;
     use super::OAuthProviderError;
+    use super::StreamableHttpRedirectMode;
     use super::append_callback_id_to_redirect_uri;
     use super::append_query_param;
     use super::callback_id_from_server_url;
@@ -975,6 +997,7 @@ mod tests {
             /*callback_port*/ None,
             /*callback_url*/ None,
             http_client.clone(),
+            StreamableHttpRedirectMode::Legacy,
         )
         .await
         .expect_err("OAuth metadata discovery should fail through the supplied client");

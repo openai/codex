@@ -1,11 +1,15 @@
 use std::io::ErrorKind;
 
+use codex_exec_server::HttpRedirectPolicy;
 use http::HeaderMap;
 use http::HeaderValue;
+use http::header::AUTHORIZATION;
 use pretty_assertions::assert_eq;
 
 use super::HttpHeader;
 use super::SseEventSizeLimit;
+use super::StreamableHttpRedirectMode;
+use super::mcp_redirect_policy;
 use super::protocol_headers;
 
 #[test]
@@ -22,6 +26,64 @@ fn protocol_headers_preserve_utf8_values() {
             name: "x-plugin-name".to_string(),
             value: "café".to_string(),
         }]
+    );
+}
+
+#[test]
+fn legacy_configured_headers_follow_redirects() {
+    assert_eq!(
+        mcp_redirect_policy(
+            StreamableHttpRedirectMode::Legacy,
+            &HeaderMap::new(),
+            /*has_configured_headers*/ true,
+        ),
+        HttpRedirectPolicy::Follow
+    );
+}
+
+#[test]
+fn agent_plugin_configured_headers_stop_redirects() {
+    assert_eq!(
+        mcp_redirect_policy(
+            StreamableHttpRedirectMode::AgentPluginV1,
+            &HeaderMap::new(),
+            /*has_configured_headers*/ true,
+        ),
+        HttpRedirectPolicy::Stop
+    );
+}
+
+#[test]
+fn requests_without_sensitive_headers_follow_redirects() {
+    assert_eq!(
+        mcp_redirect_policy(
+            StreamableHttpRedirectMode::AgentPluginV1,
+            &HeaderMap::new(),
+            /*has_configured_headers*/ false,
+        ),
+        HttpRedirectPolicy::Follow
+    );
+}
+
+#[test]
+fn authorization_redirects_depend_on_mode() {
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+    assert_eq!(
+        mcp_redirect_policy(
+            StreamableHttpRedirectMode::Legacy,
+            &headers,
+            /*has_configured_headers*/ false,
+        ),
+        HttpRedirectPolicy::Follow
+    );
+    assert_eq!(
+        mcp_redirect_policy(
+            StreamableHttpRedirectMode::AgentPluginV1,
+            &headers,
+            /*has_configured_headers*/ false,
+        ),
+        HttpRedirectPolicy::Stop
     );
 }
 

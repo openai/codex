@@ -6,6 +6,7 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::StreamableHttpOAuthDiscovery;
+use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::discover_streamable_http_oauth;
 use pretty_assertions::assert_eq;
 use rmcp::transport::auth::AuthError;
@@ -108,6 +109,7 @@ async fn discover_legacy_oauth_without_starting_an_mcp_session(
             OutboundProxyPolicy::ReqwestDefault,
         ))),
         OAuthDiscoveryTimeout::LOCAL,
+        StreamableHttpRedirectMode::Legacy,
     )
     .await;
     let routed_discovery = discover_streamable_http_oauth(
@@ -118,6 +120,7 @@ async fn discover_legacy_oauth_without_starting_an_mcp_session(
             OutboundProxyPolicy::ReqwestDefault,
         ))),
         OAuthDiscoveryTimeout::LOCAL,
+        StreamableHttpRedirectMode::Legacy,
     )
     .await;
 
@@ -197,6 +200,7 @@ async fn oauth_discovery_does_not_invent_support_for_an_unauthenticated_legacy_s
             OutboundProxyPolicy::ReqwestDefault,
         ))),
         OAuthDiscoveryTimeout::LOCAL,
+        StreamableHttpRedirectMode::Legacy,
     )
     .await?;
     let local_discovery = discover_streamable_http_oauth(
@@ -207,6 +211,7 @@ async fn oauth_discovery_does_not_invent_support_for_an_unauthenticated_legacy_s
             OutboundProxyPolicy::ReqwestDefault,
         ))),
         OAuthDiscoveryTimeout::LOCAL,
+        StreamableHttpRedirectMode::Legacy,
     )
     .await?;
 

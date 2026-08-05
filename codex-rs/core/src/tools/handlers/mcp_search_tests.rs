@@ -89,6 +89,27 @@ fn mcp_namespace_descriptions_are_bounded_at_512_kib() {
     assert_eq!(namespace.description, expected_description);
 }
 
+#[test]
+fn agent_plugin_namespace_descriptions_use_the_stricter_bound() {
+    let expected_description = "é".repeat(MAX_AGENT_PLUGIN_MCP_NAMESPACE_DESCRIPTION_BYTES / 2);
+    let mut info = tool_info();
+    info.namespace_description = Some(format!("{expected_description}overflow"));
+    let handler = McpHandler::new_agent_plugin(info).expect("MCP tool spec should build");
+    let search_info = handler.search_info().expect("MCP search info");
+
+    assert_eq!(
+        search_info.source_info,
+        Some(ToolSearchSourceInfo {
+            name: "Calendar".to_string(),
+            description: Some(expected_description.clone()),
+        })
+    );
+    let LoadableToolSpec::Namespace(namespace) = search_info.entry.output else {
+        panic!("expected namespace search output");
+    };
+    assert_eq!(namespace.description, expected_description);
+}
+
 fn tool_info() -> ToolInfo {
     ToolInfo {
         server_name: "codex-apps".to_string(),

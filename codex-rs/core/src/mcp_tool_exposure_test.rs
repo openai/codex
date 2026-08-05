@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpPluginAttribution;
+use codex_mcp::McpServerRegistration;
+use codex_mcp::ResolvedMcpCatalog;
 use codex_mcp::ToolInfo;
 use codex_tools::ToolExposure;
 use codex_tools::ToolName;
@@ -76,11 +79,28 @@ fn runtimes_by_name(
     apps_enabled: bool,
     search_tool_enabled: bool,
 ) -> HashMap<ToolName, ToolExposure> {
+    runtimes_by_name_with_catalog(
+        tools,
+        config,
+        apps_enabled,
+        &ResolvedMcpCatalog::default(),
+        search_tool_enabled,
+    )
+}
+
+fn runtimes_by_name_with_catalog(
+    tools: &[ToolInfo],
+    config: &Config,
+    apps_enabled: bool,
+    mcp_server_catalog: &ResolvedMcpCatalog,
+    search_tool_enabled: bool,
+) -> HashMap<ToolName, ToolExposure> {
     let mut registry = ToolRegistry::default();
     append_mcp_tools(
         tools,
         config,
         apps_enabled,
+        mcp_server_catalog,
         search_tool_enabled,
         &mut registry,
     );
@@ -88,6 +108,91 @@ fn runtimes_by_name(
         .entries()
         .map(|tool| (tool.runtime.tool_name(), tool.exposure))
         .collect()
+}
+
+#[tokio::test]
+async fn agent_plugin_budget_hides_only_overflow_agent_tools() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "[mcp_servers.agent]\ncommand = \"echo\"\n",
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+    let agent_config = config.mcp_servers.get()["agent"].clone();
+    let legacy_config = agent_config.clone();
+    let mut catalog = ResolvedMcpCatalog::builder();
+    catalog.register(McpServerRegistration::from_plugin(
+        "agent".to_string(),
+        McpPluginAttribution::agent_plugin("agent@test".to_string(), "Agent".to_string()),
+        /*plugin_order*/ 0,
+        agent_config,
+    ));
+    catalog.register(McpServerRegistration::from_plugin(
+        "legacy".to_string(),
+        McpPluginAttribution::new("legacy@test".to_string(), "Legacy".to_string()),
+        /*plugin_order*/ 1,
+        legacy_config,
+    ));
+    let catalog = catalog.build();
+    let mut tools = (0..40)
+        .map(|index| {
+            let name = format!("tool_{index}");
+            let mut tool = make_mcp_tool(
+                "agent",
+                &name,
+                "mcp__agent",
+                &name,
+                /*connector_id*/ None,
+                /*connector_name*/ None,
+            );
+            tool.namespace_description = Some("n".repeat(1_000));
+            tool.tool.description = Some("d".repeat(1_000).into());
+            tool
+        })
+        .collect::<Vec<_>>();
+    let oversized_name = "x".repeat(MAX_AGENT_PLUGIN_MCP_SPEC_BYTES);
+    let oversized_agent_tool = make_mcp_tool(
+        "agent",
+        "oversized_agent_tool",
+        "mcp__agent",
+        &oversized_name,
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    );
+    tools.push(oversized_agent_tool.clone());
+    let legacy_tool = make_mcp_tool(
+        "legacy",
+        "legacy_tool",
+        "mcp__legacy",
+        &oversized_name,
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    );
+    tools.push(legacy_tool.clone());
+
+    let runtimes = runtimes_by_name_with_catalog(
+        &tools, &config, /*apps_enabled*/ false, &catalog, /*search_tool_enabled*/ false,
+    );
+    let agent_exposures = tools[..40]
+        .iter()
+        .map(|tool| runtimes[&tool.canonical_tool_name()])
+        .collect::<Vec<_>>();
+
+    assert!(agent_exposures.contains(&ToolExposure::Direct));
+    assert!(agent_exposures.contains(&ToolExposure::Hidden));
+    assert_eq!(
+        runtimes[&oversized_agent_tool.canonical_tool_name()],
+        ToolExposure::Hidden
+    );
+    assert_eq!(
+        runtimes[&legacy_tool.canonical_tool_name()],
+        ToolExposure::Direct
+    );
 }
 
 fn with_visibility(mut tool: ToolInfo, visibility: &[&str]) -> ToolInfo {
@@ -240,6 +345,7 @@ async fn app_tool_registration_uses_trusted_catalog_metadata_and_preserves_sourc
         &mcp_tools,
         &config,
         /*apps_enabled*/ true,
+        &ResolvedMcpCatalog::default(),
         /*search_tool_enabled*/ false,
         &mut registry,
     );

@@ -10,6 +10,7 @@ use crate::test_support::write_curated_plugin_sha_with;
 use crate::test_support::write_openai_api_curated_marketplace;
 use crate::test_support::write_openai_curated_marketplace;
 use codex_plugin::PluginLoadOutcome;
+use codex_utils_plugins::SkillDiscoveryMode;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -30,6 +31,7 @@ fn loaded_plugin(config_name: &str, root: &Path, enabled: bool) -> LoadedPlugin 
         root: path(root),
         enabled,
         skill_roots: Vec::new(),
+        skill_discovery_mode: SkillDiscoveryMode::Recursive,
         disabled_skill_paths: HashSet::new(),
         has_enabled_skills: false,
         mcp_servers: HashMap::new(),

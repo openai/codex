@@ -21,7 +21,8 @@ use crate::loader::load_plugin_mcp_servers;
 use crate::loader::load_plugin_skill_inventory;
 use crate::manager::ConfiguredMarketplacePlugin;
 use crate::manager::remote_plugin_install_required_description;
-use crate::manifest::load_plugin_manifest;
+use crate::manifest::PluginManifestFormat;
+use crate::manifest::load_plugin_manifest_with_format;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplacePluginSource;
 
@@ -53,6 +54,7 @@ struct PluginArtifactIdentity {
 pub(crate) struct ToolSuggestMetadataFragment {
     config_name: String,
     display_name: String,
+    plugin_namespace: Option<String>,
     description: Option<String>,
     mcp_server_names: Vec<String>,
     app_declarations: Vec<AppDeclaration>,
@@ -86,6 +88,7 @@ impl ToolSuggestMetadataFragment {
         PluginCapabilitySummary {
             config_name: self.config_name.clone(),
             display_name: self.display_name.clone(),
+            plugin_namespace: self.plugin_namespace.clone(),
             description: self.description.clone(),
             has_skills: self
                 .skill_inventory
@@ -206,6 +209,7 @@ async fn load_plugin_metadata(
         return Ok(Arc::new(ToolSuggestMetadataFragment {
             config_name: plugin.id.clone(),
             display_name: plugin.name.clone(),
+            plugin_namespace: Some(plugin.name.clone()),
             description: prompt_safe_plugin_description(Some(
                 &remote_plugin_install_required_description(&plugin.source),
             )),
@@ -217,16 +221,18 @@ async fn load_plugin_metadata(
     if !plugin_root.as_path().is_dir() {
         return Err("path does not exist or is not a directory".to_string());
     }
-    let manifest = load_plugin_manifest(plugin_root.as_path())
+    let loaded_manifest = load_plugin_manifest_with_format(plugin_root.as_path())
         .ok_or_else(|| "missing or invalid plugin.json".to_string())?;
     let plugin_identity = PluginIdentity {
         plugin_id: plugin_id.as_key(),
         remote_plugin_id: None,
     };
+    let manifest = loaded_manifest.manifest;
     let skill_inventory = load_plugin_skill_inventory(
         plugin_root,
         &plugin_identity,
         &manifest,
+        loaded_manifest.format,
         restriction_product,
         /*plugin_skill_snapshots*/ None,
         root_scan_slots,
@@ -239,11 +245,16 @@ async fn load_plugin_metadata(
             .collect::<Vec<_>>();
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
-    let app_declarations = load_plugin_apps(plugin_root.as_path()).await;
+    let app_declarations = if loaded_manifest.format == PluginManifestFormat::AgentPlugin {
+        Vec::new()
+    } else {
+        load_plugin_apps(plugin_root.as_path()).await
+    };
 
     Ok(Arc::new(ToolSuggestMetadataFragment {
         config_name: plugin.id.clone(),
         display_name: plugin.name.clone(),
+        plugin_namespace: Some(manifest.name.clone()),
         description: prompt_safe_plugin_description(manifest.description.as_deref()),
         mcp_server_names,
         app_declarations,

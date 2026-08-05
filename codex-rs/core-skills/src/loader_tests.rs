@@ -1202,7 +1202,7 @@ async fn keeps_inherited_namespace_when_symlink_target_is_scan_root_ancestor() {
 #[tokio::test]
 async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
     let root = tempfile::tempdir().expect("tempdir");
-    let plugin_name = "p".repeat(MAX_NAME_LEN - 1);
+    let plugin_name = "p".repeat(MAX_NAME_LEN);
     let skill_name = "s".repeat(MAX_NAME_LEN);
     let plugin_root = root.path().join("plugins").join(&plugin_name);
     let frontmatter = format!("name: {skill_name}\ndescription: search sample data");
@@ -1257,7 +1257,7 @@ async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
 #[tokio::test]
 async fn plugin_skill_name_length_limit_rejects_overlong_qualified_name() {
     let root = tempfile::tempdir().expect("tempdir");
-    let plugin_name = "p".repeat(MAX_NAME_LEN);
+    let plugin_name = "p".repeat(MAX_NAME_LEN + 1);
     let skill_name = "s".repeat(MAX_NAME_LEN);
     let plugin_root = root.path().join("plugins").join(&plugin_name);
     let frontmatter = format!("name: {skill_name}\ndescription: search sample data");

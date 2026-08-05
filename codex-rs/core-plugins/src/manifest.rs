@@ -31,6 +31,17 @@ pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<Absol
 
 pub type UriPluginManifest = codex_plugin::manifest::PluginManifest<PathUri>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PluginManifestFormat {
+    Legacy,
+    AgentPlugin,
+}
+
+pub(crate) struct LoadedPluginManifest {
+    pub manifest: PluginManifest,
+    pub format: PluginManifestFormat,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawPluginManifest {
@@ -143,6 +154,15 @@ enum RawPluginManifestHooks {
 
 /// Loads a plugin manifest from the local host filesystem.
 pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
+    load_plugin_manifest_with_format(plugin_root).map(|loaded| loaded.manifest)
+}
+
+pub fn is_agent_plugin_manifest(plugin_root: &Path) -> bool {
+    load_plugin_manifest_with_format(plugin_root)
+        .is_some_and(|loaded| loaded.format == PluginManifestFormat::AgentPlugin)
+}
+
+pub(crate) fn load_plugin_manifest_with_format(plugin_root: &Path) -> Option<LoadedPluginManifest> {
     let manifest_path = find_plugin_manifest_path(plugin_root)?;
     let contents = fs::read_to_string(&manifest_path).ok()?;
     let is_agent_plugin = manifest_path == plugin_root.join(AGENT_PLUGIN_MANIFEST_RELATIVE_PATH);
@@ -162,7 +182,14 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
             .as_ref()
             .map(|(path, contents)| (path.as_path(), contents.as_str())),
     ) {
-        Ok(manifest) => Some(manifest),
+        Ok(manifest) => Some(LoadedPluginManifest {
+            manifest,
+            format: if is_agent_plugin {
+                PluginManifestFormat::AgentPlugin
+            } else {
+                PluginManifestFormat::Legacy
+            },
+        }),
         Err(err) => {
             tracing::warn!(
                 path = %manifest_path.display(),

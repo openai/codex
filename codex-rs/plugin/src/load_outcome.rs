@@ -25,6 +25,7 @@ pub struct LoadedPlugin<M> {
     pub root: AbsolutePathBuf,
     pub enabled: bool,
     pub skill_roots: Vec<AbsolutePathBuf>,
+    pub skill_discovery_mode: SkillDiscoveryMode,
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub has_enabled_skills: bool,
     pub mcp_servers: HashMap<String, M>,
@@ -42,6 +43,10 @@ impl<M> LoadedPlugin<M> {
     pub fn display_name(&self) -> &str {
         self.manifest_name.as_deref().unwrap_or(&self.config_name)
     }
+
+    pub fn is_agent_plugin(&self) -> bool {
+        self.skill_discovery_mode == SkillDiscoveryMode::DirectChildren
+    }
 }
 
 fn plugin_capability_summary_from_loaded<M>(
@@ -57,6 +62,7 @@ fn plugin_capability_summary_from_loaded<M>(
     let summary = PluginCapabilitySummary {
         config_name: plugin.config_name.clone(),
         display_name: plugin.display_name().to_string(),
+        plugin_namespace: plugin.plugin_namespace.clone(),
         description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
         has_skills: plugin.has_enabled_skills,
         mcp_server_names,
@@ -143,7 +149,7 @@ impl<M: Clone> PluginLoadOutcome<M> {
                         },
                         plugin_namespace: plugin_namespace.clone(),
                         plugin_root: plugin.root.clone(),
-                        discovery_mode: SkillDiscoveryMode::Recursive,
+                        discovery_mode: plugin.skill_discovery_mode,
                     });
                 }
             }
@@ -241,6 +247,7 @@ mod tests {
             root: test_path(config_name),
             enabled: true,
             skill_roots,
+            skill_discovery_mode: SkillDiscoveryMode::Recursive,
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,
             mcp_servers: HashMap::new(),

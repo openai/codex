@@ -52,6 +52,7 @@ pub fn app_connector_ids_from_declarations<'a>(
 pub struct PluginCapabilitySummary {
     pub config_name: String,
     pub display_name: String,
+    pub plugin_namespace: Option<String>,
     pub description: Option<String>,
     pub has_skills: bool,
     pub mcp_server_names: Vec<String>,

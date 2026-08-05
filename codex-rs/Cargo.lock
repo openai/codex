@@ -2926,6 +2926,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
+ "codex-utils-string",
  "dunce",
  "futures",
  "pretty_assertions",

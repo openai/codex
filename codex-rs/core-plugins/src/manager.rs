@@ -10,8 +10,8 @@ use crate::loader::curated_plugin_cache_version;
 use crate::loader::load_plugin_apps_from_manifest;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
-use crate::loader::load_plugin_mcp_servers_from_manifest;
-use crate::loader::load_plugin_skills_with_identity;
+use crate::loader::load_plugin_mcp_servers_from_manifest_with_format;
+use crate::loader::load_plugin_skill_inventory;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
 use crate::loader::materialize_marketplace_plugin_source;
@@ -21,8 +21,10 @@ use crate::loader::refresh_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_detailed;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall_detailed;
 use crate::loader::remote_installed_plugins_to_config;
+use crate::manifest::PluginManifestFormat;
 use crate::manifest::PluginManifestInterface;
 use crate::manifest::load_plugin_manifest;
+use crate::manifest::load_plugin_manifest_with_format;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
@@ -416,6 +418,7 @@ impl From<PluginDetail> for PluginCapabilitySummary {
         Self {
             config_name: value.id,
             display_name: value.name,
+            plugin_namespace: None,
             description: prompt_safe_plugin_description(value.description.as_deref()),
             has_skills,
             mcp_server_names: value.mcp_server_names,
@@ -1997,18 +2000,24 @@ impl PluginsManager {
                 "path does not exist or is not a directory".to_string(),
             ));
         }
-        let manifest =
+        let loaded_manifest =
             if codex_utils_plugins::find_plugin_manifest_path(source_path.as_path()).is_some() {
-                load_plugin_manifest(source_path.as_path())
+                load_plugin_manifest_with_format(source_path.as_path())
             } else {
                 plugin
                     .manifest_fallback
                     .as_ref()
                     .and_then(|fallback| fallback.parse_for_plugin_root(source_path.as_path()))
+                    .map(|manifest| crate::manifest::LoadedPluginManifest {
+                        manifest,
+                        format: PluginManifestFormat::Legacy,
+                    })
             }
             .ok_or_else(|| {
                 MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
             })?;
+        let manifest_format = loaded_manifest.format;
+        let manifest = loaded_manifest.manifest;
         let description = manifest.description.clone();
         let marketplace_category = plugin
             .interface
@@ -2022,21 +2031,27 @@ impl PluginsManager {
             plugin_id: plugin_id.as_key(),
             remote_plugin_id: self.remote_plugin_id_for(&plugin_id),
         };
-        let resolved_skills = load_plugin_skills_with_identity(
+        let skill_config_rules = codex_core_skills::config_rules::skill_config_rules_from_stack(
+            &config.config_layer_stack,
+        );
+        let resolved_skills = load_plugin_skill_inventory(
             &source_path,
             &plugin_identity,
             &manifest,
+            manifest_format,
             self.restriction_product,
-            &codex_core_skills::config_rules::skill_config_rules_from_stack(
-                &config.config_layer_stack,
-            ),
             /*plugin_skill_snapshots*/ None,
             Arc::clone(&self.skill_root_scan_slots),
         )
-        .await;
+        .await
+        .resolve(&skill_config_rules);
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);
-        let (hook_sources, _hook_load_warnings) =
-            load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
+        let (hook_sources, _hook_load_warnings) = if manifest_format == PluginManifestFormat::Legacy
+        {
+            load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths)
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let hooks = plugin_hook_declarations(&hook_sources)
             .into_iter()
             .map(|hook| PluginHookSummary {
@@ -2045,15 +2060,22 @@ impl PluginsManager {
             })
             .collect();
         let auth_mode = self.auth_mode();
-        let mut app_declarations =
-            load_plugin_apps_from_manifest(source_path.as_path(), &manifest.paths).await;
-        let mut mcp_servers = load_plugin_mcp_servers_from_manifest(
+        let mut app_declarations = if manifest_format == PluginManifestFormat::Legacy {
+            load_plugin_apps_from_manifest(source_path.as_path(), &manifest.paths).await
+        } else {
+            Vec::new()
+        };
+        let mcp_data_root = (manifest_format == PluginManifestFormat::AgentPlugin)
+            .then(|| self.store.mcp_data_root(&plugin_id, manifest_format));
+        let mut mcp_servers = load_plugin_mcp_servers_from_manifest_with_format(
             source_path.as_path(),
             &manifest.paths,
             /*plugin_policy*/ None,
+            mcp_data_root.as_deref(),
+            manifest_format,
         )
         .await;
-        if auth_mode.is_some() {
+        if manifest_format == PluginManifestFormat::Legacy && auth_mode.is_some() {
             apply_app_mcp_routing_policy(
                 &mut app_declarations,
                 &mut mcp_servers,

@@ -150,6 +150,7 @@ fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOut
     for snapshot in snapshots {
         let SkillRootSnapshot {
             root,
+            is_agent_plugin,
             skills,
             errors,
             file_system,
@@ -158,12 +159,14 @@ fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOut
             skill_roots.push(root.clone());
         }
         for skill in &skills {
-            skill_root_by_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| root.clone());
-            file_systems_by_skill_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| Arc::clone(&file_system));
+            let path = skill.path_to_skills_md.clone();
+            if !skill_root_by_path.contains_key(&path) {
+                skill_root_by_path.insert(path.clone(), root.clone());
+                file_systems_by_skill_path.insert(path.clone(), Arc::clone(&file_system));
+                if is_agent_plugin {
+                    outcome.agent_plugin_skill_paths.insert(path);
+                }
+            }
         }
         outcome.skills.extend(skills);
         outcome.errors.extend(errors);
@@ -182,6 +185,9 @@ fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> SkillLoadOut
     let used_roots = skill_root_by_path.values().cloned().collect::<HashSet<_>>();
     skill_roots.retain(|root| used_roots.contains(root));
     file_systems_by_skill_path.retain(|path, _| retained_skill_paths.contains(path));
+    outcome
+        .agent_plugin_skill_paths
+        .retain(|path| retained_skill_paths.contains(path));
     outcome.skill_roots = skill_roots;
     outcome.skill_root_by_path = Arc::new(skill_root_by_path);
     outcome.file_systems_by_skill_path = SkillFileSystemsByPath::new(file_systems_by_skill_path);

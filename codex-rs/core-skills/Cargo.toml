@@ -27,6 +27,7 @@ codex-skills = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
+codex-utils-string = { workspace = true }
 dunce = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

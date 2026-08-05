@@ -70,6 +70,7 @@ use tracing::warn;
 use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
+use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::in_process_transport::InProcessTransportFactory;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::ResolvedOAuthCredentialStore;
@@ -139,6 +140,7 @@ enum TransportRecipe {
         pinned_credential_store: Arc<OnceLock<ResolvedOAuthCredentialStore>>,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
+        redirect_mode: StreamableHttpRedirectMode,
     },
 }
 
@@ -481,6 +483,36 @@ impl RmcpClient {
         auth_provider: Option<SharedAuthProvider>,
         protocol_mode: McpProtocolMode,
     ) -> Result<Self> {
+        Self::new_streamable_http_client_with_protocol_mode_and_redirect_mode(
+            server_name,
+            url,
+            bearer_token,
+            http_headers,
+            env_http_headers,
+            store_mode,
+            keyring_backend_kind,
+            http_client,
+            auth_provider,
+            protocol_mode,
+            StreamableHttpRedirectMode::Legacy,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_streamable_http_client_with_protocol_mode_and_redirect_mode(
+        server_name: &str,
+        url: &str,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+        http_client: Arc<dyn HttpClient>,
+        auth_provider: Option<SharedAuthProvider>,
+        protocol_mode: McpProtocolMode,
+        redirect_mode: StreamableHttpRedirectMode,
+    ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
             url: url.to_string(),
@@ -492,6 +524,7 @@ impl RmcpClient {
             pinned_credential_store: Arc::new(OnceLock::new()),
             http_client,
             auth_provider,
+            redirect_mode,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -914,7 +947,14 @@ impl RmcpClient {
                 pinned_credential_store,
                 http_client,
                 auth_provider,
+                redirect_mode,
             } => {
+                let has_configured_headers = http_headers
+                    .as_ref()
+                    .is_some_and(|headers| !headers.is_empty())
+                    || env_http_headers
+                        .as_ref()
+                        .is_some_and(|headers| !headers.is_empty());
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
                 let auth_provider =
@@ -976,6 +1016,8 @@ impl RmcpClient {
                         credential_store,
                         default_headers.clone(),
                         Arc::clone(http_client),
+                        has_configured_headers,
+                        *redirect_mode,
                     )
                     .await
                     {
@@ -1007,6 +1049,8 @@ impl RmcpClient {
                                     Arc::clone(http_client),
                                     default_headers,
                                     /*auth_provider*/ None,
+                                    has_configured_headers,
+                                    *redirect_mode,
                                 ),
                                 http_config,
                             );
@@ -1026,6 +1070,8 @@ impl RmcpClient {
                             Arc::clone(http_client),
                             default_headers,
                             auth_provider,
+                            has_configured_headers,
+                            *redirect_mode,
                         ),
                         http_config,
                     );
@@ -1333,6 +1379,7 @@ impl RmcpClient {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_oauth_transport_and_runtime(
     server_name: &str,
     url: &str,
@@ -1340,13 +1387,17 @@ async fn create_oauth_transport_and_runtime(
     credential_store: ResolvedOAuthCredentialStore,
     default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
+    has_configured_headers: bool,
+    redirect_mode: StreamableHttpRedirectMode,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
-    let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new(
+    let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new_with_redirect_mode(
         http_client.clone(),
         default_headers.clone(),
+        has_configured_headers,
+        redirect_mode,
     ));
     let mut manager =
         AuthorizationManager::new_with_oauth_http_client(url.to_string(), oauth_http_client)
@@ -1370,7 +1421,13 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        StreamableHttpClientAdapter::new(http_client, default_headers, /*auth_provider*/ None),
+        StreamableHttpClientAdapter::new(
+            http_client,
+            default_headers,
+            /*auth_provider*/ None,
+            has_configured_headers,
+            redirect_mode,
+        ),
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();

@@ -322,7 +322,14 @@ pub fn effective_mcp_servers_from_configured(
                 }
                 McpServerAuth::OAuth => {}
             }
-            (name, EffectiveMcpServer::configured(server))
+            let agent_plugin = config
+                .mcp_server_catalog
+                .server(&name)
+                .is_some_and(|server| server.source().is_agent_plugin());
+            (
+                name,
+                EffectiveMcpServer::configured(server).with_agent_plugin(agent_plugin),
+            )
         })
         .collect::<HashMap<_, _>>();
     if !host_owned_codex_apps_enabled(config, auth) {
