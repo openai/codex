@@ -16,6 +16,9 @@ pub const MAX_PENDING_DELEGATE_CALLS: usize = 1_024;
 /// Optional second WebSocket carrying delegate callbacks and their responses.
 pub const DUAL_WEBSOCKET_CAPABILITY: &str = "dual-websocket-v1";
 
+/// Negotiated support for cell execution resource limits on `session/open`.
+pub const SESSION_RESOURCE_LIMITS_CAPABILITY: &str = "session-cell-execution-resource-limits";
+
 /// Selects one socket of a negotiated dual-WebSocket connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransportLane {
@@ -44,6 +47,7 @@ pub use payload::WireExecuteRequest;
 pub use payload::WireImageDetail;
 pub use payload::WireNestedToolCall;
 pub use payload::WireRuntimeResponse;
+pub use payload::WireSessionCellExecutionLimits;
 pub use payload::WireToolDefinition;
 pub use payload::WireToolKind;
 pub use payload::WireToolName;

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
@@ -17,6 +18,7 @@ use codex_code_mode_protocol::host::HostRequest;
 use codex_code_mode_protocol::host::HostResponse;
 use codex_code_mode_protocol::host::HostToClient;
 use codex_code_mode_protocol::host::ProtocolVersion;
+use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::WireCellId;
 use codex_code_mode_protocol::host::WireContentItem;
 use codex_code_mode_protocol::host::WireResult;
@@ -117,13 +119,19 @@ async fn websocket_provider_executes_over_shared_connector() {
             let request = EncodedFrame::decode_framed::<ClientToHost>(&frame)
                 .expect("websocket test host should decode a framed protocol message");
             let responses = match request {
-                ClientToHost::ClientHello(_) => vec![HostToClient::HostHello(HostHello::new(
-                    ProtocolVersion::V1,
-                    CapabilitySet::empty(),
-                ))],
+                ClientToHost::ClientHello(hello) => {
+                    let capability = Capability::new(SESSION_RESOURCE_LIMITS_CAPABILITY)
+                        .expect("session-limit capability");
+                    assert!(hello.optional_capabilities().contains(&capability));
+                    assert_eq!(hello.required_capabilities(), &CapabilitySet::empty());
+                    vec![HostToClient::HostHello(HostHello::new(
+                        ProtocolVersion::V1,
+                        CapabilitySet::empty(),
+                    ))]
+                }
                 ClientToHost::Request {
                     id,
-                    request: HostRequest::OpenSession { session_id },
+                    request: HostRequest::OpenSession { session_id, .. },
                 } => vec![HostToClient::Response {
                     id,
                     result: WireResult::Ok {
@@ -192,6 +200,32 @@ async fn websocket_provider_executes_over_shared_connector() {
         .create_session(Arc::new(NoopCodeModeSessionDelegate))
         .await
         .expect("shared websocket connector should open a code-mode session");
+    let error = provider
+        .create_session_with_limits(
+            Arc::new(NoopCodeModeSessionDelegate),
+            CodeModeSessionCellExecutionLimits {
+                max_yield_time_ms: Some(250),
+                max_heap_size_bytes: None,
+            },
+        )
+        .await
+        .err()
+        .expect("legacy host should reject a limited session");
+    assert_eq!(
+        error,
+        format!(
+            "code-mode host does not support session resource limits: missing `{SESSION_RESOURCE_LIMITS_CAPABILITY}` capability"
+        )
+    );
+    let second_session = provider
+        .create_session(Arc::new(NoopCodeModeSessionDelegate))
+        .await
+        .expect("rejecting limited sessions should preserve the shared legacy-host connection");
+    second_session
+        .shutdown()
+        .await
+        .expect("second unlimited session should shut down");
+    drop(second_session);
     let response = session
         .execute(ExecuteRequest {
             tool_call_id: "shared-websocket".to_string(),
@@ -261,6 +295,13 @@ async fn websocket_provider_fails_when_a_negotiated_bulk_connection_is_unavailab
         let capability =
             Capability::new(DUAL_WEBSOCKET_CAPABILITY).expect("dual websocket capability");
         assert!(hello.optional_capabilities().contains(&capability));
+        let session_limits_capability =
+            Capability::new(SESSION_RESOURCE_LIMITS_CAPABILITY).expect("session-limit capability");
+        assert!(
+            hello
+                .optional_capabilities()
+                .contains(&session_limits_capability)
+        );
         let hello = HostToClient::HostHello(
             HostHello::new(
                 ProtocolVersion::V1,

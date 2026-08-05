@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::WaitOutcome;
@@ -8,6 +9,7 @@ use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::HostRequest;
+use codex_code_mode_protocol::host::WireSessionCellExecutionLimits;
 use codex_code_mode_protocol::host::WireWaitRequest;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -28,10 +30,18 @@ impl ConnectionDriver {
             DriverCommand::OpenSession {
                 session,
                 delegate,
+                limits,
                 cleanup,
                 caller_cancellation,
                 response_tx,
-            } => self.open_session(session, delegate, cleanup, caller_cancellation, response_tx),
+            } => self.open_session(
+                session,
+                delegate,
+                limits,
+                cleanup,
+                caller_cancellation,
+                response_tx,
+            ),
             DriverCommand::Execute {
                 session,
                 request,
@@ -60,6 +70,7 @@ impl ConnectionDriver {
         &mut self,
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        limits: CodeModeSessionCellExecutionLimits,
         cleanup: super::cleanup::SessionCleanup,
         caller_cancellation: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,
@@ -71,6 +82,15 @@ impl ConnectionDriver {
             )));
             return true;
         }
+        let limits = match WireSessionCellExecutionLimits::try_from(limits) {
+            Ok(limits) => limits,
+            Err(error) => {
+                let _ = response_tx.send(Err(format!(
+                    "failed to encode code-mode session execution limits: {error}"
+                )));
+                return true;
+            }
+        };
         let request_id = match self.requests.allocate_id() {
             Ok(id) => id,
             Err(err) => {
@@ -82,6 +102,8 @@ impl ConnectionDriver {
             id: request_id,
             request: HostRequest::OpenSession {
                 session_id: session.id.clone(),
+                cell_execution_limits: (limits != WireSessionCellExecutionLimits::default())
+                    .then_some(limits),
             },
         };
         let frame = match EncodedFrame::encode(&message) {

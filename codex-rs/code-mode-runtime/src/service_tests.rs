@@ -12,12 +12,12 @@ use super::WaitOutcome;
 use super::WaitRequest;
 use super::WaitToPendingOutcome;
 use super::WaitToPendingRequest;
-use super::yield_timeout;
 use crate::CodeModeToolKind;
 use crate::ExecuteRequest;
 use crate::ExecuteToPendingOutcome;
 use crate::FunctionCallOutputContentItem;
 use crate::ToolDefinition;
+use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_protocol::ToolName;
@@ -27,15 +27,36 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 #[test]
-fn yield_timeout_adds_grace_only_at_ten_seconds() {
-    assert_eq!(
-        yield_timeout(/*yield_time_ms*/ 9_999),
-        Duration::from_millis(9_999)
-    );
-    assert_eq!(
-        yield_timeout(/*yield_time_ms*/ 10_000),
-        Duration::from_secs(11)
-    );
+fn resolve_yield_timeout_applies_grace_before_session_limits() {
+    for (max_yield_time_ms, requested_yield_time_ms, expected_timeout) in [
+        (None, 0, Duration::ZERO),
+        (None, 9_999, Duration::from_millis(9_999)),
+        (None, 10_000, Duration::from_secs(11)),
+        (None, 10_001, Duration::from_millis(11_001)),
+        (Some(0), 0, Duration::ZERO),
+        (Some(0), 10_000, Duration::ZERO),
+        (Some(5_000), 9_999, Duration::from_secs(5)),
+        (Some(10_000), 10_000, Duration::from_secs(10)),
+        (Some(10_500), 10_000, Duration::from_millis(10_500)),
+        (Some(11_000), 10_000, Duration::from_secs(11)),
+        (Some(12_000), 10_000, Duration::from_secs(11)),
+        (Some(10_500), 5_000, Duration::from_secs(5)),
+        (Some(u64::MAX), u64::MAX, Duration::from_millis(u64::MAX)),
+    ] {
+        let session = InProcessCodeModeSession::with_delegate_and_limits(
+            Arc::new(ReleasableToolDelegate::default()),
+            CodeModeSessionCellExecutionLimits {
+                max_yield_time_ms,
+                max_heap_size_bytes: None,
+            },
+        );
+
+        assert_eq!(
+            session.resolve_yield_timeout(requested_yield_time_ms),
+            expected_timeout,
+            "requested {requested_yield_time_ms} ms with limit {max_yield_time_ms:?}"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -65,6 +86,79 @@ async fn execute_waits_for_nested_tool_during_yield_grace() {
             }],
             error_text: None,
         }
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn execute_and_wait_clamp_yield_grace_without_stopping_the_cell() {
+    let delegate = Arc::new(ReleasableToolDelegate::default());
+    let service = InProcessCodeModeSession::with_delegate_and_limits(
+        delegate.clone(),
+        CodeModeSessionCellExecutionLimits {
+            max_yield_time_ms: Some(/*value*/ 10_000),
+            max_heap_size_bytes: None,
+        },
+    );
+    let started = service
+        .execute(ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"await tools.echo({}); text("done");"#.to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        })
+        .await
+        .unwrap();
+    let initial_response = tokio::spawn(started.initial_response());
+    wait_until_tool_started(&delegate).await;
+
+    tokio::time::advance(Duration::from_millis(9_999)).await;
+    assert!(!initial_response.is_finished());
+    tokio::time::advance(Duration::from_millis(/*millis*/ 1)).await;
+    wait_until_finished(&initial_response).await;
+    assert_eq!(
+        initial_response.await.unwrap().unwrap(),
+        RuntimeResponse::Yielded {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        }
+    );
+
+    let wait_response = service
+        .begin_wait(WaitRequest {
+            cell_id: cell_id("1"),
+            yield_time_ms: 10_000,
+        })
+        .await;
+    let wait_response = tokio::spawn(wait_response);
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(/*secs*/ 10)).await;
+    wait_until_finished(&wait_response).await;
+    assert_eq!(
+        wait_response.await.unwrap().unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Yielded {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        })
+    );
+
+    delegate.release_tool();
+    let completion = service
+        .begin_wait(WaitRequest {
+            cell_id: cell_id("1"),
+            yield_time_ms: 10_000,
+        })
+        .await;
+    let completion = tokio::spawn(completion);
+    wait_until_finished(&completion).await;
+    assert_eq!(
+        completion.await.unwrap().unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        })
     );
 }
 
@@ -111,6 +205,76 @@ async fn wait_waits_for_nested_tool_during_yield_grace() {
             error_text: None,
         })
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_yield_limit_is_immediate_and_scoped_to_its_session() {
+    let zero_delegate = Arc::new(ReleasableToolDelegate::default());
+    let zero_session = InProcessCodeModeSession::with_delegate_and_limits(
+        zero_delegate.clone(),
+        CodeModeSessionCellExecutionLimits {
+            max_yield_time_ms: Some(/*value*/ 0),
+            max_heap_size_bytes: None,
+        },
+    );
+    let limited_delegate = Arc::new(ReleasableToolDelegate::default());
+    let limited_session = InProcessCodeModeSession::with_delegate_and_limits(
+        limited_delegate.clone(),
+        CodeModeSessionCellExecutionLimits {
+            max_yield_time_ms: Some(/*value*/ 10),
+            max_heap_size_bytes: None,
+        },
+    );
+    let request = ExecuteRequest {
+        enabled_tools: vec![echo_tool()],
+        source: "await tools.echo({});".to_string(),
+        yield_time_ms: Some(/*value*/ 60_000),
+        ..execute_request("")
+    };
+    let zero_started = zero_session.execute(request.clone()).await.unwrap();
+    let limited_started = limited_session.execute(request).await.unwrap();
+    let zero_response = tokio::spawn(zero_started.initial_response());
+    let limited_response = tokio::spawn(limited_started.initial_response());
+    wait_until_tool_started(&zero_delegate).await;
+    wait_until_tool_started(&limited_delegate).await;
+    wait_until_finished(&zero_response).await;
+    assert!(!limited_response.is_finished());
+    assert_eq!(
+        zero_response.await.unwrap().unwrap(),
+        RuntimeResponse::Yielded {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        }
+    );
+
+    let zero_wait = zero_session
+        .begin_wait(WaitRequest {
+            cell_id: cell_id("1"),
+            yield_time_ms: 60_000,
+        })
+        .await;
+    let zero_wait = tokio::spawn(zero_wait);
+    wait_until_finished(&zero_wait).await;
+    assert_eq!(
+        zero_wait.await.unwrap().unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Yielded {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        })
+    );
+
+    tokio::time::advance(Duration::from_millis(/*millis*/ 10)).await;
+    wait_until_finished(&limited_response).await;
+    assert_eq!(
+        limited_response.await.unwrap().unwrap(),
+        RuntimeResponse::Yielded {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        }
+    );
+
+    zero_session.shutdown().await.unwrap();
+    limited_session.shutdown().await.unwrap();
 }
 
 async fn wait_until_finished<T>(task: &tokio::task::JoinHandle<T>) {

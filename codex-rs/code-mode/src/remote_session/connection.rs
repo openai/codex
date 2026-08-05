@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::StartedCell;
@@ -28,6 +29,7 @@ use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
+use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
 use codex_code_mode_protocol::host::TransportLane;
 use codex_http_client::HttpClientFactory;
@@ -120,6 +122,7 @@ pub(super) struct Connection {
     alive: Arc<AtomicBool>,
     failure: Arc<std::sync::Mutex<Option<String>>>,
     cancellation: CancellationToken,
+    capabilities: CapabilitySet,
 }
 
 struct CallerCancellation {
@@ -285,11 +288,14 @@ impl Connection {
         let handshake = async {
             let dual_capability =
                 Capability::new(DUAL_WEBSOCKET_CAPABILITY).map_err(|error| error.to_string())?;
+            let session_limits_capability = Capability::new(SESSION_RESOURCE_LIMITS_CAPABILITY)
+                .map_err(|error| error.to_string())?;
             let optional_capabilities = if bulk_connection_options.is_some() {
-                CapabilitySet::try_new([dual_capability.clone()])
+                CapabilitySet::try_new([dual_capability.clone(), session_limits_capability])
                     .map_err(|error| error.to_string())?
             } else {
-                CapabilitySet::empty()
+                CapabilitySet::try_new([session_limits_capability])
+                    .map_err(|error| error.to_string())?
             };
             let hello = ClientHello::new(
                 SupportedProtocolVersions::try_new([ProtocolVersion::V1])
@@ -310,7 +316,8 @@ impl Connection {
                 Some(HostToClient::HostHello(hello))
                     if hello.selected_version() == ProtocolVersion::V1 =>
                 {
-                    if hello.capabilities().contains(&dual_capability) {
+                    let capabilities = hello.capabilities().clone();
+                    let bulk_token = if capabilities.contains(&dual_capability) {
                         hello
                             .bulk_connection_token()
                             .map(str::to_string)
@@ -318,12 +325,15 @@ impl Connection {
                                 "code-mode host advertised dual websockets without a pairing token"
                                     .to_string()
                             })
-                            .map(Some)
+                            .map(Some)?
                     } else if hello.bulk_connection_token().is_some() {
-                        Err("code-mode host returned an unexpected bulk pairing token".to_string())
+                        return Err(
+                            "code-mode host returned an unexpected bulk pairing token".to_string()
+                        );
                     } else {
-                        Ok(None)
-                    }
+                        None
+                    };
+                    Ok((capabilities, bulk_token))
                 }
                 Some(HostToClient::HandshakeRejected { reason }) => {
                     Err(format!("code-mode host rejected the handshake: {reason:?}"))
@@ -344,8 +354,8 @@ impl Connection {
                 ));
             }
         };
-        let bulk_token = match handshake_result {
-            Ok(token) => token,
+        let (capabilities, bulk_token) = match handshake_result {
+            Ok(negotiated) => negotiated,
             Err(err) => {
                 let _ = writer.close().await;
                 owner.close().await;
@@ -460,6 +470,7 @@ impl Connection {
             alive,
             failure,
             cancellation,
+            capabilities,
         })
     }
 
@@ -478,13 +489,25 @@ impl Connection {
         &self,
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        limits: CodeModeSessionCellExecutionLimits,
     ) -> Result<SessionCleanup, String> {
+        if limits != CodeModeSessionCellExecutionLimits::default()
+            && !self
+                .capabilities
+                .iter()
+                .any(|capability| capability.as_str() == SESSION_RESOURCE_LIMITS_CAPABILITY)
+        {
+            return Err(format!(
+                "code-mode host does not support session resource limits: missing `{SESSION_RESOURCE_LIMITS_CAPABILITY}` capability"
+            ));
+        }
         let cleanup = SessionCleanup::new();
         let cancellation = CallerCancellation::new();
         let (response_tx, response_rx) = oneshot::channel();
         self.send(DriverCommand::OpenSession {
             session,
             delegate,
+            limits,
             cleanup: cleanup.clone(),
             caller_cancellation: cancellation.token(),
             response_tx,

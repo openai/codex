@@ -23,6 +23,13 @@ pub type ToolInvocationFuture<'a> =
     Pin<Box<dyn Future<Output = Result<JsonValue, String>> + Send + 'a>>;
 pub type NotificationFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
+/// Optional resource limits shared by every cell in one code-mode session.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CodeModeSessionCellExecutionLimits {
+    pub max_yield_time_ms: Option<u64>,
+    pub max_heap_size_bytes: Option<usize>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct CellId(String);
 
@@ -164,6 +171,24 @@ pub trait CodeModeSessionProvider: Send + Sync {
         &'a self,
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a>;
+
+    /// Creates a session whose cells share the supplied execution limits.
+    ///
+    /// Existing providers remain compatible with unlimited sessions, but must
+    /// explicitly implement this method before accepting non-default limits.
+    fn create_session_with_limits<'a>(
+        &'a self,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        limits: CodeModeSessionCellExecutionLimits,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        if limits == CodeModeSessionCellExecutionLimits::default() {
+            self.create_session(delegate)
+        } else {
+            Box::pin(async {
+                Err("code-mode session provider does not support resource limits".to_string())
+            })
+        }
+    }
 }
 
 #[cfg(test)]

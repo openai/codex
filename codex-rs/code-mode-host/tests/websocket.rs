@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
+use codex_code_mode::CodeModeSessionCellExecutionLimits;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
@@ -32,6 +33,7 @@ use codex_code_mode_protocol::host::HostToClient;
 use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
+use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
 use codex_code_mode_protocol::host::WireContentItem;
@@ -225,16 +227,18 @@ impl HostClient {
 
     async fn negotiate_dual(&mut self, websocket_url: &str) -> Result<HostClient> {
         let capability = Capability::new(DUAL_WEBSOCKET_CAPABILITY)?;
+        let resource_limits = Capability::new(SESSION_RESOURCE_LIMITS_CAPABILITY)?;
         let hello = ClientHello::new(
             SupportedProtocolVersions::try_new([ProtocolVersion::V1])?,
             CapabilitySet::empty(),
-            CapabilitySet::try_new([capability.clone()])?,
+            CapabilitySet::try_new([capability.clone(), resource_limits.clone()])?,
         )?;
         self.send(&ClientToHost::ClientHello(hello)).await?;
         let HostToClient::HostHello(hello) = self.read().await? else {
             anyhow::bail!("expected code-mode host hello");
         };
         assert!(hello.capabilities().contains(&capability));
+        assert!(hello.capabilities().contains(&resource_limits));
         let token = hello
             .bulk_connection_token()
             .context("dual websocket handshake omitted its pairing token")?;
@@ -257,6 +261,7 @@ impl HostClient {
             id,
             request: HostRequest::OpenSession {
                 session_id: session_id.clone(),
+                cell_execution_limits: None,
             },
         })
         .await?;
@@ -416,7 +421,13 @@ async fn production_websocket_client_runs_nested_tools_while_other_sessions_prog
         .await
         .map_err(anyhow::Error::msg)?;
     let fast_session = provider
-        .create_session(Arc::new(NoopCodeModeSessionDelegate))
+        .create_session_with_limits(
+            Arc::new(NoopCodeModeSessionDelegate),
+            CodeModeSessionCellExecutionLimits {
+                max_yield_time_ms: Some(5_000),
+                max_heap_size_bytes: None,
+            },
+        )
         .await
         .map_err(anyhow::Error::msg)?;
 

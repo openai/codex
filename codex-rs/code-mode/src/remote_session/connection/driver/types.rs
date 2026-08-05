@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::RuntimeResponse;
@@ -30,6 +31,7 @@ pub(in crate::remote_session::connection) enum DriverCommand {
     OpenSession {
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        limits: CodeModeSessionCellExecutionLimits,
         cleanup: SessionCleanup,
         caller_cancellation: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,

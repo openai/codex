@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeSession;
+use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_code_mode_protocol::CodeModeSessionProviderFuture;
@@ -85,7 +86,15 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
         &'a self,
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a> {
-        Box::pin(create_host_session(delegate, self.process_host()))
+        self.create_session_with_limits(delegate, CodeModeSessionCellExecutionLimits::default())
+    }
+
+    fn create_session_with_limits<'a>(
+        &'a self,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        limits: CodeModeSessionCellExecutionLimits,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        Box::pin(create_host_session(delegate, self.process_host(), limits))
     }
 }
 
@@ -99,6 +108,14 @@ impl CodeModeSessionProvider for DisabledCodeModeSessionProvider {
         _delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a> {
         Box::pin(async { Err("code-mode host is disabled".to_string()) })
+    }
+
+    fn create_session_with_limits<'a>(
+        &'a self,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        _limits: CodeModeSessionCellExecutionLimits,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        self.create_session(delegate)
     }
 }
 
@@ -129,15 +146,28 @@ impl CodeModeSessionProvider for WebSocketCodeModeSessionProvider {
         &'a self,
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a> {
-        Box::pin(create_host_session(delegate, Arc::clone(&self.host)))
+        self.create_session_with_limits(delegate, CodeModeSessionCellExecutionLimits::default())
+    }
+
+    fn create_session_with_limits<'a>(
+        &'a self,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        limits: CodeModeSessionCellExecutionLimits,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        Box::pin(create_host_session(
+            delegate,
+            Arc::clone(&self.host),
+            limits,
+        ))
     }
 }
 
 async fn create_host_session(
     delegate: Arc<dyn CodeModeSessionDelegate>,
     host: Arc<OwnedCodeModeHost>,
+    limits: CodeModeSessionCellExecutionLimits,
 ) -> Result<Arc<dyn CodeModeSession>, String> {
-    let session = ProcessOwnedCodeModeSession::with_host(delegate, host);
+    let session = ProcessOwnedCodeModeSession::with_host(delegate, host, limits);
     session.connection().await?;
     Ok(Arc::new(session))
 }
@@ -244,6 +274,7 @@ struct SessionBinding {
 struct SessionInner {
     host: Arc<OwnedCodeModeHost>,
     delegate: Arc<dyn CodeModeSessionDelegate>,
+    limits: CodeModeSessionCellExecutionLimits,
     state: StdMutex<SessionState>,
     next_generation: AtomicU64,
     shutdown_requested: AtomicBool,
@@ -263,14 +294,20 @@ impl ProcessOwnedCodeModeSession {
             Arc::new(OwnedCodeModeHost::new(
                 InstallContext::current().code_mode_host_program(),
             )),
+            CodeModeSessionCellExecutionLimits::default(),
         )
     }
 
-    fn with_host(delegate: Arc<dyn CodeModeSessionDelegate>, host: Arc<OwnedCodeModeHost>) -> Self {
+    fn with_host(
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        host: Arc<OwnedCodeModeHost>,
+        limits: CodeModeSessionCellExecutionLimits,
+    ) -> Self {
         Self {
             inner: Arc::new(SessionInner {
                 host,
                 delegate,
+                limits,
                 state: StdMutex::new(SessionState::New),
                 next_generation: AtomicU64::new(1),
                 shutdown_requested: AtomicBool::new(false),
@@ -361,7 +398,11 @@ impl SessionInner {
         let result = match self.host.connection().await {
             Ok(connection) => {
                 let cleanup = connection
-                    .open_session(remote.clone(), Arc::clone(&self.delegate))
+                    .open_session(
+                        remote.clone(),
+                        Arc::clone(&self.delegate),
+                        self.limits.clone(),
+                    )
                     .await;
                 cleanup.map(|cleanup| SessionBinding {
                     connection,

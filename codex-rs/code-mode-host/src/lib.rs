@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientToHost;
@@ -23,6 +24,7 @@ use codex_code_mode_protocol::host::HostToClient;
 use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
+use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
 use codex_code_mode_protocol::host::TransportLane;
@@ -314,11 +316,21 @@ async fn negotiate(
     } else {
         None
     };
-    let host_capabilities = if registration.is_some() {
-        CapabilitySet::try_new([dual_capability])?
-    } else {
-        CapabilitySet::empty()
-    };
+    let resource_limits_capability = Capability::new(SESSION_RESOURCE_LIMITS_CAPABILITY)?;
+    let resource_limits_requested = client_hello
+        .required_capabilities()
+        .contains(&resource_limits_capability)
+        || client_hello
+            .optional_capabilities()
+            .contains(&resource_limits_capability);
+    let host_capabilities = CapabilitySet::try_new(
+        [
+            registration.is_some().then_some(dual_capability),
+            resource_limits_requested.then_some(resource_limits_capability),
+        ]
+        .into_iter()
+        .flatten(),
+    )?;
     if let Some(capability) = client_hello
         .required_capabilities()
         .iter()
@@ -419,10 +431,16 @@ impl HostState {
             return;
         }
         match request {
-            HostRequest::OpenSession { session_id } => {
-                let result = self
-                    .open_session(session_id.clone())
-                    .map(|()| HostResponse::SessionReady { session_id });
+            HostRequest::OpenSession {
+                session_id,
+                cell_execution_limits,
+            } => {
+                let result = CodeModeSessionCellExecutionLimits::try_from(
+                    cell_execution_limits.unwrap_or_default(),
+                )
+                .map_err(|error| format!("invalid code-mode session execution limits: {error}"))
+                .and_then(|limits| self.open_session(session_id.clone(), limits))
+                .map(|()| HostResponse::SessionReady { session_id });
                 self.respond(request_id, result);
             }
             HostRequest::Execute {
@@ -537,7 +555,11 @@ impl HostState {
         }
     }
 
-    fn open_session(&self, session_id: SessionId) -> Result<(), String> {
+    fn open_session(
+        &self,
+        session_id: SessionId,
+        cell_execution_limits: CodeModeSessionCellExecutionLimits,
+    ) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
         if sessions.contains_key(&session_id) {
             return Err(format!(
@@ -571,6 +593,7 @@ impl HostState {
                 InProcessCodeModeSession::with_delegate_and_task_failure_handler(
                     delegate,
                     task_failure_handler,
+                    cell_execution_limits,
                 ),
             ),
         );
