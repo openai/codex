@@ -19,6 +19,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
 use codex_extension_api::ToolExecutor;
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
@@ -264,6 +265,42 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
             encrypted_function_args: None,
         }
     );
+
+    Ok(())
+}
+
+#[test]
+fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow::Result<()> {
+    for namespace in [None, Some(""), Some(DEFAULT_FUNCTION_NAMESPACE)] {
+        let function_call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+            id: None,
+            name: "lookup".to_string(),
+            namespace: namespace.map(str::to_string),
+            arguments: "{}".to_string(),
+            encrypted_function_args: None,
+            call_id: "call-function".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        })?
+        .expect("function_call should produce a tool call");
+        let custom_call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-custom".to_string(),
+            name: "apply_patch".to_string(),
+            namespace: namespace.map(str::to_string),
+            input: "patch".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        })?
+        .expect("custom_tool_call should produce a tool call");
+
+        assert_eq!(
+            [function_call.tool_name, custom_call.tool_name],
+            [
+                ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "lookup"),
+                ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "apply_patch"),
+            ]
+        );
+    }
 
     Ok(())
 }

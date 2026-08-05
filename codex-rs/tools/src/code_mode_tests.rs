@@ -1,4 +1,5 @@
 use super::augment_tool_spec_for_code_mode;
+use super::code_mode_name_for_tool_name;
 use super::tool_spec_to_code_mode_tool_definition;
 use crate::AdditionalProperties;
 use crate::FreeformTool;
@@ -12,6 +13,21 @@ use crate::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
+
+#[test]
+fn code_mode_tool_names_do_not_prefix_the_default_namespace() {
+    for tool_name in [
+        ToolName::plain("apply_patch"),
+        ToolName::namespaced("functions", "apply_patch"),
+    ] {
+        assert_eq!(code_mode_name_for_tool_name(&tool_name), "apply_patch");
+    }
+
+    assert_eq!(
+        code_mode_name_for_tool_name(&ToolName::namespaced("editor", "apply_patch")),
+        "editor__apply_patch"
+    );
+}
 
 #[test]
 fn augment_tool_spec_for_code_mode_augments_function_tools() {

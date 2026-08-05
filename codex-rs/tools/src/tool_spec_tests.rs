@@ -9,6 +9,7 @@ use crate::JsonSchema;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::create_tools_json_for_responses_api;
+use crate::create_tools_json_for_responses_lite;
 use crate::create_tools_raw_json_for_responses_api;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
@@ -143,6 +144,107 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
             },
         })]
     );
+}
+
+fn responses_lite_function(name: &str) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: name.to_string(),
+        description: format!("{name} tool"),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::new(),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
+        output_schema: None,
+    }
+}
+
+#[test]
+fn responses_lite_groups_default_function_and_custom_tools() {
+    let tools = create_tools_json_for_responses_lite(&[
+        ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search tools".to_string(),
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None,
+            ),
+        },
+        ToolSpec::Function(responses_lite_function("lookup_order")),
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "editor".to_string(),
+            description: "Editing tools".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(
+                responses_lite_function("edit"),
+            )],
+        }),
+        ToolSpec::Freeform(FreeformTool {
+            name: "exec".to_string(),
+            description: "Run code".to_string(),
+            defer_loading: None,
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: /.+/".to_string(),
+            },
+        }),
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "functions".to_string(),
+            description: "Existing default tools".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(
+                responses_lite_function("existing"),
+            )],
+        }),
+        ToolSpec::Function(responses_lite_function("last")),
+    ])
+    .expect("serialize Responses Lite tools");
+
+    assert_eq!(tools.len(), 3);
+    assert_eq!(tools[0]["type"], "tool_search");
+    assert_eq!(tools[2]["type"], "namespace");
+    assert_eq!(tools[2]["name"], "editor");
+    assert_eq!(tools[2]["tools"][0]["name"], "edit");
+    assert_eq!(tools[1]["type"], "namespace");
+    assert_eq!(tools[1]["name"], "functions");
+    assert_eq!(tools[1]["description"], "Existing default tools");
+    assert_eq!(
+        tools[1]["tools"]
+            .as_array()
+            .expect("functions namespace should contain tools")
+            .iter()
+            .map(|tool| (tool["type"].as_str(), tool["name"].as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (Some("function"), Some("lookup_order")),
+            (Some("custom"), Some("exec")),
+            (Some("function"), Some("existing")),
+            (Some("function"), Some("last")),
+        ]
+    );
+}
+
+#[test]
+fn responses_lite_preserves_empty_functions_namespace_description() {
+    let tools = create_tools_json_for_responses_lite(&[ToolSpec::Function(
+        responses_lite_function("lookup_order"),
+    )])
+    .expect("serialize Responses Lite tools");
+    assert_eq!(tools[0]["description"], "");
+}
+
+#[test]
+fn responses_lite_does_not_add_an_empty_functions_namespace() {
+    let tools =
+        create_tools_json_for_responses_lite(&[ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "functions".to_string(),
+            description: "Empty default tools".to_string(),
+            tools: Vec::new(),
+        })])
+        .expect("serialize Responses Lite tools");
+    assert!(tools.is_empty());
 }
 
 #[test]

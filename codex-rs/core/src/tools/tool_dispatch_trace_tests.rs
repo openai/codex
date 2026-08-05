@@ -287,18 +287,24 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
+    let mut invocation = test_invocation(
+        session,
+        turn,
+        "wait-call",
+        WAIT_TOOL_NAME,
+        ToolCallSource::Direct,
+        r#"{"cell_id":"noop","terminate":true}"#,
+    );
+    invocation.tool_name = invocation.tool_name.with_default_namespace();
+    assert!(
+        super::tool_dispatch_invocation(&invocation)
+            .expect("wait calls should produce a trace invocation")
+            .tool_namespace
+            .is_none()
+    );
+
     registry
-        .dispatch_any_with_terminal_outcome(
-            test_invocation(
-                session,
-                turn,
-                "wait-call",
-                WAIT_TOOL_NAME,
-                ToolCallSource::Direct,
-                r#"{"cell_id":"noop","terminate":true}"#,
-            ),
-            /*terminal_outcome_reached*/ None,
-        )
+        .dispatch_any_with_terminal_outcome(invocation, /*terminal_outcome_reached*/ None)
         .await?;
 
     let replayed = codex_rollout_trace::replay_bundle(single_bundle_dir(temp.path())?)?;

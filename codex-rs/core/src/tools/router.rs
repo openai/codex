@@ -161,7 +161,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let tool_name = ToolName::new(namespace, name);
+                let tool_name = ToolName::new(namespace, name).with_default_namespace();
                 Ok(Some(ToolCall {
                     tool_name,
                     call_id,
@@ -196,7 +196,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => Ok(Some(ToolCall {
-                tool_name: ToolName::new(namespace, name),
+                tool_name: ToolName::new(namespace, name).with_default_namespace(),
                 call_id,
                 payload: ToolPayload::Custom { input },
                 encrypted_function_args: None,

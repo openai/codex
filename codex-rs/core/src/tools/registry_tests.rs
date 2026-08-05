@@ -1,6 +1,7 @@
 use super::*;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicUsize;
@@ -80,7 +81,11 @@ impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
         test_spec(&self.tool_name)
     }
 
-    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        assert_eq!(
+            invocation.tool_name,
+            self.tool_name.clone().with_default_namespace()
+        );
         Box::pin(self.handle_call())
     }
 }
@@ -172,7 +177,7 @@ impl codex_extension_api::ToolLifecycleContributor for ToolLifecycleRecorder {
 }
 
 #[test]
-fn handler_looks_up_namespaced_aliases_explicitly() {
+fn handler_normalizes_only_the_default_namespace() {
     let namespace = "mcp__codex_apps__gmail";
     let tool_name = "gmail_get_recent_emails";
     let plain_name = codex_tools::ToolName::plain(tool_name);
@@ -187,6 +192,11 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
         ToolRegistry::from_tools([Arc::clone(&plain_handler), Arc::clone(&namespaced_handler)]);
 
     let plain = registry.tool(&plain_name);
+    let default_namespaced = registry.tool(&codex_tools::ToolName::namespaced(
+        DEFAULT_FUNCTION_NAMESPACE,
+        tool_name,
+    ));
+    let empty_namespaced = registry.tool(&codex_tools::ToolName::namespaced("", tool_name));
     let namespaced = registry.tool(&namespaced_name);
     let missing_namespaced = registry.tool(&codex_tools::ToolName::namespaced(
         "mcp__codex_apps__calendar",
@@ -202,10 +212,59 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             .is_some_and(|handler| Arc::ptr_eq(handler, &plain_handler))
     );
     assert!(
+        default_namespaced
+            .as_ref()
+            .is_some_and(|handler| Arc::ptr_eq(handler, &plain_handler))
+    );
+    assert!(
+        empty_namespaced
+            .as_ref()
+            .is_some_and(|handler| Arc::ptr_eq(handler, &plain_handler))
+    );
+    assert!(
         namespaced
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
     );
+}
+
+#[test]
+fn registry_rejects_default_namespace_alias_collisions() {
+    let plain_name = codex_tools::ToolName::plain("lookup");
+    let namespaced_name = codex_tools::ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "lookup");
+
+    for [first_name, duplicate_name] in [
+        [plain_name.clone(), namespaced_name.clone()],
+        [namespaced_name, plain_name],
+    ] {
+        let winner = Arc::new(TestHandler {
+            tool_name: first_name.clone(),
+        }) as Arc<dyn CoreToolRuntime>;
+        let mut registry = ToolRegistry::from_tools([Arc::clone(&winner)]);
+
+        assert!(!registry.register_external(Arc::new(TestHandler {
+            tool_name: duplicate_name.clone(),
+        })));
+        assert!(
+            registry
+                .tool(&duplicate_name)
+                .is_some_and(|handler| Arc::ptr_eq(&handler, &winner))
+        );
+        assert_eq!(
+            registry.tool_exposure(&duplicate_name),
+            Some(ToolExposure::Direct)
+        );
+        assert_eq!(
+            registry.supports_parallel_tool_calls(&duplicate_name),
+            Some(false)
+        );
+        assert!(
+            registry
+                .remove(&duplicate_name)
+                .is_some_and(|handler| Arc::ptr_eq(&handler, &winner))
+        );
+        assert!(registry.tool(&first_name).is_none());
+    }
 }
 
 #[test]
@@ -248,6 +307,12 @@ fn reserved_shell_command_rejects_external_runtimes_without_a_builtin() {
         handler(shell_command_name.clone()),
         ToolExposure::Direct,
     ));
+    assert!(
+        !registry.register_external(handler(codex_tools::ToolName::namespaced(
+            DEFAULT_FUNCTION_NAMESPACE,
+            "shell_command",
+        )))
+    );
     assert!(registry.tool(&shell_command_name).is_none());
     assert_eq!(registry.first_collision(), None);
 
@@ -449,6 +514,7 @@ async fn spawn_agent_function_tools_use_agent_matcher_alias() {
 
     let hook_payloads = [
         codex_tools::ToolName::plain("spawn_agent"),
+        codex_tools::ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "spawn_agent"),
         codex_tools::ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "spawn_agent"),
     ]
     .into_iter()
@@ -469,6 +535,10 @@ async fn spawn_agent_function_tools_use_agent_matcher_alias() {
     assert_eq!(
         hook_payloads,
         vec![
+            Some(PreToolUsePayload {
+                tool_name: HookToolName::spawn_agent(),
+                tool_input: serde_json::json!({ "message": "inspect this repo" }),
+            }),
             Some(PreToolUsePayload {
                 tool_name: HookToolName::spawn_agent(),
                 tool_input: serde_json::json!({ "message": "inspect this repo" }),
@@ -565,7 +635,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
 }
 
 #[tokio::test]
-async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
+async fn dispatch_uses_canonical_tool_names_for_lifecycle_contributors() -> anyhow::Result<()> {
     let (mut session, turn) = crate::session::tests::make_session_and_context().await;
     let records = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
@@ -575,7 +645,7 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
     session.services.extensions = Arc::new(builder.build());
 
     let ok_tool = codex_tools::ToolName::plain("ok_tool");
-    let failing_tool = codex_tools::ToolName::plain("failing_tool");
+    let failing_tool = codex_tools::ToolName::namespaced("extensions", "failing_tool");
     let ok_handler = Arc::new(LifecycleTestHandler {
         tool_name: ok_tool.clone(),
         result: LifecycleTestResult::Ok { success: false },
@@ -594,7 +664,7 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
                 Arc::clone(&session),
                 Arc::clone(&turn),
                 "ok-call",
-                ok_tool.clone(),
+                codex_tools::ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "ok_tool"),
             ),
             /*terminal_outcome_reached*/ None,
         )
@@ -619,11 +689,11 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
     let expected = vec![
         RecordedToolLifecycle::Start {
             call_id: "ok-call".to_string(),
-            tool_name: ok_tool.clone(),
+            tool_name: ok_tool.clone().with_default_namespace(),
         },
         RecordedToolLifecycle::Finish {
             call_id: "ok-call".to_string(),
-            tool_name: ok_tool,
+            tool_name: ok_tool.with_default_namespace(),
             outcome: codex_extension_api::ToolCallOutcome::Completed { success: false },
         },
         RecordedToolLifecycle::Start {

@@ -82,7 +82,8 @@ impl CodeModeWaitHandler {
         );
         let result = match payload {
             ToolPayload::Function { arguments }
-                if tool_name.namespace.is_none() && tool_name.name.as_str() == WAIT_TOOL_NAME =>
+                if tool_name.is_default_namespace()
+                    && tool_name.name.as_str() == WAIT_TOOL_NAME =>
             {
                 let args: ExecWaitArgs = parse_arguments(&arguments).inspect_err(|_error| {
                     telemetry.finish(/*success*/ false);

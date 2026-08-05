@@ -129,7 +129,19 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
     );
 
     let tools = additional_tools(&body)?;
-    assert!(!tools.is_empty());
+    let functions_namespaces = tools
+        .iter()
+        .filter(|tool| tool["type"] == "namespace" && tool["name"] == "functions")
+        .collect::<Vec<_>>();
+    assert_eq!(functions_namespaces.len(), 1);
+    assert_eq!(functions_namespaces[0]["description"], "");
+    assert!(has_namespaced_tool(tools, "functions", "wait"));
+    assert!(has_namespaced_tool(tools, "functions", "exec"));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| { !matches!(tool["type"].as_str(), Some("function" | "custom")) })
+    );
     let client_metadata = body["client_metadata"]
         .as_object()
         .context("Responses request should include client metadata")?;

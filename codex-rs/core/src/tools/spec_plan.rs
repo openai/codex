@@ -205,6 +205,7 @@ fn apply_mcp_tool_exposure_policy(
         let Some(omitted_exposures) = omitted_exposures_by_tool.get(&tool_name) else {
             continue;
         };
+        let tool_name = tool_name.with_default_namespace();
 
         let mut exposures = ToolExposures::ALL.difference(*omitted_exposures);
         if tool_name.namespace.as_ref().is_some_and(|namespace| {
@@ -368,6 +369,7 @@ fn apply_direct_model_only_namespace_overrides(
         let configured = tool
             .runtime
             .tool_name()
+            .with_default_namespace()
             .namespace
             .as_ref()
             .is_some_and(|namespace| {
@@ -591,6 +593,7 @@ fn is_hidden_by_code_mode_only(
 }
 
 fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) -> bool {
+    let tool_name = tool_name.clone().with_default_namespace();
     tool_name.namespace.as_ref().is_some_and(|namespace| {
         turn_context
             .config

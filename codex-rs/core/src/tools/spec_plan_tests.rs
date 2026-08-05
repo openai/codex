@@ -1825,6 +1825,25 @@ async fn code_mode_only_exposes_configured_dynamic_namespace_directly() {
 }
 
 #[tokio::test]
+async fn code_mode_only_exposes_default_namespace_tools_directly() {
+    let plan = probe(|turn| {
+        set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+        update_config(turn, |config| {
+            config.code_mode.direct_only_tool_namespaces = vec!["functions".to_string()];
+        });
+    })
+    .await;
+
+    plan.assert_visible_contains(&["update_plan"]);
+    assert_eq!(plan.exposure("update_plan"), ToolExposure::DirectModelOnly);
+
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(!exec.description.contains("update_plan(args:"));
+}
+
+#[tokio::test]
 async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
     let plan = probe_with(
         |turn| {
@@ -1858,6 +1877,26 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
         &ToolName::namespaced("excluded", "lookup").to_string(),
         "tool_search",
     ]);
+}
+
+#[tokio::test]
+async fn code_mode_excludes_default_namespace_tools() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::CodeMode, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.code_mode.excluded_tool_namespaces = vec!["functions".to_string()];
+        });
+    })
+    .await;
+
+    plan.assert_visible_contains(&["update_plan"]);
+    plan.assert_registered_contains(&["update_plan"]);
+    assert_eq!(plan.exposure("update_plan"), ToolExposure::Direct);
+
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(!exec.description.contains("update_plan(args:"));
 }
 
 #[tokio::test]

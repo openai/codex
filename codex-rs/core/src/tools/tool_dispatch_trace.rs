@@ -80,7 +80,12 @@ fn tool_dispatch_invocation(invocation: &ToolInvocation) -> Option<ToolDispatchI
         codex_turn_id: invocation.turn.sub_id.clone(),
         tool_call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.name.clone(),
-        tool_namespace: invocation.tool_name.namespace.clone(),
+        tool_namespace: invocation
+            .tool_name
+            .namespace
+            .as_ref()
+            .filter(|_| !invocation.tool_name.is_default_namespace())
+            .cloned(),
         requester,
         payload: tool_dispatch_payload(&invocation.payload),
     })

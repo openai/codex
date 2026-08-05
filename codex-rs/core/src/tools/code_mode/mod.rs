@@ -62,9 +62,9 @@ pub(crate) fn default_exec_yield_time_override_ms(features: &Features) -> Option
         .then_some(BUFFERED_EXEC_YIELD_TIME_MS)
 }
 
-/// Returns true for the un-namespaced code-mode `exec` tool.
+/// Returns true for the code-mode `exec` tool in the default namespace.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
-    tool_name.namespace.is_none() && tool_name.name == PUBLIC_TOOL_NAME
+    tool_name.is_default_namespace() && tool_name.name == PUBLIC_TOOL_NAME
 }
 
 #[derive(Clone)]
@@ -339,7 +339,7 @@ async fn call_nested_tool(
     };
 
     let call = ToolCall {
-        tool_name,
+        tool_name: tool_name.with_default_namespace(),
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
         encrypted_function_args: None,

@@ -3,6 +3,43 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 #[test]
+fn top_level_function_search_results_use_the_default_namespace() {
+    let function_tool = ResponsesApiTool {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::new(),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
+        output_schema: Some(serde_json::json!({ "type": "object" })),
+    };
+    let search_info = ToolSearchInfo::from_tool_spec(
+        ToolSpec::Function(function_tool.clone()),
+        /*source_info*/ None,
+    )
+    .expect("top-level function should be searchable");
+
+    assert_eq!(
+        (search_info.entry.search_text, search_info.entry.output),
+        (
+            "lookup_order lookup order Look up an order".to_string(),
+            LoadableToolSpec::Namespace(ResponsesApiNamespace {
+                name: "functions".to_string(),
+                description: String::new(),
+                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                    defer_loading: Some(true),
+                    output_schema: None,
+                    ..function_tool
+                })],
+            }),
+        )
+    );
+}
+
+#[test]
 fn top_level_custom_tools_are_searchable() {
     let custom_tool = crate::FreeformTool {
         name: "apply_patch".to_string(),
@@ -24,9 +61,13 @@ fn top_level_custom_tools_are_searchable() {
         (search_info.entry.search_text, search_info.entry.output),
         (
             "apply_patch Apply a patch lark".to_string(),
-            LoadableToolSpec::Custom(crate::FreeformTool {
-                defer_loading: Some(true),
-                ..custom_tool
+            LoadableToolSpec::Namespace(ResponsesApiNamespace {
+                name: "functions".to_string(),
+                description: String::new(),
+                tools: vec![ResponsesApiNamespaceTool::Custom(crate::FreeformTool {
+                    defer_loading: Some(true),
+                    ..custom_tool
+                })],
             }),
         )
     );

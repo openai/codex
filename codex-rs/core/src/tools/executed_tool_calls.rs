@@ -70,7 +70,7 @@ impl ExecutedToolCallRecorder {
     ) {
         if matches!(source, ToolCallSource::Direct)
             && matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-            && call.tool_name.namespace.is_none()
+            && call.tool_name.is_default_namespace()
             && matches!(
                 (call.tool_name.name.as_str(), &call.payload),
                 (

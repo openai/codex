@@ -55,7 +55,7 @@ use core_test_support::apps_test_server::search_capable_apps_builder as configur
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_custom_tool_call;
+use core_test_support::responses::ev_custom_tool_call_with_namespace;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
@@ -1001,7 +1001,7 @@ async fn tool_search_returns_deferred_custom_tool_and_routes_follow_up_call() ->
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_custom_tool_call("custom-1", "custom_echo", "hello"),
+                ev_custom_tool_call_with_namespace("custom-1", "functions", "custom_echo", "hello"),
                 ev_completed("resp-2"),
             ]),
             sse(vec![
@@ -1035,15 +1035,20 @@ async fn tool_search_returns_deferred_custom_tool_and_routes_follow_up_call() ->
     assert_eq!(
         tool_search_output_tools(&requests[1], "search-1"),
         vec![json!({
-            "type": "custom",
-            "name": "custom_echo",
-            "description": "Echo a custom payload.",
-            "defer_loading": true,
-            "format": {
-                "type": "grammar",
-                "syntax": "lark",
-                "definition": "start: /.+/",
-            },
+            "type": "namespace",
+            "name": "functions",
+            "description": "",
+            "tools": [{
+                "type": "custom",
+                "name": "custom_echo",
+                "description": "Echo a custom payload.",
+                "defer_loading": true,
+                "format": {
+                    "type": "grammar",
+                    "syntax": "lark",
+                    "definition": "start: /.+/",
+                },
+            }],
         })]
     );
     let output = requests[2].custom_tool_call_output("custom-1");
@@ -1052,7 +1057,7 @@ async fn tool_search_returns_deferred_custom_tool_and_routes_follow_up_call() ->
             .as_str()
             .expect("custom tool output should contain serialized JSON"),
     )?;
-    assert_eq!(output, json!({ "echo": "hello", "namespace": null }));
+    assert_eq!(output, json!({ "echo": "hello", "namespace": "functions" }));
 
     Ok(())
 }

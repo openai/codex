@@ -1,10 +1,12 @@
 use crate::JsonSchema;
 use crate::LoadableToolSpec;
+use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ToolSearchSourceInfo;
 use crate::ToolSpec;
 use crate::default_namespace_description;
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 
 #[derive(Clone, PartialEq)]
 pub struct ToolSearchEntry {
@@ -36,11 +38,19 @@ impl ToolSearchInfo {
             ToolSpec::Function(mut tool) => {
                 tool.defer_loading = Some(true);
                 tool.output_schema = None;
-                LoadableToolSpec::Function(tool)
+                LoadableToolSpec::Namespace(ResponsesApiNamespace {
+                    name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
+                    description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
+                    tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+                })
             }
             ToolSpec::Freeform(mut tool) => {
                 tool.defer_loading = Some(true);
-                LoadableToolSpec::Custom(tool)
+                LoadableToolSpec::Namespace(ResponsesApiNamespace {
+                    name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
+                    description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
+                    tools: vec![ResponsesApiNamespaceTool::Custom(tool)],
+                })
             }
             ToolSpec::Namespace(mut namespace) => {
                 if namespace.description.trim().is_empty() {

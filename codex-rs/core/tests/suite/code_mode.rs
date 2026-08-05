@@ -4623,7 +4623,14 @@ text(JSON.stringify({
                     })
                 })
                 .and_then(|item| item["tools"].as_array())
-                .expect("the Responses Lite request should contain its additional tools")
+                .and_then(|tools| {
+                    tools.iter().find(|tool| {
+                        tool.get("type").and_then(Value::as_str) == Some("namespace")
+                            && tool.get("name").and_then(Value::as_str) == Some("functions")
+                    })
+                })
+                .and_then(|namespace| namespace["tools"].as_array())
+                .expect("the Responses Lite request should contain its default-namespace tools")
         } else {
             first_body["tools"]
                 .as_array()

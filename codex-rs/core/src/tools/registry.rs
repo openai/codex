@@ -298,7 +298,8 @@ impl ToolRegistry {
         runtime: Arc<dyn CoreToolRuntime>,
         exposure: ToolExposure,
     ) {
-        match self.tools.entry(runtime.tool_name()) {
+        let tool_name = runtime.tool_name().with_default_namespace();
+        match self.tools.entry(tool_name) {
             Entry::Vacant(entry) => {
                 entry.insert(RegisteredTool { runtime, exposure });
             }
@@ -310,7 +311,7 @@ impl ToolRegistry {
     }
 
     pub(crate) fn prepend_trusted(&mut self, runtime: Arc<dyn CoreToolRuntime>) {
-        let tool_name = runtime.tool_name();
+        let tool_name = runtime.tool_name().with_default_namespace();
         if self.tools.contains_key(&tool_name) {
             error_or_panic(format!("tool {tool_name} already registered"));
             return;
@@ -331,8 +332,8 @@ impl ToolRegistry {
         runtime: Arc<dyn CoreToolRuntime>,
         exposure: ToolExposure,
     ) -> bool {
-        let tool_name = runtime.tool_name();
-        if tool_name.namespace.is_none() && tool_name.name == "shell_command" {
+        let tool_name = runtime.tool_name().with_default_namespace();
+        if tool_name.is_default_namespace() && tool_name.name == "shell_command" {
             tracing::warn!(tool_name = %tool_name, "skipping external tool with reserved name");
             if self.tools.contains_key(&tool_name) {
                 self.record_collision(tool_name);
@@ -366,7 +367,9 @@ impl ToolRegistry {
     }
 
     pub(crate) fn remove(&mut self, tool_name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.shift_remove(tool_name).map(|tool| tool.runtime)
+        self.tools
+            .shift_remove(&tool_name.clone().with_default_namespace())
+            .map(|tool| tool.runtime)
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = &RegisteredTool> {
@@ -380,7 +383,7 @@ impl ToolRegistry {
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
         let mut namespaces = BTreeMap::<String, String>::new();
         for (name, tool) in &self.tools {
-            if !tool.exposure.is_deferred() {
+            if !tool.exposure.is_deferred() || name.is_default_namespace() {
                 continue;
             }
             let Some(namespace) = &name.namespace else {
@@ -418,7 +421,9 @@ impl ToolRegistry {
     }
 
     pub(crate) fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.get(name).map(|tool| Arc::clone(&tool.runtime))
+        self.tools
+            .get(&name.clone().with_default_namespace())
+            .map(|tool| Arc::clone(&tool.runtime))
     }
 
     #[cfg(test)]
@@ -430,7 +435,9 @@ impl ToolRegistry {
 
     #[cfg(test)]
     pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
-        self.tools.get(name).map(|tool| tool.exposure)
+        self.tools
+            .get(&name.clone().with_default_namespace())
+            .map(|tool| tool.exposure)
     }
 
     pub(crate) fn create_diff_consumer(
@@ -441,7 +448,7 @@ impl ToolRegistry {
     }
 
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
-        let tool = self.tools.get(name)?;
+        let tool = self.tools.get(&name.clone().with_default_namespace())?;
         Some(tool.exposure != ToolExposure::Hidden && tool.runtime.supports_parallel_tool_calls())
     }
 
@@ -512,7 +519,6 @@ impl ToolRegistry {
                 return Err(err);
             }
         };
-
         let telemetry_tags = tool.telemetry_tags(&invocation);
         let mut tool_result_tags =
             Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len() + 1);
@@ -589,14 +595,14 @@ impl ToolRegistry {
             if let Some(log) = internal_tool_input_log.as_mut() {
                 log.hook_normalized_input = Some(
                     match (
-                        invocation.tool_name.namespace.as_deref(),
+                        invocation.tool_name.is_default_namespace(),
                         invocation.tool_name.name.as_str(),
                         pre_tool_use_payload
                             .tool_input
                             .get("command")
                             .and_then(Value::as_str),
                     ) {
-                        (None, "shell_command" | "exec_command", Some(script)) => {
+                        (true, "shell_command" | "exec_command", Some(script)) => {
                             shell_command_metadata(script)
                         }
                         _ => serde_json::json!({}),
@@ -875,10 +881,8 @@ async fn handle_any_tool(
 
 fn function_hook_tool_name(invocation: &ToolInvocation) -> HookToolName {
     if invocation.tool_name.name == "spawn_agent"
-        && matches!(
-            invocation.tool_name.namespace.as_deref(),
-            None | Some(MULTI_AGENT_V1_NAMESPACE)
-        )
+        && (invocation.tool_name.is_default_namespace()
+            || invocation.tool_name.namespace.as_deref() == Some(MULTI_AGENT_V1_NAMESPACE))
     {
         return HookToolName::spawn_agent();
     }
