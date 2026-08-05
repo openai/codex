@@ -12,6 +12,8 @@ use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -66,10 +68,14 @@ fn tool_names(body: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[test_case(false; "normal sampling")]
-#[test_case(true; "pre sampling compaction")]
+#[test_case(false, false; "normal sampling")]
+#[test_case(true, false; "pre sampling compaction")]
+#[test_case(false, true; "namespace collision")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn strict_tool_collisions_fail_the_turn_before_sampling(pre_compact: bool) -> Result<()> {
+async fn strict_tool_collisions_fail_the_turn_before_sampling(
+    pre_compact: bool,
+    namespace_collision: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -80,19 +86,47 @@ async fn strict_tool_collisions_fail_the_turn_before_sampling(pre_compact: bool)
         }
     });
     let test = builder.build_with_auto_env(&server).await?;
+    let dynamic_tools = if namespace_collision {
+        [
+            ("first", "First namespace description."),
+            ("second", "Second namespace description."),
+        ]
+        .into_iter()
+        .map(|(name, description)| {
+            DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+                name: "shared".to_string(),
+                description: description.to_string(),
+                tools: vec![DynamicToolNamespaceTool::Function(
+                    DynamicToolFunctionSpec {
+                        name: name.to_string(),
+                        description: format!("The {name} tool."),
+                        input_schema: json!({
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false,
+                        }),
+                        defer_loading: false,
+                    },
+                )],
+            })
+        })
+        .collect()
+    } else {
+        vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            name: "update_plan".to_string(),
+            description: "Collides with the built-in planning tool.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            defer_loading: false,
+        })]
+    };
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
-                name: "update_plan".to_string(),
-                description: "Collides with the built-in planning tool.".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false,
-                }),
-                defer_loading: false,
-            })],
+            dynamic_tools,
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?
@@ -116,7 +150,12 @@ async fn strict_tool_collisions_fail_the_turn_before_sampling(pre_compact: bool)
     else {
         unreachable!("event predicate guarantees an error");
     };
-    assert_eq!(error.message, "duplicate tool: functions.update_plan");
+    let expected_collision = if namespace_collision {
+        "duplicate tool: shared"
+    } else {
+        "duplicate tool: functions.update_plan"
+    };
+    assert_eq!(error.message, expected_collision);
 
     let EventMsg::TurnComplete(completed) =
         wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await

@@ -349,12 +349,31 @@ pub(crate) fn finalize_tool_router(
 
     let code_mode_tool_names = register_code_mode_executors(turn_context, &mut registry);
 
-    if turn_context.config.tool_registry.error_on_tool_collisions
-        && let Some(tool_name) = registry.first_collision()
-    {
-        let namespace = tool_name.namespace.as_deref().unwrap_or("functions");
-        let name = format!("{namespace}.{}", tool_name.name);
-        return Err(CodexErrorDetails::ToolCollision(name).into());
+    if turn_context.config.tool_registry.error_on_tool_collisions {
+        if let Some(tool_name) = registry.first_collision() {
+            let namespace = tool_name.namespace.as_deref().unwrap_or("functions");
+            let name = format!("{namespace}.{}", tool_name.name);
+            return Err(CodexErrorDetails::ToolCollision(name).into());
+        }
+
+        let mut namespace_descriptions = BTreeMap::new();
+        for tool in registry.entries() {
+            let ToolSpec::Namespace(namespace) = tool.runtime.spec() else {
+                continue;
+            };
+            if namespace.description.trim().is_empty() {
+                continue;
+            }
+            match namespace_descriptions.entry(namespace.name) {
+                Entry::Vacant(entry) => {
+                    entry.insert(namespace.description);
+                }
+                Entry::Occupied(entry) if entry.get() != &namespace.description => {
+                    return Err(CodexErrorDetails::ToolCollision(entry.key().clone()).into());
+                }
+                Entry::Occupied(_) => {}
+            }
+        }
     }
 
     let model_visible_specs =

@@ -1303,7 +1303,30 @@ async fn strict_tool_collisions_reject_external_and_synthetic_duplicates() {
         ),
     ];
 
-    for (expected_name, inputs, code_mode_enabled, search_enabled) in cases {
+    let namespace_cases = [
+        (ToolExposure::Direct, ToolExposure::Direct, false),
+        (ToolExposure::Direct, ToolExposure::Deferred, true),
+        (ToolExposure::Deferred, ToolExposure::Deferred, true),
+        (ToolExposure::Deferred, ToolExposure::Deferred, false),
+    ]
+    .map(|(first_exposure, second_exposure, search_enabled)| {
+        (
+            "shared",
+            ToolPlanInputs {
+                tool_runtimes: vec![
+                    mcp_runtime("first", "shared", "lookup", first_exposure),
+                    mcp_runtime("second", "shared", "list", second_exposure),
+                ],
+                ..ToolPlanInputs::default()
+            },
+            false,
+            search_enabled,
+        )
+    });
+
+    for (expected_name, inputs, code_mode_enabled, search_enabled) in
+        cases.into_iter().chain(namespace_cases)
+    {
         let (_session, mut turn) = make_session_and_context().await;
         update_config(&mut turn, |config| {
             config.tool_registry.error_on_tool_collisions = true;
@@ -1345,6 +1368,84 @@ async fn strict_tool_collisions_reject_external_and_synthetic_duplicates() {
             error.to_string(),
             format!("duplicate tool: {expected_name}")
         );
+    }
+}
+
+#[tokio::test]
+async fn strict_tool_collisions_allow_multiple_tools_in_one_namespace() {
+    let mut undocumented_tool = mcp_tool("shared", "shared", "undocumented");
+    undocumented_tool.namespace_description = None;
+    let plan = probe_with(
+        |turn| {
+            update_config(turn, |config| {
+                config.tool_registry.error_on_tool_collisions = true;
+            });
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![
+                RegisteredTool {
+                    runtime: Arc::new(
+                        McpHandler::new(undocumented_tool).expect("MCP tool spec should build"),
+                    ),
+                    exposure: ToolExposure::Direct,
+                },
+                mcp_runtime("shared", "shared", "lookup", ToolExposure::Direct),
+                mcp_runtime("shared", "shared", "list", ToolExposure::Direct),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        plan.namespace_function_names("shared"),
+        ["list", "lookup", "undocumented"]
+    );
+    let ToolSpec::Namespace(namespace) = plan.visible_spec("shared") else {
+        panic!("expected the shared namespace to stay visible");
+    };
+    assert_eq!(namespace.description, "Tools from shared.");
+}
+
+#[tokio::test]
+async fn relaxed_tool_collisions_preserve_first_nonempty_namespace_description() {
+    for (first_description, second_description, expected_description) in [
+        (
+            Some("First namespace description."),
+            Some("Second namespace description."),
+            "First namespace description.",
+        ),
+        (
+            None,
+            Some("Second namespace description."),
+            "Second namespace description.",
+        ),
+    ] {
+        let runtime = |name, description: Option<&str>| {
+            let mut tool = mcp_tool("shared", "shared", name);
+            tool.namespace_description = description.map(str::to_string);
+            RegisteredTool {
+                runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
+                exposure: ToolExposure::Direct,
+            }
+        };
+        let plan = probe_with(
+            |_| {},
+            ToolPlanInputs {
+                tool_runtimes: vec![
+                    runtime("lookup", first_description),
+                    runtime("list", second_description),
+                ],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        assert_eq!(plan.namespace_function_names("shared"), ["list", "lookup"]);
+        let ToolSpec::Namespace(namespace) = plan.visible_spec("shared") else {
+            panic!("expected the shared namespace to stay visible");
+        };
+        assert_eq!(namespace.description, expected_description);
     }
 }
 
