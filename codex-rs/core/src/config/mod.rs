@@ -13,6 +13,7 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
+use codex_config::ManagedAuthPolicy;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
@@ -160,6 +161,7 @@ mod requirements;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
+pub use auth_keyring::bootstrap_auth_config;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
@@ -1337,8 +1339,16 @@ impl AuthManagerConfig for Config {
         Config::auth_keyring_backend_kind(self)
     }
 
+    fn forced_login_method(&self) -> Option<ForcedLoginMethod> {
+        self.forced_login_method
+    }
+
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
+    }
+
+    fn managed_auth_policy(&self) -> ManagedAuthPolicy {
+        self.config_layer_stack.requirements().managed_auth_policy()
     }
 
     fn chatgpt_base_url(&self) -> String {
@@ -3198,10 +3208,11 @@ impl Config {
             config_layer_stack.requirements(),
             &mut startup_warnings,
         );
-
         // Destructure every field to ensure ConfigRequirements additions are
         // either applied above or handled while constructing the final Config.
         let ConfigRequirements {
+            allowed_login_methods: _,
+            allowed_chatgpt_workspaces: _,
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,

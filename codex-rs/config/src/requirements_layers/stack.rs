@@ -206,6 +206,8 @@ fn populate_merged_regular_fields_with_sources(
     // Destructure without `..` so every new requirements field must choose
     // whether it belongs in the regular TOML merge path or in a special merger.
     let ConfigRequirementsToml {
+        allowed_login_methods,
+        allowed_chatgpt_workspaces,
         sqlite_home,
         log_dir,
         model_catalog_json,
@@ -239,6 +241,8 @@ fn populate_merged_regular_fields_with_sources(
         guardian_policy_config,
     } = requirements;
 
+    set_sourced!(allowed_login_methods, &["allowed_login_methods"]);
+    set_sourced!(allowed_chatgpt_workspaces, &["allowed_chatgpt_workspaces"]);
     set_sourced!(sqlite_home, &["sqlite_home"]);
     set_sourced!(log_dir, &["log_dir"]);
     set_sourced!(model_catalog_json, &["model_catalog_json"]);

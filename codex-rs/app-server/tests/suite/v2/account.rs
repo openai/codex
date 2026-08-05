@@ -357,6 +357,51 @@ async fn logout_account_succeeds_when_config_reload_fails() -> Result<()> {
 }
 
 #[tokio::test]
+async fn startup_enforces_local_auth_requirements_before_cloud_fetch() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allowed_login_methods = [\"api\"]\n",
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .plan_type("enterprise")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    assert!(
+        mock_server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty(),
+        "disallowed ChatGPT auth must not fetch cloud requirements"
+    );
+
+    assert_eq!(read_account(&mut mcp).await?.account, None);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;

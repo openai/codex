@@ -67,6 +67,21 @@ fn login_with_api_key_reads_stdin_and_writes_auth_json() -> Result<()> {
 }
 
 #[test]
+fn login_status_reports_auth_storage_errors() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_file_auth_config(codex_home.path())?;
+    std::fs::write(codex_home.path().join("auth.json"), "{invalid json")?;
+
+    codex_command(codex_home.path())?
+        .args(["login", "status"])
+        .assert()
+        .failure()
+        .stderr(contains("Error checking login status:"));
+
+    Ok(())
+}
+
+#[test]
 fn login_with_access_token_rejects_invalid_jwt() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_file_auth_config(codex_home.path())?;

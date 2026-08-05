@@ -671,9 +671,14 @@ async fn write_value_defaults_to_selected_user_config_path() {
 }
 
 #[tokio::test]
-async fn load_default_config_preserves_selected_user_config_path_after_load_error() {
+async fn load_default_config_preserves_managed_requirements_and_selected_user_config_path() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"gpt-main\"").unwrap();
+    std::fs::write(
+        tmp.path().join("requirements.toml"),
+        "allowed_login_methods = [\"api\"]\nallowed_chatgpt_workspaces = [\"managed-workspace\"]\n",
+    )
+    .unwrap();
     let selected_path = tmp.path().join("work.config.toml");
     std::fs::write(&selected_path, "not valid toml").unwrap();
     let selected_file =
@@ -703,6 +708,61 @@ async fn load_default_config_preserves_selected_user_config_path_after_load_erro
         config.config_layer_stack.get_user_config_file(),
         Some(&selected_file)
     );
+    assert_eq!(
+        config
+            .config_layer_stack
+            .requirements()
+            .managed_auth_policy(),
+        codex_config::ManagedAuthPolicy {
+            allowed_login_methods: Some(vec![codex_protocol::config_types::ForcedLoginMethod::Api]),
+            allowed_chatgpt_workspaces: Some(vec!["managed-workspace".to_string()]),
+        }
+    );
+}
+
+#[tokio::test]
+async fn managed_auth_policy_survives_unusable_requirements_file_changes() -> Result<()> {
+    let tmp = tempdir()?;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    std::fs::write(
+        &requirements_path,
+        "allowed_login_methods = [\"api\"]\nallowed_chatgpt_workspaces = [\"startup\"]\n",
+    )?;
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::with_managed_config_path_for_tests(tmp.path().join("managed_config.toml")),
+        CloudConfigBundleLoader::default(),
+    );
+    let startup = service.load_latest_config(/*fallback_cwd*/ None).await?;
+    let auth_manager = codex_login::AuthManager::shared_from_config(
+        &startup, /*enable_codex_api_key_env*/ false,
+    )
+    .await;
+    std::fs::write(
+        &requirements_path,
+        "allowed_login_methods = [\"chatgpt\"]\nallowed_chatgpt_workspaces = []\n",
+    )?;
+    for refreshed in [
+        service.load_latest_config(/*fallback_cwd*/ None).await?,
+        service.load_latest_config_for_thread(&startup).await?,
+    ] {
+        assert_eq!(refreshed.forced_login_method, None);
+        assert_eq!(refreshed.forced_chatgpt_workspace_id, None);
+    }
+    assert!(
+        auth_manager.is_login_method_allowed(codex_protocol::config_types::ForcedLoginMethod::Api)
+    );
+    assert!(
+        !auth_manager
+            .is_login_method_allowed(codex_protocol::config_types::ForcedLoginMethod::Chatgpt)
+    );
+    assert_eq!(
+        auth_manager.effective_chatgpt_workspaces(),
+        Some(vec!["startup".to_string()])
+    );
+    Ok(())
 }
 
 #[tokio::test]

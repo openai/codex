@@ -542,6 +542,7 @@ pub async fn run_main_with_transport_options(
             })?
         }
     };
+    config.auth_config().validate()?;
     let code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>> =
         match &runtime_options.code_mode_host_transport {
             CodeModeHostTransport::Local => None,

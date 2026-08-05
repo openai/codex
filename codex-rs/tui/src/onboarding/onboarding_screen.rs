@@ -111,7 +111,7 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.to_path_buf();
-        let forced_login_method = config.forced_login_method;
+        let auth_config = config.auth_config();
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
@@ -119,10 +119,12 @@ impl OnboardingScreen {
             config.animations,
         )));
         if show_login_screen {
-            let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
-                _ => SignInOption::ChatGpt,
-            };
+            let highlighted_mode =
+                if auth_config.is_login_method_allowed(ForcedLoginMethod::Chatgpt) {
+                    SignInOption::ChatGpt
+                } else {
+                    SignInOption::ApiKey
+                };
             if let Some(app_server_request_handle) = app_server_request_handle {
                 steps.push(Step::Auth(AuthModeWidget {
                     request_frame: tui.frame_requester(),
@@ -131,7 +133,7 @@ impl OnboardingScreen {
                     sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                     login_status,
                     app_server_request_handle,
-                    forced_login_method,
+                    auth_config,
                     animations_enabled: config.animations,
                     animations_suppressed: std::cell::Cell::new(false),
                 }));

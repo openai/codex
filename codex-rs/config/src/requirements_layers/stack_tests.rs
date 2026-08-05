@@ -58,6 +58,25 @@ fn empty_layers_compose_to_none() {
 }
 
 #[test]
+fn cloud_auth_requirements_do_not_override_local_or_discard_other_policy() {
+    let local = RequirementsLayerEntry::from_toml(
+        RequirementSource::Unknown,
+        "allowed_login_methods = [\"api\"]",
+    );
+    let cloud = layer(
+        "req_cloud",
+        "Cloud policy",
+        "allowed_login_methods = [\"saml\"]\nallowed_chatgpt_workspaces = \"invalid\"\nallow_login_shell = false",
+    );
+    assert_eq!(
+        compose(vec![local, cloud]).expect("cloud auth cannot invalidate enterprise policy"),
+        Some(expected_requirements(
+            "allowed_login_methods = [\"api\"]\nallow_login_shell = false"
+        ))
+    );
+}
+
+#[test]
 fn top_level_values_use_toml_priority() {
     let composed = compose(vec![
         layer(

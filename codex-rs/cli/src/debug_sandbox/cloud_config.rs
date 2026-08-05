@@ -1,9 +1,8 @@
 use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadOptions;
+use codex_core::config::bootstrap_auth_config;
 use codex_core::config::load_config_toml_with_layer_stack;
-use codex_core::config::resolve_bootstrap_auth_keyring_backend_kind;
-use codex_core::config::resolve_bootstrap_auth_route_config;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
 
@@ -41,28 +40,9 @@ pub(super) async fn bootstrap_cloud_config_bundle(
         },
     )
     .await?;
-    let bootstrap_config_toml = &bootstrap_config.config_toml;
-    let auth_route_config = resolve_bootstrap_auth_route_config(
-        bootstrap_config_toml,
-        bootstrap_config
-            .config_layer_stack
-            .requirements()
-            .feature_requirements
-            .as_ref(),
-    )?;
-
     Ok(cloud_config_bundle_loader_for_storage(
-        codex_home.to_path_buf(),
+        bootstrap_auth_config(codex_home.as_path(), &bootstrap_config)?,
         /*enable_codex_api_key_env*/ false,
-        bootstrap_config_toml
-            .cli_auth_credentials_store
-            .unwrap_or_default(),
-        resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
-        bootstrap_config_toml
-            .chatgpt_base_url
-            .clone()
-            .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string()),
-        auth_route_config,
     )
     .await)
 }

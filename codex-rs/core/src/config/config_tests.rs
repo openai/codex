@@ -9446,6 +9446,8 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
     let fixture = create_test_fixture()?;
 
     let requirements_toml = codex_config::ConfigRequirementsToml {
+        allowed_login_methods: None,
+        allowed_chatgpt_workspaces: None,
         sqlite_home: None,
         log_dir: None,
         model_catalog_json: None,

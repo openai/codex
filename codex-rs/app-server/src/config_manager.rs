@@ -6,6 +6,7 @@ use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_exec_server::LOCAL_FS;
 use codex_features::feature_for_key;
@@ -171,21 +172,16 @@ impl ConfigManager {
     }
 
     pub(crate) async fn load_default_config(&self) -> std::io::Result<Config> {
-        let mut config = Config::load_default_with_cli_overrides_for_codex_home(
-            self.codex_home.clone(),
-            self.current_cli_overrides(),
-        )
-        .await?;
-        if self.loader_overrides.user_config_path.is_some()
-            || self.loader_overrides.user_config_profile.is_some()
-        {
-            let user_config_path = self.loader_overrides.user_config_path(self.codex_home())?;
-            config.config_layer_stack = config.config_layer_stack.with_user_config_profile(
-                &user_config_path,
-                self.loader_overrides.user_config_profile.as_ref(),
-                TomlValue::Table(toml::map::Map::new()),
-            )?;
-        }
+        let mut loader_overrides = self.loader_overrides.clone();
+        loader_overrides.ignore_user_config = true;
+        let mut config = ConfigBuilder::default()
+            .codex_home(self.codex_home.clone())
+            .cli_overrides(self.current_cli_overrides())
+            .loader_overrides(loader_overrides)
+            .fallback_cwd(Some(self.codex_home.clone()))
+            .cloud_config_bundle(CloudConfigBundleLoader::default())
+            .build()
+            .await?;
         config.psp = self.psp;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);

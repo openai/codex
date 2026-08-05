@@ -929,6 +929,8 @@ interrupt_message = false
         };
 
         let requirements_toml = ConfigRequirementsToml {
+            allowed_login_methods: None,
+            allowed_chatgpt_workspaces: None,
             sqlite_home: Some(sqlite_home),
             log_dir: Some(log_dir),
             model_catalog_json: Some(model_catalog_json),

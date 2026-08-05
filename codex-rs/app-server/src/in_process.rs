@@ -403,6 +403,7 @@ async fn run_outbound_router(
 }
 
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    args.config.auth_config().validate()?;
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);

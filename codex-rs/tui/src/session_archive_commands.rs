@@ -13,9 +13,8 @@ use crate::Cli;
 use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::bootstrap_auth_config;
 use crate::legacy_core::config::load_config_toml_with_layer_stack;
-use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
-use crate::legacy_core::config::resolve_bootstrap_http_client_factory;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -28,7 +27,6 @@ use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
-use codex_login::AuthRouteConfig;
 use codex_protocol::ThreadId;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_home_dir::find_codex_home;
@@ -380,6 +378,7 @@ async fn start_app_server_for_archive_command(
         ));
         loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
+    loader_overrides.ignore_login_requirements = app_server_target.uses_remote_workspace();
 
     let bootstrap_config = load_config_toml_with_layer_stack(
         codex_home.as_path(),
@@ -394,26 +393,12 @@ async fn start_app_server_for_archive_command(
     .await
     .wrap_err("failed to load config.toml")?;
     let config_toml = &bootstrap_config.config_toml;
-    let chatgpt_base_url = config_toml
-        .chatgpt_base_url
-        .clone()
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let http_client_factory = resolve_bootstrap_http_client_factory(
-        config_toml,
-        bootstrap_config
-            .config_layer_stack
-            .requirements()
-            .feature_requirements
-            .as_ref(),
-    )?;
-    let auth_route_config = AuthRouteConfig::from_http_client_factory(http_client_factory);
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-        codex_home.to_path_buf(),
+        app_server_target.auth_config_for_cloud_loader(bootstrap_auth_config(
+            codex_home.as_path(),
+            &bootstrap_config,
+        )?),
         /*enable_codex_api_key_env*/ false,
-        config_toml.cli_auth_credentials_store.unwrap_or_default(),
-        resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
-        chatgpt_base_url,
-        auth_route_config,
     )
     .await;
 

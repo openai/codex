@@ -65,8 +65,18 @@ impl ComposableRequirementsLayer {
             let _guard = base_dir
                 .as_ref()
                 .map(|base_dir| AbsolutePathBufGuard::new(base_dir.as_path()));
-            let regular_toml = parse_layer_toml(&toml, &source)?;
-            let requirements = parse_layer_requirements(&toml, &source)?;
+            let mut regular_toml = parse_layer_toml(&toml, &source)?;
+
+            // These fields can only be set locally; ignore them before validating cloud policy.
+            if matches!(source, RequirementSource::EnterpriseManaged { .. }) {
+                remove_top_level_field(&mut regular_toml, "allowed_login_methods");
+                remove_top_level_field(&mut regular_toml, "allowed_chatgpt_workspaces");
+            }
+
+            let requirements = parse_layer_requirements(
+                &RequirementsLayerToml::Value(regular_toml.clone()),
+                &source,
+            )?;
             (regular_toml, requirements)
         };
 

@@ -1,3 +1,4 @@
+mod auth_policy;
 mod cloud_config_bundle;
 mod cloud_config_layers;
 mod config_layer_source;
@@ -34,6 +35,7 @@ pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
+pub use auth_policy::ManagedAuthPolicy;
 pub use cloud_config_bundle::CloudConfigBundle;
 pub use cloud_config_bundle::CloudConfigBundleLayers;
 pub use cloud_config_bundle::CloudConfigBundleLoadError;

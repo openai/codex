@@ -142,6 +142,33 @@ async fn login_with_access_token_writes_agent_identity_jwt() {
 }
 
 #[tokio::test]
+async fn login_with_access_token_rejects_agent_identity_workspace_mismatch() {
+    let dir = tempdir().unwrap();
+    let record = agent_identity_record(WORKSPACE_ID_DISALLOWED);
+    let agent_identity =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
+    let server = MockServer::start().await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let allowed_workspaces = [WORKSPACE_ID_ALLOWED.to_string()];
+
+    let err = super::login_with_access_token(
+        dir.path(),
+        &agent_identity,
+        AuthCredentialsStoreMode::File,
+        Some(&allowed_workspaces),
+        Some(&chatgpt_base_url),
+        AuthKeyringBackendKind::default(),
+        &crate::test_support::transport_default_auth_route_config(),
+    )
+    .await
+    .expect_err("agent identity workspace mismatch should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(!get_auth_file(dir.path()).exists());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 #[serial(codex_auth_env)]
 async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result<()> {
     let _access_token_guard = remove_access_token_env_var();
@@ -178,6 +205,7 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         Some(&chatgpt_base_url),
         AuthKeyringBackendKind::Direct,
@@ -366,6 +394,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -448,6 +477,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -490,6 +520,7 @@ async fn chatgpt_auth_retries_transient_agent_identity_registration() -> anyhow:
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -556,6 +587,7 @@ async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> an
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -617,6 +649,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -673,6 +706,7 @@ async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyh
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -816,6 +850,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -878,6 +913,7 @@ async fn loads_api_key_from_auth_json() {
         dir.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -974,6 +1010,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -1343,6 +1380,7 @@ async fn build_config(
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method,
         forced_chatgpt_workspace_id,
+        managed_auth_policy: ManagedAuthPolicy::default(),
         chatgpt_base_url: None,
         auth_route_config: crate::test_support::transport_default_auth_route_config(),
     }
@@ -1423,6 +1461,7 @@ async fn load_auth_reads_access_token_from_env() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         Some(&chatgpt_base_url),
         AuthKeyringBackendKind::Direct,
@@ -1471,6 +1510,7 @@ async fn load_auth_reads_personal_access_token_from_env() {
             codex_home.path(),
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
+            /*allowed_login_methods*/ None,
             /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
@@ -1644,6 +1684,7 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ true,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -1685,6 +1726,162 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be removed on mismatch"
     );
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn auth_manager_rejects_disallowed_stored_and_external_auth() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+    .expect("seed api key");
+    let mut config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        /*forced_chatgpt_workspace_id*/ None,
+    )
+    .await;
+    config.managed_auth_policy.allowed_login_methods = Some(vec![ForcedLoginMethod::Chatgpt]);
+    let manager =
+        AuthManager::shared_from_auth_config(config, /*enable_codex_api_key_env*/ false).await;
+
+    assert_eq!(manager.auth().await, None);
+    assert!(
+        manager
+            .set_external_auth(Arc::new(StaticExternalAuth(CodexAuth::from_api_key(
+                "sk-external",
+            ))))
+            .await
+            .is_err(),
+        "external auth cannot bypass managed login policy"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn api_only_policy_rejects_access_tokens_before_hydration() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-rejected");
+    let mut config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        /*forced_chatgpt_workspace_id*/ None,
+    )
+    .await;
+    config.managed_auth_policy.allowed_login_methods = Some(vec![ForcedLoginMethod::Api]);
+    let manager =
+        AuthManager::shared_from_auth_config(config, /*enable_codex_api_key_env*/ false).await;
+
+    assert_eq!(manager.auth().await, None);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("inspect auth requests")
+            .is_empty(),
+        "rejected access tokens must not call whoami or register Agent Identity"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn workspace_policy_rejects_agent_identity_before_hydration() {
+    let codex_home = tempdir().unwrap();
+    let server = MockServer::start().await;
+    let record = agent_identity_record(WORKSPACE_ID_DISALLOWED);
+    let agent_identity =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let _access_token_reset = remove_access_token_env_var();
+    let access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
+    let mut config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        /*forced_chatgpt_workspace_id*/ None,
+    )
+    .await;
+    config.managed_auth_policy.allowed_chatgpt_workspaces =
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]);
+    let manager =
+        AuthManager::shared_from_auth_config(config, /*enable_codex_api_key_env*/ false).await;
+
+    assert_eq!(manager.auth().await, None);
+    drop(access_token_guard);
+
+    for stored_agent_identity in [
+        AgentIdentityStorage::Jwt(agent_identity),
+        AgentIdentityStorage::Record(record),
+    ] {
+        save_auth(
+            codex_home.path(),
+            &AuthDotJson {
+                auth_mode: Some(AuthMode::AgentIdentity),
+                openai_api_key: None,
+                tokens: None,
+                last_refresh: None,
+                agent_identity: Some(stored_agent_identity),
+                personal_access_token: None,
+                bedrock_api_key: None,
+            },
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::Direct,
+        )
+        .expect("store agent identity");
+        let mut config = build_config(
+            codex_home.path(),
+            /*forced_login_method*/ None,
+            /*forced_chatgpt_workspace_id*/ None,
+        )
+        .await;
+        config.managed_auth_policy.allowed_chatgpt_workspaces =
+            Some(vec![WORKSPACE_ID_ALLOWED.to_string()]);
+        let manager =
+            AuthManager::shared_from_auth_config(config, /*enable_codex_api_key_env*/ false).await;
+        assert_eq!(manager.auth().await, None);
+    }
+
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "rejected agent identities must not fetch JWKS or register"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn workspace_policy_checks_the_selected_request_account() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("seed ChatGPT credentials");
+    let auth_path = codex_home.path().join("auth.json");
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&auth_path).unwrap()).unwrap();
+    stored["tokens"]["account_id"] = json!(WORKSPACE_ID_DISALLOWED);
+    std::fs::write(&auth_path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
+    )
+    .await;
+    let manager =
+        AuthManager::shared_from_auth_config(config, /*enable_codex_api_key_env*/ false).await;
+
+    assert_eq!(manager.auth().await, None);
 }
 
 #[tokio::test]
@@ -1756,6 +1953,7 @@ async fn enforce_login_restrictions_logs_out_for_personal_access_token_workspace
         keyring_backend_kind: AuthKeyringBackendKind::default(),
         forced_login_method: None,
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
+        managed_auth_policy: ManagedAuthPolicy::default(),
         chatgpt_base_url: None,
         auth_route_config: crate::test_support::transport_default_auth_route_config(),
     };
@@ -1880,6 +2078,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method: None,
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
+        managed_auth_policy: ManagedAuthPolicy::default(),
         chatgpt_base_url: Some(chatgpt_base_url),
         auth_route_config: crate::test_support::transport_default_auth_route_config(),
     };
@@ -2162,6 +2361,7 @@ async fn plan_type_maps_known_plan() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -2194,6 +2394,7 @@ async fn plan_type_maps_self_serve_business_usage_based_plan() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -2229,6 +2430,7 @@ async fn plan_type_maps_enterprise_cbp_usage_based_plan() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -2264,6 +2466,7 @@ async fn plan_type_maps_unknown_to_unknown() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -2296,6 +2499,7 @@ async fn missing_plan_type_maps_to_unknown() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*allowed_login_methods*/ None,
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,

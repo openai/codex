@@ -47,6 +47,8 @@ pub struct LoaderOverrides {
     pub system_config_path: Option<PathBuf>,
     pub system_requirements_path: Option<PathBuf>,
     pub ignore_managed_requirements: bool,
+    /// Remote app servers own their authentication policy independently.
+    pub ignore_login_requirements: bool,
     pub ignore_user_config: bool,
     pub ignore_user_and_project_exec_policy_rules: bool,
     //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
@@ -68,6 +70,7 @@ impl LoaderOverrides {
             system_config_path: Some(base.join("config.toml")),
             system_requirements_path: Some(base.join("requirements.toml")),
             ignore_managed_requirements: false,
+            ignore_login_requirements: false,
             ignore_user_config: false,
             ignore_user_and_project_exec_policy_rules: false,
             #[cfg(target_os = "macos")]

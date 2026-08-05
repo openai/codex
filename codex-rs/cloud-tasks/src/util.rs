@@ -7,6 +7,7 @@ use codex_core::config::Config;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
+use std::sync::Arc;
 
 pub fn set_user_agent_suffix(suffix: &str) {
     if let Ok(mut guard) = codex_login::default_client::USER_AGENT_SUFFIX.lock() {
@@ -45,7 +46,7 @@ pub fn normalize_base_url(input: &str) -> String {
 
 pub async fn load_auth_manager(
     chatgpt_base_url: Option<String>,
-) -> (Option<AuthManager>, HttpClientFactory) {
+) -> (Option<Arc<AuthManager>>, HttpClientFactory) {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = match Config::load_with_cli_overrides(Vec::new()).await {
         Ok(config) => config,
@@ -58,16 +59,10 @@ pub async fn load_auth_manager(
         }
     };
     let http_client_factory = config.http_client_factory();
-    let auth_manager = AuthManager::new(
-        config.codex_home.to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-        config.forced_chatgpt_workspace_id.clone(),
-        chatgpt_base_url.or(Some(config.chatgpt_base_url.clone())),
-        config.auth_keyring_backend_kind(),
-        config.auth_route_config(),
-    )
-    .await;
+    let mut auth_config = config.auth_config();
+    auth_config.chatgpt_base_url = chatgpt_base_url.or(Some(config.chatgpt_base_url.clone()));
+    let auth_manager =
+        AuthManager::shared_from_auth_config(auth_config, /*enable_codex_api_key_env*/ false).await;
     (Some(auth_manager), http_client_factory)
 }
 

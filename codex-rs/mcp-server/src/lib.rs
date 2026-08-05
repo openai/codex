@@ -80,6 +80,7 @@ pub async fn run_main(
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
+    config.auth_config().validate()?;
     set_default_client_residency_requirement(config.enforce_residency.value());
     let otel = codex_core::otel_init::build_provider(
         &config,
