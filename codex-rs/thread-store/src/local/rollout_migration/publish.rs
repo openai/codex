@@ -22,6 +22,13 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use tokio::fs::File;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio::io::BufWriter;
 
 use super::migration_error;
 use crate::ThreadStoreResult;
@@ -137,6 +144,74 @@ pub(super) async fn compress_rollout_to_path(
     .await
     .map_err(migration_error)?
     .map_err(migration_error)
+}
+
+pub(super) fn rewritten_staged_rollout_path(staged_path: &Path) -> ThreadStoreResult<PathBuf> {
+    let filename = staged_path
+        .file_name()
+        .and_then(|filename| filename.to_str())
+        .ok_or_else(|| migration_error("staged rollout path has no valid filename"))?;
+    Ok(staged_path.with_file_name(format!("{filename}.head.tmp")))
+}
+
+pub(super) async fn rewrite_subagent_history_boundary(
+    staged_path: &Path,
+    boundary: u64,
+) -> ThreadStoreResult<()> {
+    let rewritten_path = rewritten_staged_rollout_path(staged_path)?;
+    let permissions = tokio::fs::metadata(staged_path)
+        .await
+        .map_err(migration_error)?
+        .permissions();
+    let source = File::open(staged_path).await.map_err(migration_error)?;
+    let mut source = BufReader::new(source);
+    let mut head_bytes = Vec::new();
+    source
+        .read_until(b'\n', &mut head_bytes)
+        .await
+        .map_err(migration_error)?;
+    let mut head = serde_json::from_slice::<RolloutLine>(&head_bytes).map_err(migration_error)?;
+    let RolloutItem::SessionMeta(session_meta) = &mut head.item else {
+        return Err(migration_error(
+            "staged rollout head is not session metadata",
+        ));
+    };
+    session_meta.meta.subagent_history_start_ordinal = Some(boundary);
+
+    let rewritten = tokio::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&rewritten_path)
+        .await
+        .map_err(migration_error)?;
+    rewritten
+        .set_permissions(permissions)
+        .await
+        .map_err(migration_error)?;
+    let mut rewritten = BufWriter::new(rewritten);
+    rewritten
+        .write_all(
+            serde_json::to_string(&head)
+                .map_err(migration_error)?
+                .as_bytes(),
+        )
+        .await
+        .map_err(migration_error)?;
+    rewritten.write_all(b"\n").await.map_err(migration_error)?;
+    tokio::io::copy(&mut source, &mut rewritten)
+        .await
+        .map_err(migration_error)?;
+    rewritten.flush().await.map_err(migration_error)?;
+    rewritten
+        .get_ref()
+        .sync_all()
+        .await
+        .map_err(migration_error)?;
+    drop(rewritten);
+    tokio::fs::rename(rewritten_path, staged_path)
+        .await
+        .map_err(migration_error)
 }
 
 pub(super) async fn remove_file_if_present(path: &Path) -> ThreadStoreResult<()> {

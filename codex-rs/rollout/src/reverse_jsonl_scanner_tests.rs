@@ -69,6 +69,21 @@ not-json
 }
 
 #[test]
+fn skips_records_over_the_configured_limit() -> std::io::Result<()> {
+    let oversized = record(&"x".repeat(128));
+    let input = format!(
+        "{}\n{}\n{}\n",
+        serde_json::to_string(&record("first"))?,
+        serde_json::to_string(&oversized)?,
+        serde_json::to_string(&record("third"))?
+    );
+    let mut scanner = ReverseJsonlScanner::new(Cursor::new(input.into_bytes()))?
+        .with_max_record_bytes(/*max_record_bytes*/ 32);
+
+    assert_records(&mut scanner, &["third", "first"])
+}
+
+#[test]
 fn accepts_valid_json_at_eof() -> std::io::Result<()> {
     let input = b"{\"value\":\"first\"}\n{\"value\":\"second\"}";
 

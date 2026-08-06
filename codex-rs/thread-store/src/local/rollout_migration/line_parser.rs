@@ -26,7 +26,11 @@ pub(super) fn parse_legacy_rollout_line(bytes: &[u8]) -> Result<Option<RolloutLi
     // Deserializing through Value is intentional. Some historical numeric
     // payloads fail serde_json's streaming enum path but deserialize correctly
     // once their tagged object shape has been materialized.
-    let mut value = serde_json::from_slice::<Value>(bytes).map_err(|error| error.to_string())?;
+    let value = serde_json::from_slice::<Value>(bytes).map_err(|error| error.to_string())?;
+    parse_legacy_rollout_value(value)
+}
+
+pub(super) fn parse_legacy_rollout_value(mut value: Value) -> Result<Option<RolloutLine>, String> {
     if should_skip_retired_record(&value) {
         return Ok(None);
     }
