@@ -480,8 +480,13 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
 }
 
 fn connector_install_url(name: &str, connector_id: &str) -> String {
+    let chatgpt_base_url = std::env::var("CODEX_APP_SERVER_CHATGPT_BASE_URL")
+        .unwrap_or_else(|_| "https://chatgpt.com".to_string());
+    let chatgpt_origin = chatgpt_base_url
+        .trim_end_matches('/')
+        .trim_end_matches("/backend-api");
     let slug = connector_name_slug(name);
-    format!("https://chatgpt.com/apps/{slug}/{connector_id}")
+    format!("{chatgpt_origin}/apps/{slug}/{connector_id}")
 }
 
 fn connector_name_slug(name: &str) -> String {
@@ -567,6 +572,19 @@ mod tests {
             distribution_channel: None,
             visibility: None,
         }
+    }
+
+    #[test]
+    fn connector_install_url_uses_configured_origin() {
+        let chatgpt_base_url = std::env::var("CODEX_APP_SERVER_CHATGPT_BASE_URL")
+            .unwrap_or_else(|_| "https://chatgpt.com".to_string());
+        let chatgpt_origin = chatgpt_base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/backend-api");
+        assert_eq!(
+            connector_install_url("Google Calendar", "calendar"),
+            format!("{chatgpt_origin}/apps/google-calendar/calendar"),
+        );
     }
 
     #[test]
