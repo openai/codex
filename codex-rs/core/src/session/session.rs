@@ -516,6 +516,7 @@ impl Session {
         installation_id: String,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
+        model_info: ModelInfo,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
@@ -1000,10 +1001,14 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
-            let state = SessionState::new_with_auto_compact_window_ids(
+            let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
             );
+            state.base_instructions_model = (config.base_instructions.is_none()
+                && session_configuration.base_instructions
+                    == model_info.get_model_instructions(config.personality))
+            .then(|| model_info.slug.clone());
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()

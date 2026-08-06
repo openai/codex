@@ -729,6 +729,7 @@ impl Session {
             installation_id,
             auth_manager.clone(),
             models_manager.clone(),
+            model_info,
             exec_policy,
             tx_event.clone(),
             agent_status_tx.clone(),

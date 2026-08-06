@@ -1,7 +1,10 @@
 use anyhow::Result;
 use codex_config::types::Personality;
+use codex_core::CodexThread;
+use codex_core::ForkSnapshot;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -22,6 +25,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_image_generation_call;
@@ -39,6 +43,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use test_case::test_case;
 use wiremock::MockServer;
 
 fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
@@ -65,6 +70,28 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
             ..Default::default()
         },
     }
+}
+
+async fn submit_model_turn(
+    thread: &CodexThread,
+    model: &str,
+    mut thread_settings: ThreadSettingsOverrides,
+) -> Result<()> {
+    thread_settings.model = Some(model.to_string());
+    thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "switch models".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings,
+        })
+        .await?;
+    wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    Ok(())
 }
 
 fn test_model_info(
@@ -119,6 +146,194 @@ fn test_model_info(
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
+}
+
+#[test_case(None; "model only")]
+#[test_case(Some(Personality::Pragmatic); "model and personality")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_model_change_appends_model_instructions_developer_message(
+    personality: Option<Personality>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let mut builder = test_codex().with_model("gpt-5.2").with_config(|config| {
+        config
+            .features
+            .enable(Feature::Personality)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let next_model = "gpt-5.4";
+
+    submit_model_turn(
+        &test.codex,
+        next_model,
+        ThreadSettingsOverrides {
+            personality,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let request = resp_mock.single_request();
+    assert_eq!(request.body_json()["model"], next_model);
+    let developer_texts = request.message_input_texts("developer");
+    let expected_instructions = bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == next_model)
+        .expect("expected target model in bundled catalog")
+        .get_model_instructions(personality.or(test.config.personality));
+    assert!(
+        developer_texts.iter().any(|text| {
+            text.contains("<model_switch>") && text.contains(&expected_instructions)
+        })
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains("<personality_spec>")),
+        "model instructions already include the selected personality"
+    );
+
+    Ok(())
+}
+
+#[test_case(None; "model-generated base instructions")]
+#[test_case(Some("inherited custom base instructions"); "custom base instructions")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instructions(
+    custom_base_instructions: Option<&'static str>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-fork")).await;
+
+    let initial_model = "gpt-5.2";
+    let mut builder = test_codex()
+        .with_model(initial_model)
+        .with_config(move |config| {
+            config.base_instructions = custom_base_instructions.map(str::to_string);
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+
+    let mut fork_config = test.config.clone();
+    fork_config.model = Some("gpt-5.4".to_string());
+    fork_config.base_instructions = None;
+    let fork = test
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::TruncateBeforeNthUserMessage(0),
+            fork_config,
+            test.codex.rollout_path().expect("rollout path"),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    submit_model_turn(
+        &fork.thread,
+        initial_model,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+
+    let request = resp_mock.single_request();
+    assert_eq!(request.body_json()["model"], initial_model);
+    if let Some(instructions) = custom_base_instructions {
+        assert_eq!(request.instructions_text(), instructions);
+    }
+    assert!(
+        request
+            .message_input_texts("developer")
+            .iter()
+            .all(|text| !text.contains("<model_switch>")),
+        "the inherited base instructions must not be replaced by catalog instructions"
+    );
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum RollbackFollowup {
+    StartupModel,
+    SwitchedModel,
+    ColdResume,
+}
+
+#[test_case(RollbackFollowup::StartupModel; "return to startup model")]
+#[test_case(RollbackFollowup::SwitchedModel; "retry switched model")]
+#[test_case(RollbackFollowup::ColdResume; "retry switched model after cold resume")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rollback_first_turn_model_change_removes_its_instructions(
+    followup: RollbackFollowup,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![sse_completed("resp-first"), sse_completed("resp-followup")],
+    )
+    .await;
+
+    let initial_model = "gpt-5.2";
+    let switched_model = "gpt-5.4";
+    let mut builder = test_codex().with_model(initial_model);
+    let test = builder.build_with_auto_env(&server).await?;
+
+    submit_model_turn(
+        &test.codex,
+        switched_model,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+
+    test.codex
+        .submit(Op::ThreadRollback { num_turns: 1 })
+        .await?;
+    wait_for_event(&test.codex, |ev| {
+        matches!(ev, EventMsg::ThreadRolledBack(_))
+    })
+    .await;
+
+    let test = match followup {
+        RollbackFollowup::ColdResume => {
+            let mut resume_builder = test_codex().with_model(initial_model);
+            resume_builder.restart(&server, &test).await?
+        }
+        RollbackFollowup::StartupModel | RollbackFollowup::SwitchedModel => test,
+    };
+    let followup_model = match followup {
+        RollbackFollowup::StartupModel => initial_model,
+        RollbackFollowup::SwitchedModel | RollbackFollowup::ColdResume => switched_model,
+    };
+    submit_model_turn(
+        &test.codex,
+        followup_model,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+
+    let request = &response_mock.requests()[1];
+    assert_eq!(request.body_json()["model"], followup_model);
+    let model_switch_count = request
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .count();
+    assert_eq!(
+        model_switch_count,
+        usize::from(followup_model == switched_model),
+        "rolled-back model instructions must not survive or be duplicated"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
