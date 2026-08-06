@@ -15,7 +15,9 @@ use codex_connectors::ConnectorRuntimeContextKey;
 use codex_exec_server::Environment;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_rmcp_client::StoredOAuthCredentialSnapshot;
 use codex_rmcp_client::StoredOAuthTokens;
+use codex_rmcp_client::stored_oauth_credential_snapshot;
 use codex_rmcp_client::stored_oauth_credentials;
 use rmcp::model::ElicitationCapability;
 use tracing::warn;
@@ -96,7 +98,7 @@ pub(crate) struct McpServerConnectionIdentity {
     transport: McpServerTransportConfig,
     environment_id: String,
     oauth_store: Option<(OAuthCredentialsStoreMode, AuthKeyringBackendKind)>,
-    oauth_credentials: Result<Option<StoredOAuthTokens>, String>,
+    oauth_credentials: Result<Option<StoredOAuthCredentialSnapshot>, String>,
     resolved_environment: Result<Option<Arc<Environment>>, String>,
     local_stdio_fallback_cwd: Option<PathBuf>,
     referenced_environment_variables: Vec<(String, Option<OsString>)>,
@@ -143,7 +145,7 @@ impl McpServerConnectionIdentity {
             None
         };
         let oauth_credentials = stored_oauth_url.map_or(Ok(None), |url| {
-            stored_oauth_credentials(
+            stored_oauth_credential_snapshot(
                 config.oauth_credential_name(server_name).as_ref(),
                 url,
                 store_mode,
@@ -211,8 +213,52 @@ impl McpServerConnectionIdentity {
             && self.agent_plugin == other.agent_plugin
     }
 
-    pub(crate) fn oauth_credentials(&self) -> Result<&Option<StoredOAuthTokens>, &String> {
-        self.oauth_credentials.as_ref()
+    pub(crate) fn oauth_credentials(&self) -> Result<Option<&StoredOAuthTokens>, &String> {
+        self.oauth_credentials.as_ref().map(|credentials| {
+            credentials
+                .as_ref()
+                .map(StoredOAuthCredentialSnapshot::credentials)
+        })
+    }
+
+    pub(crate) fn oauth_credentials_changed(
+        &self,
+        server_name: &str,
+        config: &McpServerConfig,
+    ) -> bool {
+        let Some((store_mode, keyring_backend_kind)) = self.oauth_store else {
+            return false;
+        };
+        let McpServerTransportConfig::StreamableHttp { url, .. } = &self.transport else {
+            return false;
+        };
+
+        let credential_name = config.oauth_credential_name(server_name);
+        let current_credentials = match self.oauth_credentials.as_ref() {
+            Ok(Some(credentials)) => credentials.reload(
+                credential_name.as_ref(),
+                url,
+                store_mode,
+                keyring_backend_kind,
+            ),
+            Ok(None) | Err(_) => stored_oauth_credentials(
+                credential_name.as_ref(),
+                url,
+                store_mode,
+                keyring_backend_kind,
+            ),
+        };
+
+        match current_credentials {
+            Ok(Some(current_credentials)) => {
+                self.oauth_credentials() != Ok(Some(&current_credentials))
+            }
+            Ok(None) => false,
+            Err(error) => {
+                warn!(server_name, %error, "failed to read stored MCP OAuth credentials");
+                false
+            }
+        }
     }
 }
 

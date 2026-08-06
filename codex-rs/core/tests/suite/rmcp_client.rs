@@ -50,6 +50,7 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpStartupFailureReason;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
@@ -3077,7 +3078,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     let server_name = "rmcp_http_oauth";
     let namespace = format!("mcp__{server_name}");
 
-    mount_sse_once(
+    let response_mock = mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
@@ -3130,13 +3131,15 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         credential_name.as_ref(),
         &server_url,
         client_id,
-        expected_token,
+        "expired-access-token",
         refresh_token,
+        OAuthCredentialExpiry::Expired,
     )?;
 
     // Phase 4: configure Codex with the OAuth-backed Streamable HTTP MCP
     // server and build the fixture in the active local or remote-aware mode.
     let fixture = test_codex()
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
         .with_home(temp_home.clone())
         .with_config(move |config| {
             // Keep OAuth credentials isolated to this test home because Bazel
@@ -3160,9 +3163,35 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         })
         .build_with_auto_env(&server)
         .await?;
-    // Phase 5: wait for MCP startup before the turn is submitted, which keeps
-    // failures tied to server startup/discovery.
-    wait_for_mcp_server(&fixture.codex, server_name).await?;
+    // Phase 5: replace rejected credentials as an external OAuth login would.
+    let mut failure_reason = None;
+    let startup = wait_for_event(&fixture.codex, |event| {
+        if let EventMsg::McpStartupUpdate(update) = event
+            && update.server == server_name
+            && let McpStartupStatus::Failed { reason, .. } = &update.status
+        {
+            failure_reason = *reason;
+        }
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+    let EventMsg::McpStartupComplete(startup) = startup else {
+        unreachable!("event guard guarantees McpStartupComplete");
+    };
+    assert_eq!(startup.failed.len(), 1);
+    assert_eq!(startup.failed[0].server, server_name);
+    assert_eq!(
+        failure_reason,
+        Some(McpStartupFailureReason::ReauthenticationRequired),
+    );
+    write_fallback_oauth_tokens(
+        credential_name.as_ref(),
+        http_server.url(),
+        client_id,
+        expected_token,
+        refresh_token,
+        OAuthCredentialExpiry::Valid,
+    )?;
 
     // Phase 6: submit the user turn that should invoke the OAuth-backed tool.
     fixture
@@ -3175,12 +3204,18 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
 
     // Phase 7: assert Codex begins the expected tool invocation.
     let begin_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallBegin(_))
+        matches!(
+            ev,
+            EventMsg::McpToolCallBegin(_)
+                | EventMsg::Error(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::TurnComplete(_)
+        )
     })
     .await;
 
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
-        unreachable!("event guard guarantees McpToolCallBegin");
+        anyhow::bail!("OAuth MCP recovery ended before the tool was called: {begin_event:?}");
     };
     assert_eq!(begin.invocation.server, server_name);
     assert_eq!(begin.invocation.tool, "echo");
@@ -3227,6 +3262,11 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     // placement-aware MCP server.
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let request = response_mock.single_request().body_json();
+    assert!(
+        responses::namespace_child_tool(&request, &namespace, "echo").is_some(),
+        "the recovered MCP tool must be advertised to the model"
+    );
     server.verify().await;
 
     http_server.shutdown().await;
@@ -3584,18 +3624,27 @@ fn streamable_http_metadata_url(server_url: &str) -> String {
     format!("{base_url}{STREAMABLE_HTTP_METADATA_PATH}")
 }
 
+enum OAuthCredentialExpiry {
+    Valid,
+    Expired,
+}
+
 fn write_fallback_oauth_tokens(
     server_name: &str,
     server_url: &str,
     client_id: &str,
     access_token: &str,
     refresh_token: &str,
+    expiry: OAuthCredentialExpiry,
 ) -> anyhow::Result<()> {
-    let expires_at = SystemTime::now()
-        .checked_add(Duration::from_secs(3600))
-        .ok_or_else(|| anyhow::anyhow!("failed to compute expiry time"))?
-        .duration_since(UNIX_EPOCH)?
-        .as_millis() as u64;
+    let expires_at = match expiry {
+        OAuthCredentialExpiry::Valid => SystemTime::now()
+            .checked_add(Duration::from_secs(3600))
+            .ok_or_else(|| anyhow::anyhow!("failed to compute expiry time"))?
+            .duration_since(UNIX_EPOCH)?
+            .as_millis() as u64,
+        OAuthCredentialExpiry::Expired => 0,
+    };
 
     let tokens = serde_json::from_value(json!({
         "server_name": server_name,

@@ -87,6 +87,38 @@ pub struct StoredOAuthTokens {
     pub expires_at: Option<u64>,
 }
 
+/// OAuth credentials paired with the concrete store selected for their client lifecycle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredOAuthCredentialSnapshot {
+    credentials: StoredOAuthTokens,
+    store: ResolvedOAuthCredentialStore,
+}
+
+impl StoredOAuthCredentialSnapshot {
+    /// Returns the normalized credentials originally read from the selected store.
+    pub fn credentials(&self) -> &StoredOAuthTokens {
+        &self.credentials
+    }
+
+    /// Rereads the selected authority, allowing Auto login to migrate File credentials to keyring.
+    pub fn reload(
+        &self,
+        server_name: &str,
+        url: &str,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+    ) -> Result<Option<StoredOAuthTokens>> {
+        if self.store == ResolvedOAuthCredentialStore::File
+            && store_mode == OAuthCredentialsStoreMode::Auto
+        {
+            return stored_oauth_credentials(server_name, url, store_mode, keyring_backend_kind);
+        }
+
+        let credentials = self.store.load(&DefaultKeyringStore, server_name, url)?;
+        Ok(normalized_oauth_credentials(credentials.as_ref()))
+    }
+}
+
 /// Wrap OAuthTokenResponse to allow for partial equality comparison.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WrappedOAuthTokenResponse(pub OAuthTokenResponse);
@@ -134,6 +166,19 @@ pub fn stored_oauth_credentials(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<Option<StoredOAuthTokens>> {
+    Ok(
+        stored_oauth_credential_snapshot(server_name, url, store_mode, keyring_backend_kind)?
+            .map(|snapshot| snapshot.credentials),
+    )
+}
+
+/// Loads OAuth credentials together with the concrete authority selected by store policy.
+pub fn stored_oauth_credential_snapshot(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<Option<StoredOAuthCredentialSnapshot>> {
     let Some(resolved) = resolve_oauth_tokens_from_store_policy(
         &DefaultKeyringStore,
         server_name,
@@ -144,7 +189,12 @@ pub fn stored_oauth_credentials(
     else {
         return Ok(None);
     };
-    Ok(normalized_oauth_credentials(Some(&resolved.tokens)))
+    let mut credentials = resolved.tokens;
+    credentials.token_response.0.set_expires_in(None);
+    Ok(Some(StoredOAuthCredentialSnapshot {
+        credentials,
+        store: resolved.store,
+    }))
 }
 
 fn normalized_oauth_credentials(tokens: Option<&StoredOAuthTokens>) -> Option<StoredOAuthTokens> {

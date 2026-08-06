@@ -19,6 +19,7 @@ use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
 use codex_rmcp_client::save_oauth_tokens;
+use codex_rmcp_client::stored_oauth_credential_snapshot;
 use futures::future::BoxFuture;
 use keyring::credential::Credential;
 use keyring::credential::CredentialApi;
@@ -209,13 +210,6 @@ async fn auto_store_remains_pinned_across_session_recovery_child() -> anyhow::Re
 
     let base_url = std::env::var(CHILD_SERVER_URL_ENV)?;
     let server_url = format!("{base_url}/mcp");
-    let keyring_tokens = stored_tokens(&server_url, KEYRING_ACCESS_TOKEN);
-    save_oauth_tokens(
-        SERVER_NAME,
-        &keyring_tokens,
-        OAuthCredentialsStoreMode::Keyring,
-        AuthKeyringBackendKind::Direct,
-    )?;
     let file_tokens = stored_tokens(&server_url, FILE_ACCESS_TOKEN);
     save_oauth_tokens(
         SERVER_NAME,
@@ -223,6 +217,35 @@ async fn auto_store_remains_pinned_across_session_recovery_child() -> anyhow::Re
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::Direct,
     )?;
+    let file_snapshot = stored_oauth_credential_snapshot(
+        SERVER_NAME,
+        &server_url,
+        OAuthCredentialsStoreMode::Auto,
+        AuthKeyringBackendKind::Direct,
+    )?
+    .expect("Auto should initially resolve the fallback File");
+    let keyring_tokens = stored_tokens(&server_url, KEYRING_ACCESS_TOKEN);
+    save_oauth_tokens(
+        SERVER_NAME,
+        &keyring_tokens,
+        OAuthCredentialsStoreMode::Auto,
+        AuthKeyringBackendKind::Direct,
+    )?;
+    save_oauth_tokens(
+        SERVER_NAME,
+        &file_tokens,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::Direct,
+    )?;
+    assert_eq!(
+        file_snapshot.reload(
+            SERVER_NAME,
+            &server_url,
+            OAuthCredentialsStoreMode::Auto,
+            AuthKeyringBackendKind::Direct,
+        )?,
+        Some(keyring_tokens.clone()),
+    );
     let http_client = RecordingHttpClient::new(Environment::default_for_tests().get_http_client());
 
     let client = RmcpClient::new_streamable_http_client(

@@ -59,15 +59,14 @@ pub(super) fn mcp_startup_failure_reason(
         return None;
     }
     match auth_state {
-        Some(McpAuthState::LoggedOut(McpLoginRequirement::Reauthentication)) => {
-            Some(McpStartupFailureReason::ReauthenticationRequired)
-        }
+        Some(
+            McpAuthState::LoggedOut(McpLoginRequirement::Reauthentication) | McpAuthState::OAuth,
+        ) => Some(McpStartupFailureReason::ReauthenticationRequired),
         Some(
             McpAuthState::Unsupported
             | McpAuthState::Unknown
             | McpAuthState::LoggedOut(McpLoginRequirement::Login)
-            | McpAuthState::BearerToken
-            | McpAuthState::OAuth,
+            | McpAuthState::BearerToken,
         )
         | None => None,
     }
@@ -91,13 +90,18 @@ pub(super) fn mcp_init_error_display(
         format!(
             "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         )
-    } else if matches!(
-        error,
-        StartupOutcomeError::Failed { error, .. } if error.contains("Auth required")
-    ) {
-        format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+    } else if error.is_authentication_required()
+        || matches!(
+                error,
+                StartupOutcomeError::Failed { error, .. } if error.contains("Auth required")
         )
+    {
+        let recovery_hint = if config.is_some_and(|config| !config.is_local_environment()) {
+            "Use your client's MCP OAuth sign-in flow.".to_string()
+        } else {
+            format!("Run `codex mcp login {server_name}`.")
+        };
+        format!("The {server_name} MCP server is not logged in. {recovery_hint}")
     } else if matches!(
         error,
         StartupOutcomeError::Failed { error, .. }

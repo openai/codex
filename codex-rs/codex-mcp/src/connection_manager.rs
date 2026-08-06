@@ -97,7 +97,7 @@ impl McpServerConnection {
             return Some(client);
         };
         let reusable = match client.client.managed_oauth_credentials().await {
-            Some(live_credentials) => &live_credentials == desired_credentials,
+            Some(live_credentials) => live_credentials.as_ref() == desired_credentials,
             None => current
                 .oauth_credentials()
                 .is_ok_and(|startup_credentials| startup_credentials == desired_credentials),
@@ -643,6 +643,60 @@ impl McpConnectionSet {
 
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
         self.servers.contains_key(server_name)
+    }
+
+    pub(crate) async fn authentication_failed_servers(&self) -> Vec<String> {
+        let mut failed_servers = Vec::new();
+        for (server_name, view) in &self.servers {
+            if view
+                .connection
+                .client
+                .startup_complete
+                .load(Ordering::Acquire)
+                && let Err(error) = view.connection.client().await
+                && error.is_authentication_required()
+            {
+                failed_servers.push(server_name.clone());
+            }
+        }
+        failed_servers
+    }
+
+    pub(crate) async fn updated_oauth_credentials_after_auth_failure(
+        &self,
+        config: &crate::McpConfig,
+    ) -> Vec<String> {
+        let mut candidates = Vec::new();
+        for server_name in self.authentication_failed_servers().await {
+            if let Some(view) = self.servers.get(&server_name)
+                && let Some(identity) = view.connection.identity.as_ref()
+                && let Some(server) = config.mcp_server_catalog.server(&server_name)
+            {
+                candidates.push((server_name, identity.clone(), server.config().clone()));
+            }
+        }
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        match tokio::task::spawn_blocking(move || {
+            candidates
+                .into_iter()
+                .filter_map(|(server_name, identity, config)| {
+                    identity
+                        .oauth_credentials_changed(&server_name, &config)
+                        .then_some(server_name)
+                })
+                .collect()
+        })
+        .await
+        {
+            Ok(recovered_servers) => recovered_servers,
+            Err(error) => {
+                warn!(%error, "failed to inspect stored MCP OAuth credentials");
+                Vec::new()
+            }
+        }
     }
 
     pub(crate) async fn wait_for_server_startup(&self, server_name: &str) -> bool {

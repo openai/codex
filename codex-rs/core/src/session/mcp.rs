@@ -302,11 +302,32 @@ impl Session {
         {
             self.mark_mcp_runtime_dirty();
         }
+
+        let recovered_oauth_servers = self
+            .services
+            .mcp_runtime
+            .updated_oauth_credentials_after_auth_failure()
+            .await;
+        if !recovered_oauth_servers.is_empty()
+            && let Ok(_refresh) = self.mcp_refresh.acquire().await
+            && self
+                .services
+                .mcp_runtime
+                .has_authentication_failed_servers(&recovered_oauth_servers)
+                .await
+        {
+            self.mark_mcp_runtime_dirty();
+        }
         self.refresh_mcp_if_dirty().await;
+        let required_servers = required_servers
+            .iter()
+            .chain(&recovered_oauth_servers)
+            .cloned()
+            .collect::<Vec<_>>();
         if let Some(binding) = self
             .services
             .mcp_runtime
-            .current_binding_with_required_servers(required_servers)
+            .current_binding_with_required_servers(&required_servers)
             .await
         {
             return binding;

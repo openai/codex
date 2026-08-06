@@ -177,6 +177,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }),
         )
+        .route(
+            "/oauth/token",
+            post(|| async {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "invalid_grant",
+                        "error_description": "refresh token expired or revoked",
+                    })),
+                )
+            }),
+        )
         .nest_service(
             "/mcp",
             StreamableHttpService::new(
@@ -386,7 +398,7 @@ async fn require_bearer(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path().contains("/.well-known/") {
+    if request.uri().path().contains("/.well-known/") || request.uri().path() == "/oauth/token" {
         return Ok(next.run(request).await);
     }
     if request
