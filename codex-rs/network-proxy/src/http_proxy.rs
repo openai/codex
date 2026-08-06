@@ -758,6 +758,54 @@ async fn http_plain_proxy(
         }
     }
 
+    let host_mitm_requirement = match app_state.host_mitm_requirement(&host).await {
+        Ok(requirement) => requirement,
+        Err(err) => {
+            return Ok(internal_error("failed to inspect MITM requirements", err));
+        }
+    };
+    if host_mitm_requirement == HostMitmRequirement::Always {
+        emit_http_block_decision_audit_event(
+            &app_state,
+            BlockDecisionAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_MITM_REQUIRED,
+                protocol: NetworkProtocol::Http,
+                server_address: host.as_str(),
+                server_port: port,
+                method: Some(req.method().as_str()),
+                client_addr: client.as_deref(),
+            },
+        );
+        let details = PolicyDecisionDetails {
+            decision: NetworkPolicyDecision::Deny,
+            reason: REASON_MITM_REQUIRED,
+            source: NetworkDecisionSource::ModeGuard,
+            protocol: NetworkProtocol::Http,
+            host: &host,
+            port,
+        };
+        let _ = app_state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: host.clone(),
+                reason: REASON_MITM_REQUIRED.to_string(),
+                client: client.clone(),
+                method: Some(req.method().as_str().to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(port),
+            }))
+            .await;
+        let client = client.as_deref().unwrap_or_default();
+        warn!(
+            "request blocked; MITM required to enforce host policy (client={client}, host={host}, method={})",
+            req.method()
+        );
+        return Ok(json_blocked(&host, REASON_MITM_REQUIRED, Some(&details)));
+    }
+
     if !method_allowed {
         emit_http_block_decision_audit_event(
             &app_state,
@@ -1416,6 +1464,87 @@ mod tests {
         proxy_task.abort();
         let _ = proxy_task.await;
         target_task.await.expect("target task should finish");
+    }
+
+    #[tokio::test]
+    async fn http_proxy_blocks_absolute_form_https_for_hooked_host() {
+        let target_listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("target listener should bind");
+        let target_addr = target_listener
+            .local_addr()
+            .expect("target listener should expose local addr");
+        let target_task = tokio::spawn(async move {
+            timeout(Duration::from_secs(1), target_listener.accept())
+                .await
+                .is_ok()
+        });
+
+        let state = Arc::new(network_proxy_state_for_policy({
+            let mut network = NetworkProxyConfig {
+                allow_local_binding: true,
+                mitm: true,
+                mitm_hooks: vec![crate::mitm_hook::MitmHookConfig {
+                    host: "127.0.0.1".to_string(),
+                    matcher: crate::mitm_hook::MitmHookMatchConfig {
+                        methods: vec!["GET".to_string()],
+                        path_prefixes: vec!["/repos/openai/ALLOWED".to_string()],
+                        ..crate::mitm_hook::MitmHookMatchConfig::default()
+                    },
+                    actions: crate::mitm_hook::MitmHookActionsConfig::default(),
+                }],
+                ..NetworkProxyConfig::default()
+            };
+            network.set_allowed_domains(vec!["127.0.0.1".to_string()]);
+            network
+        }));
+        let listener =
+            StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("proxy listener should bind");
+        let proxy_addr = listener
+            .local_addr()
+            .expect("proxy listener should expose local addr");
+        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(
+            state.clone(),
+            listener,
+            /*policy_decider*/ None,
+            /*environment_id*/ None,
+        ));
+
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr)
+            .await
+            .expect("client should connect to proxy");
+        let request = format!(
+            "GET https://127.0.0.1:{port}/repos/openai/UNAUTHORIZED HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n",
+            port = target_addr.port()
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("client should write absolute-form HTTPS request");
+
+        let mut buf = [0_u8; 512];
+        let bytes_read = timeout(Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .expect("proxy should respond before timeout")
+            .expect("client should read proxy response");
+        let response = String::from_utf8_lossy(&buf[..bytes_read]);
+        assert!(
+            response.starts_with("HTTP/1.1 403 Forbidden\r\n"),
+            "unexpected proxy response: {response:?}"
+        );
+        assert!(response.contains("x-proxy-error: blocked-by-mitm-required\r\n"));
+        assert!(
+            !target_task.await.expect("target task should finish"),
+            "blocked request must not reach upstream"
+        );
+
+        let blocked = state.drain_blocked().await.unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].reason, REASON_MITM_REQUIRED);
+
+        drop(stream);
+        proxy_task.abort();
+        let _ = proxy_task.await;
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+use crate::authorization_path::is_safe_for_authorization;
 use crate::config::NetworkProxyConfig;
 use crate::policy::normalize_host;
 use anyhow::Context as _;
@@ -392,7 +393,7 @@ fn hook_matches(hook: &MitmHook, req: &Request) -> bool {
     }
 
     let path = req.uri().path();
-    if !path_matches(&hook.matcher.path_prefixes, path) {
+    if !is_safe_for_authorization(path) || !path_matches(&hook.matcher.path_prefixes, path) {
         return false;
     }
 
@@ -916,6 +917,46 @@ mod tests {
             evaluate_mitm_hooks(&hooks, "api.github.com", &nested_req),
             HookEvaluation::HookedHostNoMatch
         );
+    }
+
+    #[test]
+    fn evaluate_rejects_paths_that_upstream_may_normalize() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.methods = vec!["GET".to_string()];
+        hook.matcher.path_prefixes = vec!["pattern:/openai/openai/**".to_string()];
+        config.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let paths = [
+            "/openai/openai/../codex",
+            "/openai/openai/%2e%2e/codex",
+            "/openai/openai/%2E%2E/codex",
+            "/openai/openai/.%2e/codex",
+            "/openai/openai/%2e./codex",
+            "/openai/openai/%252e%252e/codex",
+            "/openai/openai/%2f..%2fcodex",
+            "/openai/openai/%5c..%5ccodex",
+            "/openai/openai/%2e%2e/%2e%2e/microsoft/vscode",
+        ];
+        let actual = paths
+            .iter()
+            .map(|path| {
+                let req = Request::builder()
+                    .method(Method::GET)
+                    .uri(*path)
+                    .body(Body::empty())
+                    .unwrap();
+                evaluate_mitm_hooks(&hooks, "api.github.com", &req)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, vec![HookEvaluation::HookedHostNoMatch; paths.len()]);
     }
 
     #[test]

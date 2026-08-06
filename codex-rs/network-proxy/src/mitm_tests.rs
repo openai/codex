@@ -278,6 +278,77 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
 }
 
 #[tokio::test]
+async fn mitm_policy_blocks_encoded_path_traversal_for_repository_allowlist() {
+    let mut hook = github_write_hook();
+    hook.host = "github.com".to_string();
+    hook.matcher.methods = vec!["GET".to_string()];
+    hook.matcher.path_prefixes = vec!["pattern:/openai/openai/**".to_string()];
+    hook.actions.inject_request_headers.clear();
+    let mut network = NetworkProxyConfig {
+        mitm: true,
+        mitm_hooks: vec![hook],
+        mode: NetworkMode::Full,
+        ..NetworkProxyConfig::default()
+    };
+    network.set_allowed_domains(vec!["github.com".to_string()]);
+    let app_state = Arc::new(network_proxy_state_for_policy(network));
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Full,
+        "github.com",
+        /*target_port*/ 443,
+    );
+    let paths = [
+        "/openai/openai/issues",
+        "/openai/codex",
+        "/openai/openai/%2e%2e/codex",
+        "/openai/openai/%2e%2e/%2e%2e/microsoft/vscode",
+    ];
+    let mut actual = Vec::with_capacity(paths.len());
+    for path in paths {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(path)
+            .header(HOST, "github.com")
+            .body(Body::empty())
+            .unwrap();
+        let response = mitm_blocking_response(&req, &ctx).await.unwrap();
+        actual.push(response.map(|response| {
+            (
+                response.status(),
+                response.headers().get("x-proxy-error").cloned(),
+            )
+        }));
+    }
+
+    assert_eq!(
+        actual,
+        vec![
+            None,
+            Some((
+                StatusCode::FORBIDDEN,
+                Some(HeaderValue::from_static("blocked-by-mitm-hook")),
+            )),
+            Some((
+                StatusCode::FORBIDDEN,
+                Some(HeaderValue::from_static("blocked-by-mitm-hook")),
+            )),
+            Some((
+                StatusCode::FORBIDDEN,
+                Some(HeaderValue::from_static("blocked-by-mitm-hook")),
+            )),
+        ]
+    );
+    let blocked = app_state.drain_blocked().await.unwrap();
+    assert_eq!(blocked.len(), 3);
+    assert!(
+        blocked
+            .iter()
+            .all(|request| request.reason == REASON_MITM_HOOK_DENIED)
+    );
+}
+
+#[tokio::test]
 async fn mitm_policy_blocks_matching_hooked_write_in_limited_mode() {
     let mut hook = github_write_hook();
     hook.actions.inject_request_headers.clear();

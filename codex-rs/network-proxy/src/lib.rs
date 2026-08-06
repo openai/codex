@@ -1,6 +1,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod attribution;
+mod authorization_path;
 mod certs;
 mod config;
 mod connect_policy;
