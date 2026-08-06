@@ -10,6 +10,7 @@ use codex_skills::SkillDependencies;
 use codex_skills::SkillPolicy;
 use codex_skills::parse_skill_frontmatter_metadata;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::SkillDiscoveryMode;
 use futures::StreamExt;
 
 use super::MAX_QUALIFIED_NAME_LEN;
@@ -120,6 +121,7 @@ pub async fn load_environment_skills_from_root(
         SkillDiscoveryOptions {
             directory_symlinks: DirectorySymlinkPolicy::Follow,
             hidden_directories: HiddenDirectoryPolicy::Include,
+            mode: SkillDiscoveryMode::Recursive,
         },
     )
     .await;

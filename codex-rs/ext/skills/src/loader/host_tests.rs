@@ -10,8 +10,13 @@ use codex_skills::SkillMetadata;
 use codex_skills::SkillPolicy;
 use codex_skills::SkillToolDependency;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PluginIdentity;
+use codex_utils_plugins::PluginSkillRoot;
+use codex_utils_plugins::SkillDiscoveryMode;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+
+use crate::loader::MAX_NAME_LEN;
 
 use super::HostSkillRoot;
 use super::load_host_skill_root;
@@ -36,12 +41,11 @@ fn write_metadata(root: &TempDir, directory: &str, contents: &str) {
 }
 
 fn root_for(temp_dir: &TempDir, scope: SkillScope) -> HostSkillRoot {
-    HostSkillRoot {
-        path: AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute root"),
+    HostSkillRoot::host(
+        AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute root"),
         scope,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_root: None,
-    }
+        Arc::clone(&LOCAL_FS),
+    )
 }
 
 struct PluginSkillFixture {
@@ -81,12 +85,19 @@ impl PluginSkillFixture {
     }
 
     fn host_root(&self) -> HostSkillRoot {
-        HostSkillRoot {
-            path: self.plugin_root.join("skills"),
-            scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_root: Some(self.plugin_root.clone()),
-        }
+        HostSkillRoot::plugin(
+            PluginSkillRoot {
+                path: self.plugin_root.join("skills"),
+                plugin_identity: PluginIdentity {
+                    plugin_id: "fixture@test".to_string(),
+                    remote_plugin_id: None,
+                },
+                plugin_namespace: "plugin".to_string(),
+                plugin_root: self.plugin_root.clone(),
+                discovery_mode: SkillDiscoveryMode::Recursive,
+            },
+            Arc::clone(&LOCAL_FS),
+        )
     }
 }
 
@@ -234,7 +245,7 @@ async fn loads_plugin_skill_interface_icons_from_local_and_shared_assets() {
     assert_eq!(
         snapshot.skills,
         vec![SkillMetadata {
-            name: "send-message".to_string(),
+            name: "plugin:send-message".to_string(),
             description: "Send messages".to_string(),
             short_description: None,
             interface: Some(SkillInterface {
@@ -253,7 +264,7 @@ async fn loads_plugin_skill_interface_icons_from_local_and_shared_assets() {
             policy: None,
             path_to_skills_md: fixture.skill_path,
             scope: SkillScope::User,
-            plugin_id: None,
+            plugin_id: Some("fixture@test".to_string()),
             remote_plugin_id: None,
         }]
     );
@@ -276,7 +287,7 @@ async fn rejects_plugin_skill_interface_icons_outside_shared_assets() {
     assert_eq!(
         snapshot.skills,
         vec![SkillMetadata {
-            name: "send-message".to_string(),
+            name: "plugin:send-message".to_string(),
             description: "Send messages".to_string(),
             short_description: None,
             interface: Some(SkillInterface {
@@ -291,7 +302,7 @@ async fn rejects_plugin_skill_interface_icons_outside_shared_assets() {
             policy: None,
             path_to_skills_md: fixture.skill_path,
             scope: SkillScope::User,
-            plugin_id: None,
+            plugin_id: Some("fixture@test".to_string()),
             remote_plugin_id: None,
         }]
     );
@@ -374,6 +385,254 @@ async fn discovers_nested_plugin_namespace_without_plugin_identity() {
             plugin_id: None,
             remote_plugin_id: None,
         }]
+    );
+}
+
+#[tokio::test]
+async fn plugin_root_accepts_maximum_length_qualified_skill_name() {
+    let root = TempDir::new().expect("temp dir");
+    let plugin_namespace = "p".repeat(MAX_NAME_LEN);
+    let skill_name = "s".repeat(MAX_NAME_LEN);
+    let skill_path = write_skill(
+        &root,
+        "skills/search",
+        &format!("name: {skill_name}\ndescription: Search skill"),
+    );
+    let plugin_root = AbsolutePathBuf::from_absolute_path(root.path()).expect("plugin root");
+
+    let snapshot = load_host_skill_root(HostSkillRoot::plugin(
+        PluginSkillRoot {
+            path: plugin_root.join("skills"),
+            plugin_identity: PluginIdentity {
+                plugin_id: "demo@test".to_string(),
+                remote_plugin_id: None,
+            },
+            plugin_namespace: plugin_namespace.clone(),
+            plugin_root,
+            discovery_mode: SkillDiscoveryMode::Recursive,
+        },
+        Arc::clone(&LOCAL_FS),
+    ))
+    .await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: format!("{plugin_namespace}:{skill_name}"),
+            description: "Search skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: skill_path,
+            scope: SkillScope::User,
+            plugin_id: Some("demo@test".to_string()),
+            remote_plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn recursive_plugin_root_preserves_owner_namespace_and_shared_asset_policy() {
+    let root = TempDir::new().expect("temp dir");
+    let skill_path = write_skill(
+        &root,
+        "skills/group/demo",
+        "name: demo\ndescription: Demo skill",
+    );
+    let nested_manifest = root.path().join("skills/group/.codex-plugin/plugin.json");
+    fs::create_dir_all(nested_manifest.parent().expect("nested manifest parent"))
+        .expect("create nested plugin manifest directory");
+    fs::write(nested_manifest, r#"{"name":"conflicting-plugin"}"#)
+        .expect("write nested plugin manifest");
+    write_metadata(
+        &root,
+        "skills/group/demo",
+        "interface:\n  icon_small: ../../../assets/logo.svg\n",
+    );
+    fs::create_dir_all(root.path().join("assets")).expect("create assets directory");
+    fs::write(root.path().join("assets/logo.svg"), "<svg/>").expect("write asset");
+    let plugin_root = AbsolutePathBuf::from_absolute_path(root.path()).expect("plugin root");
+    let canonical_plugin_root = AbsolutePathBuf::from_absolute_path(
+        fs::canonicalize(root.path()).expect("canonicalize plugin root"),
+    )
+    .expect("canonical plugin root");
+
+    let snapshot = load_host_skill_root(HostSkillRoot::plugin(
+        PluginSkillRoot {
+            path: plugin_root.join("skills"),
+            plugin_identity: PluginIdentity {
+                plugin_id: "demo@test".to_string(),
+                remote_plugin_id: Some("remote-demo".to_string()),
+            },
+            plugin_namespace: "plugin".to_string(),
+            plugin_root,
+            discovery_mode: SkillDiscoveryMode::Recursive,
+        },
+        Arc::clone(&LOCAL_FS),
+    ))
+    .await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: "plugin:demo".to_string(),
+            description: "Demo skill".to_string(),
+            short_description: None,
+            interface: Some(SkillInterface {
+                display_name: None,
+                short_description: None,
+                icon_small: Some(canonical_plugin_root.join("assets/logo.svg")),
+                icon_large: None,
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: skill_path.clone(),
+            scope: SkillScope::User,
+            plugin_id: Some("demo@test".to_string()),
+            remote_plugin_id: Some("remote-demo".to_string()),
+        }]
+    );
+    assert_eq!(
+        snapshot.skill_discovery_path_by_path.get(&skill_path),
+        Some(&skill_path)
+    );
+}
+
+#[tokio::test]
+async fn direct_child_plugin_root_ignores_nested_skills() {
+    let root = TempDir::new().expect("temp dir");
+    let direct_path = write_skill(
+        &root,
+        "skills/direct",
+        "name: direct\ndescription: Direct skill",
+    );
+    write_skill(
+        &root,
+        "skills/nested/too-deep",
+        "name: nested\ndescription: Nested skill",
+    );
+    let plugin_root = AbsolutePathBuf::from_absolute_path(root.path()).expect("plugin root");
+
+    let snapshot = load_host_skill_root(HostSkillRoot::plugin(
+        PluginSkillRoot {
+            path: plugin_root.join("skills"),
+            plugin_identity: PluginIdentity {
+                plugin_id: "demo@test".to_string(),
+                remote_plugin_id: None,
+            },
+            plugin_namespace: "plugin".to_string(),
+            plugin_root,
+            discovery_mode: SkillDiscoveryMode::DirectChildren,
+        },
+        Arc::clone(&LOCAL_FS),
+    ))
+    .await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: "plugin:direct".to_string(),
+            description: "Direct skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: direct_path,
+            scope: SkillScope::User,
+            plugin_id: Some("demo@test".to_string()),
+            remote_plugin_id: None,
+        }]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_child_plugin_root_skips_skills_resolving_outside_plugin_root() {
+    let root = TempDir::new().expect("temp dir");
+    let outside_root = TempDir::new().expect("outside temp dir");
+    write_skill(
+        &outside_root,
+        "escaped",
+        "name: escaped\ndescription: Escaped skill",
+    );
+    fs::create_dir_all(root.path().join("skills")).expect("create skills root");
+    std::os::unix::fs::symlink(
+        outside_root.path().join("escaped"),
+        root.path().join("skills/escaped"),
+    )
+    .expect("create skill symlink");
+    let plugin_root = AbsolutePathBuf::from_absolute_path(root.path()).expect("plugin root");
+
+    let snapshot = load_host_skill_root(HostSkillRoot::plugin(
+        PluginSkillRoot {
+            path: plugin_root.join("skills"),
+            plugin_identity: PluginIdentity {
+                plugin_id: "demo@test".to_string(),
+                remote_plugin_id: None,
+            },
+            plugin_namespace: "plugin".to_string(),
+            plugin_root,
+            discovery_mode: SkillDiscoveryMode::DirectChildren,
+        },
+        Arc::clone(&LOCAL_FS),
+    ))
+    .await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(snapshot.skills, Vec::new());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn recursive_plugin_root_preserves_symlinked_skill_discovery_path() {
+    let root = TempDir::new().expect("temp dir");
+    let target = TempDir::new().expect("target temp dir");
+    let target_skill = write_skill(&target, "demo", "name: demo\ndescription: Symlinked skill");
+    fs::create_dir_all(root.path().join("skills")).expect("create skills root");
+    std::os::unix::fs::symlink(target.path().join("demo"), root.path().join("skills/alias"))
+        .expect("create skill symlink");
+    let plugin_root = AbsolutePathBuf::from_absolute_path(root.path()).expect("plugin root");
+
+    let snapshot = load_host_skill_root(HostSkillRoot::plugin(
+        PluginSkillRoot {
+            path: plugin_root.join("skills"),
+            plugin_identity: PluginIdentity {
+                plugin_id: "demo@test".to_string(),
+                remote_plugin_id: None,
+            },
+            plugin_namespace: "plugin".to_string(),
+            plugin_root,
+            discovery_mode: SkillDiscoveryMode::Recursive,
+        },
+        Arc::clone(&LOCAL_FS),
+    ))
+    .await;
+
+    assert_eq!(snapshot.errors, Vec::new());
+    assert_eq!(
+        snapshot.skills,
+        vec![SkillMetadata {
+            name: "plugin:demo".to_string(),
+            description: "Symlinked skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: target_skill.clone(),
+            scope: SkillScope::User,
+            plugin_id: Some("demo@test".to_string()),
+            remote_plugin_id: None,
+        }]
+    );
+    assert_eq!(
+        snapshot.skill_discovery_path_by_path.get(&target_skill),
+        Some(&snapshot.root.join("alias/SKILL.md"))
     );
 }
 

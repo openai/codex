@@ -303,12 +303,11 @@ impl HostSkillsService {
                 let snapshot = if use_legacy_loader {
                     load_skill_root_snapshot(root, plugin_skill_snapshots).await
                 } else {
-                    let snapshot = load_host_skill_root(HostSkillRoot {
-                        path: root.path,
-                        scope: root.scope,
-                        file_system: root.file_system,
-                        plugin_root: root.plugin_root,
-                    })
+                    let snapshot = load_host_skill_root(HostSkillRoot::host(
+                        root.path,
+                        root.scope,
+                        root.file_system,
+                    ))
                     .await;
                     SkillRootSnapshot::new(
                         snapshot.root,

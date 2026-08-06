@@ -28,6 +28,14 @@ pub(crate) struct SkillNamespaceResolver {
 }
 
 impl SkillNamespaceResolver {
+    /// Uses the authoritative namespace supplied by an owning plugin.
+    pub(crate) fn with_provided_namespace(namespace: &str) -> Self {
+        Self {
+            inherited_namespace: ResolvedSkillNamespace::Plugin(namespace.to_string()),
+            nested_namespaces: Vec::new(),
+        }
+    }
+
     pub(crate) async fn discover(
         fs: &dyn ExecutorFileSystem,
         root: &PathUri,
