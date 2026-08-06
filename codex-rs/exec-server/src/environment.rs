@@ -89,13 +89,6 @@ pub struct EnvironmentReadyInfo {
     pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
 }
 
-/// The one-shot capability to complete a deferred environment registration.
-#[must_use = "the deferred environment cannot connect until registration is completed"]
-pub struct DeferredEnvironmentRegistration {
-    environment_id: String,
-    environment: Option<Arc<Environment>>,
-}
-
 /// Maximum capability roots accepted from environment ready information.
 pub const MAX_SELECTED_CAPABILITY_ROOTS: usize = 256;
 
@@ -232,7 +225,16 @@ impl EnvironmentManager {
             local_runtime_paths,
             http_client_factory,
         };
-        manager.upsert_noise_environment(REMOTE_ENVIRONMENT_ID.to_string(), connect_provider)?;
+        let identity = noise_channel_identity()?;
+        let environment = Arc::new(Environment::remote_with_transport(
+            ExecServerTransportParams::NoiseRendezvous {
+                provider: connect_provider,
+                identity,
+            },
+            manager.local_runtime_paths.clone(),
+            manager.http_client_factory.clone(),
+        ));
+        manager.insert_environment(REMOTE_ENVIRONMENT_ID.to_string(), environment)?;
         Ok(manager)
     }
 
@@ -380,26 +382,6 @@ impl EnvironmentManager {
             .cloned()
     }
 
-    /// Publishes capability roots without changing an environment's provisioning state.
-    pub fn publish_ready_info(
-        &self,
-        environment_id: &str,
-        ready_info: EnvironmentReadyInfo,
-    ) -> Result<(), ExecServerError> {
-        validate_environment_id(environment_id)?;
-        validate_environment_ready_info(environment_id, &ready_info)?;
-
-        let environments = self
-            .environments
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let environment = environments.get(environment_id).ok_or_else(|| {
-            ExecServerError::Protocol(format!("environment `{environment_id}` is not registered"))
-        })?;
-        environment.ready_info.store(Some(Arc::new(ready_info)));
-        Ok(())
-    }
-
     /// Records a Ready or Failed provisioning result for an environment.
     ///
     /// Ordinary environments are ignored. A provisioned environment keeps the same `Arc` from
@@ -489,22 +471,6 @@ impl EnvironmentManager {
         self.insert_environment(environment_id, environment)
     }
 
-    /// Adds or replaces a Noise environment completed through its registration handle.
-    pub fn register_deferred_noise_environment(
-        &self,
-        environment_id: String,
-        provider: Arc<dyn NoiseRendezvousConnectProvider>,
-    ) -> Result<DeferredEnvironmentRegistration, ExecServerError> {
-        validate_environment_id(&environment_id)?;
-        let environment =
-            Arc::new(self.provisioning_noise_environment(provider, /*initial_result*/ None)?);
-        self.insert_environment(environment_id.clone(), Arc::clone(&environment))?;
-        Ok(DeferredEnvironmentRegistration {
-            environment_id,
-            environment: Some(environment),
-        })
-    }
-
     /// Returns the stable environment for an ID, creating it as pending when absent.
     pub fn materialize_pending_noise_environment(
         &self,
@@ -548,22 +514,6 @@ impl EnvironmentManager {
         Ok(environment)
     }
 
-    /// Adds or replaces a named remote environment using authenticated Noise rendezvous.
-    pub fn upsert_noise_environment(
-        &self,
-        environment_id: String,
-        provider: Arc<dyn NoiseRendezvousConnectProvider>,
-    ) -> Result<(), ExecServerError> {
-        validate_environment_id(&environment_id)?;
-        let identity = noise_channel_identity()?;
-        let environment = Arc::new(Environment::remote_with_transport(
-            ExecServerTransportParams::NoiseRendezvous { provider, identity },
-            self.local_runtime_paths.clone(),
-            self.http_client_factory.clone(),
-        ));
-        self.insert_environment(environment_id, environment)
-    }
-
     fn insert_environment(
         &self,
         environment_id: String,
@@ -579,36 +529,6 @@ impl EnvironmentManager {
         drop(replaced);
         environment.start_connecting();
         Ok(())
-    }
-}
-
-impl DeferredEnvironmentRegistration {
-    /// Completes provisioning with ready information or a terminal error message.
-    pub fn complete(
-        mut self,
-        result: Result<EnvironmentReadyInfo, String>,
-    ) -> Result<(), ExecServerError> {
-        let Some(environment) = self.environment.take() else {
-            return Err(ExecServerError::Disconnected(
-                "deferred environment registration is inactive".into(),
-            ));
-        };
-
-        match result {
-            Ok(ready_info) => environment.apply_ready_report(&self.environment_id, ready_info),
-            Err(error) => environment.apply_error_report(&self.environment_id, error),
-        }
-    }
-}
-
-impl Drop for DeferredEnvironmentRegistration {
-    fn drop(&mut self) {
-        if let Some(environment) = self.environment.take() {
-            let _ = environment.apply_error_report(
-                &self.environment_id,
-                "environment registration ended before completion".to_string(),
-            );
-        }
     }
 }
 

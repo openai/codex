@@ -81,7 +81,6 @@ pub use environment::CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
-pub use environment::DeferredEnvironmentRegistration;
 pub use environment::Environment;
 pub use environment::EnvironmentConnectionState;
 pub use environment::EnvironmentManager;
