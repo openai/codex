@@ -18,6 +18,22 @@ use codex_app_server_protocol::ServerRequest;
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
+        if self
+            .current_displayed_thread_id()
+            .zip(self.primary_thread_id)
+            .is_some_and(|(thread_id, primary_thread_id)| {
+                self.agent_navigation.is_parent_owned(thread_id)
+                    || (thread_id != primary_thread_id
+                        && !self.side_threads.contains_key(&thread_id))
+            })
+        {
+            // Subagents can defer cached servers indefinitely, so only servers
+            // that actually report startup should keep their status running.
+            self.chat_widget
+                .set_mcp_startup_expected_servers(std::iter::empty());
+            return;
+        }
+
         let enabled_config_mcp_servers: Vec<String> = self
             .config
             .mcp_servers
