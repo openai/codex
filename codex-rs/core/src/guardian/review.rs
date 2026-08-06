@@ -7,6 +7,7 @@ use codex_analytics::GuardianReviewTrackContext;
 use codex_analytics::GuardianReviewedAction;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -38,6 +39,7 @@ use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
 use super::GuardianAssessmentOutcome;
 use super::GuardianRejectionCircuitBreakerAction;
+use super::GuardianRejectionCircuitBreakerPolicy;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
@@ -235,12 +237,17 @@ async fn record_guardian_non_denial(session: &Arc<Session>, turn_id: &str) {
 }
 
 async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>, turn_id: &str) {
+    let policy = if turn.model_info.model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER) {
+        GuardianRejectionCircuitBreakerPolicy::CyberModel
+    } else {
+        GuardianRejectionCircuitBreakerPolicy::Standard
+    };
     let action = session
         .services
         .guardian_rejection_circuit_breaker
         .lock()
         .await
-        .record_denial(turn_id);
+        .record_denial(turn_id, policy);
     let GuardianRejectionCircuitBreakerAction::InterruptTurn {
         consecutive_denials,
         recent_denials,

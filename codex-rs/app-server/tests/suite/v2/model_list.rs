@@ -16,6 +16,7 @@ use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
@@ -157,7 +158,7 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         "slug": "chatgpt-remote-only",
         "display_name": "ChatGPT Remote Only",
         "description": "Remote-only model for app-server model/list coverage",
-        "model_specialty": "cyber",
+        "model_specialty": MODEL_SPECIALTY_CYBER,
         "default_reasoning_level": "max",
         "supported_reasoning_levels": [
             {"effort": "max", "description": "Maximum"},

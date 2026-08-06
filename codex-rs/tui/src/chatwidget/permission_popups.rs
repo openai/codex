@@ -5,6 +5,7 @@
 //! `windows_sandbox_prompts`.
 
 use super::*;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 
 impl ChatWidget {
     /// Open the permissions popup.
@@ -410,7 +411,7 @@ impl ChatWidget {
         let is_cyber_model = self.model_catalog.try_list_models().is_ok_and(|models| {
             models.iter().any(|model| {
                 model.model == self.current_model()
-                    && model.model_specialty.as_deref() == Some("cyber")
+                    && model.model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER)
             })
         });
         let title_line = Line::from("Enable full access?").bold();

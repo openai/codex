@@ -106,6 +106,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -7248,7 +7249,7 @@ async fn selecting_cyber_model_defaults_active_thread_to_auto_review() {
             .into_iter()
             .find(|model| model.model == "gpt-5.4")
             .expect("gpt-5.4 model");
-        model.model_specialty = Some("cyber".to_string());
+        model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
         app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
 
         let mut app_server =
@@ -7311,7 +7312,7 @@ async fn changing_cyber_model_reasoning_preserves_selected_permissions() {
             .into_iter()
             .find(|model| model.model == model_name)
             .expect("current model");
-        model.model_specialty = Some("cyber".to_string());
+        model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
         app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
 
         assert!(
@@ -7414,7 +7415,7 @@ async fn selecting_cyber_model_falls_back_to_user_when_auto_review_is_unavailabl
         .into_iter()
         .find(|model| model.model == "gpt-5.4")
         .expect("gpt-5.4 model");
-    model.model_specialty = Some("cyber".to_string());
+    model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
     app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
     let _ = app.config.features.disable(Feature::GuardianApproval);
     app.chat_widget
@@ -7469,7 +7470,7 @@ async fn selecting_cyber_model_respects_auto_review_requirements() {
             .into_iter()
             .find(|model| model.model == "gpt-5.4")
             .expect("gpt-5.4 model");
-        model.model_specialty = Some("cyber".to_string());
+        model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
         app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
 
         let mut app_server =
