@@ -833,6 +833,9 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
 -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
+    let updated_workspace = TempDir::new()?;
+    let persisted_cwd = normalized_existing_path(updated_workspace.path())?;
+    let live_cwd = normalized_existing_path(codex_home.path())?;
     mock_responses_config(&server.uri()).write(codex_home.path())?;
     let config_path = codex_home.path().join("config.toml");
     let config_toml = std::fs::read_to_string(&config_path)?;
@@ -887,6 +890,7 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
                 model: Some("gpt-5.2-codex".to_string()),
                 effort: Some(ReasoningEffort::Ultra),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                cwd: Some(persisted_cwd.clone()),
                 ..Default::default()
             })
             .await?;
@@ -898,6 +902,31 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
         )
         .await??;
 
+        let read_id = mcp
+            .send_thread_read_request(ThreadReadParams {
+                thread_id: thread.id.clone(),
+                include_turns: false,
+            })
+            .await?;
+        let ThreadReadResponse { thread: read } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
+        assert_eq!(read.cwd.as_path(), persisted_cwd);
+
+        let list_id = mcp
+            .send_raw_request(
+                "thread/list",
+                Some(json!({ "cwd": persisted_cwd, "useStateDbOnly": true })),
+            )
+            .await?;
+        let ThreadListResponse { data, .. } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(list_id)).await??;
+        assert_eq!(
+            data.iter()
+                .find(|listed| listed.id == thread.id)
+                .map(|listed| &listed.cwd),
+            Some(&read.cwd)
+        );
+
         thread.id
     };
 
@@ -908,10 +937,13 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread_id.clone(),
+            cwd: Some(live_cwd.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .await?;
     let ThreadResumeResponse {
+        thread,
+        cwd,
         model,
         reasoning_effort,
         approvals_reviewer,
@@ -921,6 +953,8 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
     assert_eq!(model, "gpt-5.2-codex");
     assert_eq!(reasoning_effort, Some(ReasoningEffort::Ultra));
     assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(thread.cwd.as_path(), persisted_cwd);
+    assert_eq!(cwd.as_path(), live_cwd);
 
     let update_id = mcp
         .send_thread_settings_update_request(ThreadSettingsUpdateParams {

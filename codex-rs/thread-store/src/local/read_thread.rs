@@ -65,6 +65,9 @@ pub(super) async fn read_thread(
             rollout_thread.section = thread.section;
             rollout_thread.section_position = thread.section_position;
             rollout_thread.section_entered_at = thread.section_entered_at;
+            if !thread.cwd.as_os_str().is_empty() {
+                rollout_thread.cwd = thread.cwd;
+            }
             if thread.name.is_some() {
                 rollout_thread.name = thread.name;
             }
@@ -137,6 +140,17 @@ pub(super) async fn read_thread_by_rollout_path(
             thread.section = metadata.section;
             thread.section_position = metadata.section_position;
             thread.section_entered_at = metadata.section_entered_at;
+            if !metadata.cwd.as_os_str().is_empty()
+                && resolve_requested_rollout_path(store, metadata.rollout_path.clone())
+                    .await
+                    .is_ok_and(|metadata_rollout_path| metadata_rollout_path == path)
+            {
+                thread.cwd = metadata.cwd;
+                thread.permission_profile = permission_profile_from_metadata_value(
+                    &metadata.sandbox_policy,
+                    thread.cwd.as_path(),
+                );
+            }
             let (fallback_sha, fallback_branch, fallback_origin_url) = match thread.git_info.take()
             {
                 Some(info) => (
@@ -1026,7 +1040,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_thread_preserves_rollout_cwd_when_sqlite_metadata_exists() {
+    async fn read_thread_preserves_sqlite_cwd_when_rollout_metadata_is_stale() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
@@ -1076,7 +1090,8 @@ mod tests {
             SessionSource::Cli,
         );
         builder.model_provider = Some(config.default_model_provider_id.clone());
-        builder.cwd = home.path().join("sqlite-workspace");
+        let sqlite_cwd = home.path().join("sqlite-workspace");
+        builder.cwd = sqlite_cwd.clone();
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "Saved title".to_string();
         metadata.first_user_message = Some("Hello from sqlite".to_string());
@@ -1096,11 +1111,11 @@ mod tests {
             .expect("read thread");
 
         assert_eq!(thread.thread_id, thread_id);
-        assert_eq!(thread.rollout_path, Some(rollout_path));
+        assert_eq!(thread.rollout_path, Some(rollout_path.clone()));
         assert_eq!(thread.preview, "Hello from rollout");
         assert_eq!(thread.name, Some("Saved title".to_string()));
         assert_eq!(thread.model_provider, "rollout-provider");
-        assert_eq!(thread.cwd, rollout_cwd);
+        assert_eq!(thread.cwd, sqlite_cwd);
         let legacy_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
@@ -1111,9 +1126,70 @@ mod tests {
             thread.permission_profile,
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(
                 &legacy_policy,
-                rollout_cwd.as_path()
+                sqlite_cwd.as_path()
             )
         );
+
+        let thread_by_rollout_path = store
+            .read_thread_by_rollout_path(
+                rollout_path.clone(),
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read thread by rollout path");
+
+        assert_eq!(thread_by_rollout_path.cwd, sqlite_cwd);
+        assert_eq!(
+            thread_by_rollout_path.permission_profile,
+            thread.permission_profile
+        );
+
+        metadata.cwd = PathBuf::new();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("update state db with empty cwd");
+
+        for thread in [
+            store
+                .read_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived: false,
+                    include_history: false,
+                })
+                .await
+                .expect("read thread with empty sqlite cwd"),
+            store
+                .read_thread_by_rollout_path(
+                    rollout_path.clone(),
+                    /*include_archived*/ false,
+                    /*include_history*/ false,
+                )
+                .await
+                .expect("read rollout path with empty sqlite cwd"),
+        ] {
+            assert_eq!(thread.cwd, rollout_cwd);
+        }
+
+        metadata.cwd = sqlite_cwd;
+        metadata.rollout_path =
+            write_session_file(home.path(), "2025-01-04T12-00-00", uuid).expect("newer rollout");
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("update state db with newer rollout");
+
+        let thread_from_requested_rollout = store
+            .read_thread_by_rollout_path(
+                rollout_path,
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read explicitly requested rollout");
+
+        assert_eq!(thread_from_requested_rollout.cwd, rollout_cwd);
     }
 
     #[tokio::test]

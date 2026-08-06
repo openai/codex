@@ -66,6 +66,9 @@ fn normalized_summary_path(mut summary: ConversationSummary) -> Result<Conversat
     if !summary.path.as_os_str().is_empty() {
         summary.path = normalized_canonical_path(summary.path)?;
     }
+    if !summary.cwd.as_os_str().is_empty() {
+        summary.cwd = AbsolutePathBuf::from_absolute_path(summary.cwd)?.into_path_buf();
+    }
     Ok(summary)
 }
 
