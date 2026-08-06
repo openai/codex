@@ -355,7 +355,6 @@ async fn mount_empty_remote_installed_plugins(server: &wiremock::MockServer) -> 
 async fn mount_remote_calendar_installed_plugins(server: &wiremock::MockServer) {
     Mock::given(method("GET"))
         .and(path("/ps/plugins/installed"))
-        .and(query_param("scope", "GLOBAL"))
         .respond_with(remote_installed_plugins_response(vec![json!({
             "id": REMOTE_CALENDAR_PLUGIN_ID,
             "name": "calendar",
@@ -373,15 +372,6 @@ async fn mount_remote_calendar_installed_plugins(server: &wiremock::MockServer) 
         .with_priority(1)
         .mount(server)
         .await;
-    for scope in ["WORKSPACE", "USER"] {
-        Mock::given(method("GET"))
-            .and(path("/ps/plugins/installed"))
-            .and(query_param("scope", scope))
-            .respond_with(remote_installed_plugins_response(Vec::new()))
-            .with_priority(1)
-            .mount(server)
-            .await;
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

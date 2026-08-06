@@ -33,6 +33,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
+use wiremock::matchers::query_param_is_missing;
 
 #[tokio::test]
 async fn returns_fallback_plugins_when_remote_disabled_for_codex_auth() {
@@ -786,7 +787,7 @@ source = "/tmp/{sales_marketplace_name}"
 }
 
 #[tokio::test]
-async fn expands_cached_remote_plugins_by_loaded_apps() {
+async fn cached_remote_discovery_requires_installed_cache_and_filters_candidates() {
     let codex_home = tempdir().expect("tempdir should succeed");
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
@@ -801,6 +802,25 @@ plugins = true
         .and(query_param("scope", "GLOBAL"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "plugins": [
+                {
+                    "id": "plugins~Plugin_remote_github",
+                    "name": "github",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "AVAILABLE",
+                    "release": {
+                        "display_name": "Remote GitHub",
+                        "description": "Remote GitHub long",
+                        "app_ids": ["github"],
+                        "interface": {"short_description": "Remote GitHub short"},
+                        "skills": [{
+                            "name": "github",
+                            "description": "Use GitHub",
+                            "interface": null
+                        }]
+                    }
+                },
                 {
                     "id": "plugins~Plugin_remote_unlisted",
                     "name": "remote-unlisted",
@@ -835,6 +855,32 @@ plugins = true
                             }
                         ]
                     }
+                },
+                {
+                    "id": "plugins~Plugin_remote_slack_not_available",
+                    "name": "slack",
+                    "scope": "GLOBAL",
+                    "installation_policy": "NOT_AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "AVAILABLE",
+                    "release": {
+                        "display_name": "Remote Slack",
+                        "description": "Remote Slack long",
+                        "interface": {"short_description": "Remote Slack short"}
+                    }
+                },
+                {
+                    "id": "plugins~Plugin_remote_figma_admin_disabled",
+                    "name": "figma",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "DISABLED_BY_ADMIN",
+                    "release": {
+                        "display_name": "Remote Figma",
+                        "description": "Remote Figma long",
+                        "interface": {"short_description": "Remote Figma short"}
+                    }
                 }
             ],
             "pagination": {
@@ -860,20 +906,29 @@ plugins = true
     .await
     .expect("remote plugin catalog cache should write");
 
-    for scope in ["GLOBAL", "USER", "WORKSPACE"] {
-        Mock::given(method("GET"))
-            .and(path("/backend-api/ps/plugins/installed"))
-            .and(query_param("scope", scope))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "plugins": [],
-                "pagination": {
-                    "next_page_token": null
-                }
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
+    assert_eq!(
+        list_discoverable_plugins(
+            &plugins_manager,
+            discovery_input(plugins.clone(), &[], &[], &["remote-unlisted-app"]),
+            Some(&auth),
+        )
+        .await,
+        Vec::new()
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param_is_missing("scope"))
+        .and(query_param_is_missing("includeDownloadUrls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [],
+            "pagination": {
+                "next_page_token": null
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     plugins_manager
         .build_and_cache_remote_installed_plugin_marketplaces(
             &plugins,
@@ -884,24 +939,55 @@ plugins = true
         .await
         .expect("remote installed plugin cache should write");
 
+    let expected_github = ToolSuggestDiscoverablePlugin {
+        id: "github@openai-curated-remote".to_string(),
+        remote_plugin_id: Some("plugins~Plugin_remote_github".to_string()),
+        name: "Remote GitHub".to_string(),
+        description: Some("Remote GitHub short".to_string()),
+        has_skills: true,
+        mcp_server_names: Vec::new(),
+        app_connector_ids: vec!["github".to_string()],
+    };
+    assert_eq!(
+        list_discoverable_plugins(
+            &plugins_manager,
+            discovery_input(plugins.clone(), &[], &[], &[]),
+            Some(&auth),
+        )
+        .await,
+        vec![expected_github.clone()]
+    );
+
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &["remote-unlisted-app"]),
+        discovery_input(plugins.clone(), &[], &[], &["remote-unlisted-app"]),
         Some(&auth),
     )
     .await;
 
     assert_eq!(
         discoverable_plugins,
-        vec![ToolSuggestDiscoverablePlugin {
-            id: "remote-unlisted@openai-curated-remote".to_string(),
-            remote_plugin_id: Some("plugins~Plugin_remote_unlisted".to_string()),
-            name: "Remote Unlisted".to_string(),
-            description: Some("Remote Unlisted short".to_string()),
-            has_skills: true,
-            mcp_server_names: Vec::new(),
-            app_connector_ids: vec!["remote-unlisted-app".to_string()],
-        }]
+        vec![
+            expected_github,
+            ToolSuggestDiscoverablePlugin {
+                id: "remote-unlisted@openai-curated-remote".to_string(),
+                remote_plugin_id: Some("plugins~Plugin_remote_unlisted".to_string()),
+                name: "Remote Unlisted".to_string(),
+                description: Some("Remote Unlisted short".to_string()),
+                has_skills: true,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: vec!["remote-unlisted-app".to_string()],
+            },
+        ]
+    );
+    assert_eq!(
+        list_discoverable_plugins(
+            &plugins_manager,
+            discovery_input(plugins, &[], &["github@openai-curated-remote"], &[]),
+            Some(&auth),
+        )
+        .await,
+        Vec::new()
     );
 }
 

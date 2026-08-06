@@ -4,12 +4,13 @@ use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
+use super::RemoteInstalledPluginScope;
 use super::RemotePluginCatalogError;
 use super::RemotePluginScope;
 use super::RemotePluginServiceConfig;
 use super::RemotePluginShareDiscoverability;
 use super::ensure_chatgpt_auth;
-use super::fetch_installed_plugins_for_scope_with_download_url;
+use super::fetch_installed_plugins;
 use super::remote_plugin_canonical_marketplace_name;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
@@ -136,32 +137,13 @@ pub async fn sync_remote_installed_plugin_bundles_once(
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let authenticated_account_id = auth.get_account_id();
-    let global = async {
-        let scope = RemotePluginScope::Global;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-    let workspace = async {
-        let scope = RemotePluginScope::Workspace;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-    let user = async {
-        let scope = RemotePluginScope::User;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-
-    let (global, workspace, user) = tokio::try_join!(global, workspace, user)?;
+    let installed_plugins = fetch_installed_plugins(
+        config,
+        auth,
+        RemoteInstalledPluginScope::All,
+        /*include_download_urls*/ true,
+    )
+    .await?;
     let store = PluginStore::try_new(codex_home.clone())?;
     let mut installed_plugin_names_by_marketplace =
         BTreeMap::<String, BTreeSet<String>>::from_iter([
@@ -190,101 +172,99 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     let mut materialized_remote_plugins = BTreeMap::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
-    for (_scope, installed_plugins) in [global, workspace, user] {
-        for installed_plugin in installed_plugins {
-            let plugin = installed_plugin.plugin;
-            let scope = plugin.scope;
-            let discoverability = plugin.discoverability;
-            let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
-            installed_plugin_names_by_marketplace
-                .entry(marketplace_name.clone())
-                .or_default()
-                .insert(plugin.name.clone());
-            let plugin_id = match PluginId::new(plugin.name.clone(), marketplace_name.clone()) {
-                Ok(plugin_id) => plugin_id,
-                Err(err) => {
-                    warn!(
-                        remote_plugin_id = %plugin.id,
-                        plugin = %plugin.name,
-                        marketplace = %marketplace_name,
-                        error = %err,
-                        "skipping remote installed plugin with invalid local cache id"
-                    );
-                    failed_remote_plugin_ids.insert(plugin.id);
-                    continue;
-                }
-            };
-            let release_version = plugin
-                .release
-                .version
-                .as_deref()
-                .map(str::trim)
-                .filter(|version| !version.is_empty());
-            if store.active_plugin_version(&plugin_id).as_deref() == release_version {
-                if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
-                    warn!(
-                        remote_plugin_id = %plugin.id,
-                        plugin = %plugin.name,
-                        marketplace = %marketplace_name,
-                        error = %err,
-                        "failed to persist identity for cached remote installed plugin"
-                    );
-                    failed_remote_plugin_ids.insert(plugin.id);
-                }
+    for installed_plugin in installed_plugins {
+        let plugin = installed_plugin.plugin;
+        let scope = plugin.scope;
+        let discoverability = plugin.discoverability;
+        let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
+        installed_plugin_names_by_marketplace
+            .entry(marketplace_name.clone())
+            .or_default()
+            .insert(plugin.name.clone());
+        let plugin_id = match PluginId::new(plugin.name.clone(), marketplace_name.clone()) {
+            Ok(plugin_id) => plugin_id,
+            Err(err) => {
+                warn!(
+                    remote_plugin_id = %plugin.id,
+                    plugin = %plugin.name,
+                    marketplace = %marketplace_name,
+                    error = %err,
+                    "skipping remote installed plugin with invalid local cache id"
+                );
+                failed_remote_plugin_ids.insert(plugin.id);
                 continue;
             }
+        };
+        let release_version = plugin
+            .release
+            .version
+            .as_deref()
+            .map(str::trim)
+            .filter(|version| !version.is_empty());
+        if store.active_plugin_version(&plugin_id).as_deref() == release_version {
+            if let Err(err) = store.write_remote_plugin_id(&plugin_id, &plugin.id) {
+                warn!(
+                    remote_plugin_id = %plugin.id,
+                    plugin = %plugin.name,
+                    marketplace = %marketplace_name,
+                    error = %err,
+                    "failed to persist identity for cached remote installed plugin"
+                );
+                failed_remote_plugin_ids.insert(plugin.id);
+            }
+            continue;
+        }
 
-            let bundle = match crate::remote_bundle::validate_remote_plugin_bundle(
-                &plugin.id,
-                &marketplace_name,
-                &plugin.name,
-                release_version,
-                plugin.release.bundle_download_url.as_deref(),
-                plugin.release.app_manifest.clone(),
-            ) {
-                Ok(bundle) => bundle,
-                Err(err) => {
-                    warn!(
-                        remote_plugin_id = %plugin.id,
-                        plugin = %plugin.name,
-                        marketplace = %marketplace_name,
-                        error = %err,
-                        "skipping remote installed plugin bundle download"
-                    );
-                    failed_remote_plugin_ids.insert(plugin.id);
-                    continue;
-                }
-            };
+        let bundle = match crate::remote_bundle::validate_remote_plugin_bundle(
+            &plugin.id,
+            &marketplace_name,
+            &plugin.name,
+            release_version,
+            plugin.release.bundle_download_url.as_deref(),
+            plugin.release.app_manifest.clone(),
+        ) {
+            Ok(bundle) => bundle,
+            Err(err) => {
+                warn!(
+                    remote_plugin_id = %plugin.id,
+                    plugin = %plugin.name,
+                    marketplace = %marketplace_name,
+                    error = %err,
+                    "skipping remote installed plugin bundle download"
+                );
+                failed_remote_plugin_ids.insert(plugin.id);
+                continue;
+            }
+        };
 
-            match crate::remote_bundle::download_and_install_remote_plugin_bundle(
-                config,
-                codex_home.clone(),
-                bundle,
-            )
-            .await
-            {
-                Ok(result) => {
-                    let plugin_id = result.plugin_id;
-                    materialized_remote_plugins.insert(
-                        plugin_id.as_key(),
-                        RemotePluginMaterialization {
-                            plugin_id,
-                            scope,
-                            discoverability,
-                            authenticated_account_id: authenticated_account_id.clone(),
-                        },
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        remote_plugin_id = %plugin.id,
-                        plugin = %plugin.name,
-                        marketplace = %marketplace_name,
-                        error = %err,
-                        "failed to download remote installed plugin bundle"
-                    );
-                    failed_remote_plugin_ids.insert(plugin.id);
-                }
+        match crate::remote_bundle::download_and_install_remote_plugin_bundle(
+            config,
+            codex_home.clone(),
+            bundle,
+        )
+        .await
+        {
+            Ok(result) => {
+                let plugin_id = result.plugin_id;
+                materialized_remote_plugins.insert(
+                    plugin_id.as_key(),
+                    RemotePluginMaterialization {
+                        plugin_id,
+                        scope,
+                        discoverability,
+                        authenticated_account_id: authenticated_account_id.clone(),
+                    },
+                );
+            }
+            Err(err) => {
+                warn!(
+                    remote_plugin_id = %plugin.id,
+                    plugin = %plugin.name,
+                    marketplace = %marketplace_name,
+                    error = %err,
+                    "failed to download remote installed plugin bundle"
+                );
+                failed_remote_plugin_ids.insert(plugin.id);
             }
         }
     }
@@ -485,6 +465,7 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
     use wiremock::matchers::query_param;
+    use wiremock::matchers::query_param_is_missing;
 
     #[test]
     fn remote_installed_plugin_sync_in_flight_dedupes_by_cache_root() {
@@ -526,7 +507,8 @@ mod tests {
         let remote_plugin_id = "plugins~Plugin_linear";
         Mock::given(method("GET"))
             .and(path("/backend-api/ps/plugins/installed"))
-            .and(query_param("scope", "GLOBAL"))
+            .and(query_param_is_missing("scope"))
+            .and(query_param("limit", "200"))
             .and(query_param("includeDownloadUrls", "true"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "plugins": [{
@@ -544,28 +526,6 @@ mod tests {
                     },
                     "enabled": true,
                 }],
-                "pagination": {"next_page_token": null},
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/backend-api/ps/plugins/installed"))
-            .and(query_param("scope", "USER"))
-            .and(query_param("includeDownloadUrls", "true"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "plugins": [],
-                "pagination": {"next_page_token": null},
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/backend-api/ps/plugins/installed"))
-            .and(query_param("scope", "WORKSPACE"))
-            .and(query_param("includeDownloadUrls", "true"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "plugins": [],
                 "pagination": {"next_page_token": null},
             })))
             .expect(1)
@@ -605,6 +565,177 @@ mod tests {
                 "remote_plugin_id": remote_plugin_id,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn sync_all_scopes_paginates_and_reconciles_each_marketplace() {
+        let server = MockServer::start().await;
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let cached_plugins = [
+            (
+                REMOTE_GLOBAL_MARKETPLACE_NAME,
+                "global-plugin",
+                "GLOBAL",
+                None,
+            ),
+            (
+                REMOTE_CREATED_BY_ME_MARKETPLACE_NAME,
+                "user-plugin",
+                "USER",
+                None,
+            ),
+            (
+                REMOTE_WORKSPACE_MARKETPLACE_NAME,
+                "workspace-plugin",
+                "WORKSPACE",
+                Some("LISTED"),
+            ),
+            (
+                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+                "shared-plugin",
+                "WORKSPACE",
+                Some("PRIVATE"),
+            ),
+        ];
+        for (marketplace_name, plugin_name, _, _) in cached_plugins {
+            for cached_plugin_name in [plugin_name, "stale"] {
+                let manifest = codex_home
+                    .path()
+                    .join(PLUGINS_CACHE_DIR)
+                    .join(marketplace_name)
+                    .join(cached_plugin_name)
+                    .join("1.2.3")
+                    .join(".codex-plugin")
+                    .join("plugin.json");
+                std::fs::create_dir_all(manifest.parent().expect("manifest parent"))
+                    .expect("create cached plugin manifest parent");
+                std::fs::write(
+                    &manifest,
+                    format!(r#"{{"name":"{cached_plugin_name}","version":"1.2.3"}}"#),
+                )
+                .expect("write cached plugin manifest");
+            }
+        }
+        let installed_plugins = cached_plugins
+            .iter()
+            .map(|(_, plugin_name, scope, discoverability)| {
+                let mut plugin = json!({
+                    "id": format!("plugins~Plugin_{plugin_name}"),
+                    "name": plugin_name,
+                    "scope": scope,
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "ENABLED",
+                    "release": {
+                        "version": "1.2.3",
+                        "display_name": plugin_name,
+                        "description": "Installed plugin",
+                        "interface": {},
+                    },
+                    "enabled": true,
+                });
+                if let Some(discoverability) = discoverability {
+                    plugin["discoverability"] = json!(discoverability);
+                }
+                plugin
+            })
+            .collect::<Vec<_>>();
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param_is_missing("scope"))
+            .and(query_param("limit", "200"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .and(query_param_is_missing("pageToken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": &installed_plugins[..2],
+                "pagination": {"next_page_token": "page-2"},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param_is_missing("scope"))
+            .and(query_param("limit", "200"))
+            .and(query_param("includeDownloadUrls", "true"))
+            .and(query_param("pageToken", "page-2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plugins": &installed_plugins[2..],
+                "pagination": {"next_page_token": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (config, selected_urls) = crate::test_support::recording_remote_plugin_service_config(
+            format!("{}/backend-api", server.uri()),
+        );
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let outcome = sync_remote_installed_plugin_bundles_once(
+            codex_home.path().to_path_buf(),
+            &config,
+            Some(&auth),
+        )
+        .await
+        .expect("sync installed plugins across every marketplace");
+        let mut removed_cache_plugin_ids = cached_plugins
+            .iter()
+            .map(|(marketplace_name, _, _, _)| format!("stale@{marketplace_name}"))
+            .collect::<Vec<_>>();
+        removed_cache_plugin_ids.sort();
+
+        assert_eq!(
+            outcome,
+            RemoteInstalledPluginBundleSyncOutcome {
+                materialized_remote_plugins: Vec::new(),
+                removed_cache_plugin_ids,
+                failed_remote_plugin_ids: Vec::new(),
+            }
+        );
+        assert_eq!(
+            crate::test_support::recorded_http_client_urls(&selected_urls),
+            vec![
+                format!(
+                    "{}/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+                    server.uri()
+                ),
+                format!(
+                    "{}/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true&pageToken=page-2",
+                    server.uri()
+                ),
+            ]
+        );
+        for (marketplace_name, plugin_name, _, _) in cached_plugins {
+            let plugin_root = codex_home
+                .path()
+                .join(PLUGINS_CACHE_DIR)
+                .join(marketplace_name)
+                .join(plugin_name);
+            assert!(
+                plugin_root
+                    .join("1.2.3/.codex-plugin/plugin.json")
+                    .is_file()
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    &std::fs::read_to_string(plugin_root.join(".codex-remote-plugin-install.json"))
+                        .expect("read remote plugin install metadata")
+                )
+                .expect("parse remote plugin install metadata"),
+                json!({
+                    "schema_version": 1,
+                    "remote_plugin_id": format!("plugins~Plugin_{plugin_name}"),
+                })
+            );
+            assert!(
+                !codex_home
+                    .path()
+                    .join(PLUGINS_CACHE_DIR)
+                    .join(marketplace_name)
+                    .join("stale")
+                    .exists()
+            );
+        }
     }
 
     #[test]

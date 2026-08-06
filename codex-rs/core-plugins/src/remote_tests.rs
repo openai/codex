@@ -8,6 +8,8 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::header_exists;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+use wiremock::matchers::query_param;
+use wiremock::matchers::query_param_is_missing;
 
 #[tokio::test]
 async fn remote_plugin_list_routes_the_complete_query_url() {
@@ -43,6 +45,84 @@ async fn remote_plugin_list_routes_the_complete_query_url() {
             "{}/backend-api/ps/plugins/list?scope=GLOBAL&limit=200&collection=vertical+%26+special&pageToken=next+page%2F%2B",
             server.uri()
         )]
+    );
+}
+
+#[tokio::test]
+async fn remote_installed_plugins_paginate_across_all_scopes_without_download_urls() {
+    let server = MockServer::start().await;
+    let installed_plugin = |scope: RemotePluginScope, id: &str, name: &str| {
+        let mut plugin = directory_plugin(id, name);
+        plugin.scope = scope;
+        if scope == RemotePluginScope::Workspace {
+            plugin.discoverability = Some(RemotePluginShareDiscoverability::Listed);
+        }
+        let mut plugin = serde_json::to_value(plugin).expect("serialize installed plugin");
+        plugin["enabled"] = serde_json::json!(true);
+        plugin
+    };
+    let global = installed_plugin(RemotePluginScope::Global, "plugin-global", "global-plugin");
+    let user = installed_plugin(RemotePluginScope::User, "plugin-user", "user-plugin");
+    let workspace = installed_plugin(
+        RemotePluginScope::Workspace,
+        "plugin-workspace",
+        "workspace-plugin",
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param_is_missing("scope"))
+        .and(query_param("limit", "200"))
+        .and(query_param_is_missing("includeDownloadUrls"))
+        .and(query_param_is_missing("pageToken"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": [user.clone(), workspace.clone()],
+            "pagination": {"next_page_token": "next page/+"},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param_is_missing("scope"))
+        .and(query_param("limit", "200"))
+        .and(query_param_is_missing("includeDownloadUrls"))
+        .and(query_param("pageToken", "next page/+"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": [global.clone()],
+            "pagination": {"next_page_token": null},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (config, selected_urls) =
+        recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let installed_plugins = fetch_remote_installed_plugins(&config, Some(&auth))
+        .await
+        .expect("all-scopes installed plugin request should succeed");
+    let expected_plugins = [user, global, workspace]
+        .into_iter()
+        .map(|plugin| {
+            let plugin = serde_json::from_value(plugin).expect("deserialize installed plugin");
+            remote_installed_plugin_to_cache_entry(&plugin).expect("valid installed plugin")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(installed_plugins, expected_plugins);
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![
+            format!(
+                "{}/backend-api/ps/plugins/installed?limit=200",
+                server.uri()
+            ),
+            format!(
+                "{}/backend-api/ps/plugins/installed?limit=200&pageToken=next+page%2F%2B",
+                server.uri()
+            ),
+        ]
     );
 }
 
