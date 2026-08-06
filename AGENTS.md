@@ -115,10 +115,17 @@ Codex maintains a context (history of messages) that is sent to the model in inf
 Search for breaking changes in external integration surfaces:
 
 - app-server APIs
+- app-server/core and exec-server compatibility across independently deployed versions
 - raw response item events (`rawResponseItem/*`), even while experimental
 - CLI parameters
 - configuration loading
 - resuming sessions from existing rollouts
+
+Treat behavioral incompatibility as a breaking change even when the protocol remains wire-compatible.
+When adding required executor capabilities or changing fallback behavior, verify both new-client/old-executor
+and old-client/new-executor combinations under realistic sandbox permissions. Flag loss of existing
+functionality—including skills, plugins, and MCP tools—as P1. If safe backward compatibility is impossible,
+require explicit version gating and a coordinated rollout.
 
 ### Test authoring guidance
 
