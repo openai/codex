@@ -5,8 +5,8 @@
 
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::raw_lines_from_source;
-use crate::inline_visualization::DIRECTIVE_PREFIX;
 use crate::inline_visualization::InlineVisualizationContext;
+use crate::inline_visualization::contains_inline_visualization;
 use crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations;
 use crate::markdown::render_streaming_markdown_agent_with_links_and_cwd;
 use crate::terminal_hyperlinks::HyperlinkLine;
@@ -61,7 +61,7 @@ impl StreamingRender {
         render_mode: HistoryRenderMode,
         inline_visualization_context: Option<&InlineVisualizationContext>,
     ) {
-        self.has_inline_visualization_directive = source.contains(DIRECTIVE_PREFIX);
+        self.has_inline_visualization_directive = contains_inline_visualization(source);
         self.lines = match (render_mode, inline_visualization_context) {
             (HistoryRenderMode::Rich, None) if !self.has_inline_visualization_directive => {
                 let rendered =
@@ -107,7 +107,7 @@ impl StreamingRender {
             return;
         }
 
-        self.has_inline_visualization_directive |= committed_source.contains(DIRECTIVE_PREFIX);
+        self.has_inline_visualization_directive |= contains_inline_visualization(committed_source);
         if self.has_inline_visualization_directive {
             self.recompute(
                 raw_source,

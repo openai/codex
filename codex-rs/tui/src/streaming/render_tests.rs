@@ -251,6 +251,20 @@ fn inline_visualizations_without_context_use_canonical_full_render() {
 }
 
 #[test]
+fn inline_visualization_content_references_use_canonical_full_render() {
+    let (_, render) = assert_rich_stream_matches_full_render(
+        &[
+            "Before.\n\n",
+            "\u{e200}visualize\u{e202}{\"path\":\"/tmp/missing.html\"}\u{e201}\n",
+        ],
+        Some(80),
+    );
+
+    assert_eq!(render.stable_source_len, 0);
+    assert!(render.has_inline_visualization_directive);
+}
+
+#[test]
 fn inline_visualization_directive_survives_raw_to_rich_render_mode_switch() {
     let cwd = test_cwd();
     let width = Some(80);

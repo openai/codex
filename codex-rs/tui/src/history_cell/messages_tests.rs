@@ -71,12 +71,14 @@ fn raw_markdown_bypasses_the_rich_render_cache() {
 
 #[test]
 fn visualization_directives_are_not_cached() {
-    let cell = AgentMarkdownCell::new(
-        "::codex-inline-vis{file=\"chart.html\"}".to_string(),
-        Path::new("/tmp"),
-    );
+    for markdown in [
+        "::codex-inline-vis{file=\"chart.html\"}",
+        "\u{e200}visualize\u{e202}{\"path\":\"/tmp/chart.html\"}\u{e201}",
+    ] {
+        let cell = AgentMarkdownCell::new(markdown.to_string(), Path::new("/tmp"));
 
-    cell.display_lines(/*width*/ 48);
+        cell.display_lines(/*width*/ 48);
 
-    assert!(cell.rendered_lines.is_none());
+        assert!(cell.rendered_lines.is_none());
+    }
 }

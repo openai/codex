@@ -124,6 +124,41 @@ fn hides_incomplete_streaming_directive() {
 }
 
 #[test]
+fn hides_incomplete_streaming_content_reference() {
+    for reference in [
+        "Before\n\u{e200}visualize\u{e202}{\"path\":\"/tmp/chart",
+        "Before\n\u{e200}visualize\u{e202}{\"path\":\"/tmp/chart.html\"}",
+    ] {
+        let rewritten = rewrite_inline_visualizations(reference, /*context*/ None);
+
+        assert_eq!(rewritten.markdown, "Before\n");
+        assert!(rewritten.trusted_file_links.is_empty());
+    }
+}
+
+#[test]
+fn unavailable_or_invalid_content_reference_has_explicit_fallback() {
+    let (_codex_home, context) = context_with_fragment("<div>chart</div>");
+    let outside = tempfile::tempdir().expect("outside visualization directory");
+    let outside_path = outside.path().join("chart.html");
+    fs::write(&outside_path, "<div>outside</div>").expect("write outside fragment");
+
+    let references = [
+        serde_json::json!({ "path": outside_path }).to_string(),
+        serde_json::json!({ "path": "chart.html" }).to_string(),
+        "{\"path\":".to_string(),
+    ];
+
+    for payload in references {
+        let reference = format!("\u{e200}visualize\u{e202}{payload}\u{e201}");
+        assert_eq!(
+            rewrite_inline_visualizations(&reference, Some(&context)).markdown,
+            "_Visualization unavailable on this device._"
+        );
+    }
+}
+
+#[test]
 fn unavailable_artifact_has_explicit_fallback() {
     let codex_home = tempfile::tempdir().expect("temp codex home");
     let context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
@@ -227,8 +262,12 @@ fn viewer_reuses_path_and_refreshes_static_document() {
 #[test]
 fn finalized_agent_cell_replays_visualization_link() {
     let (_codex_home, context) = context_with_fragment("<div>chart</div>");
+    let fragment_path = context.thread_dir.join("chart.html");
     let cell = AgentMarkdownCell::new_with_inline_visualizations(
-        "Before\n\n::codex-inline-vis{file=\"chart.html\"}\n\nAfter".to_string(),
+        format!(
+            "Before\n\n\u{e200}visualize\u{e202}{}\u{e201}\n\nAfter",
+            serde_json::json!({ "path": fragment_path })
+        ),
         Path::new("/workspace"),
         Some(context),
     );
