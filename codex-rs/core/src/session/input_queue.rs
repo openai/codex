@@ -4,13 +4,15 @@ use crate::state::TurnState;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::user_input::UserInput;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 /// Input consumed by a regular turn.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TurnInput {
     UserInput {
         content: Vec<UserInput>,

@@ -339,7 +339,7 @@ enabled = false
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
                         git_attribution_base_url: good_config.chatgpt_base_url.clone(),
                         http_client_factory: good_config.http_client_factory(),
-                        thread_store: Arc::clone(&thread_store),
+                        queue_store: None,
                     },
                 ),
                 Arc::new(CodexHomeUserInstructionsProvider::new(

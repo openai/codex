@@ -73,7 +73,7 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
         async move {
             barrier.wait().await;
             codex
-                .submit_user_input_and_wait_for_admission(
+                .submit_user_input_and_wait_for_persisted_admission(
                     user_input("first message"),
                     /*trace*/ None,
                     Some("client-message-1".to_string()),
@@ -87,7 +87,7 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
         async move {
             barrier.wait().await;
             codex
-                .submit_user_input_and_wait_for_admission(
+                .submit_user_input_and_wait_for_persisted_admission(
                     user_input("second message"),
                     /*trace*/ None,
                     Some("client-message-2".to_string()),
@@ -97,11 +97,21 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
     });
     barrier.wait().await;
 
+    timeout(
+        Duration::from_secs(5),
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await
+    .expect("the started turn should reach its first model request");
+    release_response
+        .send(())
+        .expect("response gate should remain open");
+
     let (first_admission, second_admission) = timeout(Duration::from_secs(5), async {
         tokio::join!(first_submission, second_submission)
     })
     .await
-    .expect("both concurrent admissions should resolve before sampling finishes");
+    .expect("both concurrent admissions should resolve once their messages are persisted");
     let first_admission = first_admission
         .expect("first submission task should finish")
         .expect("first user message should be admitted");
@@ -125,9 +135,33 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
         };
     assert_eq!(started_turn_id, steered_turn_id);
 
-    release_response
-        .send(())
-        .expect("response gate should remain open");
+    let rollout_path = codex.rollout_path().expect("user-message rollout path");
+    let rollout = tokio::fs::read_to_string(rollout_path)
+        .await
+        .expect("read persisted user-message rollout");
+    let mut persisted_client_message_ids: Vec<_> = rollout
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse persisted user-message rollout")
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match event.item {
+                TurnItem::UserMessage(message) => message.client_id,
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    persisted_client_message_ids.sort();
+    assert_eq!(
+        persisted_client_message_ids,
+        vec![
+            "client-message-1".to_string(),
+            "client-message-2".to_string()
+        ]
+    );
+
     let mut observed_client_message_ids = Vec::new();
     loop {
         let event = timeout(Duration::from_secs(10), codex.next_event())
@@ -165,36 +199,6 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
     assert!(request_bodies[1].to_string().contains("first message"));
     assert!(request_bodies[1].to_string().contains("second message"));
 
-    codex
-        .flush_rollout()
-        .await
-        .expect("flush persisted user-message history");
-    let rollout_path = codex.rollout_path().expect("user-message rollout path");
-    let rollout = tokio::fs::read_to_string(rollout_path)
-        .await
-        .expect("read persisted user-message rollout");
-    let mut persisted_client_message_ids: Vec<_> = rollout
-        .lines()
-        .map(serde_json::from_str::<RolloutLine>)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("parse persisted user-message rollout")
-        .into_iter()
-        .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match event.item {
-                TurnItem::UserMessage(message) => message.client_id,
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect();
-    persisted_client_message_ids.sort();
-    assert_eq!(
-        persisted_client_message_ids,
-        vec![
-            "client-message-1".to_string(),
-            "client-message-2".to_string()
-        ]
-    );
     server.shutdown().await;
 }
 

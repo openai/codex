@@ -1,4 +1,5 @@
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ThreadIdleCause;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
@@ -39,7 +40,7 @@ impl Session {
         }
     }
 
-    pub(crate) async fn emit_thread_idle_lifecycle_if_idle(&self) {
+    pub(crate) async fn emit_thread_idle_lifecycle_if_idle(&self, cause: ThreadIdleCause) {
         if self.active_turn.lock().await.is_some()
             || self.input_queue.has_trigger_turn_mailbox_items().await
         {
@@ -49,6 +50,7 @@ impl Session {
         for contributor in self.services.extensions.thread_lifecycle_contributors() {
             contributor
                 .on_thread_idle(codex_extension_api::ThreadIdleInput {
+                    cause,
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                 })

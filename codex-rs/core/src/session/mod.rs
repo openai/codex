@@ -1319,6 +1319,15 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => {
                 let turn_context = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
+                if matches!(
+                    rollout_items.iter().rev().find_map(|item| match item {
+                        RolloutItem::EventMsg(event) => agent_status_from_event(event),
+                        _ => None,
+                    }),
+                    Some(AgentStatus::Interrupted)
+                ) {
+                    self.agent_status.send_replace(AgentStatus::Interrupted);
+                }
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
@@ -4025,7 +4034,7 @@ impl Session {
             .collect::<Vec<_>>();
         pending_input.push(TurnInput::UserInput {
             content: input,
-            client_id: client_user_message_id,
+            client_id: client_user_message_id.clone(),
         });
         self.input_queue
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
@@ -4033,6 +4042,10 @@ impl Session {
                 pending_input,
             )
             .await;
+        if let Some(client_id) = client_user_message_id.as_deref() {
+            self.pending_user_message_admissions
+                .associate_steered_by_client_id(client_id, active_turn_id);
+        }
         Ok(active_turn_id.clone())
     }
 

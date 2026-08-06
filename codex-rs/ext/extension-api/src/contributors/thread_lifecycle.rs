@@ -42,8 +42,21 @@ pub struct ThreadResumeInput<'a> {
     pub thread_store: &'a ExtensionData,
 }
 
+/// Why a thread has no immediately pending work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreadIdleCause {
+    /// The previous turn completed and automatic follow-up work can run.
+    Completed,
+    /// The user interrupted the previous turn.
+    Interrupted,
+    /// The previous turn ended with a terminal error.
+    Failed,
+}
+
 /// Input supplied when the host has no immediately pending thread work.
 pub struct ThreadIdleInput<'a> {
+    /// Why the thread became idle.
+    pub cause: ThreadIdleCause,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.

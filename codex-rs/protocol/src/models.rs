@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::local_media::audio_mime_for_path;
 use crate::permissions::FileSystemAccessMode;
 use crate::permissions::FileSystemPath;
 use crate::permissions::FileSystemSandboxEntry;
@@ -30,6 +31,8 @@ use crate::mcp::CallToolResult;
 
 mod executed_tool_calls;
 
+pub use crate::local_media::MAX_PROMPT_AUDIO_INPUT_BYTES;
+pub use crate::local_media::snapshot_local_user_input;
 pub use executed_tool_calls::ExecutedToolCall;
 pub use executed_tool_calls::ExecutedToolCallArguments;
 pub use executed_tool_calls::ExecutedToolCallTruncation;
@@ -1527,23 +1530,6 @@ pub fn local_image_content_items_with_label_number(
 pub enum LocalImagePreparation {
     Process,
     Defer,
-}
-
-fn audio_mime_for_path(path: &std::path::Path) -> Option<&'static str> {
-    let extension = path.extension()?.to_str()?;
-    if extension.eq_ignore_ascii_case("wav") {
-        Some("audio/wav")
-    } else if extension.eq_ignore_ascii_case("mp3") {
-        Some("audio/mpeg")
-    } else if extension.eq_ignore_ascii_case("m4a") {
-        Some("audio/mp4")
-    } else if extension.eq_ignore_ascii_case("webm") {
-        Some("audio/webm")
-    } else if extension.eq_ignore_ascii_case("ogg") {
-        Some("audio/ogg")
-    } else {
-        None
-    }
 }
 
 fn unsupported_audio_error_placeholder(path: &std::path::Path) -> ContentItem {

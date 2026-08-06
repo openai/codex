@@ -26,7 +26,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db::StateDbHandle;
-use codex_thread_store::ThreadStore;
+use codex_thread_store::QueueStore;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
@@ -44,8 +44,8 @@ pub(crate) struct ThreadExtensionDependencies {
     pub(crate) executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
     pub(crate) git_attribution_base_url: String,
     pub(crate) http_client_factory: HttpClientFactory,
-    /// Process-scoped persistence backend for extensions that need stored thread history.
-    pub(crate) thread_store: Arc<dyn ThreadStore>,
+    /// Process-scoped persistence backend for queued user messages.
+    pub(crate) queue_store: Option<Arc<dyn QueueStore>>,
 }
 
 pub(crate) fn thread_extensions<S>(
@@ -66,9 +66,17 @@ where
         executor_skill_provider,
         git_attribution_base_url,
         http_client_factory,
-        thread_store: _thread_store,
+        queue_store,
     } = dependencies;
-    let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
+    let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::clone(&event_sink));
+    if let Some(queue) = queue_store {
+        let queue_service = Arc::new(codex_queue_extension::QueuedItemService::new(
+            queue,
+            thread_manager.clone(),
+            event_sink,
+        ));
+        codex_queue_extension::install(&mut builder, queue_service);
+    }
     // copybara:strip-for-public begin
     codex_internal_persistent_mode::install(&mut builder, thread_manager.clone());
     codex_internal_history_notes_extension::install(&mut builder, auth_manager.clone());

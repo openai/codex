@@ -8,6 +8,7 @@ use codex_app_server_protocol::ThreadSection;
 use codex_app_server_protocol::ThreadSectionMoveParams;
 use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -3438,7 +3439,10 @@ impl ThreadRequestProcessor {
                     .await;
                 }
                 self.thread_goal_processor
-                    .emit_resume_goal_snapshot_and_continue(thread_id, codex_thread.as_ref())
+                    .emit_resume_goal_snapshot(thread_id)
+                    .await;
+                codex_thread
+                    .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
                     .await;
             }
             Err(err) => {

@@ -64,6 +64,7 @@ members = [
     "ext/items",
     "ext/memories",
     "ext/mcp",
+    "ext/queue",
     "ext/skills",
     "ext/web-search",
     "external-agent-migration",
@@ -232,6 +233,7 @@ codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-prompts = { path = "prompts" }
+codex-queue-extension = { path = "ext/queue" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }

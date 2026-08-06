@@ -35,6 +35,7 @@ pub use codex_thread::TryStartTurnIfIdleError;
 pub use codex_thread::TryStartTurnIfIdleRejectionReason;
 pub use session::turn_context::TurnContext;
 pub use user_message_admission::UserMessageAdmission;
+pub use user_message_admission::UserMessageAdmissionError;
 mod agent;
 mod agent_communication;
 mod attestation;

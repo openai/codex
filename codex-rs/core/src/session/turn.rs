@@ -20,6 +20,7 @@ use crate::feedback_tags;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::reject_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
@@ -583,25 +584,33 @@ pub(crate) async fn run_hooks_and_record_inputs(
 ) -> bool {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
+    let mut persistence_failed = false;
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
+            reject_pending_input(sess, turn_context, input_item).await;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
             if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
                 accepted_user_input = true;
             }
-            record_pending_input(
+            if record_pending_input(
                 sess,
                 turn_context,
                 input_item.clone(),
                 hook_outcome.additional_contexts,
             )
-            .await;
+            .await
+            .is_err()
+            {
+                // Preserve later drained inputs, but stop before sampling so a
+                // later queue retry cannot execute this message twice.
+                persistence_failed = true;
+            }
         }
     }
-    blocked_input && !accepted_user_input
+    persistence_failed || (blocked_input && !accepted_user_input)
 }
 
 fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
@@ -1750,6 +1759,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::EnvironmentConnected(_)
         | EventMsg::EnvironmentDisconnected(_)
         | EventMsg::ThreadGoalUpdated(_)
+        | EventMsg::ThreadQueueChanged(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::McpToolCallBegin(_)

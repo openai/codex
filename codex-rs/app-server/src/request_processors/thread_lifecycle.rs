@@ -1,5 +1,6 @@
 use super::*;
 use crate::extensions::send_thread_warning;
+use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
 
 pub(super) const THREAD_UNLOADING_DELAY: Duration = Duration::from_secs(30 * 60);
@@ -750,9 +751,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         .await;
     // App-server owns resume response and snapshot ordering, so wait until
     // replay completes before letting extensions react to the idle thread.
-    if pending.emit_thread_goal_update {
-        conversation.emit_thread_idle_lifecycle_if_idle().await;
-    }
+    conversation
+        .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
+        .await;
 }
 
 pub(super) async fn send_thread_goal_snapshot_notification(
