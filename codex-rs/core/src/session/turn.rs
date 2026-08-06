@@ -884,14 +884,10 @@ async fn build_extension_turn_input_items(
         .environments
         .turn_environments()
         .enumerate()
-        .filter_map(|(index, environment)| {
-            // TODO(anp): Migrate extension turn-input environments to PathUri so foreign cwd
-            // values are not omitted from extension context.
-            Some(TurnInputEnvironment {
-                environment_id: environment.environment_id.clone(),
-                cwd: environment.cwd().to_abs_path().ok()?.into_path_buf(),
-                is_primary: index == 0,
-            })
+        .map(|(index, environment)| TurnInputEnvironment {
+            environment_id: environment.environment_id.clone(),
+            cwd: environment.cwd().clone(),
+            is_primary: index == 0,
         })
         .collect::<Vec<_>>();
 

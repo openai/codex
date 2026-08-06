@@ -1,13 +1,21 @@
 use core_test_support::test_codex::local_selections;
 use std::fs;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Result;
 use codex_config::types::Personality;
 use codex_core::config::Config;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_extension_api::ContextualUserFragment;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::TurnInputContext;
+use codex_extension_api::TurnInputContributor;
+use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -35,9 +43,31 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
+
+struct RecordingTurnInputContributor(Arc<Mutex<Vec<TurnInputEnvironment>>>);
+
+impl TurnInputContributor for RecordingTurnInputContributor {
+    fn contribute<'a>(
+        &'a self,
+        input: TurnInputContext,
+        _extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
+        _session_store: &'a ExtensionData,
+        _thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
+    ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .expect("recorded environments lock")
+                .extend(input.environments);
+            Vec::new()
+        })
+    }
+}
 
 fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
@@ -96,6 +126,61 @@ fn format_environment_context_subagents_snapshot(subagents: &[&str]) -> String {
         }],
     })];
     context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_input_contributors_receive_foreign_environment_cwds() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let recorded_environments = Arc::new(Mutex::new(Vec::new()));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_input_contributor(Arc::new(RecordingTurnInputContributor(Arc::clone(
+        &recorded_environments,
+    ))));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| config.project_doc_max_bytes = 0);
+    let test = builder.build_with_auto_env(&server).await?;
+    let mut selection = test.executor_environment().selection().clone();
+    let environment_id = selection.environment_id.clone();
+    let cwd = PathUri::parse(if cfg!(windows) {
+        "file:///workspace"
+    } else {
+        "file:///C:/workspace"
+    })?;
+    assert!(cwd.to_abs_path().is_err());
+    selection.cwd = cwd.clone();
+    selection.workspace_roots = Vec::new();
+
+    test.submit_turn_with_environments("inspect the foreign environment", Some(vec![selection]))
+        .await?;
+
+    let _request = response_mock.single_request();
+    let recorded_environments = recorded_environments
+        .lock()
+        .expect("recorded environments lock")
+        .iter()
+        .map(|environment| {
+            (
+                environment.environment_id.clone(),
+                environment.cwd.clone(),
+                environment.is_primary,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(recorded_environments, vec![(environment_id, cwd, true)]);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
