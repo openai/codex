@@ -1161,6 +1161,50 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "tool_search",
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
     ]);
+
+    let reserved_namespace = probe_with(
+        |turn| {
+            set_feature(turn, Feature::CodeMode, /*enabled*/ true);
+            turn.model_info.supports_search_tool = true;
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![
+                mcp_runtime(
+                    "reserved_direct",
+                    "tool_search",
+                    "inspect",
+                    ToolExposure::Direct,
+                ),
+                mcp_runtime(
+                    "reserved_deferred",
+                    "tool_search",
+                    "tool_search_tool",
+                    ToolExposure::Deferred,
+                ),
+                mcp_runtime(
+                    "searchable",
+                    "mcp__searchable",
+                    "lookup",
+                    ToolExposure::Deferred,
+                ),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    reserved_namespace.assert_visible_contains(&["tool_search"]);
+    reserved_namespace.assert_registered_contains(&[
+        "tool_search",
+        &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
+    ]);
+    reserved_namespace.assert_registered_lacks(&[
+        &ToolName::namespaced("tool_search", "inspect").to_string(),
+        &ToolName::namespaced("tool_search", "tool_search_tool").to_string(),
+    ]);
+    assert!(matches!(
+        reserved_namespace.visible_spec("tool_search"),
+        ToolSpec::ToolSearch { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1296,6 +1340,37 @@ async fn strict_tool_collisions_reject_external_and_synthetic_duplicates() {
                     codex_tools::TOOL_SEARCH_TOOL_NAME,
                     /*defer_loading*/ false,
                 )],
+                ..ToolPlanInputs::default()
+            },
+            false,
+            true,
+        ),
+        (
+            "tool_search.tool_search_tool",
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "reserved",
+                    "tool_search",
+                    "tool_search_tool",
+                    ToolExposure::Deferred,
+                )],
+                ..ToolPlanInputs::default()
+            },
+            false,
+            true,
+        ),
+        (
+            "tool_search.inspect",
+            ToolPlanInputs {
+                tool_runtimes: vec![
+                    mcp_runtime("reserved", "tool_search", "inspect", ToolExposure::Direct),
+                    mcp_runtime(
+                        "searchable",
+                        "mcp__searchable",
+                        "lookup",
+                        ToolExposure::Deferred,
+                    ),
+                ],
                 ..ToolPlanInputs::default()
             },
             false,

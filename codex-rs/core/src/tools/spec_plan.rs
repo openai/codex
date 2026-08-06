@@ -342,7 +342,23 @@ pub(crate) fn finalize_tool_router(
         })
     {
         if registry.remove(&tool_search_name).is_some() {
-            registry.record_collision(tool_search_name);
+            registry.record_collision(tool_search_name.clone());
+        }
+        // Special model tools own the namespace matching their wire identity, so
+        // regular namespace tools cannot advertise that same model-visible surface.
+        let conflicting_tool_names = registry
+            .entries()
+            .filter_map(|tool| {
+                let ToolSpec::Namespace(namespace) = tool.runtime.spec() else {
+                    return None;
+                };
+                (namespace.name == tool_search_name.name).then(|| tool.runtime.tool_name())
+            })
+            .collect::<Vec<_>>();
+        for tool_name in conflicting_tool_names {
+            if registry.remove(&tool_name).is_some() {
+                registry.record_collision(tool_name);
+            }
         }
         append_tool_search_executor(turn_context, &mut registry, tool_search_handler_cache);
     }
