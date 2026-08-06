@@ -755,7 +755,9 @@ impl AnalyticsEventsClient {
     pub fn track_notification(&self, notification: &ServerNotification) {
         if !matches!(
             notification,
-            ServerNotification::ThreadClosed(_)
+            ServerNotification::ThreadArchived(_)
+                | ServerNotification::ThreadClosed(_)
+                | ServerNotification::ThreadUnarchived(_)
                 | ServerNotification::TurnStarted(_)
                 | ServerNotification::TurnCompleted(_)
                 | ServerNotification::TurnDiffUpdated(_)

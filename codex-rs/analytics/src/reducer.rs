@@ -55,6 +55,9 @@ use crate::events::ReviewTrigger;
 use crate::events::Reviewer;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
+use crate::events::ThreadArchiveAction;
+use crate::events::ThreadArchiveEvent;
+use crate::events::ThreadArchiveEventParams;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::ToolItemFailureKind;
@@ -103,7 +106,7 @@ use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
 use crate::facts::TurnTokenUsageFact;
-use crate::now_unix_millis; // copybara:strip-for-public
+use crate::now_unix_millis;
 use crate::now_unix_seconds;
 use crate::option_i64_to_u64;
 use crate::serialize_enum_as_string;
@@ -1635,6 +1638,26 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         match notification {
+            ServerNotification::ThreadArchived(notification) => {
+                out.push(TrackEventRequest::ThreadArchive(ThreadArchiveEvent {
+                    event_type: "codex_thread_archive_event",
+                    event_params: ThreadArchiveEventParams {
+                        thread_id: notification.thread_id,
+                        action: ThreadArchiveAction::Archived,
+                        occurred_at_ms: now_unix_millis(),
+                    },
+                }));
+            }
+            ServerNotification::ThreadUnarchived(notification) => {
+                out.push(TrackEventRequest::ThreadArchive(ThreadArchiveEvent {
+                    event_type: "codex_thread_archive_event",
+                    event_params: ThreadArchiveEventParams {
+                        thread_id: notification.thread_id,
+                        action: ThreadArchiveAction::Unarchived,
+                        occurred_at_ms: now_unix_millis(),
+                    },
+                }));
+            }
             ServerNotification::ItemStarted(notification) => {
                 let Some(item_id) = tracked_tool_item_id(&notification.item) else {
                     return;

@@ -28,9 +28,14 @@ use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
+
+use super::analytics::mount_analytics_capture;
+use super::analytics::wait_for_matching_analytics_event;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -336,7 +341,10 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
 async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!(r#"chatgpt_base_url = "{}""#, server.uri()))
+        .write(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let parent_id = create_fake_rollout(
         codex_home.path(),
@@ -423,7 +431,7 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
         .await??;
         archived_ids.push(archived_notification.thread_id);
     }
-    assert_eq!(archived_ids, vec![parent_id, grandchild_id]);
+    assert_eq!(archived_ids, vec![parent_id.clone(), grandchild_id.clone()]);
 
     assert!(
         timeout(
@@ -462,6 +470,88 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
             .await?
             .is_some(),
             "expected archived rollout for {thread_id} to exist"
+        );
+    }
+
+    let repeated_archive_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: parent_id.clone(),
+        })
+        .await?;
+    let _: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(repeated_archive_id)),
+    )
+    .await??;
+
+    let _: ThreadUnarchiveResponse = mcp
+        .request(|request_id| ClientRequest::ThreadUnarchive {
+            request_id,
+            params: ThreadUnarchiveParams {
+                thread_id: parent_id.clone(),
+            },
+        })
+        .await?;
+    wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_thread_archive_event"
+            && event["event_params"]["thread_id"] == parent_id
+            && event["event_params"]["action"] == "unarchived"
+    })
+    .await?;
+
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("wiremock did not record requests"))?;
+    let mut archive_events = Vec::new();
+    for request in requests {
+        if request.url.path() != "/codex/analytics-events/events" {
+            continue;
+        }
+        let payload: Value = serde_json::from_slice(&request.body)?;
+        let events = payload["events"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("analytics payload missing events array"))?;
+        for event in events
+            .iter()
+            .filter(|event| event["event_type"] == "codex_thread_archive_event")
+        {
+            for (header, expected) in [
+                ("authorization", "Bearer chatgpt-token"),
+                ("chatgpt-account-id", "account-123"),
+            ] {
+                assert_eq!(
+                    request
+                        .headers
+                        .get(header)
+                        .and_then(|value| value.to_str().ok()),
+                    Some(expected)
+                );
+            }
+            archive_events.push(event.clone());
+        }
+    }
+
+    let expected = [
+        (parent_id.as_str(), "archived"),
+        (grandchild_id.as_str(), "archived"),
+        (parent_id.as_str(), "unarchived"),
+    ];
+    assert_eq!(archive_events.len(), expected.len());
+    for (event, (thread_id, action)) in archive_events.iter().zip(expected) {
+        let occurred_at_ms = event["event_params"]["occurred_at_ms"]
+            .as_u64()
+            .expect("thread archive analytics must include its producer timestamp");
+        assert_eq!(
+            event,
+            &json!({
+                "event_type": "codex_thread_archive_event",
+                "event_params": {
+                    "thread_id": thread_id,
+                    "action": action,
+                    "occurred_at_ms": occurred_at_ms,
+                },
+            })
         );
     }
 

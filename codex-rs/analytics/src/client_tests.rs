@@ -35,6 +35,12 @@ use crate::events::FinalApprovalOutcome;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 #[cfg(debug_assertions)]
+use crate::events::ThreadArchiveAction;
+#[cfg(debug_assertions)]
+use crate::events::ThreadArchiveEvent;
+#[cfg(debug_assertions)]
+use crate::events::ThreadArchiveEventParams;
+#[cfg(debug_assertions)]
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
 use crate::facts::AnalyticsFact;
@@ -51,6 +57,7 @@ use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -397,6 +404,14 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
             sample_mcp_tool_call_event("non-plugin-mcp", /*plugin_id*/ None),
             sample_plugin_used_track_event("non-plugin-used", /*plugin_id*/ None),
             sample_accepted_line_fingerprint_event("other-event"),
+            TrackEventRequest::ThreadArchive(ThreadArchiveEvent {
+                event_type: "codex_thread_archive_event",
+                event_params: ThreadArchiveEventParams {
+                    thread_id: "non-plugin-thread-archive".to_string(),
+                    action: ThreadArchiveAction::Archived,
+                    occurred_at_ms: 1,
+                },
+            }),
             sample_plugin_used_track_event("plugin-used", Some("sample@test")),
             sample_skill_track_event("plugin-skill", Some("sample@test")),
             sample_mcp_tool_call_event("plugin-mcp", Some("sample@test")),
@@ -751,7 +766,20 @@ async fn flush_waits_for_preceding_fact_delivery() {
 
 #[tokio::test]
 async fn flush_is_noop_when_analytics_is_disabled() {
-    AnalyticsEventsClient::disabled().flush().await;
+    let client = AnalyticsEventsClient::new(
+        codex_login::AuthManager::from_auth_for_testing(
+            codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        ),
+        "https://chatgpt.com/backend-api".to_string(),
+        /*analytics_enabled*/ Some(false),
+    );
+    client.track_notification(&ServerNotification::ThreadArchived(
+        ThreadArchivedNotification {
+            thread_id: "thread-1".to_string(),
+        },
+    ));
+    assert!(client.queue.is_none());
+    client.flush().await;
 }
 
 #[test]
