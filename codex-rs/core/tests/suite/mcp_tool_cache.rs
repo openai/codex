@@ -12,7 +12,10 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
@@ -238,7 +241,7 @@ async fn mcp_calls_stay_bound_to_each_thread() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::Result<()> {
+async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow::Result<()> {
     skip_if_wine_exec!(
         Ok(()),
         "requires a Windows test_stdio_server in the Wine-exec environment"
@@ -313,6 +316,18 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
         &format!("Echo from {first_process}."),
     );
 
+    let NewThread {
+        thread: eager_thread,
+        ..
+    } = fixture
+        .thread_manager
+        .start_thread(StartThreadOptions::new(fixture.config.clone()))
+        .await?;
+    let eager_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&first_pid)).await?;
+    wait_for_mcp_server(&eager_thread, SERVER_NAME).await?;
+    eager_thread.shutdown_and_wait().await?;
+    let cached_process = process_label(&eager_pid);
+
     fs.remove(
         &barrier_file,
         RemoveOptions {
@@ -333,10 +348,56 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
         ..
     } = fixture
         .thread_manager
-        .start_thread(StartThreadOptions::new(fixture.config.clone()))
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: fixture.session_configured.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            ..StartThreadOptions::new(fixture.config.clone())
+        })
         .await?;
-    let second_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&first_pid)).await?;
-    let second_process = process_label(&second_pid);
+    second_thread.submit(Op::Interrupt).await?;
+
+    let unused_response = mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("unused"),
+            responses::ev_assistant_message("unused-message", "done"),
+            responses::ev_completed("unused"),
+        ]),
+    )
+    .await;
+    second_thread
+        .submit(user_turn("Do not call any MCP tools."))
+        .await?;
+    let mut reported_ready_before_startup = false;
+    wait_for_event(&second_thread, |event| {
+        if let EventMsg::McpStartupUpdate(update) = event
+            && update.server == SERVER_NAME
+            && matches!(update.status, McpStartupStatus::Ready)
+        {
+            reported_ready_before_startup = true;
+        }
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(
+        !reported_ready_before_startup,
+        "a dormant MCP server must not be reported as ready"
+    );
+    assert_definition(
+        &unused_response,
+        &format!("Tools in the {NAMESPACE} namespace."),
+        &format!("Echo from {cached_process}."),
+    );
+    assert_eq!(
+        fs.read_file_text(&pid_file, /*sandbox*/ None).await?.trim(),
+        eager_pid,
+        "cached tool definitions should not start an unused subagent-owned MCP process"
+    );
 
     let app_only_call_id = "cached-app-only-call";
     let unrelated_call_id = "cached-unrelated-plan";
@@ -376,11 +437,19 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
             .submit(user_turn("call the echo and cwd tools"))
             .await?;
         let mut unrelated_finished_tx = Some(unrelated_finished_tx);
+        let mut saw_starting = false;
+        let mut saw_ready = false;
         let end = wait_for_event(&second_for_turn, |event| {
             if matches!(event, EventMsg::PlanUpdate(_))
                 && let Some(sender) = unrelated_finished_tx.take()
             {
                 let _ = sender.send(());
+            }
+            if let EventMsg::McpStartupUpdate(update) = event
+                && update.server == SERVER_NAME
+            {
+                saw_starting |= matches!(update.status, McpStartupStatus::Starting);
+                saw_ready |= matches!(update.status, McpStartupStatus::Ready);
             }
             matches!(
                 event,
@@ -388,6 +457,11 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
             )
         })
         .await;
+        assert!(
+            saw_starting,
+            "deferred startup should emit its starting status"
+        );
+        assert!(saw_ready, "deferred startup should emit its ready status");
         let EventMsg::McpToolCallEnd(end) = end else {
             unreachable!("event predicate guarantees an MCP tool result");
         };
@@ -414,8 +488,10 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
     assert_definition(
         &cached_response,
         &format!("Tools in the {NAMESPACE} namespace."),
-        &format!("Echo from {first_process}."),
+        &format!("Echo from {cached_process}."),
     );
+    let second_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&eager_pid)).await?;
+    let second_process = process_label(&second_pid);
     tokio::time::timeout(Duration::from_secs(2), unrelated_finished_rx)
         .await
         .context("an unrelated tool should complete while cached MCP startup is pending")?
@@ -451,6 +527,135 @@ async fn regular_mcp_definition_cache_preserves_live_session_state() -> anyhow::
     );
 
     second_thread.shutdown_and_wait().await?;
+    let mut filtered_config = fixture.config.clone();
+    let mut filtered_servers = filtered_config.mcp_servers.get().clone();
+    filtered_servers
+        .get_mut(SERVER_NAME)
+        .expect("cached MCP server should remain configured")
+        .enabled_tools = Some(vec!["cwd".to_string()]);
+    filtered_config.mcp_servers.set(filtered_servers)?;
+    let NewThread {
+        thread: filtered_thread,
+        ..
+    } = fixture
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::Other(
+                "filtered-cached-startup".to_string(),
+            ))),
+            ..StartThreadOptions::new(filtered_config)
+        })
+        .await?;
+    let filtered_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&second_pid)).await?;
+    wait_for_mcp_server(&filtered_thread, SERVER_NAME).await?;
+    filtered_thread.shutdown_and_wait().await?;
+    fs.remove(
+        &barrier_file,
+        RemoveOptions {
+            recursive: false,
+            force: false,
+        },
+        /*sandbox*/ None,
+    )
+    .await?;
+    let NewThread {
+        thread: interrupted_thread,
+        ..
+    } = fixture
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::Other(
+                "interrupted-cached-startup".to_string(),
+            ))),
+            ..StartThreadOptions::new(fixture.config.clone())
+        })
+        .await?;
+    mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("interrupted-startup"),
+            responses::ev_function_call_with_namespace(
+                "interrupted-startup-call",
+                NAMESPACE,
+                "echo",
+                r#"{"message":"interrupted"}"#,
+            ),
+            responses::ev_completed("interrupted-startup"),
+        ]),
+    )
+    .await;
+    interrupted_thread
+        .submit(user_turn("Start the cached MCP tool."))
+        .await?;
+    let interrupted_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&filtered_pid)).await?;
+    wait_for_event(&interrupted_thread, |event| {
+        matches!(
+            event,
+            EventMsg::McpStartupUpdate(update)
+                if update.server == SERVER_NAME
+                    && matches!(update.status, McpStartupStatus::Starting)
+        )
+    })
+    .await;
+    interrupted_thread.submit(Op::Interrupt).await?;
+    wait_for_event(&interrupted_thread, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_event(&interrupted_thread, |event| {
+            matches!(
+                event,
+                EventMsg::McpStartupUpdate(update)
+                    if update.server == SERVER_NAME
+                        && matches!(update.status, McpStartupStatus::Ready)
+            )
+        }),
+    )
+    .await
+    .context("deferred MCP startup should survive an interrupted first tool call")?;
+    mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("retried-startup"),
+            responses::ev_function_call_with_namespace(
+                "retried-startup-call",
+                NAMESPACE,
+                "echo",
+                r#"{"message":"retried"}"#,
+            ),
+            responses::ev_completed("retried-startup"),
+        ]),
+    )
+    .await;
+    let retry_done = mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("retried-done"),
+            responses::ev_assistant_message("retried-message", "done"),
+            responses::ev_completed("retried-done"),
+        ]),
+    )
+    .await;
+    interrupted_thread
+        .submit(user_turn("Retry the cached MCP tool."))
+        .await?;
+    wait_for_event(&interrupted_thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let retry_output = retry_done
+        .single_request()
+        .function_call_output_text("retried-startup-call")
+        .expect("the retried MCP tool call should return its output");
+    assert!(
+        retry_output.contains(&process_label(&interrupted_pid)),
+        "the retry should use the server started by the interrupted call"
+    );
+    interrupted_thread.shutdown_and_wait().await?;
     responses_server.verify().await;
     Ok(())
 }

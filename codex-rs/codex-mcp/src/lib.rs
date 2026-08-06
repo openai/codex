@@ -15,6 +15,7 @@ pub use rmcp_client::MCP_SANDBOX_STATE_META_CAPABILITY;
 pub use runtime::McpRuntime;
 pub use runtime::McpRuntimeContext;
 pub use runtime::McpRuntimeInput;
+pub use runtime::McpStartupPolicy;
 pub use runtime::SandboxState;
 pub use tool_catalog_cache::McpToolCatalogCache;
 pub use tools::ToolInfo;

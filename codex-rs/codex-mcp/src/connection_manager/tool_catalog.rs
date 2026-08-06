@@ -177,9 +177,6 @@ impl McpConnectionSet {
         let revision = self.tool_catalog_revision.read().await;
         let mut listed_tools = Vec::new();
         let mut clients = std::collections::HashMap::new();
-        let optional_startup_deadline = *self
-            .optional_startup_deadline
-            .get_or_init(|| tokio::time::Instant::now() + OPTIONAL_MCP_STARTUP_GRACE);
         join_all(self.servers.iter().map(|(server_name, view)| async move {
             if !view
                 .connection
@@ -199,6 +196,13 @@ impl McpConnectionSet {
                     return;
                 }
                 if !must_wait_for_startup {
+                    let optional_startup_deadline = if view.connection.startup_is_dormant() {
+                        tokio::time::Instant::now() + OPTIONAL_MCP_STARTUP_GRACE
+                    } else {
+                        *self.optional_startup_deadline.get_or_init(|| {
+                            tokio::time::Instant::now() + OPTIONAL_MCP_STARTUP_GRACE
+                        })
+                    };
                     let startup_deadline = view
                         .connection
                         .client
@@ -206,7 +210,7 @@ impl McpConnectionSet {
                         .as_ref()
                         .map(|cache| cache.optional_startup_deadline(optional_startup_deadline))
                         .unwrap_or(optional_startup_deadline);
-                    if tokio::time::timeout_at(startup_deadline, view.connection.client.client())
+                    if tokio::time::timeout_at(startup_deadline, view.connection.client())
                         .await
                         .is_err()
                     {
@@ -214,7 +218,7 @@ impl McpConnectionSet {
                     }
                     return;
                 }
-                let _ = view.connection.client.client().await;
+                let _ = view.connection.client().await;
             }
         }))
         .await;
@@ -241,7 +245,7 @@ impl McpConnectionSet {
                 return Some((server_name.clone(), None, server_tools));
             }
             view.connection.client.reconnect_failed_startup().await;
-            let Ok(mut client) = view.connection.client.client().await else {
+            let Ok(mut client) = view.connection.client().await else {
                 trace!(server_name = %server_name, "omitting MCP server without an exact ready client");
                 return None;
             };

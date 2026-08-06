@@ -8,6 +8,7 @@ use super::session::SessionConfiguration;
 use super::*;
 use crate::mcp::McpRuntimeProjection;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::McpStartupPolicy;
 use codex_mcp::PreparedMcpCall;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
@@ -174,6 +175,11 @@ impl Session {
                 .then(|| Arc::clone(&self.services.auth_manager));
 
         McpRuntimeInput {
+            startup_policy: if matches!(desired.session_source, SessionSource::SubAgent(_)) {
+                McpStartupPolicy::LazyWhenCached
+            } else {
+                McpStartupPolicy::Eager
+            },
             config: mcp_config,
             plugins_available,
             ready_selected_capability_roots: ready_selected_capability_roots.to_vec(),

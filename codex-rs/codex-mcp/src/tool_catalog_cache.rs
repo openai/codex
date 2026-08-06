@@ -107,7 +107,7 @@ impl Default for ToolCatalogCacheEntry {
 
 impl McpToolCatalogCacheContext {
     pub(crate) fn has_tools(&self) -> bool {
-        self.current_tools().is_some()
+        self.current_tools().is_some_and(|tools| !tools.is_empty())
     }
 
     pub(crate) fn optional_startup_deadline(&self, default_deadline: Instant) -> Instant {

@@ -16,6 +16,7 @@ use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpRuntimeInput;
+use codex_mcp::McpStartupPolicy;
 use codex_mcp::McpToolCatalogCache;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::AskForApproval;
@@ -89,6 +90,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
     let plugins_manager = codex_core_plugins::PluginsManager::new(home.path().to_path_buf());
     let mcp_config = Arc::new(config.to_mcp_config(&plugins_manager).await);
     let runtime = McpRuntime::new(McpRuntimeInput {
+        startup_policy: McpStartupPolicy::Eager,
         config: mcp_config,
         plugins_available: false,
         ready_selected_capability_roots: Vec::new(),
