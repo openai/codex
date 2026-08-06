@@ -372,6 +372,7 @@ impl AccountRequestProcessor {
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
+                self.config_manager.clear_cloud_config_bundle_loader();
                 Ok(())
             }
             Err(err) => Err(internal_error(format!("failed to save api key: {err}"))),
@@ -439,6 +440,7 @@ impl AccountRequestProcessor {
             )
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
             self.auth_manager.reload().await;
+            self.config_manager.clear_cloud_config_bundle_loader();
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
         .await;
@@ -889,6 +891,8 @@ impl AccountRequestProcessor {
                 return Err(internal_error(format!("logout failed: {err}")));
             }
         }
+
+        self.config_manager.clear_cloud_config_bundle_loader();
 
         if managed_bedrock_auth {
             clear_user_model_provider_if_bedrock(&self.config_manager).await?;
