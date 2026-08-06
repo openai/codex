@@ -1081,13 +1081,17 @@ impl Tui {
             let terminal = &mut self.terminal;
             let needs_full_repaint =
                 Self::update_inline_viewport_for_resize_reflow(terminal, height, screen_size)?;
+            // A zero- or one-row history region cannot isolate raw history writes from the
+            // viewport, so replayed rows can leave stale cells inside the composer.
+            let history_can_overlap_viewport =
+                !self.pending_history_lines.is_empty() && terminal.viewport_area.top() <= 1;
             Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
 
-            if needs_full_repaint {
+            if needs_full_repaint || history_can_overlap_viewport {
                 terminal.invalidate_viewport();
             }
 

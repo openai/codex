@@ -311,6 +311,143 @@ async fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires tmux and a locally built codex binary; run with --ignored for manual resize smoke"]
+async fn tmux_scrolled_composer_resize_preserves_visible_draft_text() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+    skip_if_no_network!(Ok(()));
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("skipping resize smoke because tmux is unavailable");
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let server = MockServer::start().await;
+    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
+    write_config(codex_home.path(), &repo_root)?;
+    write_auth(codex_home.path())?;
+
+    let session_name = format!("codex-resize-scrolled-composer-{}", std::process::id());
+    let _session = TmuxSession {
+        name: session_name.clone(),
+    };
+
+    let start_output = checked_output(
+        Command::new("tmux")
+            .arg("new-session")
+            .arg("-d")
+            .arg("-P")
+            .arg("-F")
+            .arg("#{pane_id}")
+            .arg("-x")
+            .arg("44")
+            .arg("-y")
+            .arg("14")
+            .arg("-s")
+            .arg(&session_name)
+            .arg("--")
+            .arg("env")
+            .arg(format!("CODEX_HOME={}", codex_home.path().display()))
+            .arg("OPENAI_API_KEY=dummy")
+            .arg(codex)
+            .arg("--model")
+            .arg("gpt-5.6-terra")
+            .arg("-c")
+            .arg("analytics.enabled=false")
+            .arg("-c")
+            .arg(&openai_base_url_config)
+            .arg("--no-alt-screen")
+            .arg("-C")
+            .arg(&repo_root),
+    )?;
+    let codex_pane = stdout_text(&start_output).trim().to_string();
+    anyhow::ensure!(!codex_pane.is_empty(), "tmux did not report a pane id");
+    wait_for_capture_contains(
+        &codex_pane,
+        "gpt-5.6-terra",
+        Duration::from_secs(/*secs*/ 15),
+    )?;
+
+    for index in 1..=9 {
+        let line = format!("probe-{index:02} clean words");
+        check(
+            Command::new("tmux")
+                .arg("send-keys")
+                .arg("-t")
+                .arg(&codex_pane)
+                .arg("-l")
+                .arg(line),
+        )?;
+        check(
+            Command::new("tmux")
+                .arg("send-keys")
+                .arg("-t")
+                .arg(&codex_pane)
+                .arg("C-j"),
+        )?;
+    }
+
+    let final_line = "q".repeat(/*n*/ 41);
+    check(
+        Command::new("tmux")
+            .arg("send-keys")
+            .arg("-t")
+            .arg(&codex_pane)
+            .arg("-l")
+            .arg(&final_line),
+    )?;
+    let baseline =
+        wait_for_capture_contains(&codex_pane, &final_line, Duration::from_secs(/*secs*/ 15))?;
+
+    for (phase, width, height, minimum_visible_rows) in
+        [("narrowed", "28", "9", 2), ("restored", "44", "14", 6)]
+    {
+        check(
+            Command::new("tmux")
+                .arg("resize-window")
+                .arg("-t")
+                .arg(&session_name)
+                .arg("-x")
+                .arg(width)
+                .arg("-y")
+                .arg(height),
+        )?;
+        sleep(Duration::from_millis(/*millis*/ 350));
+        let capture = capture_pane(&codex_pane)?;
+        let visible_rows = capture
+            .lines()
+            .filter_map(|line| line.find("probe-").map(|start| (line, start)))
+            .collect::<Vec<_>>();
+
+        anyhow::ensure!(
+            visible_rows.len() >= minimum_visible_rows,
+            "{phase} composer exposes too few draft rows: expected at least \
+             {minimum_visible_rows}, found {}\nbaseline:\n{baseline}\ncapture:\n{capture}",
+            visible_rows.len()
+        );
+
+        for (line, start) in visible_rows {
+            let draft = &line[start..];
+            let row_number = draft
+                .get(6..8)
+                .with_context(|| format!("malformed draft row after {phase}: {draft}"))?;
+            let expected = format!("probe-{row_number} clean words");
+            let prefix = line[..start].trim();
+            anyhow::ensure!(
+                draft.starts_with(&expected) && (prefix.is_empty() || prefix == "›"),
+                "{phase} resize left stale terminal content in the composer: \
+                 expected {expected:?}, found {line:?}\nbaseline:\n{baseline}\ncapture:\n{capture}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 async fn run_repeated_resize_smoke() -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex = codex_binary(&repo_root)?;

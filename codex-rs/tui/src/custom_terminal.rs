@@ -498,11 +498,16 @@ where
         Ok(())
     }
 
-    /// Force the next draw pass to repaint the entire viewport by resetting the
-    /// diff buffer. Call this after raw terminal operations that move screen
-    /// content outside ratatui's knowledge.
+    /// Force the next draw pass to repaint the entire viewport after raw terminal
+    /// operations move screen content outside ratatui's knowledge. Resetting the
+    /// diff buffer alone would leave default-style spaces equal to their previous
+    /// cells, allowing stale terminal content to show through those spaces.
     pub fn invalidate_viewport(&mut self) {
-        self.previous_buffer_mut().reset();
+        let previous_buffer = self.previous_buffer_mut();
+        previous_buffer.reset();
+        for cell in &mut previous_buffer.content {
+            cell.set_diff_option(CellDiffOption::AlwaysUpdate);
+        }
     }
 
     /// Clear the entire visible screen (not just the viewport) and force a full redraw.
@@ -809,6 +814,7 @@ mod tests {
     use super::*;
     use std::num::NonZeroU16;
 
+    use crate::test_backend::VT100Backend;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::backend::WindowSize;
@@ -924,6 +930,48 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn invalidate_viewport_repaints_default_style_spaces_over_stale_terminal_cells() {
+        let width = 32;
+        let height = 2;
+        let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
+        let mut terminal =
+            Terminal::with_options(VT100Backend::new(width, height)).expect("terminal");
+        terminal.set_viewport_area(area);
+
+        // History insertion writes directly to the terminal, leaving cells that are absent from
+        // the diff buffers. Interior default-style spaces must still overwrite those stale cells.
+        write!(
+            terminal.backend_mut(),
+            "probe-08tcleantwords stale\r\nprobe-09xcleanxwords stale"
+        )
+        .expect("prefill terminal");
+        assert!(
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .contents()
+                .contains("probe-08tcleantwords")
+        );
+
+        terminal.invalidate_viewport();
+        terminal
+            .draw(|frame| {
+                Paragraph::new(vec![
+                    Line::from("probe-08 clean words"),
+                    Line::from("probe-09 clean words"),
+                ])
+                .render(area, frame.buffer_mut());
+            })
+            .expect("redraw invalidated viewport");
+
+        assert_snapshot!(terminal.backend().vt100().screen().contents(), @r"
+        probe-08 clean words
+        probe-09 clean words
+        ");
     }
 
     #[test]
