@@ -9,6 +9,8 @@ use crate::PUBLIC_TOOL_NAME;
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
 To find one, filter `ALL_TOOLS` by `name` and `description`."#;
+const LEGACY_IMAGE_HELPER_DESCRIPTION: &str = r#"`image(imageUrlOrItem: string | { image_url: string; detail?: "auto" | "low" | "high" | "original" | null } | ImageContent, detail?: "auto" | "low" | "high" | "original" | null)`: Appends an image item. `image_url` should be a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`. MCP image blocks may request detail with `_meta: { "codex/imageDetail": "original" }`. When provided, the second `detail` argument overrides any detail embedded in the first argument."#;
+const UNIFIED_IMAGE_HELPER_DESCRIPTION: &str = r#"`image(imageUrlOrItem: string | { image_url: string } | ImageContent)`: Appends an image item. `image_url` should be a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`."#;
 const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
 - All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
@@ -249,18 +251,31 @@ pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
     tool_name != crate::PUBLIC_TOOL_NAME && tool_name != crate::WAIT_TOOL_NAME
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageDetailVisibility {
+    Visible,
+    Hidden,
+}
+
 pub fn build_exec_tool_description(
     enabled_tools: &[ToolDefinition],
     deferred_tools: &[ToolDefinition],
     namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
     default_exec_yield_time_ms: u64,
     code_mode_only: bool,
+    image_detail_visibility: ImageDetailVisibility,
 ) -> String {
     let mut sections = Vec::new();
     sections.push(EXEC_DESCRIPTION_TEMPLATE.replace(
         "Defaults to 10000 ms.",
         &format!("Defaults to {default_exec_yield_time_ms} ms."),
     ));
+    if image_detail_visibility == ImageDetailVisibility::Hidden {
+        sections[0] = sections[0].replace(
+            LEGACY_IMAGE_HELPER_DESCRIPTION,
+            UNIFIED_IMAGE_HELPER_DESCRIPTION,
+        );
+    }
     if !deferred_tools.is_empty() {
         sections.push(DEFERRED_NESTED_TOOLS_GUIDANCE.to_string());
     }
@@ -714,6 +729,7 @@ fn render_json_schema_literal(value: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::CodeModeToolKind;
+    use super::ImageDetailVisibility;
     use super::ParsedExecSource;
     use super::ToolDefinition;
     use super::ToolNamespaceDescription;
@@ -874,6 +890,7 @@ mod tests {
             &BTreeMap::new(),
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ true,
+            ImageDetailVisibility::Visible,
         );
         assert!(description.contains(
             "### `foo`
@@ -890,6 +907,7 @@ bar"
             &BTreeMap::new(),
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ false,
+            ImageDetailVisibility::Visible,
         );
         assert!(description.contains("`audio(audioUrlOrItem:"));
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
@@ -944,6 +962,7 @@ bar"
             &namespace_descriptions,
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ true,
+            ImageDetailVisibility::Visible,
         );
         assert_eq!(description.matches("## mcp__sample").count(), 1);
         assert!(description.contains("## mcp__sample\nShared namespace guidance."));
@@ -985,6 +1004,7 @@ bar"
             &namespace_descriptions,
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ true,
+            ImageDetailVisibility::Visible,
         );
 
         assert!(!description.contains("## mcp__sample"));
@@ -1085,6 +1105,7 @@ bar"
             &BTreeMap::new(),
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ true,
+            ImageDetailVisibility::Visible,
         );
 
         assert_eq!(
@@ -1121,6 +1142,7 @@ bar"
             &BTreeMap::new(),
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ true,
+            ImageDetailVisibility::Visible,
         );
 
         assert!(description.contains("Some deferred nested tools may be omitted"));
@@ -1143,6 +1165,7 @@ bar"
             &BTreeMap::new(),
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ false,
+            ImageDetailVisibility::Visible,
         );
 
         assert!(description.contains("Some deferred nested tools may be omitted"));

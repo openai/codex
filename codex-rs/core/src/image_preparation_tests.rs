@@ -51,7 +51,11 @@ fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    prepare_response_items(&mut items, ImageResizeNoticeMode::Disabled);
+    prepare_response_items(
+        &mut items,
+        ImagePreparationMode::DetailBased,
+        ImageResizeNoticeMode::Disabled,
+    );
 
     let ResponseItem::Message { content, .. } = &items[0] else {
         panic!("expected message");
@@ -105,7 +109,11 @@ fn detail_policies_apply_the_expected_budgets() {
             internal_chat_message_metadata_passthrough: None,
         }];
 
-        let metadata = prepare_response_items(&mut items, ImageResizeNoticeMode::Disabled);
+        let metadata = prepare_response_items(
+            &mut items,
+            ImagePreparationMode::DetailBased,
+            ImageResizeNoticeMode::Disabled,
+        );
 
         let ResponseItem::Message { content, .. } = &items[0] else {
             panic!("expected message");
@@ -144,7 +152,11 @@ fn preparation_reports_tool_output_item_id() {
         ]),
         internal_chat_message_metadata_passthrough: None,
     }];
-    let metadata = prepare_response_items(&mut items, ImageResizeNoticeMode::Disabled);
+    let metadata = prepare_response_items(
+        &mut items,
+        ImagePreparationMode::DetailBased,
+        ImageResizeNoticeMode::Disabled,
+    );
 
     assert_eq!(
         metadata,
@@ -202,7 +214,11 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
         },
     ];
 
-    prepare_response_items(&mut items, ImageResizeNoticeMode::Enabled);
+    prepare_response_items(
+        &mut items,
+        ImagePreparationMode::DetailBased,
+        ImageResizeNoticeMode::Enabled,
+    );
     let expected_user_notice = concat!(
         "<image_resize_notice>\n",
         "Image 3 of 3 in the preceding user message was resized from 2048x2048 to 1600x1600 pixels.\n",
@@ -325,7 +341,11 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    prepare_response_items(&mut items, ImageResizeNoticeMode::Disabled);
+    prepare_response_items(
+        &mut items,
+        ImagePreparationMode::DetailBased,
+        ImageResizeNoticeMode::Disabled,
+    );
 
     assert_eq!(
         items,

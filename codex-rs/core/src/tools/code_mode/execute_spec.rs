@@ -1,3 +1,4 @@
+use codex_code_mode::ImageDetailVisibility;
 use codex_code_mode::ToolDefinition as CodeModeToolDefinition;
 use codex_tools::FreeformTool;
 use codex_tools::FreeformToolFormat;
@@ -10,6 +11,7 @@ pub(crate) fn create_code_mode_tool(
     namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
     default_exec_yield_time_ms: u64,
     code_mode_only: bool,
+    image_detail_visibility: ImageDetailVisibility,
 ) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
@@ -29,6 +31,7 @@ SOURCE: /[\s\S]+/
             namespace_descriptions,
             default_exec_yield_time_ms,
             code_mode_only,
+            image_detail_visibility,
         ),
         defer_loading: None,
         format: FreeformToolFormat {
@@ -63,6 +66,7 @@ mod tests {
                 &BTreeMap::new(),
                 codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                 /*code_mode_only*/ true,
+                ImageDetailVisibility::Visible,
             ),
             ToolSpec::Freeform(FreeformTool {
                 name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
@@ -72,6 +76,7 @@ mod tests {
                     &BTreeMap::new(),
                     codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                     /*code_mode_only*/ true,
+                    ImageDetailVisibility::Visible,
                 ),
                 defer_loading: None,
                 format: FreeformToolFormat {

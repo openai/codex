@@ -1,13 +1,17 @@
+use crate::config::ManagedFeatures;
 use crate::context::ContextualUserFragment;
 use crate::context::ImageResizeNotice;
 use crate::context::ImageResizeNoticeSource;
 use crate::context::ResizedImage;
+use crate::original_image_detail::can_request_original_image_detail;
 use codex_analytics::ImageDetailSetting;
 use codex_analytics::ImagePreparationMetadata;
+use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_utils_image::ImageProcessingError;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::PromptImageResizeLimits;
@@ -26,10 +30,24 @@ const HIGH_DETAIL_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits {
     max_dimension: 2048,
     max_patches: 2_500,
 };
-const ORIGINAL_DETAIL_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits {
+const UNIFIED_IMAGE_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits {
     max_dimension: 6000,
     max_patches: 10_000,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImagePreparationMode {
+    DetailBased,
+    UnifiedBudget,
+}
+
+pub(crate) fn unified_image_budget_enabled(
+    features: &ManagedFeatures,
+    model_info: &ModelInfo,
+) -> bool {
+    features.enabled(Feature::UnifiedImageBudget)
+        && (model_info.use_responses_lite || can_request_original_image_detail(model_info))
+}
 
 #[derive(Clone, Copy, Debug)]
 struct ImageOrigin<'a> {
@@ -76,6 +94,7 @@ impl ImagePreparationError {
 
 pub(crate) fn prepare_response_items(
     items: &mut Vec<ResponseItem>,
+    mode: ImagePreparationMode,
     resize_notice_mode: ImageResizeNoticeMode,
 ) -> Vec<ImagePreparationMetadata> {
     let mut metadata = Vec::new();
@@ -95,6 +114,7 @@ pub(crate) fn prepare_response_items(
                         ImageResizeNoticeMode::Disabled
                     },
                     &mut metadata,
+                    mode,
                 );
                 (!resized_images.is_empty()).then(|| {
                     ImageResizeNotice::new(ImageResizeNoticeSource::UserMessage, resized_images)
@@ -114,6 +134,7 @@ pub(crate) fn prepare_response_items(
                     },
                     resize_notice_mode,
                     &mut metadata,
+                    mode,
                 );
                 (!resized_images.is_empty()).then(|| {
                     ImageResizeNotice::new(ImageResizeNoticeSource::ToolOutput, resized_images)
@@ -148,6 +169,7 @@ fn prepare_message_content(
     origin: ImageOrigin<'_>,
     resize_notice_mode: ImageResizeNoticeMode,
     metadata: &mut Vec<ImagePreparationMetadata>,
+    mode: ImagePreparationMode,
 ) -> Vec<ResizedImage> {
     let image_count = items
         .iter()
@@ -158,7 +180,7 @@ fn prepare_message_content(
     for item in items {
         if let ContentItem::InputImage { image_url, detail } = item {
             image_number += 1;
-            match prepare_image(image_url, *detail, origin, metadata) {
+            match prepare_image(image_url, detail, origin, metadata, mode) {
                 Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
                     resized_images.push(ResizedImage {
                         image_number,
@@ -187,6 +209,7 @@ fn prepare_tool_output_content(
     origin: ImageOrigin<'_>,
     resize_notice_mode: ImageResizeNoticeMode,
     metadata: &mut Vec<ImagePreparationMetadata>,
+    mode: ImagePreparationMode,
 ) -> Vec<ResizedImage> {
     let image_count = items
         .iter()
@@ -197,7 +220,7 @@ fn prepare_tool_output_content(
     for item in items {
         if let FunctionCallOutputContentItem::InputImage { image_url, detail } = item {
             image_number += 1;
-            match prepare_image(image_url, *detail, origin, metadata) {
+            match prepare_image(image_url, detail, origin, metadata, mode) {
                 Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
                     resized_images.push(ResizedImage {
                         image_number,
@@ -235,9 +258,10 @@ fn is_data_url(image_url: &str) -> bool {
 
 fn prepare_image(
     image_url: &mut String,
-    detail: Option<ImageDetail>,
+    detail: &mut Option<ImageDetail>,
     origin: ImageOrigin<'_>,
     metadata: &mut Vec<ImagePreparationMetadata>,
+    mode: ImagePreparationMode,
 ) -> Result<Option<PreparedImageResize>, ImagePreparationError> {
     if is_remote_image_url(image_url) {
         return Err(ImagePreparationError::RemoteUrlUnsupported);
@@ -246,12 +270,15 @@ fn prepare_image(
         return Ok(None);
     }
 
-    let (effective_detail, limits) = match detail {
-        None | Some(ImageDetail::Auto | ImageDetail::High) => {
-            (ImageDetailSetting::High, HIGH_DETAIL_LIMITS)
-        }
-        Some(ImageDetail::Original) => (ImageDetailSetting::Original, ORIGINAL_DETAIL_LIMITS),
-        Some(ImageDetail::Low) => return Err(ImagePreparationError::UnsupportedLowDetail),
+    let (effective_detail, limits) = match mode {
+        ImagePreparationMode::UnifiedBudget => (ImageDetailSetting::Original, UNIFIED_IMAGE_LIMITS),
+        ImagePreparationMode::DetailBased => match detail {
+            None | Some(ImageDetail::Auto | ImageDetail::High) => {
+                (ImageDetailSetting::High, HIGH_DETAIL_LIMITS)
+            }
+            Some(ImageDetail::Original) => (ImageDetailSetting::Original, UNIFIED_IMAGE_LIMITS),
+            Some(ImageDetail::Low) => return Err(ImagePreparationError::UnsupportedLowDetail),
+        },
     };
     let image = load_data_url_for_prompt(image_url, PromptImageMode::ResizeWithLimits(limits))?;
     metadata.push(ImagePreparationMetadata {
@@ -271,6 +298,11 @@ fn prepare_image(
             prepared_height: image.height,
         });
     *image_url = image.into_data_url();
+    if mode == ImagePreparationMode::UnifiedBudget {
+        // Preserve accurate context-window accounting while older transports still require an
+        // image detail field. Responses Lite removes this compatibility hint before sending.
+        *detail = Some(ImageDetail::Original);
+    }
     Ok(resize)
 }
 

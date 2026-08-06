@@ -1,6 +1,7 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::image_preparation::unified_image_budget_enabled;
 use crate::mcp_tool_exposure::append_mcp_tools;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -730,6 +731,12 @@ fn register_code_mode_executors(
             &namespace_descriptions,
             default_exec_yield_time_ms,
             tool_mode == ToolMode::CodeModeOnly,
+            if unified_image_budget_enabled(&turn_context.config.features, &turn_context.model_info)
+            {
+                codex_code_mode::ImageDetailVisibility::Hidden
+            } else {
+                codex_code_mode::ImageDetailVisibility::Visible
+            },
         ),
         code_mode_nested_tool_specs,
     );
@@ -836,6 +843,10 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
             if turn_context.config.features.enabled(Feature::ViewImage) {
                 registry.add(ViewImageHandler::new(ViewImageToolOptions {
                     can_request_original_image_detail: can_request_original_image_detail(
+                        &turn_context.model_info,
+                    ),
+                    unified_image_budget: unified_image_budget_enabled(
+                        &turn_context.config.features,
                         &turn_context.model_info,
                     ),
                     include_environment_id,
@@ -1032,6 +1043,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         registry.add(ViewImageHandler::new(ViewImageToolOptions {
             can_request_original_image_detail: can_request_original_image_detail(
+                &turn_context.model_info,
+            ),
+            unified_image_budget: unified_image_budget_enabled(
+                &turn_context.config.features,
                 &turn_context.model_info,
             ),
             include_environment_id,

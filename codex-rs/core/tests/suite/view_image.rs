@@ -73,6 +73,13 @@ enum ResizeNoticeExpectation {
     Enabled,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ImageBudgetPolicy {
+    DetailBased,
+    Unified,
+    UnifiedResponsesLiteWithoutOriginalSupport,
+}
+
 fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
@@ -204,17 +211,27 @@ async fn write_workspace_png(
 async fn assert_user_turn_local_image_resizes_to(
     original_dimensions: (u32, u32),
     expected_dimensions: (u32, u32),
+    image_budget_policy: ImageBudgetPolicy,
     resize_notice_expectation: ResizeNoticeExpectation,
 ) -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
-    let builder = test_codex();
-    let mut builder = match resize_notice_expectation {
-        ResizeNoticeExpectation::Disabled => builder,
-        ResizeNoticeExpectation::Enabled => builder.with_config(|config| {
-            let _ = config.features.enable(Feature::ImageResizeNotice);
-        }),
+    let builder = match image_budget_policy {
+        ImageBudgetPolicy::DetailBased | ImageBudgetPolicy::Unified => test_codex(),
+        ImageBudgetPolicy::UnifiedResponsesLiteWithoutOriginalSupport => test_codex()
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.supports_image_detail_original = false;
+                model_info.use_responses_lite = true;
+            }),
     };
+    let mut builder = builder.with_config(move |config| {
+        if image_budget_policy != ImageBudgetPolicy::DetailBased {
+            let _ = config.features.enable(Feature::UnifiedImageBudget);
+        }
+        if matches!(resize_notice_expectation, ResizeNoticeExpectation::Enabled) {
+            let _ = config.features.enable(Feature::ImageResizeNotice);
+        }
+    });
     let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,
@@ -329,6 +346,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     assert_user_turn_local_image_resizes_to(
         (2304, 864),
         (2048, 768),
+        ImageBudgetPolicy::DetailBased,
         ResizeNoticeExpectation::Disabled,
     )
     .await
@@ -341,6 +359,7 @@ async fn user_turn_with_vertical_local_image_resizes_to_square_bounds() -> anyho
     assert_user_turn_local_image_resizes_to(
         (1024, 4096),
         (512, 2048),
+        ImageBudgetPolicy::DetailBased,
         ResizeNoticeExpectation::Disabled,
     )
     .await
@@ -353,7 +372,43 @@ async fn user_turn_local_image_applies_patch_budget_and_reports_resize() -> anyh
     assert_user_turn_local_image_resizes_to(
         (2048, 2048),
         (1600, 1600),
+        ImageBudgetPolicy::DetailBased,
         ResizeNoticeExpectation::Enabled,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_unified_image_budget_enforces_dimension_and_patch_limits() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    for (source_dimensions, expected_dimensions, resize_notice_expectation) in [
+        ((6401, 100), (6000, 94), ResizeNoticeExpectation::Disabled),
+        ((3201, 3201), (3200, 3200), ResizeNoticeExpectation::Enabled),
+    ] {
+        assert_user_turn_local_image_resizes_to(
+            source_dimensions,
+            expected_dimensions,
+            ImageBudgetPolicy::Unified,
+            resize_notice_expectation,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_unified_image_budget_supports_responses_lite_without_original_detail()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_user_turn_local_image_resizes_to(
+        (2304, 864),
+        (2304, 864),
+        ImageBudgetPolicy::UnifiedResponsesLiteWithoutOriginalSupport,
+        ResizeNoticeExpectation::Disabled,
     )
     .await
 }
@@ -870,6 +925,82 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_unified_budget_hides_detail_but_accepts_legacy_hints() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        let _ = config.features.enable(Feature::UnifiedImageBudget);
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let rel_path = "assets/unified-example.png";
+    write_workspace_png(
+        &test,
+        rel_path,
+        /*width*/ 2304,
+        /*height*/ 864,
+        [0u8, 80, 255, 255],
+    )
+    .await?;
+
+    let call_id = "view-image-unified";
+    let first_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                call_id,
+                "view_image",
+                &serde_json::json!({ "path": rel_path, "detail": "high" }).to_string(),
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("show the screenshot").await?;
+
+    let first_request = first_mock.single_request().body_json();
+    let view_image_tool = first_request["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "view_image"))
+        .context("view_image tool should be available")?;
+    assert!(
+        view_image_tool["parameters"]["properties"]
+            .get("detail")
+            .is_none(),
+        "the unified image budget should not advertise detail"
+    );
+
+    let request = second_mock.single_request();
+    let output = request.function_call_output(call_id);
+    let output_items = output["output"]
+        .as_array()
+        .context("view_image should return image content")?;
+    assert_eq!(output_items.len(), 1);
+    assert_eq!(output_items[0]["detail"], "original");
+
+    let image_url = output_items[0]["image_url"]
+        .as_str()
+        .context("view_image output should include image_url")?;
+    let (_, payload) = image_url
+        .split_once(',')
+        .context("view_image image_url should include a base64 payload")?;
+    let image = load_from_memory(&BASE64_STANDARD.decode(payload)?)?;
+    assert_eq!(image.dimensions(), (2304, 864));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1041,8 +1172,27 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
 async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
+    assert_view_image_tool_resizes_without_original_support(ImageBudgetPolicy::DetailBased).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_unified_budget_stays_disabled_for_unsupported_model() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_view_image_tool_resizes_without_original_support(ImageBudgetPolicy::Unified).await
+}
+
+async fn assert_view_image_tool_resizes_without_original_support(
+    image_budget_policy: ImageBudgetPolicy,
+) -> anyhow::Result<()> {
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.2");
+    let mut builder = test_codex()
+        .with_model("gpt-5.2")
+        .with_config(move |config| {
+            if image_budget_policy == ImageBudgetPolicy::Unified {
+                let _ = config.features.enable(Feature::UnifiedImageBudget);
+            }
+        });
     let test = builder.build_with_auto_env(&server).await?;
     let TestCodex {
         codex,

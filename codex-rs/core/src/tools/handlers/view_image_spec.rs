@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewImageToolOptions {
     pub can_request_original_image_detail: bool,
+    pub unified_image_budget: bool,
     pub include_environment_id: bool,
 }
 
@@ -17,7 +18,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
         "path".to_string(),
         JsonSchema::string(Some("Local filesystem path to an image file.".to_string())),
     )]);
-    if options.can_request_original_image_detail {
+    if options.can_request_original_image_detail && !options.unified_image_budget {
         properties.insert(
             "detail".to_string(),
             JsonSchema::string_enum(
@@ -45,25 +46,29 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["path".to_string()]), Some(false.into())),
-        output_schema: Some(view_image_output_schema()),
+        output_schema: Some(view_image_output_schema(options)),
     })
 }
 
-fn view_image_output_schema() -> Value {
-    json!({
+fn view_image_output_schema(options: ViewImageToolOptions) -> Value {
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "image_url": {
                 "type": "string",
                 "description": "Data URL for the loaded image."
-            },
-            "detail": {
-                "type": "string",
-                "enum": ["high", "original"],
-                "description": "Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved."
             }
         },
-        "required": ["image_url", "detail"],
+        "required": ["image_url"],
         "additionalProperties": false
-    })
+    });
+    if !options.unified_image_budget {
+        schema["properties"]["detail"] = json!({
+            "type": "string",
+            "enum": ["high", "original"],
+            "description": "Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved."
+        });
+        schema["required"] = json!(["image_url", "detail"]);
+    }
+    schema
 }

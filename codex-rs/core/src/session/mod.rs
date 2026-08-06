@@ -31,8 +31,10 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::BANNED_PREFIX_SUGGESTIONS;
 use crate::exec_policy::ExecPolicyManager;
 use crate::exec_policy::default_policy_path;
+use crate::image_preparation::ImagePreparationMode;
 use crate::image_preparation::ImageResizeNoticeMode;
 use crate::image_preparation::prepare_response_items as prepare_image_response_items;
+use crate::image_preparation::unified_image_budget_enabled;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::step_context::StepContext;
@@ -1445,7 +1447,11 @@ impl Session {
         // will be processed again if the rollout is reconstructed in a future session.
         // Never backfill resize notices during replay; only newly recorded items may
         // emit them, so the historical model prefix remains unchanged.
-        let _ = prepare_image_response_items(&mut history, ImageResizeNoticeMode::Disabled);
+        let _ = prepare_image_response_items(
+            &mut history,
+            ImagePreparationMode::DetailBased,
+            ImageResizeNoticeMode::Disabled,
+        );
         prepare_audio_response_items(&mut history);
         {
             let mut state = self.state.lock().await;
@@ -2911,17 +2917,27 @@ impl Session {
         items: &'a [ResponseItem],
     ) -> (Cow<'a, [ResponseItem]>, Vec<ImagePreparationMetadata>) {
         let mut items = items.to_vec();
+        let image_preparation_mode = if unified_image_budget_enabled(
+            &turn_context.config.features,
+            &turn_context.model_info,
+        ) {
+            ImagePreparationMode::UnifiedBudget
+        } else {
+            ImagePreparationMode::DetailBased
+        };
+        let image_resize_notice_mode = if turn_context
+            .config
+            .features
+            .enabled(Feature::ImageResizeNotice)
+        {
+            ImageResizeNoticeMode::Enabled
+        } else {
+            ImageResizeNoticeMode::Disabled
+        };
         let image_preparations = prepare_image_response_items(
             &mut items,
-            if turn_context
-                .config
-                .features
-                .enabled(Feature::ImageResizeNotice)
-            {
-                ImageResizeNoticeMode::Enabled
-            } else {
-                ImageResizeNoticeMode::Disabled
-            },
+            image_preparation_mode,
+            image_resize_notice_mode,
         );
         prepare_audio_response_items(&mut items);
         // Most response items get their passthrough turn ID at the durable history boundary.
