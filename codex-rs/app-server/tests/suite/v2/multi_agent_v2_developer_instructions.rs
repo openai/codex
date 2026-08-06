@@ -36,6 +36,7 @@ const ROLE_INSTRUCTIONS: &str = "configured role developer instructions";
 #[test_case("blank override"; "blank override")]
 #[test_case("parent has no instructions"; "parent has no instructions")]
 #[test_case("explicit configured role"; "explicit configured role")]
+#[test_case("full history configured role"; "full history configured role")]
 #[test_case("implicit configured default"; "implicit configured default")]
 #[test_case("full fork skips default role"; "full fork skips default role")]
 #[tokio::test]
@@ -44,18 +45,19 @@ async fn spawned_subagents_apply_configured_developer_instruction_precedence(
 ) -> Result<()> {
     let fork_turns = match case {
         "bounded history" => Some("1"),
-        "no history"
-        | "configured role without instructions"
-        | "explicit configured role"
-        | "implicit configured default" => Some("none"),
+        "no history" | "explicit configured role" | "implicit configured default" => Some("none"),
         _ => None,
     };
     let agent_type = match case {
-        "configured role without instructions" | "explicit configured role" => Some("custom"),
+        "configured role without instructions"
+        | "explicit configured role"
+        | "full history configured role" => Some("custom"),
         _ => None,
     };
     let configured_override = match case {
-        "unset override" => None,
+        "unset override"
+        | "full history configured role"
+        | "configured role without instructions" => None,
         "blank override" => Some("   "),
         "full history" => Some("  child-only developer instructions  "),
         _ => Some(CHILD_INSTRUCTIONS),
@@ -69,17 +71,23 @@ async fn spawned_subagents_apply_configured_developer_instruction_precedence(
         case,
         "configured role without instructions"
             | "explicit configured role"
+            | "full history configured role"
             | "implicit configured default"
             | "full fork skips default role"
     );
     let role_has_instructions = matches!(
         case,
-        "explicit configured role" | "implicit configured default" | "full fork skips default role"
+        "explicit configured role"
+            | "full history configured role"
+            | "implicit configured default"
+            | "full fork skips default role"
     );
     let expected = match case {
-        "unset override" => Some(PARENT_INSTRUCTIONS),
+        "unset override" | "configured role without instructions" => Some(PARENT_INSTRUCTIONS),
         "blank override" => None,
-        "explicit configured role" | "implicit configured default" => Some(ROLE_INSTRUCTIONS),
+        "explicit configured role"
+        | "full history configured role"
+        | "implicit configured default" => Some(ROLE_INSTRUCTIONS),
         _ => Some(CHILD_INSTRUCTIONS),
     };
     const PARENT_PROMPT: &str = "spawn the instruction override worker";
@@ -149,7 +157,12 @@ async fn spawned_subagents_apply_configured_developer_instruction_precedence(
             );
     }
     let codex_home = TempDir::new()?;
-    let mut config = MockResponsesConfig::new(&server.uri()).with_model("gpt-5.4");
+    let configured_model = if case == "full history configured role" {
+        "gpt-5.5"
+    } else {
+        "gpt-5.4"
+    };
+    let mut config = MockResponsesConfig::new(&server.uri()).with_model(configured_model);
     if role_has_instructions {
         config =
             config.with_root_config(&format!("developer_instructions = {ROLE_INSTRUCTIONS:?}"));
@@ -206,6 +219,19 @@ async fn spawned_subagents_apply_configured_developer_instruction_precedence(
         );
     }
     let child_texts = child_request.message_input_texts("developer");
+    if case == "full history configured role" {
+        assert_eq!(child_request.body_json()["model"], json!("gpt-5.5"));
+        assert!(
+            child_request.body_contains_text(PARENT_PROMPT),
+            "the child should inherit the parent's conversation history"
+        );
+        assert!(
+            child_texts
+                .iter()
+                .any(|text| text.contains("<model_switch>")),
+            "the child should preserve the parent's model context"
+        );
+    }
     let instruction_texts = child_texts
         .iter()
         .map(String::as_str)

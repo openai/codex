@@ -69,9 +69,6 @@ async fn handle_spawn_agent(
         config.service_tier = Some(service_tier.clone());
     }
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
-    if is_full_history_fork {
-        reject_full_fork_agent_type_override(role_name)?;
-    }
     apply_requested_spawn_agent_model_overrides(
         &session,
         turn.as_ref(),
@@ -80,8 +77,13 @@ async fn handle_spawn_agent(
         args.reasoning_effort.clone(),
     )
     .await?;
-    if !is_full_history_fork {
+    if !is_full_history_fork || role_name.is_some() {
         apply_spawn_agent_role(&session, &mut config, role_name).await?;
+        if is_full_history_fork && config.developer_instructions.is_none() {
+            config
+                .developer_instructions
+                .clone_from(&turn.developer_instructions);
+        }
     }
     apply_spawn_agent_service_tier(
         &session,

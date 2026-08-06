@@ -625,7 +625,9 @@ impl AgentControl {
                 .subagent_developer_instructions
                 .as_ref(),
         ) {
-            (MultiAgentVersion::V2, Some(_)) => {
+            (MultiAgentVersion::V2, override_instructions)
+                if override_instructions.is_some() || session_source.get_agent_role().is_some() =>
+            {
                 let parent_developer_instructions = match parent_thread
                     .session
                     .new_default_turn()
@@ -642,7 +644,7 @@ impl AgentControl {
                 )
             }
             (MultiAgentVersion::Disabled | MultiAgentVersion::V1, _)
-            | (MultiAgentVersion::V2, None) => (None, None),
+            | (MultiAgentVersion::V2, _) => (None, None),
         };
         let parent_history_mode = parent_thread.config_snapshot().await.history_mode;
         // `record_conversation_items` only queues persistence writes asynchronously.
