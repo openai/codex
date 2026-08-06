@@ -3143,7 +3143,7 @@ impl Session {
             self.as_ref(),
             turn_context.as_ref(),
             &environments,
-            mcp.as_ref(),
+            &mcp,
             &extension_data,
             prepared_recommendations,
         )

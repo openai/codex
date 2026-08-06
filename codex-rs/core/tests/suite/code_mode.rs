@@ -80,6 +80,8 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use test_case::test_case;
@@ -4175,7 +4177,10 @@ text(JSON.stringify({
     Ok(())
 }
 
-struct NamespacedCustomTool;
+struct NamespacedCustomTool {
+    generation: usize,
+    generations: Arc<AtomicUsize>,
+}
 
 impl ToolContributor for NamespacedCustomTool {
     fn tools(
@@ -4183,7 +4188,19 @@ impl ToolContributor for NamespacedCustomTool {
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
-        vec![Arc::new(Self)]
+        Vec::new()
+    }
+
+    fn tools_for_step(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+        _step_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        vec![Arc::new(Self {
+            generation: self.generations.fetch_add(1, Ordering::Relaxed) + 1,
+            generations: Arc::clone(&self.generations),
+        })]
     }
 }
 
@@ -4198,7 +4215,7 @@ impl ToolExecutor<ToolCall> for NamespacedCustomTool {
             description: "Editing tools.".to_string(),
             tools: vec![ResponsesApiNamespaceTool::Custom(FreeformTool {
                 name: "apply_patch".to_string(),
-                description: "Apply a raw editor patch.".to_string(),
+                description: format!("Apply a raw editor patch (step {}).", self.generation),
                 defer_loading: None,
                 format: FreeformToolFormat {
                     r#type: "grammar".to_string(),
@@ -4220,6 +4237,7 @@ impl ToolExecutor<ToolCall> for NamespacedCustomTool {
                 "namespace": call.tool_name.namespace,
                 "name": call.tool_name.name,
                 "input": input,
+                "generation": self.generation,
             }))) as Box<dyn ToolOutput>)
         })
     }
@@ -4231,7 +4249,10 @@ async fn code_mode_exposes_and_dispatches_namespaced_custom_tools() -> Result<()
 
     let server = responses::start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.tool_contributor(Arc::new(NamespacedCustomTool));
+    extensions.tool_contributor(Arc::new(NamespacedCustomTool {
+        generation: 0,
+        generations: Arc::new(AtomicUsize::new(0)),
+    }));
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_extensions(Arc::new(extensions.build()))
@@ -4283,8 +4304,11 @@ text(JSON.stringify({
 
     let declaration =
         "declare const tools: { editor__apply_patch(input: string): Promise<unknown>; };";
-    let description =
-        format!("Apply a raw editor patch.\n\nexec tool declaration:\n```ts\n{declaration}\n```");
+    let description = |generation| {
+        format!(
+            "Apply a raw editor patch (step {generation}).\n\nexec tool declaration:\n```ts\n{declaration}\n```"
+        )
+    };
     let first_body = requests[0].body_json();
     let namespaced_custom_tool = namespace_child_tool(&first_body, "editor", "apply_patch")
         .expect("namespaced custom tool should be included in the model request");
@@ -4293,13 +4317,21 @@ text(JSON.stringify({
         &serde_json::json!({
             "type": "custom",
             "name": "apply_patch",
-            "description": description,
+            "description": description(1),
             "format": {
                 "type": "grammar",
                 "syntax": "lark",
                 "definition": "start: /.+/",
             },
         })
+    );
+    let second_body = requests[1].body_json();
+    let second_description = description(2);
+    assert_eq!(
+        namespace_child_tool(&second_body, "editor", "apply_patch")
+            .and_then(|tool| tool.get("description"))
+            .and_then(Value::as_str),
+        Some(second_description.as_str())
     );
 
     let (direct_output, direct_success) =
@@ -4314,6 +4346,7 @@ text(JSON.stringify({
             "namespace": "editor",
             "name": "apply_patch",
             "input": "direct patch",
+            "generation": 1,
         })
     );
 
@@ -4327,11 +4360,12 @@ text(JSON.stringify({
         exec_output,
         serde_json::json!({
             "name": "editor__apply_patch",
-            "description": format!("Editing tools.\n\n{description}"),
+            "description": format!("Editing tools.\n\n{second_description}"),
             "result": {
                 "namespace": "editor",
                 "name": "apply_patch",
                 "input": "nested patch",
+                "generation": 2,
             },
         })
     );

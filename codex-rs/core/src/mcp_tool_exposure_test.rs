@@ -95,6 +95,7 @@ fn runtimes_by_name_with_catalog(
     mcp_server_catalog: &ResolvedMcpCatalog,
     search_tool_enabled: bool,
 ) -> HashMap<ToolName, ToolExposure> {
+    let mut handlers = HashMap::new();
     let mut registry = ToolRegistry::default();
     append_mcp_tools(
         tools,
@@ -102,6 +103,7 @@ fn runtimes_by_name_with_catalog(
         apps_enabled,
         mcp_server_catalog,
         search_tool_enabled,
+        &mut handlers,
         &mut registry,
     );
     registry
@@ -218,6 +220,89 @@ async fn directly_exposes_effective_tool_sets_when_search_is_unavailable() {
         runtimes,
         expected_runtimes(&mcp_tools, ToolExposure::Direct)
     );
+}
+
+#[tokio::test]
+async fn cached_app_handlers_still_obey_current_apps_enablement_and_tool_policy() {
+    let config = test_config().await;
+    let codex_home = tempdir().expect("create restrictive config directory");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "[apps.calendar]\ndefault_tools_enabled = false\n",
+    )
+    .expect("write restrictive app policy");
+    let restricted_config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("build restrictive app policy");
+    let tools = [make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "events/create",
+        "mcp__codex_apps__calendar",
+        "create",
+        Some("calendar"),
+        Some("Calendar"),
+    )];
+    let mut handlers = HashMap::new();
+    let catalog = ResolvedMcpCatalog::default();
+    let mut allowed_registry = ToolRegistry::default();
+    let allowed = append_mcp_tools(
+        &tools,
+        &config,
+        /*apps_enabled*/ true,
+        &catalog,
+        /*search_tool_enabled*/ false,
+        &mut handlers,
+        &mut allowed_registry,
+    );
+    let cached_handler = &allowed_registry
+        .entries()
+        .next()
+        .expect("allowed app tool should be registered")
+        .runtime;
+
+    let mut disabled_registry = ToolRegistry::default();
+    let disabled = append_mcp_tools(
+        &tools,
+        &config,
+        /*apps_enabled*/ false,
+        &catalog,
+        /*search_tool_enabled*/ false,
+        &mut handlers,
+        &mut disabled_registry,
+    );
+    let mut restricted_registry = ToolRegistry::default();
+    let restricted = append_mcp_tools(
+        &tools,
+        &restricted_config,
+        /*apps_enabled*/ true,
+        &catalog,
+        /*search_tool_enabled*/ false,
+        &mut handlers,
+        &mut restricted_registry,
+    );
+    let mut restored_registry = ToolRegistry::default();
+    let restored = append_mcp_tools(
+        &tools,
+        &config,
+        /*apps_enabled*/ true,
+        &catalog,
+        /*search_tool_enabled*/ true,
+        &mut handlers,
+        &mut restored_registry,
+    );
+    let restored_handler = restored_registry
+        .entries()
+        .next()
+        .expect("restored app tool should be registered");
+
+    assert_eq!(allowed, HashSet::from([tools[0].canonical_tool_name()]));
+    assert!(disabled.is_empty());
+    assert!(restricted.is_empty());
+    assert_eq!(restored, allowed);
+    assert!(Arc::ptr_eq(cached_handler, &restored_handler.runtime));
+    assert_eq!(restored_handler.exposure, ToolExposure::Deferred);
 }
 
 #[tokio::test]
@@ -339,6 +424,7 @@ async fn app_tool_registration_uses_trusted_catalog_metadata_and_preserves_sourc
         synthetic_app_tool.clone(),
         regular_tool.clone(),
     ];
+    let mut handlers = HashMap::new();
     let mut registry = ToolRegistry::default();
 
     append_mcp_tools(
@@ -347,6 +433,7 @@ async fn app_tool_registration_uses_trusted_catalog_metadata_and_preserves_sourc
         /*apps_enabled*/ true,
         &ResolvedMcpCatalog::default(),
         /*search_tool_enabled*/ false,
+        &mut handlers,
         &mut registry,
     );
 

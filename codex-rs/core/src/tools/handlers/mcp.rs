@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
@@ -37,7 +38,8 @@ const MAX_MCP_NAMESPACE_DESCRIPTION_BYTES: usize = 512 * 1024;
 
 pub struct McpHandler {
     tool_info: ToolInfo,
-    spec: ToolSpec,
+    spec: Arc<ToolSpec>,
+    code_mode_tool_definitions: OnceLock<Vec<codex_code_mode::ToolDefinition>>,
 }
 
 impl McpHandler {
@@ -66,8 +68,12 @@ impl McpHandler {
                         .to_string()
                     });
         }
-        let spec = create_tool_spec(&tool_info, agent_plugin)?;
-        Ok(Self { tool_info, spec })
+        let spec = Arc::new(create_tool_spec(&tool_info, agent_plugin)?);
+        Ok(Self {
+            tool_info,
+            spec,
+            code_mode_tool_definitions: OnceLock::new(),
+        })
     }
 
     pub(crate) fn model_spec_bytes(&self) -> Result<usize, serde_json::Error> {
@@ -104,7 +110,7 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        self.spec.clone()
+        self.spec.as_ref().clone()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -197,6 +203,27 @@ impl McpHandler {
 }
 
 impl CoreToolRuntime for McpHandler {
+    fn immutable_spec(&self) -> Option<&Arc<ToolSpec>> {
+        Some(&self.spec)
+    }
+
+    fn cached_code_mode_definitions(&self) -> Option<&[codex_code_mode::ToolDefinition]> {
+        Some(
+            self.code_mode_tool_definitions
+                .get_or_init(|| {
+                    let mut definitions = codex_tools::collect_code_mode_tool_definitions(
+                        std::iter::once(self.spec.as_ref()),
+                    );
+                    for definition in &mut definitions {
+                        definition.input_schema = None;
+                        definition.output_schema = None;
+                    }
+                    definitions
+                })
+                .as_slice(),
+        )
+    }
+
     fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         Some(Box::pin(async move {
             session
@@ -534,6 +561,32 @@ mod tests {
                 }),
             })
         );
+    }
+
+    #[test]
+    fn mcp_code_mode_definitions_are_cached_lazily() {
+        let handler = McpHandler::new(tool_info("filesystem", "mcp__filesystem", "read_file"))
+            .expect("MCP tool spec should build");
+
+        assert!(handler.code_mode_tool_definitions.get().is_none());
+        assert!(Arc::ptr_eq(
+            handler
+                .immutable_spec()
+                .expect("MCP spec should be immutable"),
+            &handler.spec,
+        ));
+
+        let first = handler
+            .cached_code_mode_definitions()
+            .expect("MCP definitions should be cached");
+        assert_eq!(first.len(), 1);
+        assert!(first[0].input_schema.is_none());
+        assert!(first[0].output_schema.is_none());
+
+        let second = handler
+            .cached_code_mode_definitions()
+            .expect("MCP definitions should be cached");
+        assert!(std::ptr::eq(first, second));
     }
 
     #[test]

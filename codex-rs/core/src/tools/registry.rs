@@ -59,6 +59,16 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Returns a shared spec when both the spec and search metadata are immutable.
+    fn immutable_spec(&self) -> Option<&Arc<ToolSpec>> {
+        None
+    }
+
+    /// Returns lazily cached Code Mode definitions owned by this runtime.
+    fn cached_code_mode_definitions(&self) -> Option<&[codex_code_mode::ToolDefinition]> {
+        None
+    }
+
     /// Returns a readiness wait for this exact tool before taking the execution gate.
     fn wait_until_ready<'a>(&'a self, _session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         None
@@ -393,15 +403,22 @@ impl ToolRegistry {
             if !existing_description.trim().is_empty() {
                 continue;
             }
-            let description = match tool.runtime.spec() {
-                ToolSpec::Namespace(namespace) => namespace.description,
+            let owned_spec;
+            let spec = if let Some(spec) = tool.runtime.immutable_spec() {
+                spec.as_ref()
+            } else {
+                owned_spec = tool.runtime.spec();
+                &owned_spec
+            };
+            let description = match spec {
+                ToolSpec::Namespace(namespace) => namespace.description.as_str(),
                 ToolSpec::Function(_)
                 | ToolSpec::Freeform(_)
                 | ToolSpec::ToolSearch { .. }
-                | ToolSpec::WebSearch { .. } => String::new(),
+                | ToolSpec::WebSearch { .. } => "",
             };
             if !description.trim().is_empty() {
-                *existing_description = description;
+                *existing_description = description.to_string();
             }
         }
         namespaces

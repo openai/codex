@@ -222,8 +222,13 @@ async fn mcp_calls_stay_bound_to_each_thread() -> anyhow::Result<()> {
         wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
         let request = call_response.single_request();
         assert!(request.tool_by_name(NAMESPACE, "echo").is_some());
-        let output = completion_response
-            .single_request()
+        let completion_request = completion_response.single_request();
+        assert_eq!(
+            request.body_json()["tools"],
+            completion_request.body_json()["tools"],
+            "MCP tool schemas must remain unchanged across a same-turn continuation"
+        );
+        let output = completion_request
             .function_call_output_text(call_id)
             .expect("MCP result should be returned to the model");
         assert!(output.contains(&process));
@@ -502,6 +507,11 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         .await?;
     let expected_error = format!("MCP tool `{SERVER_NAME}/cwd` is not available to the model");
     assert_eq!(cached_turn.await??, second_process);
+    assert_definition(
+        &cached_done_response,
+        &format!("Use the tools from {second_process}."),
+        &format!("Echo from {second_process}."),
+    );
     let output = cached_done_response
         .single_request()
         .function_call_output_text(app_only_call_id)
