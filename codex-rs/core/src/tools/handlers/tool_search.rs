@@ -7,6 +7,7 @@ use crate::tools::handlers::tool_search_spec::ToolSearchSourceListing;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::ToolRegistry;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
@@ -21,6 +22,7 @@ use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 use tracing::instrument;
 
 pub struct ToolSearchHandler {
@@ -32,40 +34,94 @@ pub struct ToolSearchHandler {
 
 #[derive(Default)]
 pub(crate) struct ToolSearchHandlerCache {
-    cached: Mutex<Option<Arc<ToolSearchHandler>>>,
+    cached: Mutex<Option<CachedToolSearchHandler>>,
+}
+
+struct CachedToolSearchHandler {
+    handler: Arc<ToolSearchHandler>,
+    sources: Vec<ToolSearchSource>,
+}
+
+enum ToolSearchSource {
+    Immutable(Weak<dyn CoreToolRuntime>),
+    Dynamic(Box<ToolSearchInfo>),
 }
 
 impl ToolSearchHandlerCache {
-    #[instrument(level = "trace", skip_all, fields(search_info_count = search_infos.len()))]
+    #[instrument(level = "trace", skip_all)]
     pub(crate) fn get_or_build(
         &self,
-        search_infos: Vec<ToolSearchInfo>,
+        registry: &ToolRegistry,
         source_listing: ToolSearchSourceListing,
     ) -> Arc<ToolSearchHandler> {
+        let sources = registry
+            .entries()
+            .filter(|tool| tool.exposure.is_deferred())
+            .filter_map(|tool| {
+                if tool.runtime.immutable_spec().is_some() {
+                    Some(ToolSearchSource::Immutable(Arc::downgrade(&tool.runtime)))
+                } else {
+                    tool.runtime
+                        .search_info()
+                        .map(Box::new)
+                        .map(ToolSearchSource::Dynamic)
+                }
+            })
+            .collect::<Vec<_>>();
+
         {
             let cached = self.cached();
             if let Some(cached) = cached.as_ref()
-                && cached.search_infos == search_infos
-                && cached.source_listing == source_listing
+                && cached.handler.source_listing == source_listing
+                && Self::sources_match(&cached.sources, &sources)
             {
-                return Arc::clone(cached);
+                return Arc::clone(&cached.handler);
             }
         }
+
+        let search_infos = sources
+            .iter()
+            .filter_map(|source| match source {
+                ToolSearchSource::Immutable(runtime) => {
+                    runtime.upgrade().and_then(|runtime| runtime.search_info())
+                }
+                ToolSearchSource::Dynamic(search_info) => Some(search_info.as_ref().clone()),
+            })
+            .collect();
 
         let handler = Arc::new(ToolSearchHandler::new(search_infos, source_listing));
         let mut cached = self.cached();
         if let Some(cached) = cached.as_ref()
-            && cached.search_infos == handler.search_infos
-            && cached.source_listing == handler.source_listing
+            && cached.handler.source_listing == source_listing
+            && Self::sources_match(&cached.sources, &sources)
         {
-            return Arc::clone(cached);
+            return Arc::clone(&cached.handler);
         }
-
-        *cached = Some(Arc::clone(&handler));
+        *cached = Some(CachedToolSearchHandler {
+            handler: Arc::clone(&handler),
+            sources,
+        });
         handler
     }
 
-    fn cached(&self) -> std::sync::MutexGuard<'_, Option<Arc<ToolSearchHandler>>> {
+    fn sources_match(cached_sources: &[ToolSearchSource], sources: &[ToolSearchSource]) -> bool {
+        cached_sources.len() == sources.len()
+            && cached_sources
+                .iter()
+                .zip(sources)
+                .all(|(cached, current)| match (cached, current) {
+                    (ToolSearchSource::Immutable(cached), ToolSearchSource::Immutable(current)) => {
+                        Weak::ptr_eq(cached, current)
+                    }
+                    (ToolSearchSource::Dynamic(cached), ToolSearchSource::Dynamic(current)) => {
+                        cached == current
+                    }
+                    (ToolSearchSource::Immutable(_), ToolSearchSource::Dynamic(_))
+                    | (ToolSearchSource::Dynamic(_), ToolSearchSource::Immutable(_)) => false,
+                })
+    }
+
+    fn cached(&self) -> std::sync::MutexGuard<'_, Option<CachedToolSearchHandler>> {
         match self.cached.lock() {
             Ok(cached) => cached,
             Err(poisoned) => poisoned.into_inner(),
@@ -201,6 +257,7 @@ mod tests {
     use super::*;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::McpHandler;
+    use crate::tools::registry::ToolExposure;
     use codex_mcp::ToolInfo;
     use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
     use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
@@ -212,30 +269,86 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn cache_reuses_handler_for_identical_search_infos_and_rebuilds_for_changes() {
+    fn cache_reuses_immutable_handlers_and_rebuilds_for_current_registry_changes() {
         let cache = ToolSearchHandlerCache::default();
-        let search_infos = vec![
+        let runtime: Arc<dyn CoreToolRuntime> = Arc::new(
             McpHandler::new(tool_info("calendar", "create_event", "Create events"))
-                .expect("MCP tool should convert")
-                .search_info()
-                .expect("MCP handler should return search info"),
-        ];
+                .expect("MCP tool should convert"),
+        );
+        let mut registry = ToolRegistry::default();
+        registry.register_trusted_with_exposure(Arc::clone(&runtime), ToolExposure::Deferred);
 
-        let first = cache.get_or_build(search_infos.clone(), ToolSearchSourceListing::Include);
-        let second = cache.get_or_build(search_infos.clone(), ToolSearchSourceListing::Include);
+        let first = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
+        let second = cache.get_or_build(&registry, ToolSearchSourceListing::Include);
         assert!(Arc::ptr_eq(&first, &second));
 
-        let without_sources =
-            cache.get_or_build(search_infos.clone(), ToolSearchSourceListing::Omit);
+        let without_sources = cache.get_or_build(&registry, ToolSearchSourceListing::Omit);
         assert!(!Arc::ptr_eq(&first, &without_sources));
 
-        let mut changed_search_infos = search_infos;
-        changed_search_infos[0]
-            .entry
-            .search_text
-            .push_str(" changed");
-        let changed = cache.get_or_build(changed_search_infos, ToolSearchSourceListing::Omit);
-        assert!(!Arc::ptr_eq(&first, &changed));
+        let mut replacement_registry = ToolRegistry::default();
+        let replacement = Arc::new(
+            McpHandler::new(tool_info("calendar", "create_event", "Create events"))
+                .expect("replacement MCP tool should convert"),
+        );
+        replacement_registry.register_trusted_with_exposure(replacement, ToolExposure::Deferred);
+        let replacement = cache.get_or_build(&replacement_registry, ToolSearchSourceListing::Omit);
+        assert!(!Arc::ptr_eq(&without_sources, &replacement));
+
+        let mut disabled_registry = ToolRegistry::default();
+        disabled_registry.register_trusted_with_exposure(runtime, ToolExposure::Direct);
+        let disabled = cache.get_or_build(&disabled_registry, ToolSearchSourceListing::Omit);
+        assert!(!Arc::ptr_eq(&replacement, &disabled));
+        assert!(disabled.search_infos.is_empty());
+    }
+
+    #[test]
+    fn cache_rechecks_dynamic_tool_metadata_while_reusing_immutable_mcp_handlers() {
+        let cache = ToolSearchHandlerCache::default();
+        let mcp_runtime: Arc<dyn CoreToolRuntime> = Arc::new(
+            McpHandler::new(tool_info("calendar", "create_event", "Create events"))
+                .expect("MCP tool should convert"),
+        );
+        let mut dynamic_tool = DynamicToolFunctionSpec {
+            name: "lookup".to_string(),
+            description: "Search current records".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            defer_loading: true,
+        };
+
+        let mut first_registry = ToolRegistry::default();
+        first_registry
+            .register_trusted_with_exposure(Arc::clone(&mcp_runtime), ToolExposure::Deferred);
+        first_registry.register_external_with_exposure(
+            Arc::new(DynamicToolHandler::new(&dynamic_tool).expect("dynamic tool should convert")),
+            ToolExposure::Deferred,
+        );
+        let first = cache.get_or_build(&first_registry, ToolSearchSourceListing::Include);
+
+        let mut equivalent_registry = ToolRegistry::default();
+        equivalent_registry
+            .register_trusted_with_exposure(Arc::clone(&mcp_runtime), ToolExposure::Deferred);
+        equivalent_registry.register_external_with_exposure(
+            Arc::new(DynamicToolHandler::new(&dynamic_tool).expect("dynamic tool should convert")),
+            ToolExposure::Deferred,
+        );
+        let equivalent = cache.get_or_build(&equivalent_registry, ToolSearchSourceListing::Include);
+        assert!(Arc::ptr_eq(&first, &equivalent));
+
+        dynamic_tool.description = "Search refreshed records".to_string();
+        let mut refreshed_registry = ToolRegistry::default();
+        refreshed_registry.register_trusted_with_exposure(mcp_runtime, ToolExposure::Deferred);
+        refreshed_registry.register_external_with_exposure(
+            Arc::new(DynamicToolHandler::new(&dynamic_tool).expect("dynamic tool should convert")),
+            ToolExposure::Deferred,
+        );
+        let refreshed = cache.get_or_build(&refreshed_registry, ToolSearchSourceListing::Include);
+        assert!(!Arc::ptr_eq(&first, &refreshed));
+        assert!(
+            refreshed.search_infos[1]
+                .entry
+                .search_text
+                .contains("refreshed")
+        );
     }
 
     #[test]

@@ -1220,11 +1220,6 @@ fn append_tool_search_executor(
     registry: &mut ToolRegistry,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) {
-    let search_infos = registry
-        .entries()
-        .filter(|tool| tool.exposure.is_deferred())
-        .filter_map(|tool| tool.runtime.search_info())
-        .collect::<Vec<_>>();
     let source_listing = if turn_context
         .config
         .features
@@ -1234,7 +1229,8 @@ fn append_tool_search_executor(
     } else {
         ToolSearchSourceListing::Include
     };
-    registry.register_trusted(tool_search_handler_cache.get_or_build(search_infos, source_listing));
+    let handler = tool_search_handler_cache.get_or_build(registry, source_listing);
+    registry.register_trusted(handler);
 }
 
 fn append_extension_tool_executors(
