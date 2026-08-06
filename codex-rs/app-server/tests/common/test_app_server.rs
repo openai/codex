@@ -2022,7 +2022,12 @@ impl TestAppServerBuilder {
         {
             // Bazel keeps binary targets in separate package directories.
             // Recreate the installed sibling layout without a path override.
-            let install_dir = TempDir::new()?;
+            // Prefer Bazel's TEST_TMPDIR so staging can share a filesystem with
+            // the binaries and avoid expensive cross-filesystem copies.
+            let install_dir = match std::env::var_os("TEST_TMPDIR") {
+                Some(test_tmpdir) => TempDir::new_in(test_tmpdir)?,
+                None => TempDir::new()?,
+            };
             let staged_program = install_dir.path().join(
                 program
                     .file_name()
