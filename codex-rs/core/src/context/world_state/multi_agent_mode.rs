@@ -1,5 +1,7 @@
 use super::PreviousSectionState;
+use super::WorldStateHash;
 use super::WorldStateSection;
+use super::multi_agent_usage_hint::MultiAgentUsageHintState;
 use crate::context::ContextualUserFragment;
 use crate::context::multi_agent_mode_instructions::MultiAgentModeInstructions;
 use codex_protocol::config_types::MultiAgentMode;
@@ -14,6 +16,8 @@ const MULTI_AGENT_MODE_MAX_TOKENS: usize = 400;
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(crate) struct MultiAgentModeState {
     mode: Option<MultiAgentMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage_hint_hash: Option<WorldStateHash>,
 }
 
 impl MultiAgentModeState {
@@ -26,7 +30,13 @@ impl MultiAgentModeState {
                 )),
                 mode @ (MultiAgentMode::ExplicitRequestOnly | MultiAgentMode::Proactive) => mode,
             }),
+            usage_hint_hash: None,
         }
+    }
+
+    pub(crate) fn with_usage_hint(mut self, usage_hint: &MultiAgentUsageHintState) -> Self {
+        self.usage_hint_hash = Some(usage_hint.snapshot());
+        self
     }
 }
 
@@ -56,7 +66,8 @@ impl WorldStateSection for MultiAgentModeState {
     ) -> Option<Box<dyn ContextualUserFragment>> {
         let mode = match (&self.mode, previous) {
             (Some(mode), PreviousSectionState::Known(previous))
-                if previous.mode.as_ref() == Some(mode) =>
+                if previous.mode.as_ref() == Some(mode)
+                    && previous.usage_hint_hash == self.usage_hint_hash =>
             {
                 return None;
             }

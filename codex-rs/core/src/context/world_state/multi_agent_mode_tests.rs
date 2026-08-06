@@ -65,6 +65,26 @@ fn persisted_mode_is_restored_only_when_missing_from_history() {
     );
 }
 
+/// Active mode instructions must follow a newly migrated multi-agent usage hint.
+#[test]
+fn unchanged_mode_is_reemitted_after_usage_hint_migration() {
+    let previous = state(Some(MultiAgentMode::Proactive));
+    let current = MultiAgentModeState::new(Some(MultiAgentMode::Proactive)).with_usage_hint(
+        &MultiAgentUsageHintState::new("Current usage instructions."),
+    );
+
+    let instructions = current
+        .render_diff(PreviousSectionState::Known(&previous))
+        .expect("unchanged mode should follow migrated usage instructions");
+
+    assert_eq!(
+        instructions.render(),
+        MultiAgentModeInstructions::from_mode(MultiAgentMode::Proactive)
+            .expect("proactive mode should render")
+            .render()
+    );
+}
+
 #[test]
 fn custom_mode_is_bounded_before_snapshot_and_rendering() {
     let state = state(Some(MultiAgentMode::Custom("custom mode ".repeat(1_000))));

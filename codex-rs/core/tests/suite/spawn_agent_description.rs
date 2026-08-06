@@ -17,10 +17,14 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -308,6 +312,378 @@ async fn configured_agent_roles_control_spawn_agent_type(
     Ok(())
 }
 
+/// Wait guidance belongs to overridable developer instructions, never the tool schema.
+#[test_case(None, true; "default developer instructions include wait guidance")]
+#[test_case(Some("Custom root instructions."), false; "custom developer instructions replace wait guidance")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_wait_guidance_uses_overridable_developer_instructions(
+    root_agent_usage_hint_text: Option<&str>,
+    expected_wait_guidance: bool,
+) -> Result<()> {
+    let root_agent_usage_hint_text = root_agent_usage_hint_text.map(str::to_string);
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            if let Some(root_agent_usage_hint_text) = root_agent_usage_hint_text {
+                config.multi_agent_v2.root_agent_usage_hint_text = Some(root_agent_usage_hint_text);
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    let has_wait_guidance = developer_messages.iter().any(|message| {
+        message.contains(
+            "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.",
+        )
+    });
+    assert_eq!(has_wait_guidance, expected_wait_guidance);
+
+    let body = request.body_json();
+    let wait_agent_tool = namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "wait_agent")
+        .expect("wait_agent should be exposed");
+    assert_eq!(
+        wait_agent_tool
+            .pointer("/parameters/properties/timeout_ms/description")
+            .and_then(Value::as_str),
+        Some("Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
+    );
+
+    Ok(())
+}
+
+/// Resumed legacy threads receive current usage hints once, before their active mode.
+/// Configured hint overrides and disabled wait tools must retain their existing semantics.
+#[test_case(true, None, true; "legacy resume restores default wait guidance")]
+#[test_case(true, Some("Custom root instructions."), false; "legacy resume preserves custom usage hints")]
+#[test_case(true, Some("Legacy root instructions."), false; "legacy resume preserves unchanged custom usage hints")]
+#[test_case(false, None, false; "legacy resume omits disabled wait guidance")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_cold_resume_refreshes_legacy_usage_hints_once(
+    wait_agent_enabled: bool,
+    resumed_root_agent_usage_hint_text: Option<&str>,
+    expected_wait_guidance: bool,
+) -> Result<()> {
+    let resumed_root_agent_usage_hint_text = resumed_root_agent_usage_hint_text.map(str::to_string);
+    let legacy_root_agent_usage_hint_text = "Legacy root instructions.";
+    let wait_guidance =
+        "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.";
+    let config_toml = format!(
+        "[features.multi_agent_v2]\nenabled = true\nwait_agent_enabled = {wait_agent_enabled}\n"
+    );
+    let server = start_mock_server().await;
+    let initial_response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial"),
+            ev_completed("resp-initial"),
+        ]),
+    )
+    .await;
+    let initial = test_codex()
+        .with_pre_build_hook(move |home| {
+            std::fs::write(home.join("config.toml"), &config_toml)
+                .expect("write multi-agent configuration");
+        })
+        .with_config(move |config| {
+            config.multi_agent_v2.root_agent_usage_hint_text =
+                Some(legacy_root_agent_usage_hint_text.to_string());
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    initial.submit_turn("before upgrading").await?;
+
+    let initial_request = initial_response.single_request();
+    assert!(
+        initial_request
+            .message_input_text_groups("developer")
+            .iter()
+            .any(|group| { group.len() == 1 && group[0] == legacy_root_agent_usage_hint_text }),
+        "legacy usage hint should be its own developer message"
+    );
+    assert!(
+        !initial_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|message| message.contains(wait_guidance)),
+        "legacy rollout should not already contain wait guidance"
+    );
+
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("initial session should have a rollout path");
+    initial.codex.shutdown_and_wait().await?;
+
+    let mut removed_recorded_usage_hint = false;
+    let mut removed_usage_hint_presence = false;
+    let legacy_rollout = std::fs::read_to_string(&rollout_path)?
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|mut line| {
+            if let RolloutItem::WorldState(world_state) = &mut line.item
+                && let Some(state) = world_state.state.as_object_mut()
+            {
+                removed_recorded_usage_hint |= state.remove("multi_agent_usage_hint").is_some();
+                if let Some(mode) = state
+                    .get_mut("multi_agent_mode")
+                    .and_then(Value::as_object_mut)
+                {
+                    removed_usage_hint_presence |= mode.remove("usage_hint_hash").is_some();
+                }
+            }
+            serde_json::to_string(&line)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    assert!(
+        removed_recorded_usage_hint,
+        "initial rollout should contain a usage-hint world-state section"
+    );
+    assert!(
+        removed_usage_hint_presence,
+        "initial rollout should record usage-hint presence on its active mode"
+    );
+    std::fs::write(&rollout_path, format!("{legacy_rollout}\n"))?;
+
+    let resumed_responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-resumed-first"),
+                ev_completed("resp-resumed-first"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-resumed-second"),
+                ev_completed("resp-resumed-second"),
+            ]),
+        ],
+    )
+    .await;
+    let mut resumed_builder = test_codex().with_config(move |config| {
+        if let Some(root_agent_usage_hint_text) = resumed_root_agent_usage_hint_text {
+            config.multi_agent_v2.root_agent_usage_hint_text = Some(root_agent_usage_hint_text);
+        }
+    });
+    let resumed = resumed_builder.resume(&server, home, rollout_path).await?;
+    let current_usage_hint = resumed
+        .config
+        .multi_agent_v2
+        .root_agent_usage_hint_text
+        .clone()
+        .expect("current root usage hint should be configured");
+
+    resumed.submit_turn("first turn after upgrading").await?;
+    resumed.submit_turn("second turn after upgrading").await?;
+
+    let requests = resumed_responses.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        let developer_messages = request.message_input_text_groups("developer");
+        let current_usage_hint_positions = developer_messages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, group)| {
+                (group.len() == 1 && group[0] == current_usage_hint).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            current_usage_hint_positions.len(),
+            1,
+            "current usage hint should appear exactly once as a standalone developer message: \
+             {developer_messages:?}"
+        );
+        let active_mode_position = developer_messages
+            .iter()
+            .rposition(|group| {
+                group
+                    .iter()
+                    .any(|message| message.contains(MULTI_AGENT_MODE_OPEN_TAG))
+            })
+            .expect("resumed context should include an active multi-agent mode");
+        assert!(
+            current_usage_hint_positions[0] < active_mode_position,
+            "active mode must follow the current usage hint: {developer_messages:?}"
+        );
+        let wait_guidance_count = developer_messages
+            .iter()
+            .flatten()
+            .filter(|message| message.contains(wait_guidance))
+            .count();
+        assert_eq!(
+            wait_guidance_count,
+            usize::from(expected_wait_guidance),
+            "wait guidance must follow configured tool availability and usage-hint overrides"
+        );
+
+        let body = request.body_json();
+        let wait_agent_tool = namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "wait_agent");
+        assert_eq!(wait_agent_tool.is_some(), wait_agent_enabled);
+        if let Some(wait_agent_tool) = wait_agent_tool {
+            assert_eq!(
+                wait_agent_tool
+                    .pointer("/parameters/properties/timeout_ms/description")
+                    .and_then(Value::as_str),
+                Some("Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Resuming after wait-tool availability changes must refresh stale usage guidance once.
+/// The active multi-agent mode must remain after the updated instructions.
+#[test_case(true, false; "disabled wait agent invalidates prior guidance")]
+#[test_case(false, true; "enabled wait agent adds current guidance")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_resume_refreshes_changed_wait_guidance(
+    initial_wait_agent_enabled: bool,
+    resumed_wait_agent_enabled: bool,
+) -> Result<()> {
+    let wait_guidance =
+        "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.";
+    let initial_config_toml = format!(
+        "[features.multi_agent_v2]\nenabled = true\nwait_agent_enabled = {initial_wait_agent_enabled}\n"
+    );
+    let server = start_mock_server().await;
+    let initial_response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial"),
+            ev_completed("resp-initial"),
+        ]),
+    )
+    .await;
+    let initial = test_codex()
+        .with_pre_build_hook(move |home| {
+            std::fs::write(home.join("config.toml"), &initial_config_toml)
+                .expect("write initial multi-agent configuration");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    initial
+        .submit_turn("before changing wait-agent availability")
+        .await?;
+
+    let initial_request = initial_response.single_request();
+    assert_eq!(
+        namespace_child_tool(
+            &initial_request.body_json(),
+            MULTI_AGENT_V2_NAMESPACE,
+            "wait_agent"
+        )
+        .is_some(),
+        initial_wait_agent_enabled
+    );
+
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("initial session should have a rollout path");
+    initial.codex.shutdown_and_wait().await?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "[features.multi_agent_v2]\nenabled = true\nwait_agent_enabled = {resumed_wait_agent_enabled}\n"
+        ),
+    )?;
+
+    let resumed_responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-resumed-first"),
+                ev_completed("resp-resumed-first"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-resumed-second"),
+                ev_completed("resp-resumed-second"),
+            ]),
+        ],
+    )
+    .await;
+    let resumed = test_codex().resume(&server, home, rollout_path).await?;
+    let current_usage_hint = resumed
+        .config
+        .multi_agent_v2
+        .root_agent_usage_hint_text
+        .clone()
+        .expect("current root usage hint should be configured");
+
+    resumed
+        .submit_turn("first turn with updated wait-agent availability")
+        .await?;
+    resumed
+        .submit_turn("second turn with updated wait-agent availability")
+        .await?;
+
+    let requests = resumed_responses.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        let developer_messages = request.message_input_text_groups("developer");
+        let current_usage_hint_positions = developer_messages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, group)| {
+                (group.len() == 1 && group[0] == current_usage_hint).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            current_usage_hint_positions.len(),
+            1,
+            "current usage hint should refresh earlier guidance exactly once: \
+             {developer_messages:?}"
+        );
+        let current_usage_hint_position = current_usage_hint_positions[0];
+        let current_usage_message = &developer_messages[current_usage_hint_position][0];
+        assert_eq!(
+            current_usage_message.contains(wait_guidance),
+            resumed_wait_agent_enabled
+        );
+        let active_mode_position = developer_messages
+            .iter()
+            .rposition(|group| {
+                group
+                    .iter()
+                    .any(|message| message.contains(MULTI_AGENT_MODE_OPEN_TAG))
+            })
+            .expect("resumed context should include an active multi-agent mode");
+        assert!(
+            current_usage_hint_position < active_mode_position,
+            "active mode must follow updated usage instructions: {developer_messages:?}"
+        );
+
+        assert_eq!(
+            namespace_child_tool(&request.body_json(), MULTI_AGENT_V2_NAMESPACE, "wait_agent")
+                .is_some(),
+            resumed_wait_agent_enabled
+        );
+    }
+
+    Ok(())
+}
+
 #[test_case(true, false; "wait agent remains available without clock sleep")]
 #[test_case(true, true; "wait agent remains available with clock sleep")]
 #[test_case(false, false; "wait agent can be disabled without clock sleep")]
@@ -359,6 +735,17 @@ wait_agent_enabled = {wait_agent_enabled}
     assert_eq!(
         namespace_child_tool(&body, "clock", "sleep").is_some(),
         sleep_tool_enabled
+    );
+    assert_eq!(
+        request
+            .message_input_texts("developer")
+            .iter()
+            .any(|message| {
+                message.contains(
+                "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.",
+            )
+            }),
+        wait_agent_enabled
     );
 
     Ok(())

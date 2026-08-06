@@ -7,6 +7,7 @@ mod environment;
 mod environments_instructions;
 mod model;
 mod multi_agent_mode;
+mod multi_agent_usage_hint;
 mod permissions;
 mod personality;
 mod plugins_instructions;
@@ -40,6 +41,7 @@ pub(crate) use environment::EnvironmentsState;
 pub(crate) use environments_instructions::EnvironmentsInstructionsState;
 pub(crate) use model::ModelInstructionsState;
 pub(crate) use multi_agent_mode::MultiAgentModeState;
+pub(crate) use multi_agent_usage_hint::MultiAgentUsageHintState;
 pub(crate) use permissions::PermissionsState;
 pub(crate) use personality::PersonalityState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
@@ -89,7 +91,7 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
     }
 
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
-        S::matches_legacy_fragment(role, text)
+        WorldStateSection::matches_current_legacy_fragment(self, role, text)
     }
 
     fn has_retained_fragment_matcher(&self) -> bool {
@@ -217,6 +219,11 @@ pub(crate) trait WorldStateSection: Send + Sync + 'static {
 
     fn matches_legacy_fragment(_role: &str, _text: &str) -> bool {
         false
+    }
+
+    /// Recognizes legacy fragments whose identity depends on this section's current value.
+    fn matches_current_legacy_fragment(&self, role: &str, text: &str) -> bool {
+        Self::matches_legacy_fragment(role, text)
     }
 
     /// Whether retained history must still contain this section's rendered fragment.

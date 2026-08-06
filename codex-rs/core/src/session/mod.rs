@@ -3549,14 +3549,16 @@ impl Session {
                 "developer" if fragment.markers().0 == MULTI_AGENT_MODE_OPEN_TAG => {
                     initial_multi_agent_mode = Some(fragment);
                 }
+                "developer"
+                    if fragment.requires_separate_message() && fragment.markers().0.is_empty() =>
+                {
+                    separate_developer_sections.push(fragment.render());
+                }
                 "developer" => developer_sections.push(fragment.render()),
                 "user" => contextual_user_sections.push(fragment.render()),
                 _ => {}
             }
         }
-
-        let multi_agent_v2_usage_hint_text =
-            multi_agents::usage_hint_text(turn_context, &session_source);
 
         let mut items = Vec::with_capacity(4);
         if let Some(developer_message) =
@@ -3570,14 +3572,6 @@ impl Session {
             {
                 items.push(developer_message);
             }
-        }
-        if let Some(usage_hint_text) = multi_agent_v2_usage_hint_text
-            && let Some(usage_hint_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    usage_hint_text.to_string(),
-                ])
-        {
-            items.push(usage_hint_message);
         }
         if let Some(initial_multi_agent_mode) = initial_multi_agent_mode {
             items.push(initial_multi_agent_mode.into_boxed_response_item());

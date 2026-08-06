@@ -13,6 +13,7 @@ use crate::context::world_state::EnvironmentsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::ModelInstructionsState;
 use crate::context::world_state::MultiAgentModeState;
+use crate::context::world_state::MultiAgentUsageHintState;
 use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PersonalityState;
 use crate::context::world_state::PluginsInstructionsState;
@@ -252,9 +253,17 @@ impl Session {
                 world_state.add_extension_section(section);
             }
         }
-        world_state.add_section(MultiAgentModeState::new(
+        let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(turn_context),
-        ));
+        );
+        if let Some(usage_hint_text) =
+            super::multi_agents::usage_hint_text(turn_context, &turn_context.session_source)
+        {
+            let usage_hint = MultiAgentUsageHintState::new(usage_hint_text);
+            multi_agent_mode = multi_agent_mode.with_usage_hint(&usage_hint);
+            world_state.add_section(usage_hint);
+        }
+        world_state.add_section(multi_agent_mode);
         Ok(world_state)
     }
 }
