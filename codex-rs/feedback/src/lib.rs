@@ -194,7 +194,7 @@ impl CodexFeedback {
         }
     }
 
-    /// Returns a [`tracing_subscriber`] layer that captures full-fidelity logs into this feedback
+    /// Returns a [`tracing_subscriber`] layer that captures diagnostic logs into this feedback
     /// ring buffer.
     ///
     /// This is intended for initialization code so call sites don't have to duplicate the exact
@@ -208,11 +208,17 @@ impl CodexFeedback {
             .with_timer(tracing_subscriber::fmt::time::SystemTime)
             .with_ansi(false)
             .with_target(false)
-            // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the
-            // full trace when the user uploads a report.
+            // Capture diagnostics independently of `RUST_LOG` without filling the feedback ring
+            // with high-volume request and response payloads.
             .with_filter(
                 Targets::new()
                     .with_default(Level::TRACE)
+                    .with_target("codex_http_client::transport", LevelFilter::DEBUG)
+                    .with_target("codex_api::sse", LevelFilter::DEBUG)
+                    // `tracing-log` checks legacy log records against their original
+                    // target before re-emitting them as `log`; tungstenite TRACE
+                    // includes full websocket frames and authenticated handshakes.
+                    .with_target("tungstenite", LevelFilter::DEBUG)
                     .with_target("codex_api::responses_websocket_timing", LevelFilter::OFF)
                     .with_target("codex_core::post_sampling_token_estimate", LevelFilter::OFF),
             )
@@ -721,18 +727,50 @@ mod tests {
     }
 
     #[test]
-    fn logger_layer_excludes_responses_websocket_timing_payloads() {
+    fn logger_layer_filters_noisy_trace_payloads() {
         let fb = CodexFeedback::new();
         let _guard = tracing_subscriber::registry()
+            // Keep another TRACE subscriber interested so bridged records are
+            // emitted; feedback must still reject them with its own filter.
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink))
             .with(fb.logger_layer())
             .set_default();
 
         tracing::trace!(target: "codex_api::responses_websocket_timing", payload = "secret");
-        tracing::trace!(target: "codex_feedback_test", "retained");
+        tracing::trace!(target: "codex_http_client::transport", "transport-trace");
+        tracing::trace!(target: "codex_api::sse", "sse-trace");
+        tracing::trace!(target: "codex_api::sse::responses", "nested-sse-trace");
+        tracing::debug!(target: "codex_http_client::transport", "transport-debug");
+        tracing::debug!(target: "codex_api::sse::responses", "sse-debug");
+        tracing::trace!(target: "codex_feedback_test", "unrelated-trace");
+        log::trace!(target: "codex_feedback_test", "unrelated-log-trace");
+        log::trace!(
+            target: "tungstenite::handshake::client",
+            "websocket-handshake-payload"
+        );
+        log::trace!(target: "tungstenite::protocol", "websocket-frame-payload");
+        log::debug!(target: "tungstenite::protocol", "websocket-debug");
 
         let logs = String::from_utf8(fb.snapshot(/*session_id*/ None).bytes).unwrap();
-        assert!(!logs.contains("secret"));
-        assert!(logs.contains("retained"));
+        for excluded in [
+            "secret",
+            "transport-trace",
+            "sse-trace",
+            "nested-sse-trace",
+            "websocket-handshake-payload",
+            "websocket-frame-payload",
+        ] {
+            assert!(!logs.contains(excluded));
+        }
+        for retained in [
+            "transport-debug",
+            "sse-debug",
+            "unrelated-trace",
+            "unrelated-log-trace",
+            "websocket-debug",
+        ] {
+            assert!(logs.contains(retained));
+        }
     }
 
     #[test]

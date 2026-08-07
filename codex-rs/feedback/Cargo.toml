@@ -17,6 +17,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+log = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lib]

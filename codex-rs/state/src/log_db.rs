@@ -61,6 +61,10 @@ pub fn default_filter() -> Targets {
         .with_target("rmcp", LevelFilter::INFO)
         .with_target("codex_api::responses_websocket_timing", LevelFilter::OFF)
         .with_target("codex_core::post_sampling_token_estimate", LevelFilter::OFF)
+        // Full model request bodies and streamed response payloads overwhelm the
+        // SQLite log database, but remain available to explicit TRACE subscribers.
+        .with_target("codex_http_client::transport", LevelFilter::DEBUG)
+        .with_target("codex_api::sse", LevelFilter::DEBUG)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
