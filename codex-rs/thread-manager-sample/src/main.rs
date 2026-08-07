@@ -208,6 +208,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
         base_instructions: None,
+        base_instructions_provenance: None,
         developer_instructions: None,
         guardian_policy_config: None,
         include_permissions_instructions: false,

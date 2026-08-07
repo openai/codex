@@ -13,6 +13,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelMessages;
@@ -1028,6 +1029,7 @@ pub(crate) fn build_guardian_review_session_config(
         tenant_policy_config,
         policy_template,
     ));
+    guardian_config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
     guardian_config.notify = None;
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);

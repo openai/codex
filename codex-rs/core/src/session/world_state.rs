@@ -26,6 +26,7 @@ use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::BaseInstructionsProvenance;
 
 impl Session {
     #[tracing::instrument(name = "world_state.build", level = "info", skip_all)]
@@ -50,8 +51,12 @@ impl Session {
                     .map(|previous| previous.model)
                     .or_else(|| {
                         state
-                            .base_instructions_model
+                            .base_instructions_provenance
                             .as_ref()
+                            .and_then(|provenance| match provenance {
+                                BaseInstructionsProvenance::Model { model } => Some(model),
+                                BaseInstructionsProvenance::Custom => None,
+                            })
                             .filter(|_| base_instructions != model_instructions)
                             .cloned()
                     }),

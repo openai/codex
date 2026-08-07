@@ -168,6 +168,7 @@ impl ContextManager {
         let personality = turn_context.personality.or(turn_context.config.personality);
         let base_instructions = BaseInstructions {
             text: model_info.get_model_instructions(personality),
+            provenance: None,
         };
         self.estimate_token_count_with_base_instructions(&base_instructions)
     }

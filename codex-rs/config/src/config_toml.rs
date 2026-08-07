@@ -45,6 +45,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -515,6 +516,10 @@ pub struct ConfigToml {
 pub struct ConfigLockfileToml {
     pub version: u32,
     pub codex_version: String,
+
+    /// Origin of the effective base instructions captured in the lockfile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instructions_provenance: Option<BaseInstructionsProvenance>,
 
     /// Replayable effective config captured in the lockfile.
     pub config: ConfigToml,

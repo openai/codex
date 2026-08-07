@@ -182,6 +182,7 @@ pub(crate) fn build_agent_spawn_config(
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn, environment)?;
     config.base_instructions = Some(base_instructions.text.clone());
+    config.base_instructions_provenance = base_instructions.provenance.clone();
     Ok(config)
 }
 
@@ -192,6 +193,7 @@ pub(crate) fn build_agent_resume_config(
     let mut config = build_agent_shared_config(turn, environment)?;
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
+    config.base_instructions_provenance = None;
     Ok(config)
 }
 

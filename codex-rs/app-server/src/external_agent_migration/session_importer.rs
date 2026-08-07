@@ -26,6 +26,7 @@ use codex_external_agent_migration::sessions::record_completed_session_imports;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
@@ -448,6 +449,17 @@ impl ExternalAgentSessionImporter {
                     .base_instructions
                     .clone()
                     .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+                provenance: Some(config.base_instructions_provenance.clone().unwrap_or_else(
+                    || {
+                        if config.base_instructions.is_some() {
+                            BaseInstructionsProvenance::Custom
+                        } else {
+                            BaseInstructionsProvenance::Model {
+                                model: model_info.slug.clone(),
+                            }
+                        }
+                    },
+                )),
             },
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),

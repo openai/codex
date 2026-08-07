@@ -295,6 +295,7 @@ async fn schedule_startup_prewarm_inner(
         startup_turn_context.as_ref(),
         BaseInstructions {
             text: base_instructions,
+            provenance: None,
         },
     );
     startup_turn_context.session_telemetry.record_startup_phase(

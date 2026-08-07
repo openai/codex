@@ -2363,6 +2363,7 @@ fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &s
     let mut prompt = prompt_with_input(input);
     prompt.base_instructions = BaseInstructions {
         text: instructions.to_string(),
+        provenance: None,
     };
     prompt
 }

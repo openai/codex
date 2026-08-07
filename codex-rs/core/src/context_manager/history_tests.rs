@@ -828,9 +828,11 @@ fn estimate_token_count_with_base_instructions_uses_provided_text() {
     let history = create_history_with_items(vec![assistant_msg("hello from history")]);
     let short_base = BaseInstructions {
         text: "short".to_string(),
+        provenance: None,
     };
     let long_base = BaseInstructions {
         text: "x".repeat(1_000),
+        provenance: None,
     };
 
     let short_estimate = history

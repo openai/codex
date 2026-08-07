@@ -470,18 +470,34 @@ async fn token_budget_model_defaults_survive_config_lock_replay() -> Result<()> 
         })
         .build_with_auto_env(&server)
         .await?;
+    core_test_support::submit_thread_settings(
+        &replay.codex,
+        ThreadSettingsOverrides {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
     replay
-        .submit_turn("inspect guidance after lock replay")
+        .submit_text_turn("inspect guidance after lock replay and model switch")
         .await?;
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    for request in requests {
+    for request in &requests {
         assert!(
             request.body_contains_text("Use the model-owned context-window guidance."),
             "exporting and replaying a config lock must preserve model-owned guidance"
         );
     }
+    assert_eq!(requests[1].body_json()["model"], "gpt-5.4");
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("<model_switch>")),
+        "replaying model-owned instructions must not override the new model's template"
+    );
 
     Ok(())
 }

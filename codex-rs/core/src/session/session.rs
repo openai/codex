@@ -547,6 +547,27 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
+        let base_instructions_provenance = if config.base_instructions.is_some() {
+            Some(
+                config
+                    .base_instructions_provenance
+                    .clone()
+                    .unwrap_or(BaseInstructionsProvenance::Custom),
+            )
+        } else if let Some(inherited_base_instructions) = initial_history.get_base_instructions() {
+            let BaseInstructions { text, provenance } = inherited_base_instructions;
+            provenance.or_else(|| {
+                (text == model_info.get_model_instructions(config.personality)).then(|| {
+                    BaseInstructionsProvenance::Model {
+                        model: model_info.slug.clone(),
+                    }
+                })
+            })
+        } else {
+            Some(BaseInstructionsProvenance::Model {
+                model: model_info.slug.clone(),
+            })
+        };
         let forked_from_id = session_configuration
             .forked_from_thread_id
             .or_else(|| initial_history.forked_from_id());
@@ -661,6 +682,7 @@ impl Session {
                             originator: session_configuration.originator.clone(),
                             base_instructions: BaseInstructions {
                                 text: session_configuration.base_instructions.clone(),
+                                provenance: base_instructions_provenance.clone(),
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
                             selected_capability_roots: selected_capability_roots.clone(),
@@ -1013,16 +1035,22 @@ impl Session {
                 );
             }
             session_configuration.thread_name = thread_name.clone();
-            validate_config_lock_if_configured(&session_configuration).await?;
-            export_config_lock_if_configured(&session_configuration, thread_id).await?;
+            validate_config_lock_if_configured(
+                &session_configuration,
+                base_instructions_provenance.as_ref(),
+            )
+            .await?;
+            export_config_lock_if_configured(
+                &session_configuration,
+                thread_id,
+                base_instructions_provenance.as_ref(),
+            )
+            .await?;
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
             );
-            state.base_instructions_model = (config.base_instructions.is_none()
-                && session_configuration.base_instructions
-                    == model_info.get_model_instructions(config.personality))
-            .then(|| model_info.slug.clone());
+            state.base_instructions_provenance = base_instructions_provenance.clone();
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()

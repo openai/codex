@@ -9,6 +9,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -202,11 +203,14 @@ async fn first_turn_model_change_appends_model_instructions_developer_message(
     Ok(())
 }
 
-#[test_case(None; "model-generated base instructions")]
-#[test_case(Some("inherited custom base instructions"); "custom base instructions")]
+#[test_case(None, "gpt-5.2"; "model-generated base instructions and original model")]
+#[test_case(None, "gpt-5.4"; "model-generated base instructions and fork model")]
+#[test_case(Some("inherited custom base instructions"), "gpt-5.2"; "custom base instructions and original model")]
+#[test_case(Some("inherited custom base instructions"), "gpt-5.4"; "custom base instructions and fork model")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instructions(
     custom_base_instructions: Option<&'static str>,
+    turn_model: &'static str,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -222,6 +226,21 @@ async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instruction
     let test = builder.build_with_auto_env(&server).await?;
     test.codex.ensure_rollout_materialized().await;
     test.codex.flush_rollout().await?;
+    let source_rollout_path = test.codex.rollout_path().expect("rollout path");
+    let source_history =
+        codex_rollout::RolloutRecorder::get_rollout_history(&source_rollout_path).await?;
+    let expected_provenance = match custom_base_instructions {
+        Some(_) => BaseInstructionsProvenance::Custom,
+        None => BaseInstructionsProvenance::Model {
+            model: initial_model.to_string(),
+        },
+    };
+    assert_eq!(
+        source_history
+            .get_base_instructions()
+            .and_then(|instructions| instructions.provenance),
+        Some(expected_provenance)
+    );
 
     let mut fork_config = test.config.clone();
     fork_config.model = Some("gpt-5.4".to_string());
@@ -231,29 +250,27 @@ async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instruction
         .fork_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
             fork_config,
-            test.codex.rollout_path().expect("rollout path"),
+            source_rollout_path,
             /*thread_source*/ None,
             /*parent_trace*/ None,
         )
         .await?;
-    submit_model_turn(
-        &fork.thread,
-        initial_model,
-        ThreadSettingsOverrides::default(),
-    )
-    .await?;
+    submit_model_turn(&fork.thread, turn_model, ThreadSettingsOverrides::default()).await?;
 
     let request = resp_mock.single_request();
-    assert_eq!(request.body_json()["model"], initial_model);
+    assert_eq!(request.body_json()["model"], turn_model);
     if let Some(instructions) = custom_base_instructions {
         assert_eq!(request.instructions_text(), instructions);
     }
-    assert!(
-        request
-            .message_input_texts("developer")
-            .iter()
-            .all(|text| !text.contains("<model_switch>")),
-        "the inherited base instructions must not be replaced by catalog instructions"
+    let model_switch_count = request
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .count();
+    assert_eq!(
+        model_switch_count,
+        usize::from(custom_base_instructions.is_none() && turn_model != initial_model),
+        "only inherited model-generated instructions should change models"
     );
 
     Ok(())
@@ -304,7 +321,7 @@ async fn rollback_first_turn_model_change_removes_its_instructions(
 
     let test = match followup {
         RollbackFollowup::ColdResume => {
-            let mut resume_builder = test_codex().with_model(initial_model);
+            let mut resume_builder = test_codex().with_model(switched_model);
             resume_builder.restart(&server, &test).await?
         }
         RollbackFollowup::StartupModel | RollbackFollowup::SwitchedModel => test,

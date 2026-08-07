@@ -34,6 +34,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::PermissionProfile;
@@ -4442,6 +4443,9 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     let (_session, mut turn) = make_session_and_context().await;
     let base_instructions = BaseInstructions {
         text: "base".to_string(),
+        provenance: Some(BaseInstructionsProvenance::Model {
+            model: turn.model_info.slug.clone(),
+        }),
     };
     turn.developer_instructions = Some("dev".to_string());
     let mut config = (*turn.config).clone();
@@ -4486,6 +4490,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     let config = build_agent_spawn_config(&base_instructions, &turn, turn.environments.primary())
         .expect("spawn config");
     let mut expected = (*turn.config).clone();
+    expected.base_instructions_provenance = base_instructions.provenance.clone();
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
@@ -4513,6 +4518,9 @@ async fn build_agent_resume_config_clears_base_instructions() {
     let (_session, mut turn) = make_session_and_context().await;
     let mut base_config = (*turn.config).clone();
     base_config.base_instructions = Some("caller-base".to_string());
+    base_config.base_instructions_provenance = Some(BaseInstructionsProvenance::Model {
+        model: turn.model_info.slug.clone(),
+    });
     turn.config = Arc::new(base_config);
     Arc::make_mut(&mut turn.config)
         .permissions
@@ -4541,6 +4549,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;
+    expected.base_instructions_provenance = None;
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
     expected.model_reasoning_effort = turn.reasoning_effort.clone();

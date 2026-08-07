@@ -13,6 +13,7 @@ use codex_features::RolloutBudgetConfigToml;
 use codex_features::TokenBudgetConfigToml;
 use codex_features::ToolRegistryConfigToml;
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructionsProvenance;
 
 use crate::config::Config;
 use crate::config_lock::ConfigLockReplayOptions;
@@ -25,6 +26,7 @@ use super::SessionConfiguration;
 
 pub(crate) async fn validate_config_lock_if_configured(
     session_configuration: &SessionConfiguration,
+    base_instructions_provenance: Option<&BaseInstructionsProvenance>,
 ) -> anyhow::Result<()> {
     if session_configuration.session_source.is_non_root_agent() {
         return Ok(());
@@ -36,7 +38,10 @@ pub(crate) async fn validate_config_lock_if_configured(
     else {
         return Ok(());
     };
-    let actual = session_configuration.to_config_lockfile_toml()?;
+    let mut actual = session_configuration.to_config_lockfile_toml()?;
+    if actual.config.instructions.is_some() {
+        actual.base_instructions_provenance = base_instructions_provenance.cloned();
+    }
     let config = session_configuration.original_config_do_not_use.as_ref();
     let options = ConfigLockReplayOptions {
         allow_codex_version_mismatch: config.config_lock_allow_codex_version_mismatch,
@@ -49,13 +54,17 @@ pub(crate) async fn validate_config_lock_if_configured(
 pub(crate) async fn export_config_lock_if_configured(
     session_configuration: &SessionConfiguration,
     conversation_id: ThreadId,
+    base_instructions_provenance: Option<&BaseInstructionsProvenance>,
 ) -> anyhow::Result<()> {
     let config = session_configuration.original_config_do_not_use.as_ref();
     let Some(export_dir) = config.config_lock_export_dir.as_ref() else {
         return Ok(());
     };
 
-    let lock = session_configuration.to_config_lockfile_toml()?;
+    let mut lock = session_configuration.to_config_lockfile_toml()?;
+    if lock.config.instructions.is_some() {
+        lock.base_instructions_provenance = base_instructions_provenance.cloned();
+    }
     let lock = toml::to_string_pretty(&lock).context("failed to serialize config lock")?;
     let path = export_dir.join(format!("{conversation_id}.config.lock.toml"));
 

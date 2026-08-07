@@ -18,6 +18,8 @@ use codex_config::ConfigLayerStack;
 use codex_config::config_toml::ConfigToml;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
 use codex_exec_server::LOCAL_FS;
+use codex_features::Feature;
+use codex_protocol::models::BaseInstructionsProvenance;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -175,6 +177,8 @@ mod reload {
         let preserve_current_model = role_layer_toml.get("model").is_none();
         let preserve_current_reasoning_effort =
             role_layer_toml.get("model_reasoning_effort").is_none();
+        let preserve_current_base_instructions = role_layer_toml.get("instructions").is_none()
+            && role_layer_toml.get("model_instructions_file").is_none();
         let mut overrides = reload_overrides(
             config,
             preserve_current_model,
@@ -205,6 +209,24 @@ mod reload {
             next_config
                 .model_reasoning_effort
                 .clone_from(&config.model_reasoning_effort);
+        }
+        if preserve_current_base_instructions {
+            let personality_changed = config.personality != next_config.personality
+                || config.features.enabled(Feature::Personality)
+                    != next_config.features.enabled(Feature::Personality);
+            if personality_changed
+                && matches!(
+                    config.base_instructions_provenance,
+                    Some(BaseInstructionsProvenance::Model { .. })
+                )
+            {
+                next_config.base_instructions = None;
+                next_config.base_instructions_provenance = None;
+            } else {
+                next_config.base_instructions = config.base_instructions.clone();
+                next_config.base_instructions_provenance =
+                    config.base_instructions_provenance.clone();
+            }
         }
         Ok(next_config)
     }

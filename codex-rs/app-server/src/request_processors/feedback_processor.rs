@@ -624,6 +624,7 @@ mod tests {
                     cwd: tempdir.path().to_path_buf(),
                     base_instructions: Some(codex_protocol::models::BaseInstructions {
                         text: "actual developer prompt".to_string(),
+                        provenance: None,
                     }),
                     ..Default::default()
                 },

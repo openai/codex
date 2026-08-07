@@ -39,6 +39,7 @@ pub(crate) fn config_lockfile(config: ConfigToml) -> ConfigLockfileToml {
     ConfigLockfileToml {
         version: CONFIG_LOCK_VERSION,
         codex_version: env!("CARGO_PKG_VERSION").to_string(),
+        base_instructions_provenance: None,
         config,
     }
 }
@@ -61,7 +62,10 @@ pub(crate) fn validate_config_lock_replay(
     }
 
     let expected_lock = config_lock_for_comparison(expected_lock, options);
-    let actual_lock = config_lock_for_comparison(actual_lock, options);
+    let mut actual_lock = config_lock_for_comparison(actual_lock, options);
+    if expected_lock.base_instructions_provenance.is_none() {
+        actual_lock.base_instructions_provenance = None;
+    }
     if expected_lock != actual_lock {
         let diff = compact_diff("config", &expected_lock, &actual_lock)
             .unwrap_or_else(|err| format!("failed to build config lock diff: {err}"));
