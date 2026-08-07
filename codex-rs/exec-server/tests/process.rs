@@ -93,7 +93,19 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
 /// Ordinary requests run one at a time when concurrent processing is not enabled.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_runs_ordinary_requests_serially_by_default() -> anyhow::Result<()> {
-    let mut server = exec_server().await?;
+    let temporary_directory = tempfile::tempdir()?;
+    let temporary_directory_env_vars: &[&str] = if cfg!(windows) {
+        &["TEMP", "TMP"]
+    } else {
+        &["TMPDIR"]
+    };
+    let mut server = exec_server_with_env(
+        temporary_directory_env_vars
+            .iter()
+            .map(|name| (*name, temporary_directory.path())),
+        &[],
+    )
+    .await?;
     let process_argv = if cfg!(windows) {
         vec!["cmd.exe", "/D", "/C", "ping -n 601 127.0.0.1 >NUL"]
     } else {
@@ -195,7 +207,14 @@ async fn exec_server_runs_ordinary_requests_serially_by_default() -> anyhow::Res
         panic!("expected the queued environment/info response after process/read");
     };
     assert_eq!(id, queued_environment_info_id);
-    let _: EnvironmentInfo = serde_json::from_value(result)?;
+    let mut expected_environment_info = EnvironmentInfo::local();
+    expected_environment_info.temporary_directories = Some(vec![PathUri::from_host_native_path(
+        temporary_directory.path(),
+    )?]);
+    assert_eq!(
+        serde_json::from_value::<EnvironmentInfo>(result)?,
+        expected_environment_info
+    );
     let response = server
         .wait_for_event(|event| matches!(event, JSONRPCMessage::Response(_)))
         .await?;

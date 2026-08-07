@@ -93,6 +93,10 @@ pub struct EnvironmentInfo {
     /// Working directory inherited by the exec-server process.
     #[serde(default)]
     pub cwd: Option<PathUri>,
+    /// Executor-local default directories for resolving `:tmpdir`, when reported.
+    /// On Windows, a command's `TEMP` or `TMP` overrides take precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporary_directories: Option<Vec<PathUri>>,
     /// Optional executor features that clients must gate before sending newer request fields.
     #[serde(default)]
     pub capabilities: EnvironmentCapabilities,
@@ -132,11 +136,36 @@ pub enum EnvironmentStatusKind {
 impl EnvironmentInfo {
     /// Returns information about the current local exec-server process.
     pub fn local() -> Self {
+        let cwd = std::env::current_dir().ok();
+        let temporary_directory_env_vars: &[&str] = if cfg!(windows) {
+            &["TEMP", "TMP"]
+        } else {
+            &["TMPDIR"]
+        };
+        let mut temporary_directories = Vec::new();
+        for name in temporary_directory_env_vars {
+            if let Some(path) = std::env::var_os(name)
+                .filter(|path| !path.is_empty())
+                .filter(|path| cfg!(unix) || std::path::Path::new(path).is_absolute())
+                .and_then(|path| {
+                    PathUri::from_host_native_path(&path).ok().or_else(|| {
+                        if cfg!(unix) {
+                            PathUri::from_host_native_path(cwd.as_ref()?.join(path)).ok()
+                        } else {
+                            None
+                        }
+                    })
+                })
+                && !temporary_directories.contains(&path)
+            {
+                temporary_directories.push(path);
+            }
+        }
+
         Self {
             shell: codex_shell_command::shell_detect::default_user_shell().into(),
-            cwd: std::env::current_dir()
-                .ok()
-                .and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
+            cwd: cwd.and_then(|cwd| PathUri::from_host_native_path(cwd).ok()),
+            temporary_directories: Some(temporary_directories),
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
@@ -868,8 +897,89 @@ mod tests {
                     path: "/bin/zsh".to_string(),
                 },
                 cwd: None,
+                temporary_directories: None,
                 capabilities: EnvironmentCapabilities::default(),
             }
+        );
+    }
+
+    #[test]
+    fn environment_info_preserves_executor_temporary_directories() {
+        let expected = serde_json::json!({
+            "shell": { "name": "powershell", "path": "powershell.exe" },
+            "cwd": null,
+            "temporaryDirectories": ["file:///C:/Temp", "file:///D:/Temp"],
+            "capabilities": {
+                "networkProxyLaunch": false,
+                "capabilityDiscoverySandbox": false,
+            },
+        });
+        let info: EnvironmentInfo = serde_json::from_value(expected.clone())
+            .expect("environment info with executor temporary directories should deserialize");
+
+        assert_eq!(
+            serde_json::to_value(info).expect("environment info should serialize"),
+            expected,
+        );
+    }
+
+    #[test]
+    fn local_environment_info_reads_platform_temporary_directories() {
+        let cwd = std::env::current_dir().expect("current directory");
+        let names: &[&str] = if cfg!(windows) {
+            &["TEMP", "TMP"]
+        } else {
+            &["TMPDIR"]
+        };
+        let mut expected = names
+            .iter()
+            .filter_map(std::env::var_os)
+            .filter(|path| !path.is_empty())
+            .filter(|path| cfg!(unix) || std::path::Path::new(path).is_absolute())
+            .filter_map(|path| {
+                PathUri::from_host_native_path(&path).ok().or_else(|| {
+                    if cfg!(unix) {
+                        PathUri::from_host_native_path(cwd.join(path)).ok()
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        expected.dedup();
+
+        assert_eq!(
+            EnvironmentInfo::local().temporary_directories,
+            Some(expected)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_environment_info_resolves_relative_temporary_directory() {
+        if std::env::var_os("CODEX_TEST_RELATIVE_TMPDIR").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .arg("--exact")
+                .arg(
+                    "protocol::tests::local_environment_info_resolves_relative_temporary_directory",
+                )
+                .env("CODEX_TEST_RELATIVE_TMPDIR", "1")
+                .env("TMPDIR", "relative-temp")
+                .status()
+                .expect("run relative TMPDIR subprocess");
+            assert!(status.success(), "relative TMPDIR subprocess failed");
+            return;
+        }
+
+        let expected = PathUri::from_host_native_path(
+            std::env::current_dir()
+                .expect("current directory")
+                .join("relative-temp"),
+        )
+        .expect("absolute temporary directory URI");
+        assert_eq!(
+            EnvironmentInfo::local().temporary_directories,
+            Some(vec![expected])
         );
     }
 
