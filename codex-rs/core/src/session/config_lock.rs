@@ -155,12 +155,12 @@ fn save_config_resolved_fields(
         .get_or_insert_with(FeaturesToml::default);
     features.materialize_resolved_enabled(config.features.get());
     if config.tool_registry.error_on_tool_collisions
-        || config.tool_registry.include_tool_namespaces_info
+        || config.tool_registry.include_tool_metadata
         || features.tool_registry.is_some()
     {
         features.tool_registry = Some(ToolRegistryConfigToml {
             error_on_tool_collisions: Some(config.tool_registry.error_on_tool_collisions),
-            include_tool_namespaces_info: Some(config.tool_registry.include_tool_namespaces_info),
+            include_tool_metadata: Some(config.tool_registry.include_tool_metadata),
         });
     }
     let mut multi_agent_v2: MultiAgentV2ConfigToml =
@@ -273,7 +273,7 @@ mod tests {
         let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
         let mut config = (*sc.original_config_do_not_use).clone();
         config.tool_registry.error_on_tool_collisions = true;
-        config.tool_registry.include_tool_namespaces_info = true;
+        config.tool_registry.include_tool_metadata = true;
         config.multi_agent_v2.subagent_developer_instructions =
             Some("Locked subagent developer instructions.".to_string());
         config.token_budget = Some(crate::config::TokenBudgetConfig {
@@ -334,7 +334,7 @@ mod tests {
             features.tool_registry,
             Some(ToolRegistryConfigToml {
                 error_on_tool_collisions: Some(true),
-                include_tool_namespaces_info: Some(true),
+                include_tool_metadata: Some(true),
             })
         );
         let feature_entries = features.entries();
