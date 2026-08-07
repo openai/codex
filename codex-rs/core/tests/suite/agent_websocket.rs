@@ -79,29 +79,6 @@ async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Res
 
     assert_eq!(non_lite_turn["model"].as_str(), Some("gpt-5.2"));
     assert_eq!(lite_turn["model"].as_str(), Some("gpt-5.4"));
-    let non_lite_turn_metadata: Value = serde_json::from_str(
-        non_lite_turn["client_metadata"]["x-codex-turn-metadata"]
-            .as_str()
-            .expect("non-lite turn metadata"),
-    )?;
-    assert!(non_lite_turn_metadata.get("code_mode_tool_names").is_none());
-    let lite_turn_metadata: Value = serde_json::from_str(
-        lite_turn["client_metadata"]["x-codex-turn-metadata"]
-            .as_str()
-            .expect("Responses Lite turn metadata"),
-    )?;
-    assert_eq!(
-        lite_turn_metadata["code_mode_tool_names"]["view_image"],
-        serde_json::json!({
-            "name": "view_image",
-            "namespace": null,
-        })
-    );
-    assert!(
-        lite_turn["client_metadata"]
-            .get("x-codex-code-mode-tool-names")
-            .is_none()
-    );
     assert!(
         non_lite_turn
             .get("tools")

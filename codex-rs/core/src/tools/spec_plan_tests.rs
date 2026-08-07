@@ -1696,6 +1696,9 @@ async fn code_mode_uses_the_first_normalized_tool_identity() {
         let mut metadata_state = None;
         let plan = probe_with(
             |turn| {
+                update_config(turn, |config| {
+                    config.tool_registry.turn_metadata_includes_tool_info = true;
+                });
                 set_feature(turn, Feature::CodeMode, /*enabled*/ true);
                 if code_mode_only {
                     set_feature(turn, Feature::CodeModeOnly, /*enabled*/ true);
@@ -1741,15 +1744,23 @@ async fn code_mode_uses_the_first_normalized_tool_identity() {
                 "window".to_string(),
                 CodexResponsesRequestKind::Turn,
             );
-        let code_mode_tool_names = metadata
-            .code_mode_tool_names
+        let tool_namespaces = metadata
+            .tool_namespaces_info
             .as_ref()
-            .expect("Responses Lite should receive the supported code-mode tools");
+            .expect("opted-in Responses Lite should receive the supported tools");
         assert_eq!(
-            code_mode_tool_names.get("normalized_alias__lookup"),
-            Some(&winner_name),
+            tool_namespaces["normalized-alias"].functions["lookup"]
+                .code_mode_name
+                .as_deref(),
+            Some("normalized_alias__lookup"),
         );
-        assert!(!code_mode_tool_names.contains_key(codex_tools::TOOL_SEARCH_TOOL_NAME));
+        assert!(
+            tool_namespaces
+                .get("normalized_alias")
+                .and_then(|namespace| namespace.functions.get("lookup"))
+                .and_then(|function| function.code_mode_name.as_ref())
+                .is_none()
+        );
 
         if !code_mode_only && !shadow_is_deferred {
             let ToolSpec::Namespace(namespace) = plan.visible_spec("normalized_alias") else {

@@ -26,7 +26,6 @@ use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes_in_repo;
 use codex_git_utils::get_head_commit_hash;
 use codex_protocol::ThreadId;
-use codex_protocol::ToolName;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -103,7 +102,6 @@ pub(crate) struct TurnMetadataState {
     turn_id: String,
     sandbox: Option<String>,
     enriched_workspaces: RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>,
-    code_mode_tool_names: RwLock<Option<BTreeMap<String, ToolName>>>,
     tool_namespaces_info: RwLock<Option<TurnToolNamespacesInfo>>,
     turn_started_at_unix_ms: RwLock<Option<i64>>,
     responsesapi_client_metadata: RwLock<BTreeMap<String, String>>,
@@ -149,7 +147,6 @@ impl TurnMetadataState {
             turn_id,
             sandbox,
             enriched_workspaces: RwLock::new(None),
-            code_mode_tool_names: RwLock::new(None),
             tool_namespaces_info: RwLock::new(None),
             turn_started_at_unix_ms: RwLock::new(None),
             responsesapi_client_metadata: RwLock::new(BTreeMap::new()),
@@ -164,7 +161,6 @@ impl TurnMetadataState {
     ) -> Option<serde_json::Value> {
         let mut responses_metadata = self.responses_metadata_template();
         // Never serialize harness-owned tool inventory for external MCP servers.
-        responses_metadata.code_mode_tool_names = None;
         responses_metadata.tool_namespaces_info = None;
         let Value::Object(mut metadata) = responses_metadata.turn_metadata_value()? else {
             return None;
@@ -218,17 +214,6 @@ impl TurnMetadataState {
             .store(true, Ordering::Relaxed);
     }
 
-    pub(crate) fn set_code_mode_tool_names(
-        &self,
-        code_mode_tool_names: BTreeMap<String, ToolName>,
-    ) {
-        *self
-            .code_mode_tool_names
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            (!code_mode_tool_names.is_empty()).then_some(code_mode_tool_names);
-    }
-
     pub(crate) fn set_tool_namespaces_info(&self, tool_namespaces_info: TurnToolNamespacesInfo) {
         *self
             .tool_namespaces_info
@@ -274,11 +259,6 @@ impl TurnMetadataState {
             thread_source: self.thread_source.clone(),
             sandbox: self.sandbox.clone(),
             workspaces: self.current_workspaces(),
-            code_mode_tool_names: self
-                .code_mode_tool_names
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone(),
             tool_namespaces_info: self
                 .tool_namespaces_info
                 .read()

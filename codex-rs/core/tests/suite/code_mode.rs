@@ -4853,6 +4853,7 @@ async fn code_mode_uses_the_first_dynamic_tool_for_a_normalized_name() -> Result
                 model_info.tool_mode = Some(ToolMode::CodeMode);
             })
             .with_config(|config| {
+                config.tool_registry.turn_metadata_includes_tool_info = true;
                 config
                     .features
                     .enable(Feature::CodeMode)
@@ -5041,18 +5042,9 @@ text(JSON.stringify({
                     .as_str()
                     .expect("Responses Lite should contain serialized turn metadata"),
             )?;
-            assert_eq!(
-                metadata["code_mode_tool_names"]["foo_bar"],
-                serde_json::json!({
-                    "name": "foo-bar",
-                    "namespace": null,
-                }),
-            );
-            assert!(
-                metadata["code_mode_tool_names"]
-                    .get("tool_search")
-                    .is_none()
-            );
+            let functions = &metadata["tool_namespaces_info"]["functions"]["functions"];
+            assert_eq!(functions["foo-bar"]["code_mode_name"], "foo_bar");
+            assert!(functions["foo_bar"]["code_mode_name"].is_null());
         }
 
         let exec_description = model_tools

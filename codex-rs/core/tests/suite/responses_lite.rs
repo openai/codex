@@ -157,15 +157,7 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
             .context("Responses request should include turn metadata")?,
     )?;
 
-    assert_eq!(
-        turn_metadata["code_mode_tool_names"]["view_image"],
-        serde_json::json!({
-            "name": "view_image",
-            "namespace": null,
-        })
-    );
     assert!(turn_metadata.get("tool_namespaces_info").is_none());
-    assert!(!client_metadata.contains_key("x-codex-code-mode-tool-names"));
 
     Ok(())
 }

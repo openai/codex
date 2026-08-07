@@ -782,12 +782,6 @@ fn register_code_mode_executors(
         code_mode_nested_tool_specs.push((spec, cached_runtime));
     }
 
-    if turn_context.model_info.use_responses_lite {
-        turn_context
-            .turn_metadata_state
-            .set_code_mode_tool_names(code_mode_tool_names.clone());
-    }
-
     let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
     let mut enabled_tools =
         collect_code_mode_exec_prompt_tool_definitions(exec_prompt_tool_specs.iter());
