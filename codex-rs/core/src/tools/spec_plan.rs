@@ -4,7 +4,6 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::image_preparation::unified_image_budget_enabled;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::tools::code_mode::default_exec_yield_time_override_ms;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
 use crate::tools::effective_tool_mode;
@@ -758,16 +757,12 @@ fn register_code_mode_executors(
     );
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-    let default_exec_yield_time_ms =
-        default_exec_yield_time_override_ms(&turn_context.config.features)
-            .unwrap_or(codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS);
-
     let execute_handler = CodeModeExecuteHandler::new(
         create_code_mode_tool(
             &enabled_tools,
             &deferred_tools,
             &namespace_descriptions,
-            default_exec_yield_time_ms,
+            turn_context.config.code_mode.default_exec_yield_time_ms,
             tool_mode == ToolMode::CodeModeOnly,
             if unified_image_budget_enabled(&turn_context.config.features, &turn_context.model_info)
             {

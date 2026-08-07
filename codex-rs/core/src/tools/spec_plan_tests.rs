@@ -1948,17 +1948,28 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
 }
 
 #[tokio::test]
-async fn code_mode_buffered_exec_updates_exec_description() {
-    let plan = probe(|turn| {
-        set_features(turn, &[Feature::CodeMode, Feature::CodeModeBufferedExec]);
-    })
-    .await;
+async fn code_mode_config_updates_exec_description() {
+    for (configured_yield_time_ms, expected_yield_time_ms) in
+        [(None, 30_000), (Some(10_000), 10_000)]
+    {
+        let plan = probe(|turn| {
+            set_features(turn, &[Feature::CodeMode]);
+            if let Some(yield_time_ms) = configured_yield_time_ms {
+                update_config(turn, |config| {
+                    config.code_mode.default_exec_yield_time_ms = yield_time_ms;
+                });
+            }
+        })
+        .await;
 
-    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
-        panic!("expected code mode exec tool");
-    };
-    assert!(exec.description.contains("Defaults to 30000 ms."));
-    assert!(!exec.description.contains("Defaults to 10000 ms."));
+        let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+            panic!("expected code mode exec tool");
+        };
+        assert!(
+            exec.description
+                .contains(&format!("Defaults to {expected_yield_time_ms} ms."))
+        );
+    }
 }
 
 #[tokio::test]

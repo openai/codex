@@ -365,6 +365,12 @@
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "default_exec_yield_time_ms": {
+          "description": "Default yield timeout for code-mode exec calls, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "direct_only_tool_namespaces": {
           "description": "Exact tool namespaces to expose only as direct model tools. These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted from the nested code-mode tool surface.",
           "items": {

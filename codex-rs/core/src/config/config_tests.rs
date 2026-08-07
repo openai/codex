@@ -538,6 +538,7 @@ async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
         r#"
 [features.code_mode]
 enabled = true
+default_exec_yield_time_ms = 10000
 excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
 direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 
@@ -554,6 +555,7 @@ disable_in_process_fallback = true
     )
     .await?;
 
+    assert_eq!(config.code_mode.default_exec_yield_time_ms, 10_000);
     assert_eq!(
         config.code_mode.excluded_tool_namespaces,
         vec!["mcp__codex_apps".to_string(), "multi_agent_v1".to_string()]

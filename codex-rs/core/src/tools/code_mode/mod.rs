@@ -17,13 +17,12 @@ use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
-use codex_features::Feature;
-use codex_features::Features;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::CodeModeConfig;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
@@ -54,13 +53,6 @@ pub(crate) use wait_handler::CodeModeWaitHandler;
 pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
 pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
-const BUFFERED_EXEC_YIELD_TIME_MS: u64 = 30_000;
-
-pub(crate) fn default_exec_yield_time_override_ms(features: &Features) -> Option<u64> {
-    features
-        .enabled(Feature::CodeModeBufferedExec)
-        .then_some(BUFFERED_EXEC_YIELD_TIME_MS)
-}
 
 /// Returns true for the code-mode `exec` tool in the default namespace.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
@@ -78,7 +70,7 @@ pub(crate) struct CodeModeService {
     session_provider: Arc<dyn CodeModeSessionProvider>,
     availability: Result<(), String>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
-    default_exec_yield_time_override_ms: Option<u64>,
+    default_exec_yield_time_ms: u64,
     shutting_down: AtomicBool,
     unavailable_warning_emitted: AtomicBool,
 }
@@ -86,7 +78,7 @@ pub(crate) struct CodeModeService {
 impl CodeModeService {
     pub(crate) fn new(
         session_provider: Arc<dyn CodeModeSessionProvider>,
-        features: &Features,
+        config: &CodeModeConfig,
     ) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         let availability = session_provider.availability();
@@ -95,7 +87,7 @@ impl CodeModeService {
             session_provider,
             availability,
             dispatch_broker,
-            default_exec_yield_time_override_ms: default_exec_yield_time_override_ms(features),
+            default_exec_yield_time_ms: config.default_exec_yield_time_ms,
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
@@ -129,9 +121,9 @@ impl CodeModeService {
         &self,
         mut request: codex_code_mode::ExecuteRequest,
     ) -> Result<codex_code_mode::StartedCell, String> {
-        if request.yield_time_ms.is_none() {
-            request.yield_time_ms = self.default_exec_yield_time_override_ms;
-        }
+        request
+            .yield_time_ms
+            .get_or_insert(self.default_exec_yield_time_ms);
         self.session().await?.execute(request).await
     }
 
