@@ -7,6 +7,7 @@ use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core::config::Config;
+use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -46,6 +47,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use tempfile::TempDir;
+use test_case::test_case;
 use wiremock::Mock;
 use wiremock::MockGuard;
 use wiremock::MockServer;
@@ -545,6 +548,118 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
             .iter()
             .any(|tool| tool["id"] == DISCOVERABLE_GMAIL_ID && tool["tool_type"] == "connector")
     }));
+    Ok(())
+}
+
+#[test_case(true; "enabled plugin skill")]
+#[test_case(false; "disabled plugin skill")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_plugin_skill_availability_reaches_tool_suggestion_candidates(
+    skill_enabled: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let codex_home = Arc::new(TempDir::new()?);
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    let plugin_root = curated_root.join("plugins/sample");
+    std::fs::create_dir_all(curated_root.join(".agents/plugins"))?;
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("skills/search"))?;
+    std::fs::write(
+        curated_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-curated",
+  "plugins": [{
+    "name": "sample",
+    "source": {"source": "local", "path": "./plugins/sample"}
+  }]
+}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample","description":"Search sample data"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join("skills/search/SKILL.md"),
+        "---\nname: search\ndescription: Search sample data\n---\n",
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            "[features]\nplugins = true\n\n[[skills.config]]\nname = \"sample:search\"\nenabled = {skill_enabled}\n"
+        ),
+    )?;
+
+    let call_id = "list-skill-backed-plugin-candidates";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME, "{}"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config({
+            let apps_base_url = apps_server.chatgpt_base_url.clone();
+            move |config| {
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::Disabled)
+                    .expect("test config should allow disabled permissions");
+                configure_apps_without_search_tool(config, apps_base_url.as_str());
+                config
+                    .features
+                    .disable(Feature::RemotePlugin)
+                    .expect("test config should allow local plugin suggestions");
+                config.tool_suggest.discoverables = vec![ToolSuggestDiscoverable {
+                    kind: ToolSuggestDiscoverableType::Plugin,
+                    id: "sample@openai-curated".to_string(),
+                }];
+            }
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "list available plugins",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_legacy_tools(&requests[0].body_json());
+    let output: Value = serde_json::from_str(
+        &requests[1]
+            .function_call_output_text(call_id)
+            .expect("list tool output"),
+    )?;
+    assert_eq!(
+        output,
+        json!({
+            "tools": [{
+                "id": "sample@openai-curated",
+                "name": "sample",
+                "description": "Search sample data",
+                "tool_type": "plugin",
+                "has_skills": skill_enabled,
+                "mcp_server_names": [],
+                "app_connector_ids": []
+            }]
+        })
+    );
     Ok(())
 }
 

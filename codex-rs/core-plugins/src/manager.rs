@@ -1860,7 +1860,7 @@ impl PluginsManager {
                 marketplace_name,
                 plugin,
                 self.restriction_product,
-                Arc::clone(&self.skill_root_scan_slots),
+                self.skill_root_loader.as_ref(),
             )
             .await?;
         Ok(fragment.project(skill_config_rules, self.auth_mode()))
