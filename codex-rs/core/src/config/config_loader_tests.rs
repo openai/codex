@@ -2749,6 +2749,52 @@ async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_h
 }
 
 #[tokio::test]
+async fn malformed_untrusted_linked_worktree_does_not_read_root_hooks() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let worktree_root = tmp.path().join("worktree");
+
+    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(repo_root.join(".codex")).await?;
+    write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    tokio::fs::write(worktree_root.join(".codex").join(CONFIG_TOML_FILE), "foo =").await?;
+    tokio::fs::write(repo_root.join(".codex").join(CONFIG_TOML_FILE), [0xff]).await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &repo_root,
+        TrustLevel::Untrusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_root)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let project_layers = layers
+        .all_layers_high_to_low()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(project_layers.len(), 1);
+    assert!(project_layers[0].disabled_reason.is_some());
+    assert_eq!(
+        project_layers[0].config,
+        TomlValue::Table(toml::map::Map::new())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_config_toml()
 -> std::io::Result<()> {
     let tmp = tempdir()?;

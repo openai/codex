@@ -36,6 +36,19 @@ impl RequirementsLayerEntry {
         self.base_dir = Some(base_dir);
         self
     }
+
+    pub(crate) fn into_raw_parts(
+        self,
+    ) -> Result<(RequirementSource, TomlValue, Option<AbsolutePathBuf>), RequirementsCompositionError>
+    {
+        let Self {
+            source,
+            toml,
+            base_dir,
+        } = self;
+        let toml = parse_layer_toml(&toml, &source)?;
+        Ok((source, toml, base_dir))
+    }
 }
 
 #[derive(Clone, Debug)]
