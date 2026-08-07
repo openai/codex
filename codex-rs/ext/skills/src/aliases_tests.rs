@@ -71,3 +71,15 @@ fn rejects_unknown_roots_and_locators_outside_the_root() {
 fn returns_none_when_no_roots_are_provided() {
     assert!(AliasPlan::build("r", &[]).is_none());
 }
+
+#[test]
+fn aliases_roots_used_by_only_one_skill() {
+    let root = "/skills/singleton";
+    let plan = AliasPlan::build("r", &[root]).expect("singleton root should produce an alias");
+
+    assert_eq!(vec!["- `r0` = `/skills/singleton`"], plan.root_lines());
+    assert_eq!(
+        Some("r0/alpha/SKILL.md".to_string()),
+        plan.shorten("/skills/singleton/alpha/SKILL.md")
+    );
+}

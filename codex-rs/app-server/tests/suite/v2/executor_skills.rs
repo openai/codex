@@ -410,24 +410,23 @@ stream_max_retries = 0
             .await?;
     }
     if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
+        let is_skills_budget_warning = |message: &str| {
+            message.starts_with("Exceeded skills context budget.")
+                || message.starts_with(
+                    "Skill descriptions were shortened to fit the skills context budget.",
+                )
+        };
         let warning = timeout(READ_TIMEOUT, async {
             loop {
                 let warning: WarningNotification = app_server.read_notification("warning").await?;
-                if warning
-                    .message
-                    .starts_with("Exceeded skills context budget.")
-                {
+                if is_skills_budget_warning(&warning.message) {
                     return Ok::<WarningNotification, anyhow::Error>(warning);
                 }
             }
         })
         .await??;
         assert_eq!(warning.thread_id, Some(thread_id));
-        assert!(
-            warning
-                .message
-                .starts_with("Exceeded skills context budget.")
-        );
+        assert!(is_skills_budget_warning(&warning.message));
     }
     timeout(
         READ_TIMEOUT,

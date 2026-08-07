@@ -97,7 +97,7 @@ fn render_catalog(
         catalog_surface,
         include_skills_usage_instructions,
         budget,
-        render_available_skills(catalog, policy, budget),
+        render_available_skills(catalog, policy, budget, include_skills_usage_instructions),
     )
 }
 

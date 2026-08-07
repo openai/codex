@@ -252,6 +252,7 @@ impl<'a> CatalogContext<'a> {
                 &catalogs.orchestrator.catalog,
                 &catalogs.host.catalog,
                 self.metadata_budget,
+                self.include_usage,
             )
         } else {
             RenderedSkillCatalogs::default()

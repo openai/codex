@@ -2,33 +2,33 @@ use codex_extension_api::ContextualUserFragment;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
-use crate::catalog_prompt::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
-use crate::catalog_prompt::SKILLS_HOW_TO_USE_WITH_ALIASES;
+use crate::catalog_prompt::SkillPromptKind;
 use crate::catalog_prompt::render_available_skills_body;
 use crate::tools::SkillToolAuthority;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AvailableSkillsInstructions {
+    prompt_kind: SkillPromptKind,
     skill_root_lines: Vec<String>,
     skill_lines: Vec<String>,
 }
 
 impl AvailableSkillsInstructions {
     pub(crate) fn from_skill_lines(
+        prompt_kind: SkillPromptKind,
         skill_root_lines: Vec<String>,
         mut skill_lines: Vec<String>,
         include_skills_usage_instructions: bool,
     ) -> Self {
         if include_skills_usage_instructions {
             skill_lines.push("### How to use skills".to_string());
-            let instructions = if skill_root_lines.is_empty() {
-                SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
-            } else {
-                SKILLS_HOW_TO_USE_WITH_ALIASES
-            };
-            skill_lines.push(instructions.to_string());
+            if let Some(instructions) = prompt_kind.alias_instructions() {
+                skill_lines.push(instructions.to_string());
+            }
+            skill_lines.push(prompt_kind.usage_instructions().to_string());
         }
         Self {
+            prompt_kind,
             skill_root_lines,
             skill_lines,
         }
@@ -49,7 +49,7 @@ impl ContextualUserFragment for AvailableSkillsInstructions {
     }
 
     fn body(&self) -> String {
-        render_available_skills_body(&self.skill_root_lines, &self.skill_lines)
+        render_available_skills_body(self.prompt_kind, &self.skill_root_lines, &self.skill_lines)
     }
 }
 

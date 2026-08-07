@@ -99,6 +99,7 @@ fn ordering_follows_render_policy() {
     assert_eq!(
         render(SkillCatalogRenderPolicy::CoreCompatible),
         render_available_skills_body(
+            SkillPromptKind::Unaliased,
             &[],
             &[
                 "- system-zeta: Description. (file: /skills/system-zeta/SKILL.md)".to_string(),
@@ -113,6 +114,7 @@ fn ordering_follows_render_policy() {
     assert_eq!(
         render(SkillCatalogRenderPolicy::ExtensionCompatible),
         render_available_skills_body(
+            SkillPromptKind::Unaliased,
             &[],
             &[
                 "- repo-zeta: Description. (file: /skills/repo-zeta/SKILL.md)".to_string(),
@@ -158,6 +160,7 @@ fn description_selection_follows_render_policy() {
     assert_eq!(
         core.body(),
         render_available_skills_body(
+            SkillPromptKind::Unaliased,
             &[],
             &[
                 "- fallback: fallback description (file: /skills/fallback/SKILL.md)".to_string(),
@@ -168,6 +171,7 @@ fn description_selection_follows_render_policy() {
     assert_eq!(
         extension.body(),
         render_available_skills_body(
+            SkillPromptKind::Unaliased,
             &[],
             &[
                 "- shortened: short description (file: /skills/shortened/SKILL.md)".to_string(),
@@ -191,6 +195,98 @@ fn catalog_budget_uses_context_percentage_or_character_fallback() {
         skill_metadata_budget(/*context_window*/ None),
         SkillMetadataBudget::Characters(8_000)
     );
+}
+
+#[test]
+fn host_only_prompts_preserve_existing_behavior_with_and_without_aliases() {
+    let root = "/Users/test/.codex/plugins/cache/openai-curated/host-plugin/1.0.0/skills-with-a-long-shared-root";
+    let catalog = SkillCatalog {
+        entries: [
+            ("alpha", "Alpha skill."),
+            ("beta", "Beta skill."),
+            ("gamma", "Gamma skill."),
+        ]
+        .into_iter()
+        .map(|(name, description)| {
+            entry(name, description, /*short_description*/ None)
+                .with_display_path(format!("{root}/{name}/SKILL.md"))
+                .with_alias_root(root)
+        })
+        .collect(),
+        warnings: Vec::new(),
+    };
+
+    let unaliased = available_skills_fragment(
+        &catalog,
+        /*include_skills_usage_instructions*/ true,
+        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillMetadataBudget::Characters(usize::MAX),
+    )
+    .expect("unaliased host catalog should render");
+    insta::assert_snapshot!(unaliased.body(), @r###"
+
+    ## Skills
+    A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `environment resource` locators are owned by an execution environment, `orchestrator resource` locators are opaque non-filesystem resources, and `custom resource` locators use their provider's access mechanism.
+    ### Available skills
+    - alpha: Alpha skill. (file: /Users/test/.codex/plugins/cache/openai-curated/host-plugin/1.0.0/skills-with-a-long-shared-root/alpha/SKILL.md)
+    - beta: Beta skill. (file: /Users/test/.codex/plugins/cache/openai-curated/host-plugin/1.0.0/skills-with-a-long-shared-root/beta/SKILL.md)
+    - gamma: Gamma skill. (file: /Users/test/.codex/plugins/cache/openai-curated/host-plugin/1.0.0/skills-with-a-long-shared-root/gamma/SKILL.md)
+    ### How to use skills
+    - Discovery: The list above is the skills available in this session (name + description + source locator). `file` entries live on the host filesystem, `environment resource` and `orchestrator resource` entries must be accessed through `skills.list` and `skills.read`, and `custom resource` entries use their provider's access mechanism.
+    - Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+    - Missing/blocked: If a named skill isn't in the list or its source can't be read, say so briefly and continue with the best fallback.
+    - How to use a skill (progressive disclosure):
+      1) After deciding to use a skill, the main agent must read its `SKILL.md` completely before taking task actions. For a `file` entry, open the listed path. For an `environment resource`, call `skills.list` with `{"authority":{"kind":"executor"}}`; for an `orchestrator resource`, use `{"authority":{"kind":"orchestrator"}}`. Select the matching package and pass its exact authority, package, and `main_resource` to `skills.read`. Follow `next_cursor`; if a read is paginated, continue until EOF.
+      2) When `SKILL.md` references another resource, use the same access mechanism. Resolve relative references beneath an executor skill's returned package and call `skills.read` with the same authority and package. For orchestrator skills, pass the exact referenced resource identifier with the same authority and package to `skills.read`; do not treat `skill://` identifiers as filesystem paths.
+      3) If `SKILL.md` points to extra folders such as `references/`, use its routing instructions to identify the resources required for the task. The main agent must read each required instruction or reference file itself before acting on it. Do not delegate reading, summarizing, or interpreting skill instructions to a subagent. Subagents may still perform task work when the selected skill allows it.
+      4) For filesystem-backed skills, prefer running or patching provided scripts instead of retyping large code blocks. For environment and orchestrator skills, use `skills.read` and the available tools; do not invent a local path.
+      5) Reuse provided assets or templates through the same source access mechanism instead of recreating them.
+    - Coordination and sequencing:
+      - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+      - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+    - Context hygiene:
+      - Progressive disclosure applies to selecting relevant files, not partially reading a selected instruction file. Do not load unrelated references, scripts, or assets.
+      - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+      - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+    - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+    "###);
+
+    let aliased = available_skills_fragment(
+        &catalog,
+        /*include_skills_usage_instructions*/ true,
+        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillMetadataBudget::Characters(200),
+    )
+    .expect("aliased host catalog should render");
+    insta::assert_snapshot!(aliased.body(), @r###"
+
+    ## Skills
+    A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.
+    ### Skill roots
+    - `r0` = `/Users/test/.codex/plugins/cache/openai-curated/host-plugin/1.0.0/skills-with-a-long-shared-root`
+    ### Available skills
+    - alpha: Alpha skill. (file: r0/alpha/SKILL.md)
+    - beta: Beta skill. (file: r0/beta/SKILL.md)
+    - gamma: Gamma skill. (file: r0/gamma/SKILL.md)
+    ### How to use skills
+    - Discovery: The list above is the skills available in this session (name + description + short path). Skill bodies live on disk at the listed paths after expanding the matching alias from `### Skill roots`.
+    - Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+    - Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
+    - How to use a skill (progressive disclosure):
+      1) After deciding to use a skill, the main agent must expand the listed short `path` with the matching alias from `### Skill roots`, then open and read its `SKILL.md` completely before taking task actions. If a read is truncated or paginated, continue until EOF.
+      2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the directory containing that expanded `SKILL.md` first, and only consider other paths if needed.
+      3) If `SKILL.md` points to extra folders such as `references/`, use its routing instructions to identify the files required for the task. The main agent must read each required instruction or reference file itself before acting on it. Do not delegate reading, summarizing, or interpreting skill instructions to a subagent. Subagents may still perform task work when the selected skill allows it.
+      4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
+      5) If `assets/` or templates exist, reuse them instead of recreating from scratch.
+    - Coordination and sequencing:
+      - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+      - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+    - Context hygiene:
+      - Progressive disclosure applies to selecting relevant files, not partially reading a selected instruction file. Do not load unrelated references, scripts, or assets.
+      - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+      - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+    - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+    "###);
 }
 
 #[test]
@@ -243,7 +339,9 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
     let plan = build_alias_plan(&visible_entries).expect("alias plan should build");
     let table_cost = aliased_metadata_overhead_cost(
         SkillMetadataBudget::Characters(usize::MAX),
+        SkillPromptKind::HostAliases,
         &plan.root_lines(),
+        /*include_skills_usage_instructions*/ true,
     );
     let alias_minimum = visible_entries.iter().fold(table_cost, |cost, entry| {
         cost.saturating_add(
@@ -290,7 +388,9 @@ async fn host_alias_roots_follow_core_discovery_order() -> Result<(), Box<dyn st
     let system_root_path = parent.join("system-root");
     for (root, name) in [
         (&user_root_path, "user-skill"),
+        (&user_root_path, "another-user-skill"),
         (&system_root_path, "system-skill"),
+        (&system_root_path, "another-system-skill"),
     ] {
         let skill_dir = root.join(name);
         std::fs::create_dir_all(&skill_dir)?;
@@ -436,6 +536,7 @@ fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
         &SkillCatalog::default(),
         &host_catalog,
         SkillMetadataBudget::Tokens(28),
+        /*include_skills_usage_instructions*/ false,
     );
     let host = host.expect("host catalog should render");
     let executor = executor.expect("executor catalog should render");
@@ -470,6 +571,102 @@ fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
     assert!(
         host.into_fragment(/*include_skills_usage_instructions*/ false)
             .is_none()
+    );
+}
+
+#[test]
+fn mixed_catalogs_alias_all_skill_sources_under_budget_pressure() {
+    let executor_root =
+        "skill://executor-environment-with-a-long-shared-root/workspaces/project/.agents/skills";
+    let orchestrator_root = "skill://plugin_connector_1p_2330815c823c8191941e5dc465bb899f";
+    let host_root = "/Users/test/.codex/plugins/cache/openai-curated/example/hash1234567890/skills";
+    let catalog =
+        |source: SkillSourceKind, authority: &str, root: &str, prefix: &str| SkillCatalog {
+            entries: (0..3)
+                .map(|index| {
+                    let name = format!("{prefix}-{index}");
+                    let locator = match source {
+                        SkillSourceKind::Orchestrator => format!("{root}/{name}"),
+                        SkillSourceKind::Host
+                        | SkillSourceKind::Executor
+                        | SkillSourceKind::Custom(_) => format!("{root}/{name}/SKILL.md"),
+                    };
+                    SkillCatalogEntry::new(
+                        SkillPackageId(locator.clone()),
+                        SkillAuthority::new(source.clone(), authority),
+                        name,
+                        "Description.",
+                        SkillResourceId::new(locator.clone()),
+                    )
+                    .with_display_path(locator)
+                    .with_alias_root(root)
+                })
+                .collect(),
+            warnings: Vec::new(),
+        };
+    let executor_catalog = catalog(
+        SkillSourceKind::Executor,
+        "executor-environment",
+        executor_root,
+        "executor",
+    );
+    let orchestrator_catalog = catalog(
+        SkillSourceKind::Orchestrator,
+        "codex_apps",
+        orchestrator_root,
+        "orchestrator",
+    );
+    let host_catalog = catalog(SkillSourceKind::Host, "host", host_root, "host");
+
+    let rendered = render_combined_available_skills(
+        &executor_catalog,
+        &orchestrator_catalog,
+        &host_catalog,
+        SkillMetadataBudget::Characters(900),
+        /*include_skills_usage_instructions*/ true,
+    );
+    let executor = rendered.executor.expect("executor catalog should render");
+    let orchestrator = rendered
+        .orchestrator
+        .expect("orchestrator catalog should render");
+    let host = rendered.host.expect("host catalog should render");
+
+    assert_eq!(
+        executor.skill_root_lines,
+        vec![format!("- `e0` = `{executor_root}`")]
+    );
+    assert_eq!(
+        orchestrator.skill_root_lines,
+        vec![format!("- `o0` = `{orchestrator_root}`")]
+    );
+    assert_eq!(
+        host.skill_root_lines,
+        vec![format!("- `r0` = `{host_root}`")]
+    );
+    assert!(
+        executor
+            .skill_lines
+            .iter()
+            .any(|line| line.contains("(environment resource: e0/executor-0/SKILL.md)"))
+    );
+    assert!(
+        orchestrator
+            .skill_lines
+            .iter()
+            .any(|line| line.contains("(orchestrator resource: o0/orchestrator-0)"))
+    );
+    assert!(
+        host.skill_lines
+            .iter()
+            .any(|line| line.contains("(file: r0/host-0/SKILL.md)"))
+    );
+    assert_eq!(
+        (
+            executor.report.included_count,
+            orchestrator.report.included_count,
+            host.report.included_count,
+        ),
+        (3, 3, 3)
     );
 }
 
@@ -528,6 +725,7 @@ fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
         &orchestrator_catalog,
         &host_catalog,
         SkillMetadataBudget::Tokens(74),
+        /*include_skills_usage_instructions*/ false,
     );
     let host = host.expect("host catalog should render");
     let executor = executor.expect("executor catalog should render");
@@ -724,6 +922,7 @@ fn catalog_report_counts_partial_description_truncation() {
         &catalog,
         SkillCatalogRenderPolicy::ExtensionCompatible,
         budget,
+        /*include_skills_usage_instructions*/ false,
     )
     .expect("catalog should render");
     assert_eq!(
@@ -773,6 +972,7 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
         &catalog,
         SkillCatalogRenderPolicy::CoreCompatible,
         SkillMetadataBudget::Tokens(100),
+        /*include_skills_usage_instructions*/ false,
     )
     .expect("core-compatible report should render");
     assert_eq!(core_render.report, expected_report);
@@ -785,6 +985,7 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
         &catalog,
         SkillCatalogRenderPolicy::ExtensionCompatible,
         SkillMetadataBudget::Tokens(100),
+        /*include_skills_usage_instructions*/ false,
     )
     .expect("catalog should render");
     assert_eq!(render.report, expected_report);
@@ -817,6 +1018,7 @@ fn catalog_preserves_report_when_no_fragment_fits_budget() {
         &catalog,
         SkillCatalogRenderPolicy::ExtensionCompatible,
         SkillMetadataBudget::Tokens(1),
+        /*include_skills_usage_instructions*/ false,
     )
     .expect("catalog should produce a report");
     assert_eq!(
@@ -861,6 +1063,7 @@ fn substantial_description_shortening_emits_warning() {
         &catalog,
         SkillCatalogRenderPolicy::ExtensionCompatible,
         SkillMetadataBudget::Characters(minimum_cost + 49),
+        /*include_skills_usage_instructions*/ false,
     )
     .expect("catalog should render");
 
