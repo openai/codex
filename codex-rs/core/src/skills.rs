@@ -22,7 +22,6 @@ pub use codex_core_skills::injection;
 pub use codex_core_skills::injection::SkillInjections;
 pub use codex_core_skills::injection::build_skill_injections;
 pub use codex_core_skills::model;
-pub use codex_core_skills::remote;
 pub use codex_skills::SkillMetadata;
 pub use codex_skills::SkillPolicy;
 pub use codex_skills::collect_explicit_skill_mentions;

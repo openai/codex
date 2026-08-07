@@ -2,7 +2,6 @@ pub mod config_rules;
 pub mod injection;
 pub(crate) mod invocation_utils;
 pub mod model;
-pub mod remote;
 mod skill_instructions;
 
 /// Hard byte limit for one model-visible skill instruction body.
