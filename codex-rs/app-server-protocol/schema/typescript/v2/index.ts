@@ -391,6 +391,8 @@ export type { ScheduledTaskWeekday } from "./ScheduledTaskWeekday";
 export type { SelectedCapabilityRoot } from "./SelectedCapabilityRoot";
 export type { SendAddCreditsNudgeEmailParams } from "./SendAddCreditsNudgeEmailParams";
 export type { SendAddCreditsNudgeEmailResponse } from "./SendAddCreditsNudgeEmailResponse";
+export type { ServerDiagnosticsGauge } from "./ServerDiagnosticsGauge";
+export type { ServerDiagnosticsProcess } from "./ServerDiagnosticsProcess";
 export type { ServerRequestResolvedNotification } from "./ServerRequestResolvedNotification";
 export type { SessionMigration } from "./SessionMigration";
 export type { SessionSource } from "./SessionSource";
