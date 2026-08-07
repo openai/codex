@@ -5,6 +5,7 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::StartThreadOptions;
+use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -790,6 +791,14 @@ async fn remote_compact_uses_agent_identity_assertion() -> Result<()> {
         compact_request.header("chatgpt-account-id").as_deref(),
         Some("account-compact")
     );
+    let compact_body = compact_request.body_json();
+    let model = compact_body["model"]
+        .as_str()
+        .expect("missing request model");
+    assert_eq!(
+        compact_request.header(X_CODEX_ROUTING_HINT_HEADER),
+        Some(format!("model={model}"))
+    );
 
     Ok(())
 }
@@ -801,6 +810,7 @@ async fn assert_remote_manual_compact_request_parity(
     snapshot_name: &str,
     scenario: &str,
 ) -> Result<()> {
+    let uses_codex_backend = auth.uses_codex_backend();
     let mut builder = test_codex().with_auth(auth);
     if let Some(service_tier) = configured_service_tier {
         builder = builder.with_config(move |config| {
@@ -969,6 +979,25 @@ async fn assert_remote_manual_compact_request_parity(
     let compact_request = compact_mock.single_request();
     let normal_body = normal_request.body_json();
     let compact_body = compact_request.body_json();
+    let expected_routing_hint = |body: &Value| {
+        if !uses_codex_backend {
+            return None;
+        }
+
+        let model = body["model"].as_str().expect("missing request model");
+        match body.get("service_tier").and_then(Value::as_str) {
+            Some(tier) => Some(format!("model={model};tier={tier}")),
+            None => Some(format!("model={model}")),
+        }
+    };
+    assert_eq!(
+        normal_request.header(X_CODEX_ROUTING_HINT_HEADER),
+        expected_routing_hint(&normal_body)
+    );
+    assert_eq!(
+        compact_request.header(X_CODEX_ROUTING_HINT_HEADER),
+        expected_routing_hint(&compact_body)
+    );
 
     let mut expected_compact_body_without_input = normal_body.clone();
     let expected_compact_object = expected_compact_body_without_input

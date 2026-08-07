@@ -5,6 +5,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
 use codex_extension_api::empty_extension_registry;
@@ -1326,6 +1327,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
+    assert_eq!(request.header(X_CODEX_ROUTING_HINT_HEADER), None);
     let request_session_id = request.header("session-id").expect("session-id header");
     let request_thread_id = request.header("thread-id").expect("thread-id header");
     let request_authorization = request
@@ -1656,6 +1658,13 @@ async fn chatgpt_auth_sends_correct_request() {
         .header("chatgpt-account-id")
         .expect("chatgpt-account-id header");
     let request_body = request.body_json();
+    let model = request_body["model"]
+        .as_str()
+        .expect("missing request model");
+    assert_eq!(
+        request.header(X_CODEX_ROUTING_HINT_HEADER),
+        Some(format!("model={model}"))
+    );
 
     let request_session_id = request.header("session-id").expect("session-id header");
     let request_thread_id = request.header("thread-id").expect("thread-id header");
@@ -2525,6 +2534,7 @@ async fn sequential_cutoff_is_omitted_for_non_openai_provider() -> anyhow::Resul
     )
     .await;
     let TestCodex { codex, .. } = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model_provider.name = "mock".to_string();
             let _ = config
@@ -2550,7 +2560,9 @@ async fn sequential_cutoff_is_omitted_for_non_openai_provider() -> anyhow::Resul
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let request_body = resp_mock.single_request().body_json();
+    let request = resp_mock.single_request();
+    assert_eq!(request.header(X_CODEX_ROUTING_HINT_HEADER), None);
+    let request_body = request.body_json();
     pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
 
     Ok(())
@@ -3766,7 +3778,7 @@ async fn env_var_overrides_loaded_auth() {
         .await;
 
     let provider = ModelProviderInfo {
-        name: "custom".to_string(),
+        name: ModelProviderInfo::create_openai_provider(/*base_url*/ None).name,
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
         env_key: Some(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE.to_string()),
@@ -3820,6 +3832,15 @@ async fn env_var_overrides_loaded_auth() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = server
+        .received_requests()
+        .await
+        .expect("read recorded requests")
+        .into_iter()
+        .find(|request| request.url.path() == "/openai/responses")
+        .expect("missing provider request");
+    assert_eq!(request.headers.get(X_CODEX_ROUTING_HINT_HEADER), None);
 }
 
 fn create_dummy_codex_auth() -> CodexAuth {
