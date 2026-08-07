@@ -5753,7 +5753,7 @@
     },
     "project_doc_max_bytes": {
       "default": 32768,
-      "description": "Maximum number of bytes to include from an AGENTS.md project doc file.",
+      "description": "Maximum total bytes of project instruction content across all selected environments.",
       "format": "uint",
       "minimum": 0.0,
       "type": "integer"

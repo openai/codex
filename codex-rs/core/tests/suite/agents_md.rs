@@ -634,6 +634,67 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_environment_project_instructions_share_one_byte_budget() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("multi-env-budget-response"),
+            responses::ev_completed("multi-env-budget-response"),
+        ]),
+    )
+    .await;
+    let local_root = TempDir::new()?;
+    std::fs::write(local_root.path().join(GLOBAL_AGENTS_FILENAME), "VWXYZ")?;
+    let mut builder = test_codex()
+        .with_config(|config| config.project_doc_max_bytes = 7)
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &PathUri::from_host_native_path(cwd.join(GLOBAL_AGENTS_FILENAME))?,
+                b"ABCDE".to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![
+                TurnEnvironmentSelection {
+                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd: PathUri::from_abs_path(&test.config.cwd),
+                    workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+                },
+                TurnEnvironmentSelection {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: PathUri::from_host_native_path(local_root.path())?,
+                    workspace_roots: vec![PathUri::from_host_native_path(local_root.path())?],
+                },
+            ]),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+
+    submit_thread_turn(&thread.thread, "inspect the shared AGENTS.md budget").await?;
+
+    let contents = format!(
+        "for `{REMOTE_ENVIRONMENT_ID}` with root {}\n\nABCDE\n\nfor `{LOCAL_ENVIRONMENT_ID}` with root {}\n\nVW",
+        PathUri::from_abs_path(&test.config.cwd).inferred_native_path_string(),
+        local_root.path().display(),
+    );
+    let expected =
+        format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>");
+    assert_single_instruction_fragment(&response_mock.single_request(), &expected);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapshot() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_no_remote_env!(Ok(()));

@@ -864,7 +864,7 @@ pub struct Config {
     /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
-    /// Maximum number of bytes to include from an AGENTS.md project doc file.
+    /// Maximum total bytes of project instruction content across all selected environments.
     pub project_doc_max_bytes: usize,
 
     /// Additional filenames to try when looking for project-level docs.

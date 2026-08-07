@@ -55,17 +55,28 @@ pub(crate) async fn load_project_instructions(
     environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
+    let mut remaining = config.project_doc_max_bytes;
     for turn_environment in environments.turn_environments() {
+        if remaining == 0 {
+            break;
+        }
+
         let filesystem = turn_environment.environment.get_filesystem();
         match read_agents_md(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
             turn_environment.cwd(),
+            remaining,
         )
         .await
         {
-            Ok(Some(docs)) => loaded.entries.extend(docs.entries),
+            Ok(Some(docs)) => {
+                for entry in docs.entries {
+                    remaining = remaining.saturating_sub(entry.contents.len());
+                    loaded.entries.push(entry);
+                }
+            }
             Ok(None) => {}
             Err(e) => {
                 error!(
@@ -90,9 +101,8 @@ async fn read_agents_md(
     fs: &dyn ExecutorFileSystem,
     environment_id: &str,
     cwd: &PathUri,
+    max_total: usize,
 ) -> io::Result<Option<LoadedAgentsMd>> {
-    let max_total = config.project_doc_max_bytes;
-
     if max_total == 0 {
         return Ok(None);
     }

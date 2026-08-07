@@ -675,9 +675,15 @@ async fn read_agents_md_propagates_metadata_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
-        .await
-        .expect_err("metadata error");
+    let err = read_agents_md(
+        &config.config,
+        &fs,
+        "local",
+        &PathUri::from_abs_path(&cwd),
+        config.project_doc_max_bytes,
+    )
+    .await
+    .expect_err("metadata error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -694,9 +700,15 @@ async fn read_agents_md_propagates_read_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
-        .await
-        .expect_err("read error");
+    let err = read_agents_md(
+        &config.config,
+        &fs,
+        "local",
+        &PathUri::from_abs_path(&cwd),
+        config.project_doc_max_bytes,
+    )
+    .await
+    .expect_err("read error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -713,9 +725,15 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     };
 
     let cwd = config.cwd.clone();
-    let loaded = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
-        .await
-        .expect("removed file is recoverable");
+    let loaded = read_agents_md(
+        &config.config,
+        &fs,
+        "local",
+        &PathUri::from_abs_path(&cwd),
+        config.project_doc_max_bytes,
+    )
+    .await
+    .expect("removed file is recoverable");
 
     assert_eq!(loaded, None);
 }
@@ -1175,12 +1193,12 @@ async fn primary_only_project_doc_preserves_legacy_layout_with_multiple_bound_en
 }
 
 #[tokio::test]
-async fn project_doc_byte_limit_is_applied_independently_per_environment() {
+async fn project_doc_byte_limit_is_shared_across_environments() {
     let primary = tempfile::tempdir().expect("primary tempdir");
     let secondary = tempfile::tempdir().expect("secondary tempdir");
     fs::write(primary.path().join("AGENTS.md"), "ABCDE").unwrap();
     fs::write(secondary.path().join("AGENTS.md"), "VWXYZ").unwrap();
-    let config = make_config(&primary, /*limit*/ 3, /*instructions*/ None).await;
+    let config = make_config(&primary, /*limit*/ 7, /*instructions*/ None).await;
     let environments = resolved_local_environments([
         ("primary", config.cwd.clone()),
         ("secondary", secondary.abs()),
@@ -1194,7 +1212,7 @@ async fn project_doc_byte_limit_is_applied_independently_per_environment() {
     assert_eq!(
         loaded.text(),
         format!(
-            "for `primary` with root {}\n\nABC\n\nfor `secondary` with root {}\n\nVWX",
+            "for `primary` with root {}\n\nABCDE\n\nfor `secondary` with root {}\n\nVW",
             primary.path().display(),
             secondary.path().display()
         )
@@ -1202,9 +1220,7 @@ async fn project_doc_byte_limit_is_applied_independently_per_environment() {
 }
 
 #[tokio::test]
-async fn multiple_environments_can_exceed_single_environment_project_doc_limit() {
-    // TODO(anp): Add an aggregate cap across environments instead of allowing the combined
-    // project instructions to grow by one full per-environment budget for every binding.
+async fn full_primary_environment_budget_excludes_later_environment_docs() {
     const LIMIT: usize = 8;
     let primary = tempfile::tempdir().expect("primary tempdir");
     let secondary = tempfile::tempdir().expect("secondary tempdir");
@@ -1232,10 +1248,9 @@ async fn multiple_environments_can_exceed_single_environment_project_doc_limit()
         .map(|entry| entry.contents.len())
         .sum::<usize>();
 
-    assert_eq!(project_bytes, LIMIT * 2);
-    assert!(project_bytes > config.project_doc_max_bytes);
+    assert_eq!(project_bytes, LIMIT);
     assert!(loaded.text().contains(&primary_doc));
-    assert!(loaded.text().contains(&secondary_doc));
+    assert!(!loaded.text().contains(&secondary_doc));
 }
 
 #[tokio::test]
