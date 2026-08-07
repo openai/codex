@@ -242,7 +242,7 @@ impl ProcessHandle {
         result
     }
 
-    /// Attempts to kill the child and abort helper tasks.
+    /// Attempts to kill the child and abort I/O helper tasks.
     pub fn terminate(&self) {
         self.request_terminate();
 
@@ -264,7 +264,8 @@ impl ProcessHandle {
         if let Ok(mut h) = self.wait_handle.lock()
             && let Some(handle) = h.take()
         {
-            handle.abort();
+            // Even a queued PTY waiter must run to reap the terminated child.
+            drop(handle);
         }
     }
 }
