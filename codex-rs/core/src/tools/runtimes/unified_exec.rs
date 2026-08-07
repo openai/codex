@@ -192,6 +192,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         &req.turn_environment
     }
 
+    fn uses_executor_managed_process_sandbox(&self, req: &UnifiedExecRequest) -> bool {
+        req.turn_environment.environment.is_remote()
+    }
+
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b PathUri> {
         Some(&req.sandbox_cwd)
     }
@@ -363,7 +367,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
             Some(&req.shell_type),
-            attempt.sandbox,
+            attempt.sandbox_requested,
             attempt.windows_sandbox_level,
         );
         let command = if matches!(req.shell_type, ShellType::PowerShell) {

@@ -237,7 +237,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
             req.shell_type.as_ref(),
-            attempt.sandbox,
+            attempt.sandbox_requested,
             attempt.windows_sandbox_level,
         );
         let command = if matches!(shell.shell_type, ShellType::PowerShell) {

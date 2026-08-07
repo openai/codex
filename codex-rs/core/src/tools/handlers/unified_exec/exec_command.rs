@@ -152,23 +152,22 @@ impl ExecCommandHandler {
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
 
-        // A foreign cwd cannot seed the AbsolutePathBufGuard used to resolve relative paths in the
-        // permissions config below. Consult the configured platform-sandbox requirement before
-        // deciding whether parsing may continue without that base path.
-        let sandbox = SandboxManager::new().select_initial(
-            turn_environment.permission_profile(),
-            SandboxablePreference::Auto,
-            turn.windows_sandbox_level,
-            turn.network.is_some(),
-        );
+        // Remote executors enforce URI-native sandbox policy themselves. Only a host-local
+        // sandbox needs a native cwd for resolving paths nested in the permissions config.
+        let requires_host_native_cwd = !environment.is_remote()
+            && SandboxManager::new().select_initial(
+                turn_environment.permission_profile(),
+                SandboxablePreference::Auto,
+                turn.windows_sandbox_level,
+                turn.network.is_some(),
+            ) != SandboxType::None;
         // `to_abs_path()` alone cannot identify foreign drive paths: `file:///C:/repo` is
         // representable as `/C:/repo` on POSIX. Require the inferred convention to match too.
         let cwd_uses_native_convention =
             cwd.infer_path_convention() == Some(PathConvention::native());
-        // TODO(anp): Remove this parsing split once sandboxing supports foreign paths.
         let native_cwd = match cwd.to_abs_path() {
             Ok(cwd) if cwd_uses_native_convention => Some(cwd),
-            _ if sandbox == SandboxType::None => None,
+            _ if !requires_host_native_cwd => None,
             Err(err) => return Err(FunctionCallError::RespondToModel(err.to_string())),
             Ok(_) => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -183,9 +182,8 @@ impl ExecCommandHandler {
                 parse_arguments_with_base_path(&arguments, native_cwd)?
             }
             None => {
-                // Parsing without a base only skips relative-path resolution inside the
-                // permissions config. That is safe only for a truly unsandboxed attempt;
-                // sandboxed attempts fall through and return the conversion error below.
+                // Foreign executor cwd values cannot seed this host's AbsolutePathBufGuard.
+                // Sandbox intent and URI-native roots are still sent to the executor.
                 parse_arguments(&arguments)?
             }
         };
@@ -239,6 +237,23 @@ impl ExecCommandHandler {
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
+        if environment.is_remote()
+            && !cwd_uses_native_convention
+            && !turn_environment
+                .permission_profile()
+                .file_system_sandbox_policy()
+                .has_full_disk_write_access()
+            && matches!(
+                codex_apply_patch::maybe_parse_apply_patch(&command, &cwd),
+                codex_apply_patch::MaybeApplyPatch::Body(_)
+            )
+        {
+            // CA-781: patch verification reads executor files before process sandboxing applies.
+            manager.release_process_id(process_id).await;
+            return Err(FunctionCallError::RespondToModel(
+                "cross-platform remote apply_patch is unavailable until executor-side filesystem sandboxing is supported".to_string(),
+            ));
+        }
         let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
