@@ -3218,6 +3218,10 @@
         "error_on_tool_collisions": {
           "description": "Fail the turn when multiple tools share the same effective name.",
           "type": "boolean"
+        },
+        "include_tool_namespaces_info": {
+          "description": "Include the resolved tool namespace inventory in per-turn request metadata.",
+          "type": "boolean"
         }
       },
       "type": "object"

@@ -95,6 +95,8 @@ fn strict_config_accepts_tool_registry_config() {
     for contents in [
         "[features.tool_registry]\nerror_on_tool_collisions = true\n",
         "[profiles.work.features.tool_registry]\nerror_on_tool_collisions = true\n",
+        "[features.tool_registry]\ninclude_tool_namespaces_info = true\n",
+        "[profiles.work.features.tool_registry]\ninclude_tool_namespaces_info = true\n",
     ] {
         assert_eq!(
             config_error_from_ignored_toml_fields::<ConfigToml>(path, contents),

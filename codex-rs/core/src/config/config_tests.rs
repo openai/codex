@@ -574,10 +574,16 @@ disable_in_process_fallback = true
 async fn load_config_resolves_tool_registry_config() -> std::io::Result<()> {
     let codex_home = tempdir()?;
 
-    for (config_toml, error_on_tool_collisions) in [
-        ("", false),
+    for (config_toml, error_on_tool_collisions, include_tool_namespaces_info) in [
+        ("", false, false),
         (
             "[features.tool_registry]\nerror_on_tool_collisions = true\n",
+            true,
+            false,
+        ),
+        (
+            "[features.tool_registry]\ninclude_tool_namespaces_info = true\n",
+            false,
             true,
         ),
     ] {
@@ -593,6 +599,10 @@ async fn load_config_resolves_tool_registry_config() -> std::io::Result<()> {
         assert_eq!(
             config.tool_registry.error_on_tool_collisions,
             error_on_tool_collisions
+        );
+        assert_eq!(
+            config.tool_registry.include_tool_namespaces_info,
+            include_tool_namespaces_info
         );
         assert!(!config.features.enabled(Feature::CodeMode));
     }

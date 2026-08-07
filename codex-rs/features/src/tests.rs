@@ -29,14 +29,16 @@ fn under_development_features_are_disabled_by_default() {
 
 #[test]
 fn tool_registry_config_is_not_a_feature_toggle() {
-    let features: FeaturesToml =
-        toml::from_str("[tool_registry]\nerror_on_tool_collisions = true\n")
-            .expect("tool registry settings should deserialize");
+    let features: FeaturesToml = toml::from_str(
+        "[tool_registry]\nerror_on_tool_collisions = true\ninclude_tool_namespaces_info = true\n",
+    )
+    .expect("tool registry settings should deserialize");
 
     assert_eq!(
         features.tool_registry,
         Some(crate::ToolRegistryConfigToml {
             error_on_tool_collisions: Some(true),
+            include_tool_namespaces_info: Some(true),
         })
     );
     assert!(features.entries().is_empty());
@@ -552,6 +554,7 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     let mut features_toml = FeaturesToml {
         tool_registry: Some(crate::ToolRegistryConfigToml {
             error_on_tool_collisions: Some(true),
+            include_tool_namespaces_info: Some(true),
         }),
         code_mode_host: Some(FeatureToml::Config(crate::CodeModeHostConfigToml {
             enabled: Some(false),
@@ -584,6 +587,7 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
         features_toml.tool_registry,
         Some(crate::ToolRegistryConfigToml {
             error_on_tool_collisions: Some(true),
+            include_tool_namespaces_info: Some(true),
         })
     );
     let entries = features_toml.entries();
