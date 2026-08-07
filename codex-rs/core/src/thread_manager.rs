@@ -416,20 +416,21 @@ impl ThreadManager {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
+        let skills_service = Arc::new(HostSkillsService::new_with_restriction_product(
+            codex_home.clone(),
+            config.bundled_skills_enabled(),
+            restriction_product,
+        ));
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.to_path_buf(),
             restriction_product,
             auth_manager.get_api_auth_mode(),
+            skills_service.clone(),
         ));
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
             codex_apps_tools_cache,
-        ));
-        let skills_service = Arc::new(HostSkillsService::new_with_restriction_product(
-            codex_home,
-            config.bundled_skills_enabled(),
-            restriction_product,
         ));
         let code_mode_session_provider: Arc<dyn CodeModeSessionProvider> =
             if config.features.enabled(Feature::CodeModeHost)
@@ -562,17 +563,18 @@ impl ThreadManager {
         };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
-        let plugins_manager = Arc::new(PluginsManager::new_with_options(
-            codex_home.clone(),
-            restriction_product,
-            auth_manager.get_api_auth_mode(),
-        ));
-        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_service = Arc::new(HostSkillsService::new_with_restriction_product(
             absolute_codex_home.clone(),
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
+        let plugins_manager = Arc::new(PluginsManager::new_with_options(
+            codex_home.clone(),
+            restriction_product,
+            auth_manager.get_api_auth_mode(),
+            skills_service.clone(),
+        ));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(

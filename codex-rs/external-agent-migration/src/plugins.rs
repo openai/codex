@@ -1,8 +1,8 @@
 use codex_analytics::PluginInstallSource;
 use codex_core::config::ConfigBuilder;
+use codex_core::plugins_manager_for_config;
 use codex_core_plugins::PluginInstallError;
 use codex_core_plugins::PluginInstallRequest;
-use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
@@ -101,7 +101,7 @@ impl ExternalAgentConfigService {
             .map_err(|err| io::Error::other(format!("failed to load config: {err}")))?;
         let requirements = config.config_layer_stack.requirements().clone();
         let mut outcome = PluginImportOutcome::default();
-        let plugins_manager = PluginsManager::new(self.codex_home.clone())
+        let plugins_manager = plugins_manager_for_config(&config)
             .with_plugin_install_source(PluginInstallSource::ExternalAgentMigration);
         if let Some(analytics_events_client) = self.analytics_events_client.clone() {
             plugins_manager.set_analytics_events_client(analytics_events_client);

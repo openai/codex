@@ -504,6 +504,111 @@ async fn agent_plugin_skills_use_shared_catalog_and_direct_child_discovery() -> 
     Ok(())
 }
 
+#[test_case("CHATGPT", false, None; "product restricted skill is unavailable")]
+#[test_case("CODEX", true, Some("native review skill"); "native skill wins over migrated command")]
+#[test_case("CHATGPT", true, Some("migrated review command"); "migrated command replaces filtered native skill")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_skill_product_policy_and_migrated_command_precedence_reach_agent_turns(
+    native_skill_product: &str,
+    include_migrated_command: bool,
+    expected_skill_description: Option<&str>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_root = write_sample_plugin_manifest_and_config(codex_home.as_ref());
+    let native_skill_dir = plugin_root.join("skills/review");
+    std::fs::create_dir_all(native_skill_dir.join("agents"))?;
+    std::fs::write(
+        native_skill_dir.join("SKILL.md"),
+        "---\nname: source-command-review\ndescription: native review skill\n---\n",
+    )?;
+    std::fs::write(
+        native_skill_dir.join("agents/openai.yaml"),
+        format!("policy:\n  products: [{native_skill_product}]\n"),
+    )?;
+    if include_migrated_command {
+        let migrated_skill_dir =
+            plugin_root.join(".codex-plugin/migrated-command-skills/source-command-review");
+        std::fs::create_dir_all(&migrated_skill_dir)?;
+        std::fs::write(
+            migrated_skill_dir.join("SKILL.md"),
+            "---\nname: source-command-review\ndescription: migrated review command\n---\n",
+        )?;
+    }
+
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_extensions(skills_extensions());
+    let test = builder.build_with_auto_env(&server).await?;
+    let plugin_outcome = test
+        .thread_manager
+        .plugins_manager()
+        .plugins_for_config(&test.config.plugins_config_input())
+        .await;
+    assert_eq!(
+        plugin_outcome
+            .plugins()
+            .iter()
+            .map(|plugin| (plugin.config_name.as_str(), plugin.has_enabled_skills))
+            .collect::<Vec<_>>(),
+        vec![(
+            SAMPLE_PLUGIN_CONFIG_NAME,
+            expected_skill_description.is_some()
+        )]
+    );
+    assert_eq!(
+        plugin_outcome
+            .capability_summaries()
+            .iter()
+            .map(|plugin| (plugin.config_name.as_str(), plugin.has_skills))
+            .collect::<Vec<_>>(),
+        expected_skill_description
+            .map(|_| (SAMPLE_PLUGIN_CONFIG_NAME, true))
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Inspect the available plugin skills.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let developer_text = response
+        .single_request()
+        .message_input_texts("developer")
+        .join("\n");
+    assert_eq!(
+        (
+            developer_text.contains("sample:source-command-review: native review skill"),
+            developer_text.contains("sample:source-command-review: migrated review command"),
+        ),
+        (
+            expected_skill_description == Some("native review skill"),
+            expected_skill_description == Some("migrated review command"),
+        )
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn legacy_plugin_skill_prompt_remains_complete() -> Result<()> {
     skip_if_no_network!(Ok(()));

@@ -4,9 +4,9 @@ use anyhow::bail;
 use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
+use codex_core::plugins_manager_for_config;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsConfigInput;
-use codex_core_plugins::PluginsManager;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
 use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_core_plugins::marketplace::marketplace_root_dir;
@@ -211,7 +211,7 @@ async fn run_list(overrides: Vec<(String, toml::Value)>, args: ListMarketplaceAr
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
-    let manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let manager = plugins_manager_for_config(&config);
     manager.set_auth_mode(load_cli_auth_mode(&config).await);
     let plugins_input = config.plugins_config_input();
     let marketplace_listing = manager
@@ -378,8 +378,7 @@ async fn run_upgrade(
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
-    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let manager = PluginsManager::new(codex_home.to_path_buf());
+    let manager = plugins_manager_for_config(&config);
     let plugins_input = config.plugins_config_input();
     let outcome = manager
         .upgrade_configured_marketplaces_for_config(&plugins_input, marketplace_name.as_deref())

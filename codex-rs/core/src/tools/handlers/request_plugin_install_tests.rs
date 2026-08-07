@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::plugins_manager_for_config;
 use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_openai_curated_marketplace;
@@ -10,7 +11,6 @@ use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginInstallRequest;
-use codex_core_plugins::PluginsManager;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;
@@ -40,7 +40,7 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let plugins_manager = plugins_manager_for_config(&config);
 
     assert!(!verified_plugin_install_completed(
         "sample@openai-curated",

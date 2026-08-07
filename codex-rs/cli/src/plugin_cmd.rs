@@ -4,6 +4,7 @@ use anyhow::bail;
 use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
+use codex_core::plugins_manager_for_config;
 use codex_core_plugins::ConfiguredMarketplace;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallOutcome;
@@ -589,7 +590,7 @@ async fn load_plugin_command_context(
         .await
         .context("failed to load configuration")?;
     let plugins_input = config.plugins_config_input();
-    let manager = PluginsManager::new(codex_home.to_path_buf());
+    let manager = plugins_manager_for_config(&config);
     manager.set_auth_mode(load_cli_auth_mode(&config).await);
     Ok(PluginCommandContext {
         codex_home: codex_home.to_path_buf(),

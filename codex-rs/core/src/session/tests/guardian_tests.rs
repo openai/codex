@@ -2,6 +2,7 @@ use super::*;
 use crate::compact::InitialContextInjection;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
+use crate::plugins::plugins_manager_for_config;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
 use crate::test_support::models_manager_with_provider;
@@ -738,7 +739,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         auth_manager.clone(),
         config.model_provider.clone(),
     );
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let plugins_manager = Arc::new(plugins_manager_for_config(&config));
     let skills_service = Arc::new(HostSkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,

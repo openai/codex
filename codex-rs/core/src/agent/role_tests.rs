@@ -1,8 +1,8 @@
 use super::*;
 use crate::HostSkillsService;
 use crate::config::ConfigBuilder;
+use crate::plugins::plugins_manager_for_config;
 use crate::skills_load_input_from_config;
-use codex_core_plugins::PluginsManager;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -398,7 +398,7 @@ enabled = false
         .await
         .expect("custom role should apply");
 
-    let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
+    let plugins_manager = Arc::new(plugins_manager_for_config(&config));
     let skills_service =
         HostSkillsService::new(home.path().abs(), /*bundled_skills_enabled*/ true);
     let plugins_input = config.plugins_config_input();

@@ -25,7 +25,7 @@ use crate::utils::invalid_data_error;
 use crate::utils::is_missing_or_empty_text_file;
 use codex_config::types::PluginConfig;
 use codex_core::config::ConfigBuilder;
-use codex_core_plugins::PluginsManager;
+use codex_core::plugins_manager_for_config;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -351,7 +351,7 @@ impl ExternalAgentConfigService {
                         .unwrap_or_default();
                     let configured_marketplace_plugins = configured_marketplace_plugins(
                         &config,
-                        &PluginsManager::new(self.codex_home.clone()),
+                        &plugins_manager_for_config(&config),
                     )?;
                     let source_root = repo_root.unwrap_or(self.external_agent_home.as_path());
                     if let Some(detected) =

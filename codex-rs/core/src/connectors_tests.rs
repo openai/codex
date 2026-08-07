@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
+use crate::plugins::plugins_manager_for_config;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_connectors::merge::plugin_connector_to_app_info;
@@ -504,7 +505,7 @@ discoverables = [
         .await
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let plugins_manager = plugins_manager_for_config(&config);
 
     let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
         &config,
@@ -542,7 +543,7 @@ apps = true
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let loaded_plugin_app_connector_ids = vec!["asdk_app_databricks_workspace".to_string()];
-    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let plugins_manager = plugins_manager_for_config(&config);
 
     let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
         &config,

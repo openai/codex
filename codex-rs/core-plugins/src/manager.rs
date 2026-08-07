@@ -58,6 +58,7 @@ use crate::remote_legacy::RemotePluginMutationError;
 use crate::remote_plugin_id_resolver::RemoteInstalledPluginsSnapshot;
 use crate::remote_plugin_id_resolver::RemotePluginIdResolver;
 use crate::remote_plugin_id_resolver::persisted_remote_plugin_id_for_installation;
+use crate::skill_snapshots::new_plugin_skill_snapshots;
 use crate::startup_sync::curated_plugins_api_marketplace_path;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::startup_sync::read_curated_plugins_sha;
@@ -74,7 +75,6 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
-use codex_core_skills::PluginSkillSnapshots;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_hooks::plugin_hook_declarations;
@@ -94,6 +94,8 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_skills::SkillConfigRules;
 use codex_skills::SkillMetadata;
+use codex_skills::SkillRootLoader;
+use codex_skills::SkillRootSnapshots;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
@@ -442,6 +444,7 @@ pub struct PluginsManager {
     loaded_plugins_cache: RwLock<LoadedPluginsCache>,
     loaded_plugins_load_semaphore: Semaphore,
     skill_root_scan_slots: Arc<Semaphore>,
+    skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     tool_suggest_metadata_cache: ToolSuggestMetadataCache,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
@@ -456,7 +459,7 @@ pub struct PluginsManager {
 struct LoadedPluginsCacheEntry {
     key: PluginLoadCacheKey,
     plugins: Vec<LoadedPlugin>,
-    plugin_skill_snapshots: PluginSkillSnapshots,
+    plugin_skill_snapshots: SkillRootSnapshots<PluginSkillRoot>,
 }
 
 #[derive(Default)]
@@ -510,14 +513,23 @@ fn target_curated_marketplace(
 }
 
 impl PluginsManager {
-    pub fn new(codex_home: PathBuf) -> Self {
-        Self::new_with_options(codex_home, Some(Product::Codex), /*auth_mode*/ None)
+    pub fn new(
+        codex_home: PathBuf,
+        skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
+    ) -> Self {
+        Self::new_with_options(
+            codex_home,
+            Some(Product::Codex),
+            /*auth_mode*/ None,
+            skill_root_loader,
+        )
     }
 
     pub fn new_with_options(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
         auth_mode: Option<AuthMode>,
+        skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
         // listing, install, and curated refresh all consult this restriction context before new
@@ -544,6 +556,7 @@ impl PluginsManager {
             loaded_plugins_cache: RwLock::new(LoadedPluginsCache::default()),
             loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
             skill_root_scan_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+            skill_root_loader,
             tool_suggest_metadata_cache: ToolSuggestMetadataCache::new(),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
@@ -628,7 +641,7 @@ impl PluginsManager {
     pub fn plugin_skill_snapshots_for_config(
         &self,
         config: &PluginsConfigInput,
-    ) -> Option<PluginSkillSnapshots> {
+    ) -> Option<SkillRootSnapshots<PluginSkillRoot>> {
         if !config.plugins_enabled {
             return None;
         }
@@ -683,7 +696,7 @@ impl PluginsManager {
             return self.resolve_loaded_plugins_for_auth(plugins, &config.model_provider_id);
         }
         let cache_generation = self.loaded_plugins_cache_generation();
-        let plugin_skill_snapshots = PluginSkillSnapshots::for_plugin_load();
+        let plugin_skill_snapshots = new_plugin_skill_snapshots();
         let plugins = load_plugins_from_layer_stack(
             &config.config_layer_stack,
             self.remote_installed_plugins_snapshot(),
@@ -691,7 +704,7 @@ impl PluginsManager {
             Some(&plugin_skill_snapshots),
             self.restriction_product,
             remote_global_catalog_active,
-            Arc::clone(&self.skill_root_scan_slots),
+            self.skill_root_loader.as_ref(),
         )
         .await;
         log_plugin_load_errors(&plugins);
@@ -792,7 +805,7 @@ impl PluginsManager {
             /*plugin_skill_snapshots*/ None,
             self.restriction_product,
             self.remote_global_catalog_active(config),
-            Arc::clone(&self.skill_root_scan_slots),
+            self.skill_root_loader.as_ref(),
         )
         .await;
         self.resolve_loaded_plugins_for_auth(plugins, &config.model_provider_id)
@@ -852,7 +865,7 @@ impl PluginsManager {
         generation: u64,
         key: PluginLoadCacheKey,
         plugins: Vec<LoadedPlugin>,
-        plugin_skill_snapshots: PluginSkillSnapshots,
+        plugin_skill_snapshots: SkillRootSnapshots<PluginSkillRoot>,
     ) {
         let mut cache = match self.loaded_plugins_cache.write() {
             Ok(cache) => cache,

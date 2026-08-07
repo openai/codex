@@ -19,6 +19,7 @@ pub mod remote_bundle;
 pub mod remote_legacy;
 mod remote_plugin_id_resolver;
 mod script_attribution;
+mod skill_snapshots;
 pub mod startup_sync;
 pub mod store;
 #[cfg(test)]

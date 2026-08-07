@@ -22,6 +22,7 @@ use tracing::warn;
 use crate::config::Config;
 use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
+use crate::plugins::plugins_manager_for_config;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -186,7 +187,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     force_refetch: bool,
     environment_manager: Arc<EnvironmentManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let plugins_manager = Arc::new(plugins_manager_for_config(config));
     let mcp_manager = Arc::new(McpManager::new(plugins_manager));
     list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         config,

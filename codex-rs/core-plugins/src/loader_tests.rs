@@ -1,12 +1,12 @@
 use super::*;
 use crate::manifest::load_plugin_manifest;
 use crate::manifest::load_plugin_manifest_with_format;
+use crate::test_support::test_skill_root_loader;
 use crate::test_support::write_file;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
-use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_plugin::PluginId;
 use codex_utils_plugins::AGENT_PLUGIN_SCHEMA_URI;
 use pretty_assertions::assert_eq;
@@ -168,7 +168,7 @@ async fn installed_agent_plugin_uses_isolated_data_root_for_stdio_mcp() {
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
         /*remote_global_catalog_active*/ false,
-        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+        test_skill_root_loader().as_ref(),
     )
     .await;
 
@@ -337,7 +337,7 @@ enabled = true
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
         /*remote_global_catalog_active*/ false,
-        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+        test_skill_root_loader().as_ref(),
     )
     .await;
     let hooks_only = load_plugins_from_layer_stack_with_scope(

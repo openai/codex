@@ -13,8 +13,6 @@ use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
-use codex_utils_plugins::SkillDiscoveryMode;
-use futures::StreamExt;
 use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 use tracing::info;
@@ -22,27 +20,23 @@ use tracing::instrument;
 use tracing::warn;
 
 use codex_config::SkillsConfig;
-use codex_core_skills::PluginSkillSnapshots;
-use codex_core_skills::SkillError;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_core_skills::loader::SkillRoot;
-use codex_core_skills::loader::SkillRootSnapshot;
-use codex_core_skills::loader::load_skill_root_snapshot;
 use codex_skills::LoadedSkills;
 use codex_skills::SkillLoadFuture;
 use codex_skills::SkillRootLoadRequest;
 use codex_skills::SkillRootLoader;
+use codex_skills::SkillRootSnapshots;
 use codex_skills::install_system_skills;
 
 use crate::HostSkillsSnapshot;
 use crate::host_roots::resolve_skill_roots;
 use crate::loader::HostSkillRoot;
 use crate::loader::load_and_merge_host_skill_roots;
-use crate::loader::load_host_skill_root;
 
 #[derive(Debug, Clone)]
 pub struct HostSkillsLoadInput {
@@ -50,7 +44,7 @@ pub struct HostSkillsLoadInput {
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
-    plugin_skill_snapshots: Option<PluginSkillSnapshots>,
+    plugin_skill_snapshots: Option<SkillRootSnapshots<PluginSkillRoot>>,
 }
 
 impl HostSkillsLoadInput {
@@ -72,7 +66,7 @@ impl HostSkillsLoadInput {
     /// Attaches plugin skill snapshots parsed during plugin loading, when available.
     pub fn with_plugin_skill_snapshots(
         mut self,
-        plugin_skill_snapshots: Option<PluginSkillSnapshots>,
+        plugin_skill_snapshots: Option<SkillRootSnapshots<PluginSkillRoot>>,
     ) -> Self {
         self.plugin_skill_snapshots = plugin_skill_snapshots;
         self
@@ -294,58 +288,37 @@ impl HostSkillsService {
         roots: Vec<SkillRoot>,
         skill_config_rules: &SkillConfigRules,
     ) -> SkillLoadOutcome {
-        let plugin_skill_snapshots = input.plugin_skill_snapshots.as_ref();
-        let mut indexed_snapshots = futures::stream::iter(roots.into_iter().enumerate())
-            .map(|(root_index, root)| async move {
-                let _root_scan_slot = self
-                    .root_scan_slots
-                    .acquire()
-                    .await
-                    .unwrap_or_else(|_| unreachable!());
-                let use_legacy_loader = root.plugin_identity.is_some()
-                    || root.plugin_namespace.is_some()
-                    || root.plugin_root.is_some()
-                    || root.discovery_mode != SkillDiscoveryMode::Recursive;
-                let snapshot = if use_legacy_loader {
-                    load_skill_root_snapshot(root, plugin_skill_snapshots).await
-                } else {
-                    let snapshot = load_host_skill_root(HostSkillRoot::host(
-                        root.path,
-                        root.scope,
-                        root.file_system,
-                    ))
-                    .await;
-                    SkillRootSnapshot::new(
-                        snapshot.root,
-                        snapshot.skills,
-                        snapshot.skill_discovery_path_by_path,
-                        snapshot
-                            .errors
-                            .into_iter()
-                            .map(|error| SkillError {
-                                path: error.path,
-                                message: error.message,
-                            })
-                            .collect(),
-                        snapshot.file_system,
-                    )
-                };
-                (root_index, snapshot)
+        let roots = roots
+            .into_iter()
+            .map(|root| {
+                match (
+                    root.plugin_identity,
+                    root.plugin_namespace,
+                    root.plugin_root,
+                ) {
+                    (Some(plugin_identity), Some(plugin_namespace), Some(plugin_root)) => {
+                        HostSkillRoot::plugin(
+                            PluginSkillRoot {
+                                path: root.path,
+                                plugin_identity,
+                                plugin_namespace,
+                                plugin_root,
+                                discovery_mode: root.discovery_mode,
+                            },
+                            root.file_system,
+                        )
+                    }
+                    _ => HostSkillRoot::host(root.path, root.scope, root.file_system),
+                }
             })
-            .buffer_unordered(MAX_CONCURRENT_ROOT_SCANS)
-            .collect::<Vec<_>>()
-            .await;
-        indexed_snapshots.sort_unstable_by_key(|(root_index, _)| *root_index);
-        let outcome = SkillLoadOutcome::from_root_snapshots(
-            indexed_snapshots
-                .into_iter()
-                .map(|(_, snapshot)| snapshot)
-                .collect(),
-        );
-        let outcome = codex_core_skills::filter_skill_load_outcome_for_product(
-            outcome,
+            .collect();
+        let outcome = load_and_merge_host_skill_roots(
+            roots,
+            &self.root_scan_slots,
             self.restriction_product,
-        );
+            input.plugin_skill_snapshots.as_ref(),
+        )
+        .await;
         let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);
         outcome.with_disabled_paths(disabled_paths)
     }
@@ -441,7 +414,7 @@ impl SkillRootLoader<PluginSkillRoot> for HostSkillsService {
 struct ConfigSkillsCacheKey {
     roots: Vec<ConfigSkillRootCacheKey>,
     skill_config_rules: SkillConfigRules,
-    plugin_skill_snapshots: Option<PluginSkillSnapshots>,
+    plugin_skill_snapshots: Option<SkillRootSnapshots<PluginSkillRoot>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -495,7 +468,7 @@ pub fn bundled_skills_enabled_from_stack(
 fn config_skills_cache_key(
     roots: &[SkillRoot],
     skill_config_rules: &SkillConfigRules,
-    plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
+    plugin_skill_snapshots: Option<&SkillRootSnapshots<PluginSkillRoot>>,
 ) -> ConfigSkillsCacheKey {
     ConfigSkillsCacheKey {
         roots: roots
