@@ -2053,15 +2053,27 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 ),
                 ev_completed("resp-guardian-3"),
             ]),
+            sse(vec![
+                ev_response_created("resp-guardian-4"),
+                ev_assistant_message(
+                    "msg-guardian-4",
+                    "{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"fourth guardian rationale\"}",
+                ),
+                ev_completed("resp-guardian-4"),
+            ]),
         ],
     )
     .await;
 
     let (session, mut turn) = guardian_test_session_and_turn(&server).await;
-    Arc::get_mut(&mut turn)
-        .expect("turn should be unique")
-        .model_info
-        .auto_review_model_override = Some("codex-auto-review".to_string());
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::GuardianReuseParentCompaction)
+        .expect("Guardian parent-compaction reuse should be configurable");
+    let turn_mut = Arc::get_mut(&mut turn).expect("turn should be unique");
+    turn_mut.model_info.auto_review_model_override = Some("codex-auto-review".to_string());
+    turn_mut.config = Arc::new(config);
     seed_guardian_parent_history(&session, &turn).await;
 
     let first_request = GuardianApprovalRequest::Shell {
@@ -2135,10 +2147,32 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         /*max_attempts*/ 1,
     )
     .await;
+    let committed_rollout_items = session
+        .guardian_review_session
+        .committed_fork_rollout_items_for_test()
+        .await
+        .expect("committed guardian fork snapshot");
+    assert_eq!(
+        committed_rollout_items
+            .iter()
+            .filter(|item| rollout_item_contains_message_text(
+                item,
+                "Use prior reviews as context, not binding precedent."
+            ))
+            .count(),
+        1,
+        "follow-up reminder should be persisted for guardian forks"
+    );
     session
-        .record_conversation_items(
-            turn.as_ref(),
-            &[
+        .replace_history(
+            vec![
+                ResponseItem::Compaction {
+                    id: Some(codex_protocol::ResponseItemId::from_server(
+                        "cmp_guardian_parent_summary".to_string(),
+                    )),
+                    encrypted_content: "encrypted guardian parent summary".to_string(),
+                    internal_chat_message_metadata_passthrough: None,
+                },
                 ResponseItem::Message {
                     id: None,
                     role: "user".to_string(),
@@ -2158,6 +2192,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     internal_chat_message_metadata_passthrough: None,
                 },
             ],
+            /*reference_context_item*/ None,
         )
         .await;
     let third_request = GuardianApprovalRequest::Shell {
@@ -2181,6 +2216,30 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         /*max_attempts*/ 1,
     )
     .await;
+    session
+        .replace_history(
+            vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Please review after a summary-free context reset.".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }],
+            /*reference_context_item*/ None,
+        )
+        .await;
+    let fourth_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        guardian_shell_request("shell-4"),
+        ApprovalRequestReasons::default(),
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+        /*max_attempts*/ 1,
+    )
+    .await;
 
     let (GuardianReviewOutcome::Completed(first_assessment), first_metadata) = first_outcome else {
         panic!("expected first guardian assessment");
@@ -2192,9 +2251,14 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let (GuardianReviewOutcome::Completed(third_assessment), third_metadata) = third_outcome else {
         panic!("expected third guardian assessment");
     };
+    let (GuardianReviewOutcome::Completed(fourth_assessment), fourth_metadata) = fourth_outcome
+    else {
+        panic!("expected fourth guardian assessment");
+    };
     assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(third_assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(fourth_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert!(matches!(
         first_metadata.guardian_session_kind,
         Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
@@ -2205,6 +2269,10 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     ));
     assert!(matches!(
         third_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
+    ));
+    assert!(matches!(
+        fourth_metadata.guardian_session_kind,
         Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
     ));
     ThreadId::from_string(
@@ -2230,26 +2298,49 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     .expect("third guardian thread id should be a valid UUID");
     assert_eq!(first_metadata.had_prior_review_context, Some(false));
     assert_eq!(second_metadata.had_prior_review_context, Some(true));
-    assert_eq!(third_metadata.had_prior_review_context, Some(true));
+    assert_eq!(third_metadata.had_prior_review_context, Some(false));
+    assert_eq!(fourth_metadata.had_prior_review_context, Some(true));
     assert_eq!(
         first_metadata.guardian_thread_id,
         second_metadata.guardian_thread_id
     );
-    assert_eq!(
+    assert_ne!(
         second_metadata.guardian_thread_id,
         third_metadata.guardian_thread_id
     );
+    assert_eq!(
+        third_metadata.guardian_thread_id,
+        fourth_metadata.guardian_thread_id
+    );
 
     let requests = request_log.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
 
     let first_body = requests[0].body_json();
     let second_body = requests[1].body_json();
     let third_body = requests[2].body_json();
+    let fourth_body = requests[3].body_json();
+    let third_input = third_body["input"]
+        .as_array()
+        .expect("guardian review should include input items");
+    assert!(third_input.iter().any(|item| {
+        item["type"] == "compaction"
+            && item["id"] == "cmp_guardian_parent_summary"
+            && item["encrypted_content"] == "encrypted guardian parent summary"
+    }));
     assert_eq!(
         first_body["prompt_cache_key"],
         second_body["prompt_cache_key"]
     );
+    assert_eq!(
+        second_body["prompt_cache_key"],
+        third_body["prompt_cache_key"]
+    );
+    assert_eq!(
+        third_body["prompt_cache_key"],
+        fourth_body["prompt_cache_key"]
+    );
+    assert!(fourth_body.to_string().contains("third guardian rationale"));
     assert!(
         second_body.to_string().contains(concat!(
             "Use prior reviews as context, not binding precedent. ",
@@ -2269,25 +2360,17 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             .to_string()
             .matches("Use prior reviews as context, not binding precedent.")
             .count(),
-        1,
-        "later follow-up guardian requests should not append the reminder again"
+        0,
+        "a fresh guardian session should not inherit the follow-up reminder"
     );
-    let committed_rollout_items = session
-        .guardian_review_session
-        .committed_fork_rollout_items_for_test()
-        .await
-        .expect("committed guardian fork snapshot");
-    assert_eq!(
-        committed_rollout_items
-            .iter()
-            .filter(|item| rollout_item_contains_message_text(
-                item,
-                "Use prior reviews as context, not binding precedent."
-            ))
-            .count(),
-        1,
-        "follow-up reminder should be persisted for guardian forks"
-    );
+    let third_user_message = requests[2]
+        .message_input_text_groups("user")
+        .last()
+        .expect("fresh guardian user message")
+        .join("");
+    assert!(third_user_message.contains(">>> TRANSCRIPT START\n"));
+    assert!(third_user_message.contains("Please push the third docs fix too."));
+    assert!(!third_body.to_string().contains(first_rationale));
     let second_user_message = requests[1]
         .message_input_text_groups("user")
         .last()

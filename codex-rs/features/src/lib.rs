@@ -247,6 +247,8 @@ pub enum Feature {
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
+    /// Reuse encrypted parent compaction when restarting Guardian review sessions.
+    GuardianReuseParentCompaction,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -1364,6 +1366,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GuardianReuseParentCompaction,
+        key: "guardian_reuse_parent_compaction",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::GuardianV2,

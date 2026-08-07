@@ -570,6 +570,9 @@
             "guardian_approval": {
               "type": "boolean"
             },
+            "guardian_reuse_parent_compaction": {
+              "type": "boolean"
+            },
             "guardianv2": {
               "type": "boolean"
             },
@@ -5233,6 +5236,9 @@
           "type": "boolean"
         },
         "guardian_approval": {
+          "type": "boolean"
+        },
+        "guardian_reuse_parent_compaction": {
           "type": "boolean"
         },
         "guardianv2": {
