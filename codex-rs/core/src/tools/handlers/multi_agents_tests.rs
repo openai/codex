@@ -2989,7 +2989,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_wait_agent_rejects_timeout_below_configured_min() {
+async fn multi_agent_v2_wait_agent_clamps_timeout_below_configured_min() {
     let (session, mut turn) = make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config
@@ -3001,7 +3001,9 @@ async fn multi_agent_v2_wait_agent_rejects_timeout_below_configured_min() {
     config.multi_agent_v2.default_wait_timeout_ms = 50;
     set_turn_config(&mut turn, config);
 
-    let Err(err) = WaitAgentHandlerV2::default()
+    tokio::time::pause();
+    let started_at = tokio::time::Instant::now();
+    let output = WaitAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -3009,13 +3011,28 @@ async fn multi_agent_v2_wait_agent_rejects_timeout_below_configured_min() {
             function_payload(json!({"timeout_ms": 1})),
         ))
         .await
-    else {
-        panic!("timeout below configured minimum should be rejected");
-    };
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel("timeout_ms must be at least 50".to_string())
+        .expect("wait_agent should succeed");
+    let elapsed = started_at.elapsed();
+    tokio::time::resume();
+
+    assert!(
+        elapsed >= Duration::from_millis(/*millis*/ 50)
+            && elapsed <= Duration::from_millis(/*millis*/ 51),
+        "wait_agent should time out at the configured minimum: {elapsed:?}"
     );
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message:
+                "Wait timed out.\n\nRequested timeout of 1ms was clamped to the minimum of 50ms."
+                    .to_string(),
+            timed_out: true,
+        }
+    );
+    assert_eq!(success, None);
 }
 
 #[tokio::test]

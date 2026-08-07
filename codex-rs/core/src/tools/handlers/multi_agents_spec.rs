@@ -517,7 +517,7 @@ fn wait_output_schema_v2() -> Value {
         "properties": {
             "message": {
                 "type": "string",
-                "description": "Brief wait summary without the agent's final content."
+                "description": "Brief wait summary without the agent's final content, including any timeout adjustment."
             },
             "timed_out": {
                 "type": "boolean",
