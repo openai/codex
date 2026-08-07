@@ -1,3 +1,4 @@
+use std::env;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -25,16 +26,46 @@ use crate::outbound_proxy::AuthRouteConfig;
 use super::storage::AgentIdentityAuthRecord;
 
 pub(super) const MAX_AGENT_IDENTITY_BOOTSTRAP_ATTEMPTS: usize = 3;
+const CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR: &str = "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL";
+const CODEX_AGENT_IDENTITY_JWKS_BASE_URL_ENV_VAR: &str = "CODEX_AGENT_IDENTITY_JWKS_BASE_URL";
+
+fn agent_identity_endpoint_override(environment_variable: &str) -> Option<String> {
+    env::var(environment_variable)
+        .ok()
+        .map(|base_url| base_url.trim().trim_end_matches('/').to_string())
+        .filter(|base_url| !base_url.is_empty())
+}
+
+fn agent_identity_jwks_base_url_matches(chatgpt_base_url: &str, jwks_base_url: &str) -> bool {
+    chatgpt_base_url.trim().trim_end_matches('/') == jwks_base_url
+}
 
 pub(super) fn agent_identity_authapi_base_url(
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<String> {
     let environment = match chatgpt_base_url {
-        Some(chatgpt_base_url) => ChatGptEnvironment::from_chatgpt_base_url(chatgpt_base_url)
-            .map_err(std::io::Error::other)?,
-        None => ChatGptEnvironment::default(),
+        Some(chatgpt_base_url) => ChatGptEnvironment::from_chatgpt_base_url(chatgpt_base_url),
+        None => Ok(ChatGptEnvironment::default()),
     };
-    Ok(environment.agent_identity_authapi_base_url().to_string())
+    let authapi_base_url =
+        agent_identity_endpoint_override(CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR);
+    let jwks_base_url =
+        agent_identity_endpoint_override(CODEX_AGENT_IDENTITY_JWKS_BASE_URL_ENV_VAR);
+
+    match (environment, authapi_base_url) {
+        (Ok(_), Some(base_url)) => Ok(base_url),
+        (Ok(environment), None) => Ok(environment.agent_identity_authapi_base_url().to_string()),
+        (Err(_), Some(base_url))
+            if chatgpt_base_url.is_some_and(|chatgpt_base_url| {
+                jwks_base_url.as_deref().is_some_and(|jwks_base_url| {
+                    agent_identity_jwks_base_url_matches(chatgpt_base_url, jwks_base_url)
+                })
+            }) =>
+        {
+            Ok(base_url)
+        }
+        (Err(error), _) => Err(std::io::Error::other(error)),
+    }
 }
 
 pub(super) fn require_agent_identity_authapi_base_url(
@@ -225,9 +256,20 @@ pub(super) async fn verified_record_from_jwt(
     auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<AgentIdentityAuthRecord> {
     AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
-    let jwks_url = agent_identity_jwks_url(chatgpt_base_url);
+    let jwks_base_url =
+        match agent_identity_endpoint_override(CODEX_AGENT_IDENTITY_JWKS_BASE_URL_ENV_VAR) {
+            Some(base_url) => {
+                if !agent_identity_jwks_base_url_matches(chatgpt_base_url, &base_url) {
+                    ChatGptEnvironment::from_chatgpt_base_url(chatgpt_base_url)
+                        .map_err(std::io::Error::other)?;
+                }
+                base_url
+            }
+            None => chatgpt_base_url.to_string(),
+        };
+    let jwks_url = agent_identity_jwks_url(&jwks_base_url);
     let client = create_default_auth_client(&jwks_url, auth_route_config)?;
-    let jwks = fetch_agent_identity_jwks(&client, chatgpt_base_url)
+    let jwks = fetch_agent_identity_jwks(&client, &jwks_base_url)
         .await
         .map_err(std::io::Error::other)?;
     let claims = decode_agent_identity_jwt(jwt, Some(&jwks)).map_err(std::io::Error::other)?;
@@ -351,6 +393,7 @@ mod tests {
     use codex_agent_identity::generate_agent_key_material;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use serial_test::serial;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -414,6 +457,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_auth_env)]
     async fn from_jwt_registers_task() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
