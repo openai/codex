@@ -6,6 +6,8 @@ use std::sync::RwLock;
 use std::sync::Weak;
 
 use codex_config::ConfigLayerStack;
+use codex_config::SkillConfigRules;
+use codex_config::skill_config_rules_from_stack;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
@@ -21,9 +23,6 @@ use tracing::warn;
 
 use codex_config::SkillsConfig;
 use codex_core_skills::SkillLoadOutcome;
-use codex_core_skills::config_rules::SkillConfigRules;
-use codex_core_skills::config_rules::resolve_disabled_skill_paths;
-use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_skills::LoadedSkills;
 use codex_skills::SkillLoadFuture;
 use codex_skills::SkillRootLoadRequest;
@@ -294,7 +293,12 @@ impl HostSkillsService {
             input.plugin_skill_snapshots.as_ref(),
         )
         .await;
-        let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);
+        let disabled_paths = skill_config_rules.resolve_disabled_paths(
+            outcome
+                .skills
+                .iter()
+                .map(|skill| (skill.name.as_str(), &skill.path_to_skills_md)),
+        );
         outcome.with_disabled_paths(disabled_paths)
     }
 

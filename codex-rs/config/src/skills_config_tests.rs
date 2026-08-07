@@ -1,8 +1,8 @@
-use codex_config::CONFIG_TOML_FILE;
-use codex_config::ConfigLayerEntry;
-use codex_config::ConfigLayerSource;
-use codex_config::ConfigLayerStack;
-use codex_config::ConfigRequirementsToml;
+use crate::CONFIG_TOML_FILE;
+use crate::ConfigLayerEntry;
+use crate::ConfigLayerSource;
+use crate::ConfigLayerStack;
+use crate::ConfigRequirementsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
@@ -143,5 +143,70 @@ enabled = true
                 },
             ],
         }
+    );
+}
+
+#[test]
+fn path_rule_disables_selected_path() {
+    let codex_home = TempDir::new().expect("temp dir");
+    let path = codex_home.path().join("disable-by-path/SKILL.md").abs();
+    let rules = SkillConfigRules {
+        entries: vec![SkillConfigRule {
+            selector: SkillConfigRuleSelector::Path(path.clone()),
+            enabled: false,
+        }],
+    };
+
+    assert_eq!(
+        rules.resolve_disabled_paths(std::iter::empty()),
+        [path].into_iter().collect()
+    );
+}
+
+#[test]
+fn later_name_rule_reenables_path_disabled_skill() {
+    let codex_home = TempDir::new().expect("temp dir");
+    let path = codex_home.path().join("reenable-by-name/SKILL.md").abs();
+    let rules = SkillConfigRules {
+        entries: vec![
+            SkillConfigRule {
+                selector: SkillConfigRuleSelector::Path(path.clone()),
+                enabled: false,
+            },
+            SkillConfigRule {
+                selector: SkillConfigRuleSelector::Name("demo".to_string()),
+                enabled: true,
+            },
+        ],
+    };
+
+    assert_eq!(
+        rules.resolve_disabled_paths([("demo", &path)]),
+        Default::default()
+    );
+}
+
+#[test]
+fn later_path_rule_reenables_one_skill_disabled_by_name() {
+    let codex_home = TempDir::new().expect("temp dir");
+    let root = codex_home.path().join("reenable-by-path");
+    let first_path = root.join("first/SKILL.md").abs();
+    let second_path = root.join("second/SKILL.md").abs();
+    let rules = SkillConfigRules {
+        entries: vec![
+            SkillConfigRule {
+                selector: SkillConfigRuleSelector::Name("demo".to_string()),
+                enabled: false,
+            },
+            SkillConfigRule {
+                selector: SkillConfigRuleSelector::Path(first_path.clone()),
+                enabled: true,
+            },
+        ],
+    };
+
+    assert_eq!(
+        rules.resolve_disabled_paths([("demo", &first_path), ("demo", &second_path)]),
+        [second_path].into_iter().collect()
     );
 }

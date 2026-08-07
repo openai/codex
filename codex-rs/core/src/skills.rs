@@ -16,7 +16,6 @@ use tokio::sync::Mutex;
 pub use codex_core_skills::SkillError;
 pub use codex_core_skills::SkillLoadOutcome;
 pub use codex_core_skills::build_skill_name_counts;
-pub use codex_core_skills::config_rules;
 pub use codex_core_skills::detect_implicit_skill_invocation_for_command;
 pub use codex_core_skills::injection;
 pub use codex_core_skills::injection::SkillInjections;

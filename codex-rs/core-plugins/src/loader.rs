@@ -22,14 +22,14 @@ use crate::store::plugin_version_for_source;
 use crate::store::plugin_version_for_source_with_fallback_manifest;
 use codex_config::ConfigLayerStack;
 use codex_config::HooksFile;
+use codex_config::SkillConfigRules;
+use codex_config::skill_config_rules_from_stack;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
 use codex_connectors::parse_plugin_app_config;
 use codex_connectors::parse_plugin_app_config_value;
-use codex_core_skills::config_rules::resolve_disabled_skill_paths;
-use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_mcp::parse_agent_plugin_mcp_config;
 use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppDeclaration;
@@ -41,7 +41,6 @@ use codex_plugin::PluginIdError;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
-use codex_skills::SkillConfigRules;
 use codex_skills::SkillMetadata;
 use codex_skills::SkillRootLoadRequest;
 use codex_skills::SkillRootLoader;
@@ -976,12 +975,20 @@ impl PluginSkillInventory {
     pub(crate) fn has_enabled_skills(&self, skill_config_rules: &SkillConfigRules) -> bool {
         contains_enabled_skill(
             &self.skills,
-            &resolve_disabled_skill_paths(&self.skills, skill_config_rules),
+            &skill_config_rules.resolve_disabled_paths(
+                self.skills
+                    .iter()
+                    .map(|skill| (skill.name.as_str(), &skill.path_to_skills_md)),
+            ),
         )
     }
 
     pub(crate) fn resolve(self, skill_config_rules: &SkillConfigRules) -> ResolvedPluginSkills {
-        let disabled_skill_paths = resolve_disabled_skill_paths(&self.skills, skill_config_rules);
+        let disabled_skill_paths = skill_config_rules.resolve_disabled_paths(
+            self.skills
+                .iter()
+                .map(|skill| (skill.name.as_str(), &skill.path_to_skills_md)),
+        );
         ResolvedPluginSkills {
             skills: self.skills,
             disabled_skill_paths,

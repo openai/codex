@@ -5,7 +5,6 @@ mod mentions;
 mod model;
 mod name_counts;
 mod parser;
-mod policy;
 mod selection;
 
 pub use interface::SkillInterfaceAssetPolicy;
@@ -30,9 +29,6 @@ pub use mentions::normalize_skill_path;
 pub use mentions::plugin_config_name_from_path;
 pub use mentions::tool_kind_for_path;
 pub use model::EnvironmentSkillMetadata;
-pub use model::SkillConfigRule;
-pub use model::SkillConfigRuleSelector;
-pub use model::SkillConfigRules;
 pub use model::SkillDependencies;
 pub use model::SkillInterface;
 pub use model::SkillMetadata;
@@ -42,7 +38,6 @@ pub use name_counts::build_skill_name_counts;
 pub use parser::ParsedSkillFrontmatter;
 pub use parser::SkillParseError;
 pub use parser::parse_skill_frontmatter_metadata;
-pub use policy::resolve_disabled_skill_paths;
 pub use selection::ExplicitSkillLookup;
 pub use selection::collect_explicit_skill_mentions;
 

@@ -70,12 +70,13 @@ use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::PluginInstallSource;
 use codex_config::ConfigLayerStack;
+use codex_config::SkillConfigRules;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
+use codex_config::skill_config_rules_from_stack;
 use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
-use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_hooks::plugin_hook_declarations;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -91,7 +92,6 @@ use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
-use codex_skills::SkillConfigRules;
 use codex_skills::SkillMetadata;
 use codex_skills::SkillRootLoader;
 use codex_skills::SkillRootSnapshots;
@@ -2055,9 +2055,7 @@ impl PluginsManager {
             plugin_id: plugin_id.as_key(),
             remote_plugin_id: self.remote_plugin_id_for(&plugin_id),
         };
-        let skill_config_rules = codex_core_skills::config_rules::skill_config_rules_from_stack(
-            &config.config_layer_stack,
-        );
+        let skill_config_rules = skill_config_rules_from_stack(&config.config_layer_stack);
         let resolved_skills = load_plugin_skill_inventory(
             &source_path,
             &plugin_identity,

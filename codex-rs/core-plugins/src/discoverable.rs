@@ -1,7 +1,7 @@
 use anyhow::Context;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
-use codex_core_skills::config_rules::skill_config_rules_from_stack;
+use codex_config::skill_config_rules_from_stack;
 use codex_login::CodexAuth;
 use codex_plugin::PluginId;
 use std::collections::HashSet;

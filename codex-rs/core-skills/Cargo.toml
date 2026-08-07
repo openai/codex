@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 codex-analytics = { workspace = true }
-codex-config = { workspace = true }
 codex-context-fragments = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-otel = { workspace = true }
@@ -26,5 +25,3 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
-toml = { workspace = true }
