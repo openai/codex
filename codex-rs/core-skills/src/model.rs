@@ -8,18 +8,13 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 pub use codex_skills::SkillDependencies;
+pub use codex_skills::SkillError;
 pub use codex_skills::SkillInterface;
 pub use codex_skills::SkillMetadata;
 pub use codex_skills::SkillPolicy;
 pub use codex_skills::SkillToolDependency;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillError {
-    pub path: AbsolutePathBuf,
-    pub message: String,
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct SkillLoadOutcome {
