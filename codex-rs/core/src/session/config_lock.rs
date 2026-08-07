@@ -272,7 +272,6 @@ mod tests {
         config.multi_agent_v2.subagent_developer_instructions =
             Some("Locked subagent developer instructions.".to_string());
         config.token_budget = Some(crate::config::TokenBudgetConfig {
-            mode: codex_features::TokenBudgetMode::Thread,
             reminder_threshold_tokens: Some(16_000),
             reminder_message_template: "Locked reminder: {n_remaining} tokens.".to_string(),
             guidance_message: Some("Locked context-window guidance.".to_string()),
@@ -372,7 +371,6 @@ mod tests {
             features.token_budget,
             Some(FeatureToml::Config(TokenBudgetConfigToml {
                 enabled: Some(true),
-                mode: Some(codex_features::TokenBudgetMode::Thread),
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: Some(
                     "Locked reminder: {n_remaining} tokens.".to_string()

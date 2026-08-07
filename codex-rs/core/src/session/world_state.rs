@@ -4,6 +4,7 @@ use super::session::Session;
 use super::step_context::StepContext;
 use crate::connectors;
 use crate::context::ApprovalPromptContext;
+use crate::context::TokenBudgetContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::CollaborationModeState;
@@ -99,14 +100,27 @@ impl Session {
         }
         if turn_context.config.features.enabled(Feature::TokenBudget)
             && turn_context.model_context_window().is_some()
-            && let Some(guidance) = turn_context
+        {
+            let window_ids = self.state.lock().await.auto_compact_window_ids();
+            world_state.add_section(TokenBudgetContext::new(
+                turn_context
+                    .session_source
+                    .get_agent_path()
+                    .unwrap_or_else(codex_protocol::AgentPath::root),
+                window_ids.first_window_id,
+                window_ids.previous_window_id,
+                window_ids.window_id,
+                /*mcp_result*/ None,
+            ));
+            if let Some(guidance) = turn_context
                 .config
                 .token_budget
                 .as_ref()
                 .and_then(|config| config.guidance_message.as_deref())
                 .filter(|message| !message.trim().is_empty())
-        {
-            world_state.add_section(ContextWindowGuidanceState::new(guidance));
+            {
+                world_state.add_section(ContextWindowGuidanceState::new(guidance));
+            }
         }
         let realtime_mode_instructions = self.conversation.mode_instructions().await;
         world_state.add_section(RealtimeState::new(
