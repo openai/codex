@@ -2,6 +2,10 @@ module(name = "codex")
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
+
+# Expose the public protobuf rules already used transitively by rules_rs.
+bazel_dep(name = "protobuf", version = "34.0.bcr.1", repo_name = "com_google_protobuf")
+bazel_dep(name = "rules_proto", version = "7.1.0")
 bazel_dep(name = "llvm", version = "0.8.11")
 
 # Patch hermetic LLVM for Codex's custom libc++ and Windows gnullvm runtime
@@ -205,6 +209,10 @@ rules_rust_bindgen = use_extension(
 use_repo(rules_rust_bindgen, "rules_rust_bindgen")
 
 register_toolchains("@rules_rust_bindgen//:all")
+
+# Generate Rust protobuf/gRPC libraries against the workspace's prost/tonic
+# versions instead of the versions bundled with rules_rs's default toolchain.
+register_toolchains("//bazel/toolchains/prost:toolchain")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(

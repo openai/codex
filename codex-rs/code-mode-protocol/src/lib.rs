@@ -1,4 +1,5 @@
 mod description;
+pub mod grpc;
 pub mod host;
 mod response;
 mod runtime;

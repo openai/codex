@@ -1,6 +1,24 @@
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@rules_rust//extensions/prost:defs.bzl", "rust_prost_library")
 load("//:defs.bzl", "codex_rust_crate")
+
+proto_library(
+    name = "code-mode-proto",
+    srcs = glob(["src/grpc/*.proto"]),
+    strip_import_prefix = "src/grpc",
+    visibility = ["//visibility:public"],
+)
+
+rust_prost_library(
+    name = "code-mode-rust-proto",
+    proto = ":code-mode-proto",
+    visibility = ["//visibility:public"],
+)
 
 codex_rust_crate(
     name = "code-mode-protocol",
+    build_script_enabled = False,
     crate_name = "codex_code_mode_protocol",
+    deps_extra = [":code-mode-rust-proto"],
+    rustc_flags_extra = ["--cfg=codex_bazel"],
 )

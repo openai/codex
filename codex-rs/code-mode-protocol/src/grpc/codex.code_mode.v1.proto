@@ -1,0 +1,257 @@
+syntax = "proto3";
+
+package codex.code_mode.v1;
+
+// Hosts stateful JavaScript execution and delegates nested tool calls to the
+// session owner. Large tool inputs and outputs stay off the session event
+// stream so independent HTTP/2 streams can make progress concurrently.
+service CodeModeHost {
+  // Opens a session lease. The first event is always SessionOpened; dropping
+  // this stream closes the session and terminates its active cells.
+  rpc OpenSession(OpenSessionRequest) returns (stream SessionEvent);
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+
+  // Each subscription owns an independent stream of matching invocations. An
+  // empty tool_names filter matches every tool. Each invocation is routed to
+  // exactly one matching subscription, even when filters overlap.
+  rpc SubscribeToToolCalls(SubscribeToToolCallsRequest)
+      returns (stream ToolCall);
+
+  // Each result receives its own HTTP/2 stream, preventing a large response
+  // from blocking unrelated tool completions or session control events.
+  rpc CompleteToolCall(CompleteToolCallRequest)
+      returns (CompleteToolCallResponse);
+  rpc AcknowledgeNotification(AcknowledgeNotificationRequest)
+      returns (AcknowledgeNotificationResponse);
+
+  // Emits ExecutionStarted immediately, followed by one ExecutionOutcome when
+  // the execution yields, completes, or is terminated.
+  rpc Execute(ExecuteRequest) returns (stream ExecuteEvent);
+  rpc Wait(WaitRequest) returns (WaitResponse);
+
+  // Acknowledges that a canceled wait has retired before another wait starts.
+  rpc CancelWait(CancelWaitRequest) returns (CancelWaitResponse);
+  rpc Terminate(TerminateRequest) returns (WaitResponse);
+}
+
+message OpenSessionRequest {
+  optional SessionCellExecutionLimits cell_execution_limits = 1;
+}
+
+message SessionCellExecutionLimits {
+  optional uint64 max_yield_time_ms = 1;
+  optional uint64 max_heap_size_bytes = 2;
+}
+
+message SessionEvent {
+  oneof event {
+    SessionOpened opened = 1;
+    ToolCallCancelled tool_call_cancelled = 2;
+    Notification notification = 3;
+    NotificationCancelled notification_cancelled = 4;
+    CellClosed cell_closed = 5;
+  }
+}
+
+message SessionOpened {
+  string session_id = 1;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+message CloseSessionResponse {}
+
+message SubscribeToToolCallsRequest {
+  string session_id = 1;
+  repeated ToolName tool_names = 2;
+}
+
+message ToolCall {
+  string session_id = 1;
+
+  // Correlates callbacks with Execute before ExecutionStarted is received.
+  string execution_id = 2;
+  string cell_id = 3;
+  string invocation_id = 4;
+  string runtime_tool_call_id = 5;
+  ToolName tool_name = 6;
+  ToolKind tool_kind = 7;
+  optional bytes input_json = 8;
+
+  // Starts at one and increases independently for each execution.
+  uint64 sequence = 9;
+}
+
+message CompleteToolCallRequest {
+  string session_id = 1;
+  string invocation_id = 2;
+
+  oneof outcome {
+    ToolCallSucceeded succeeded = 3;
+    ToolCallFailed failed = 4;
+  }
+}
+
+message ToolCallSucceeded {
+  bytes output_json = 1;
+}
+
+message ToolCallFailed {
+  string message = 1;
+}
+
+message CompleteToolCallResponse {}
+
+message ToolCallCancelled {
+  string invocation_id = 1;
+
+  // Cancellation can arrive before the corresponding ToolCall because session
+  // control events and tool subscriptions use independent HTTP/2 streams.
+}
+
+message Notification {
+  string notification_id = 1;
+  string execution_id = 2;
+  string cell_id = 3;
+  string call_id = 4;
+  string text = 5;
+}
+
+message NotificationCancelled {
+  string notification_id = 1;
+}
+
+message AcknowledgeNotificationRequest {
+  string session_id = 1;
+  string notification_id = 2;
+}
+
+message AcknowledgeNotificationResponse {}
+
+message CellClosed {
+  string execution_id = 1;
+  string cell_id = 2;
+
+  // All lower sequences must be observed before the client retires the cell.
+  uint64 final_tool_call_sequence = 3;
+}
+
+message ExecuteRequest {
+  string session_id = 1;
+
+  // Chosen by the client so callbacks can be correlated before cell admission.
+  string execution_id = 2;
+  string tool_call_id = 3;
+  string source = 4;
+  repeated ToolDefinition enabled_tools = 5;
+  optional uint64 yield_time_ms = 6;
+  optional uint64 max_output_tokens = 7;
+}
+
+message ExecuteEvent {
+  oneof event {
+    ExecutionStarted started = 1;
+    ExecutionOutcome outcome = 2;
+  }
+}
+
+message ExecutionStarted {
+  string execution_id = 1;
+  string cell_id = 2;
+}
+
+message WaitRequest {
+  string session_id = 1;
+  string cell_id = 2;
+  string wait_id = 3;
+  uint64 yield_time_ms = 4;
+}
+
+message WaitResponse {
+  oneof state {
+    ExecutionOutcome live_cell = 1;
+    ExecutionOutcome missing_cell = 2;
+  }
+}
+
+message CancelWaitRequest {
+  string session_id = 1;
+  string wait_id = 2;
+}
+
+message CancelWaitResponse {}
+
+message TerminateRequest {
+  string session_id = 1;
+  string cell_id = 2;
+}
+
+message ExecutionOutcome {
+  string cell_id = 1;
+  repeated ContentItem content_items = 2;
+
+  oneof outcome {
+    ExecutionYielded yielded = 3;
+    ExecutionTerminated terminated = 4;
+    ExecutionCompleted completed = 5;
+  }
+}
+
+message ExecutionYielded {}
+
+message ExecutionTerminated {}
+
+message ExecutionCompleted {
+  optional string error_text = 1;
+}
+
+message ToolDefinition {
+  string name = 1;
+  ToolName tool_name = 2;
+  string description = 3;
+  ToolKind kind = 4;
+  optional bytes input_schema_json = 5;
+  optional bytes output_schema_json = 6;
+}
+
+message ToolName {
+  string name = 1;
+  optional string namespace = 2;
+}
+
+enum ToolKind {
+  TOOL_KIND_UNSPECIFIED = 0;
+  TOOL_KIND_FUNCTION = 1;
+  TOOL_KIND_FREEFORM = 2;
+}
+
+message ContentItem {
+  oneof item {
+    TextContent text = 1;
+    ImageContent image = 2;
+    AudioContent audio = 3;
+  }
+}
+
+message TextContent {
+  string text = 1;
+}
+
+message ImageContent {
+  string image_url = 1;
+  optional ImageDetail detail = 2;
+}
+
+message AudioContent {
+  string audio_url = 1;
+}
+
+enum ImageDetail {
+  IMAGE_DETAIL_UNSPECIFIED = 0;
+  IMAGE_DETAIL_AUTO = 1;
+  IMAGE_DETAIL_LOW = 2;
+  IMAGE_DETAIL_HIGH = 3;
+  IMAGE_DETAIL_ORIGINAL = 4;
+}
