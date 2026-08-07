@@ -11,4 +11,8 @@ codex_rust_crate(
         "thread_history_migrations/**",
     ]),
     crate_name = "codex_state",
+    test_shard_counts = {
+        # Windows runs database-heavy Rust tests serially within each shard.
+        "state-unit-tests": 4,
+    },
 )
