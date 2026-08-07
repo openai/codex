@@ -1,0 +1,31 @@
+---
+source: tui/src/app/transcript_export_tests.rs
+expression: "render_markdown_transcript(&cells).expect(\"exported transcript\")"
+---
+# Codex conversation
+
+## User
+
+Explain **the change**
+
+## Assistant
+
+```rust
+let answer = 42;
+```
+
+## Plan
+
+completed plan
+
+## Activity
+
+    $ cargo test
+
+## User
+
+[Image #1]
+
+## User
+
+[Image #1] describe this

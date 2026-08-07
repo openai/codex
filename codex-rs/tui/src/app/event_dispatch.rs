@@ -61,6 +61,20 @@ impl App {
                     tracing::warn!(%thread_id, error = %err, "failed to load older transcript history");
                 }
             }
+            AppEvent::OpenTranscriptExportFilePrompt => {
+                self.chat_widget.show_transcript_export_file_prompt();
+            }
+            AppEvent::ExportTranscript { destination } => {
+                if let Err(error) = self.export_transcript(app_server, destination).await {
+                    self.chat_widget
+                        .add_error_message(format!("Export failed: {error}"));
+                }
+                if self.chat_widget.no_modal_or_popup_active() {
+                    self.chat_widget
+                        .set_queue_autosend_suppressed(/*suppressed*/ false);
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
+            }
             AppEvent::ClearUi { name } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_event::TranscriptExportDestination;
 use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_parented_rollout_with_source;
 use app_test_support::create_fake_rollout;
@@ -579,11 +580,47 @@ async fn transcript_home_loads_every_older_history_page() -> Result<()> {
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
     app.transcript_cells = initial_cells;
+    while app_event_rx.try_recv().is_ok() {}
+    let initial_turn_requests = recorded_params(&requests, "thread/turns/list").len();
+    let initial_item_requests = recorded_params(&requests, "thread/items/list").len();
+    let export_path = codex_home.path().join("complete-export.md");
+    app.chat_widget
+        .set_queue_autosend_suppressed(/*suppressed*/ true);
+    app.chat_widget.insert_str("queued after export");
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::ExportTranscript {
+            destination: TranscriptExportDestination::File(export_path.clone()),
+        },
+    )
+    .await?;
+    assert!(app.chat_widget.queued_user_message_texts().is_empty());
+    let markdown = std::fs::read_to_string(export_path)?;
+    assert!(
+        (0..305)
+            .map(|index| format!("history output {index}"))
+            .eq(markdown.lines().filter(|line| line.starts_with("history")))
+    );
+    assert!(
+        recorded_params(&requests, "thread/turns/list")[initial_turn_requests..]
+            .iter()
+            .all(|params| params["itemsView"] == "notLoaded")
+    );
+    assert!(
+        recorded_params(&requests, "thread/items/list")[initial_item_requests..]
+            .iter()
+            .all(|params| {
+                params["limit"] == crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT
+            })
+    );
     app.scrollback_has_older_history = app_server.has_older_history(thread_id);
     assert!(app.scrollback_has_older_history);
     while app_event_rx.try_recv().is_ok() {}
     let initial_page_requests = recorded_params(&requests, "thread/items/list").len();
-    let mut tui = crate::tui::test_support::make_test_tui()?;
     app.open_transcript_overlay(&mut tui);
 
     app.handle_backtrack_overlay_event(
@@ -635,6 +672,11 @@ async fn remote_legacy_history_start_negotiates_once_for_resume_and_fork() -> Re
     let (app, _codex_home) = make_history_test_app().await?;
     let legacy_thread_id =
         create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "legacy history")?;
+    let paginated_thread_id = create_history_rollout(
+        &app.config,
+        ThreadHistoryMode::Paginated,
+        "paginated history",
+    )?;
     let (mut app_server, requests, proxy) = start_recording_app_server_with_history(
         &app.config,
         HistoryCapabilities::LegacyOnly,
@@ -670,6 +712,24 @@ async fn remote_legacy_history_start_negotiates_once_for_resume_and_fork() -> Re
     }
     assert!(recorded_params(&requests, "thread/turns/list").is_empty());
     assert!(recorded_params(&requests, "thread/items/list").is_empty());
+
+    let initial_read_count = recorded_params(&requests, "thread/read").len();
+    let exported = crate::app::transcript_export::load_export_transcript(
+        &mut app_server,
+        paginated_thread_id,
+        crate::thread_transcript::RawReasoningVisibility::Hidden,
+        Some(app.config.codex_home.as_path()),
+        vec![Arc::new(PlainHistoryCell::new(vec!["visible".into()]))],
+    )
+    .await
+    .map_err(|error| color_eyre::eyre::eyre!(error))?;
+    assert_eq!(exported[0].raw_lines()[0].to_string(), "visible");
+    assert!(
+        recorded_params(&requests, "thread/read")[initial_read_count..]
+            .iter()
+            .any(|params| params["includeTurns"] == true)
+    );
+    assert_eq!(recorded_params(&requests, "thread/turns/list").len(), 1);
 
     app_server.shutdown().await?;
     proxy.await??;

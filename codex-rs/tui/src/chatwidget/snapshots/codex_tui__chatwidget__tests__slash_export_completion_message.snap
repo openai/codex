@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: "cells.iter().map(|cell|\nlines_to_single_string(cell).trim().to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+• Saved conversation to conversation.md
+• Copied conversation to clipboard
+■ Copy failed: clipboard unavailable
+■ Export failed: missing parent

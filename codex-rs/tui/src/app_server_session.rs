@@ -169,7 +169,7 @@ fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> col
     color_eyre::eyre::eyre!("{context}: {err}")
 }
 
-fn is_history_pagination_unsupported(source: &JSONRPCErrorError) -> bool {
+pub(crate) fn is_history_pagination_unsupported(source: &JSONRPCErrorError) -> bool {
     if source.code == JSONRPC_METHOD_NOT_FOUND {
         return true;
     }

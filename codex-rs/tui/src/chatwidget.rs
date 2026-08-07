@@ -429,6 +429,7 @@ pub(crate) use self::tokens::TokenActivityView;
 mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
+mod transcript_export;
 use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;

@@ -1758,6 +1758,40 @@ async fn slash_copy_reports_when_no_agent_response_exists() {
 }
 
 #[tokio::test]
+async fn slash_export_opens_destination_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.thread_id = Some(
+        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread ID"),
+    );
+    handle_turn_started(&mut chat, "turn-1");
+    queue_composer_text_with_tab(&mut chat, "/export");
+    complete_turn_with_message(&mut chat, "turn-1", /*message*/ None);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("slash_export_destination_picker", popup);
+    chat.show_transcript_export_file_prompt();
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("slash_export_filename_prompt", popup);
+
+    let statuses = "Saved conversation to conversation.md\nCopied conversation to clipboard";
+    for message in statuses.lines() {
+        chat.add_info_message(message.into(), /*hint*/ None);
+    }
+    chat.add_error_message("Copy failed: clipboard unavailable".to_string());
+    chat.add_error_message("Export failed: missing parent".to_string());
+    let cells = drain_insert_history(&mut rx);
+    assert_chatwidget_snapshot!(
+        "slash_export_completion_message",
+        cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+}
+
+#[tokio::test]
 async fn ctrl_o_copy_reports_when_no_agent_response_exists() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

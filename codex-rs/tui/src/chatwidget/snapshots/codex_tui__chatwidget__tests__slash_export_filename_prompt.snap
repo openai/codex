@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: popup
+---
+▌ Save conversation
+▌
+▌ codex-session-00000000-0000-0000-0000-000000000123.md
+
+Press enter to confirm or esc to go back

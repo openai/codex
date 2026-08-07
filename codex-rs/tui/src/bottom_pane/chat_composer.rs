@@ -85,7 +85,8 @@
 //! Parent-owned subagent threads keep the draft editable while blocking agent-directed submission.
 //! On the `Enter` and `Tab` submission paths, normal prompts, disallowed slash commands, and `!`
 //! shell commands return `ParentOwnedInputBlocked` without clearing the draft. Bare local and
-//! navigation slash commands remain available so users can leave or manage the view.
+//! navigation slash commands remain available so users can leave or manage the view. Transcript
+//! exports also remain available, including an explicit destination filename.
 //!
 //! # Reasoning Effort Animations
 //!
@@ -357,6 +358,10 @@ pub enum InputResult {
 }
 
 fn parent_owned_command_is_allowed(command: SlashCommand, args: &str) -> bool {
+    if command == SlashCommand::Export {
+        return true;
+    }
+
     args.is_empty()
         && matches!(
             command,

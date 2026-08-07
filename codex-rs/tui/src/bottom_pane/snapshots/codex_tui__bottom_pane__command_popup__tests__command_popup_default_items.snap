@@ -26,6 +26,7 @@ expression: commands
 /agent - switch the active agent thread
 /side - start a side conversation in an ephemeral fork
 /copy - copy last response as markdown
+/export - export the conversation as markdown
 /raw - toggle raw scrollback mode for copy-friendly terminal selection
 /diff - show git diff (including untracked files)
 /mention - mention a file

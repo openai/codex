@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: popup
+---
+  Export conversation
+  Save the complete conversation as Markdown
+
+› 1. Copy to clipboard  Copy the complete Markdown transcript
+  2. Save to file       Choose a Markdown filename
+
+  Press enter to confirm or esc to go back
