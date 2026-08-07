@@ -1369,6 +1369,67 @@ async fn plugin_read_fails_on_malformed_share_mapping() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_read_agent_plugin_excludes_nested_skills() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let plugin_root = repo_root.path().join("plugins/demo-plugin");
+    write_plugins_enabled_config(&codex_home)?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "codex-curated",
+        "demo-plugin",
+        "./plugins/demo-plugin",
+    )?;
+    std::fs::create_dir_all(plugin_root.join("skills/direct"))?;
+    std::fs::create_dir_all(plugin_root.join("skills/group/nested"))?;
+    std::fs::write(
+        plugin_root.join("plugin.json"),
+        r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo-plugin"}"#,
+    )?;
+    let direct_skill_path = plugin_root.join("skills/direct/SKILL.md");
+    std::fs::write(
+        &direct_skill_path,
+        "---\nname: direct\ndescription: Direct skill\n---\n",
+    )?;
+    std::fs::write(
+        plugin_root.join("skills/group/nested/SKILL.md"),
+        "---\nname: nested\ndescription: Nested skill\n---\n",
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?),
+            remote_marketplace_name: None,
+            plugin_name: "demo-plugin".to_string(),
+        })
+        .await?;
+    let response: PluginReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert_eq!(
+        response.plugin.skills,
+        vec![codex_app_server_protocol::SkillSummary {
+            name: "demo-plugin:direct".to_string(),
+            description: "Direct skill".to_string(),
+            short_description: None,
+            interface: None,
+            path: Some(AbsolutePathBuf::try_from(std::fs::canonicalize(
+                direct_skill_path
+            )?)?),
+            enabled: true,
+        }]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;

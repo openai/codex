@@ -28,12 +28,8 @@ use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
 use codex_connectors::parse_plugin_app_config;
 use codex_connectors::parse_plugin_app_config_value;
-use codex_core_skills::PluginSkillSnapshots as LegacyPluginSkillSnapshots;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
-use codex_core_skills::loader::SkillRoot;
-use codex_core_skills::loader::load_skills_from_roots;
-use codex_exec_server::LOCAL_FS;
 use codex_mcp::parse_agent_plugin_mcp_config;
 use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppDeclaration;
@@ -45,7 +41,6 @@ use codex_plugin::PluginIdError;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
-use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillConfigRules;
 use codex_skills::SkillMetadata;
 use codex_skills::SkillRootLoadRequest;
@@ -63,9 +58,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::Semaphore;
 use tracing::instrument;
 use tracing::warn;
 
@@ -911,7 +904,7 @@ async fn load_plugin(
                 plugin_id: loaded_plugin_id.as_key(),
                 remote_plugin_id: loaded_plugin.remote_plugin_id.clone(),
             };
-            let resolved_skills = load_plugin_skill_inventory_with_loader(
+            let resolved_skills = load_plugin_skill_inventory(
                 &plugin_root,
                 &plugin_identity,
                 &manifest,
@@ -1019,115 +1012,7 @@ fn contains_enabled_skill(
         .any(|skill| !disabled_skill_paths.contains(&skill.path_to_skills_md))
 }
 
-pub async fn load_plugin_skills(
-    plugin_root: &AbsolutePathBuf,
-    plugin_id: &PluginId,
-    manifest: &PluginManifest,
-    restriction_product: Option<Product>,
-    skill_config_rules: &SkillConfigRules,
-    plugin_skill_snapshots: Option<&LegacyPluginSkillSnapshots>,
-    root_scan_slots: Arc<Semaphore>,
-) -> ResolvedPluginSkills {
-    let plugin_identity = PluginIdentity {
-        plugin_id: plugin_id.as_key(),
-        remote_plugin_id: None,
-    };
-    load_plugin_skills_with_identity(
-        plugin_root,
-        &plugin_identity,
-        manifest,
-        restriction_product,
-        skill_config_rules,
-        plugin_skill_snapshots,
-        root_scan_slots,
-    )
-    .await
-}
-
-pub(crate) async fn load_plugin_skills_with_identity(
-    plugin_root: &AbsolutePathBuf,
-    plugin_identity: &PluginIdentity,
-    manifest: &PluginManifest,
-    restriction_product: Option<Product>,
-    skill_config_rules: &SkillConfigRules,
-    plugin_skill_snapshots: Option<&LegacyPluginSkillSnapshots>,
-    root_scan_slots: Arc<Semaphore>,
-) -> ResolvedPluginSkills {
-    load_plugin_skill_inventory(
-        plugin_root,
-        plugin_identity,
-        manifest,
-        PluginManifestFormat::Legacy,
-        restriction_product,
-        plugin_skill_snapshots,
-        root_scan_slots,
-    )
-    .await
-    .resolve(skill_config_rules)
-}
-
 pub(crate) async fn load_plugin_skill_inventory(
-    plugin_root: &AbsolutePathBuf,
-    plugin_identity: &PluginIdentity,
-    manifest: &PluginManifest,
-    manifest_format: PluginManifestFormat,
-    restriction_product: Option<Product>,
-    plugin_skill_snapshots: Option<&LegacyPluginSkillSnapshots>,
-    root_scan_slots: Arc<Semaphore>,
-) -> PluginSkillInventory {
-    let discovery_mode = match manifest_format {
-        PluginManifestFormat::Legacy => SkillDiscoveryMode::Recursive,
-        PluginManifestFormat::AgentPlugin => SkillDiscoveryMode::DirectChildren,
-    };
-    let roots = plugin_skill_roots(plugin_root, &manifest.paths, manifest_format)
-        .into_iter()
-        .map(|path| SkillRoot {
-            path,
-            scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_identity: Some(plugin_identity.clone()),
-            plugin_namespace: Some(manifest.name.clone()),
-            plugin_root: Some(plugin_root.clone()),
-            discovery_mode,
-        })
-        .collect::<Vec<_>>();
-    let outcome = load_skills_from_roots(roots, plugin_skill_snapshots, root_scan_slots).await;
-    let had_errors = !outcome.errors.is_empty();
-    let migrated_command_skills = migrated_command_skills_root(plugin_root);
-    let migrated_command_skills = fs::canonicalize(migrated_command_skills.as_path())
-        .ok()
-        .and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
-        .unwrap_or(migrated_command_skills);
-    let skills = outcome
-        .skills
-        .into_iter()
-        .filter(|skill| skill.matches_product_restriction_for_product(restriction_product))
-        .collect::<Vec<_>>();
-    let native_skill_names = skills
-        .iter()
-        .filter(|skill| {
-            !skill
-                .path_to_skills_md
-                .as_path()
-                .starts_with(migrated_command_skills.as_path())
-        })
-        .map(|skill| skill.name.clone())
-        .collect::<HashSet<_>>();
-    let skills = skills
-        .into_iter()
-        .filter(|skill| {
-            !skill
-                .path_to_skills_md
-                .as_path()
-                .starts_with(migrated_command_skills.as_path())
-                || !native_skill_names.contains(&skill.name)
-        })
-        .collect::<Vec<_>>();
-
-    PluginSkillInventory { skills, had_errors }
-}
-
-pub(crate) async fn load_plugin_skill_inventory_with_loader(
     plugin_root: &AbsolutePathBuf,
     plugin_identity: &PluginIdentity,
     manifest: &PluginManifest,
@@ -1419,6 +1304,7 @@ async fn load_apps_from_paths(
 pub async fn plugin_capability_summary_from_root(
     plugin_id: &PluginId,
     plugin_root: &AbsolutePathBuf,
+    skill_root_loader: &dyn SkillRootLoader<PluginSkillRoot>,
 ) -> Option<PluginCapabilitySummary> {
     let loaded_manifest = load_plugin_manifest_with_format(plugin_root.as_path())?;
     let manifest_format = loaded_manifest.format;
@@ -1441,7 +1327,7 @@ pub async fn plugin_capability_summary_from_root(
                 manifest_format,
                 /*restriction_product*/ None,
                 /*plugin_skill_snapshots*/ None,
-                Arc::new(Semaphore::new(1)),
+                skill_root_loader,
             )
             .await
             .skills

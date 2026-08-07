@@ -6,7 +6,7 @@ use crate::PluginLoadOutcome;
 use crate::ToolSuggestDiscoverablePlugin;
 use crate::ToolSuggestPluginDiscoveryInput;
 use crate::installed_marketplaces::marketplace_install_root;
-use crate::loader::load_plugin_skills;
+use crate::loader::load_plugin_skill_inventory;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
@@ -1254,6 +1254,62 @@ async fn installed_plugin_telemetry_metadata_collects_capabilities() {
 }
 
 #[tokio::test]
+async fn installed_agent_plugin_telemetry_metadata_uses_portable_capabilities() {
+    for (skill_path, has_skills) in [
+        ("skills/direct/SKILL.md", true),
+        ("skills/group/nested/SKILL.md", false),
+    ] {
+        let codex_home = TempDir::new().unwrap();
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache/test/agent-plugin/local");
+        write_file(
+            &plugin_root.join("plugin.json"),
+            r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent.tools"}"#,
+        );
+        write_file(
+            &plugin_root.join(skill_path),
+            "---\nname: portable\ndescription: Portable skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join("mcp.json"),
+            r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"portable":{"type":"stdio","command":"echo"}}}"#,
+        );
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"apps":"./.app.json"}"#,
+        );
+        write_file(
+            &plugin_root.join(".app.json"),
+            r#"{"apps":{"legacy":{"id":"connector_legacy"}}}"#,
+        );
+        let manager = test_plugins_manager(codex_home.path().to_path_buf());
+        let plugin_id = PluginId::parse("agent-plugin@test").expect("plugin id should parse");
+
+        let metadata = manager
+            .telemetry_metadata_for_installed_plugin(&plugin_id)
+            .await;
+
+        assert_eq!(
+            metadata,
+            PluginTelemetryMetadata {
+                plugin_id: Some(plugin_id),
+                remote_plugin_id: None,
+                capability_summary: Some(PluginCapabilitySummary {
+                    config_name: "agent-plugin@test".to_string(),
+                    display_name: "agent-plugin".to_string(),
+                    plugin_namespace: Some("agent.tools".to_string()),
+                    description: None,
+                    has_skills,
+                    mcp_server_names: vec!["portable".to_string()],
+                    app_connector_ids: Vec::new(),
+                }),
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn installed_plugin_telemetry_metadata_resolves_persisted_remote_identity() {
     let codex_home = TempDir::new().unwrap();
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
@@ -1826,6 +1882,7 @@ async fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
     let summary = plugin_capability_summary_from_root(
         &PluginId::parse("sample@test").expect("plugin id should parse"),
         &plugin_root.abs(),
+        test_skill_root_loader().as_ref(),
     )
     .await;
 
@@ -1868,6 +1925,7 @@ async fn plugin_capability_summary_uses_manifest_mcp_server_objects() {
     let summary = plugin_capability_summary_from_root(
         &PluginId::parse("counter-sample@test").expect("plugin id should parse"),
         &plugin_root.abs(),
+        test_skill_root_loader().as_ref(),
     )
     .await;
 
@@ -2171,16 +2229,20 @@ async fn install_plugin_materializes_default_command_skills() {
     );
 
     let manifest = crate::manifest::load_plugin_manifest(&result.installed_path).unwrap();
-    let resolved = load_plugin_skills(
+    let resolved = load_plugin_skill_inventory(
         &result.installed_path,
-        &result.plugin_id,
+        &PluginIdentity {
+            plugin_id: result.plugin_id.as_key(),
+            remote_plugin_id: None,
+        },
         &manifest,
+        PluginManifestFormat::Legacy,
         /*restriction_product*/ None,
-        &SkillConfigRules::default(),
         /*plugin_skill_snapshots*/ None,
-        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+        test_skill_root_loader().as_ref(),
     )
-    .await;
+    .await
+    .resolve(&SkillConfigRules::default());
     assert_eq!(
         resolved
             .skills
@@ -2292,16 +2354,20 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         interface: None,
     };
     let plugin_id = PluginId::parse("sample@test").expect("plugin id should parse");
-    let resolved = load_plugin_skills(
+    let resolved = load_plugin_skill_inventory(
         &plugin_root,
-        &plugin_id,
+        &PluginIdentity {
+            plugin_id: plugin_id.as_key(),
+            remote_plugin_id: None,
+        },
         &manifest,
+        PluginManifestFormat::Legacy,
         /*restriction_product*/ None,
-        &SkillConfigRules::default(),
         /*plugin_skill_snapshots*/ None,
-        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+        test_skill_root_loader().as_ref(),
     )
-    .await;
+    .await
+    .resolve(&SkillConfigRules::default());
 
     let skill_paths = resolved
         .skills

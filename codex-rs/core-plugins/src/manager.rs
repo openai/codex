@@ -76,7 +76,6 @@ use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
-use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_hooks::plugin_hook_declarations;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -443,7 +442,6 @@ pub struct PluginsManager {
     // Keep the cache auth-independent so auth changes only need to resolve capabilities again.
     loaded_plugins_cache: RwLock<LoadedPluginsCache>,
     loaded_plugins_load_semaphore: Semaphore,
-    skill_root_scan_slots: Arc<Semaphore>,
     skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     tool_suggest_metadata_cache: ToolSuggestMetadataCache,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
@@ -555,7 +553,6 @@ impl PluginsManager {
             .0,
             loaded_plugins_cache: RwLock::new(LoadedPluginsCache::default()),
             loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
-            skill_root_scan_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
             skill_root_loader,
             tool_suggest_metadata_cache: ToolSuggestMetadataCache::new(),
             remote_installed_plugins_cache: RwLock::new(None),
@@ -931,7 +928,14 @@ impl PluginsManager {
     ) -> PluginTelemetryMetadata {
         let mut metadata = self.telemetry_metadata_for_plugin_id(plugin_id);
         metadata.capability_summary = match self.store.active_plugin_root(plugin_id) {
-            Some(plugin_root) => plugin_capability_summary_from_root(plugin_id, &plugin_root).await,
+            Some(plugin_root) => {
+                plugin_capability_summary_from_root(
+                    plugin_id,
+                    &plugin_root,
+                    self.skill_root_loader.as_ref(),
+                )
+                .await
+            }
             None => None,
         };
         metadata
@@ -945,7 +949,14 @@ impl PluginsManager {
         let mut metadata =
             self.telemetry_metadata_for_plugin_id_with_remote_id(plugin_id, remote_plugin_id);
         metadata.capability_summary = match self.store.active_plugin_root(plugin_id) {
-            Some(plugin_root) => plugin_capability_summary_from_root(plugin_id, &plugin_root).await,
+            Some(plugin_root) => {
+                plugin_capability_summary_from_root(
+                    plugin_id,
+                    &plugin_root,
+                    self.skill_root_loader.as_ref(),
+                )
+                .await
+            }
             None => None,
         };
         metadata
@@ -2054,7 +2065,7 @@ impl PluginsManager {
             manifest_format,
             self.restriction_product,
             /*plugin_skill_snapshots*/ None,
-            Arc::clone(&self.skill_root_scan_slots),
+            self.skill_root_loader.as_ref(),
         )
         .await
         .resolve(&skill_config_rules);
