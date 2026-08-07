@@ -65,6 +65,7 @@ pub fn telemetry_transport_error_message(error: &TransportError) -> String {
         TransportError::Http { status, .. } => format!("http {}", status.as_u16()),
         TransportError::RetryLimit => "retry limit reached".to_string(),
         TransportError::Timeout => "timeout".to_string(),
+        TransportError::Connection(err) => err.to_string(),
         TransportError::Network(err) => err.to_string(),
         TransportError::Build(err) => err.to_string(),
     }

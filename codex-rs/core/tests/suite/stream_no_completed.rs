@@ -13,6 +13,9 @@ use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
+use std::net::TcpListener;
+use wiremock::MockServer;
 
 fn sse_incomplete() -> String {
     responses::sse(vec![serde_json::json!({
@@ -100,4 +103,76 @@ async fn retries_on_early_close() {
     );
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connection_failure_pauses_retry_budget_until_provider_is_reachable() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let bootstrap_server = responses::start_mock_server().await;
+    let unavailable_listener = TcpListener::bind("127.0.0.1:0")?;
+    let unavailable_address = unavailable_listener.local_addr()?;
+    drop(unavailable_listener);
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(format!("http://{unavailable_address}/v1"));
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(1);
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&bootstrap_server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "recover after the network returns".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let EventMsg::StreamError(connection_error) =
+        wait_for_event(&codex, |event| matches!(event, EventMsg::StreamError(_))).await
+    else {
+        unreachable!("predicate guarantees a stream error event");
+    };
+    assert_eq!(
+        connection_error.message,
+        "Reconnecting... waiting for network"
+    );
+
+    let recovered_server = MockServer::builder()
+        .listener(TcpListener::bind(unavailable_address)?)
+        .start()
+        .await;
+    let response_mock = responses::mount_sse_sequence(
+        &recovered_server,
+        vec![sse_incomplete(), responses::sse_completed("resp_recovered")],
+    )
+    .await;
+
+    let EventMsg::StreamError(stream_error) =
+        wait_for_event(&codex, |event| matches!(event, EventMsg::StreamError(_))).await
+    else {
+        unreachable!("predicate guarantees a stream error event");
+    };
+    assert_eq!(stream_error.message, "Reconnecting... 1/1");
+
+    let EventMsg::TurnComplete(completed) =
+        wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await
+    else {
+        unreachable!("predicate guarantees a turn complete event");
+    };
+
+    assert_eq!(completed.error, None);
+    assert_eq!(response_mock.requests().len(), 2);
+
+    Ok(())
 }

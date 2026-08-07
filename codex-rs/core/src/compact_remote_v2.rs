@@ -23,6 +23,7 @@ use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_retry::ResponsesStreamRequest;
+use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -344,7 +345,7 @@ async fn run_remote_compaction_request_v2(
         .info()
         .stream_max_retries()
         .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);
-    let mut retries = 0;
+    let mut retry_state = ResponsesStreamRetryState::default();
     loop {
         let result = match client_session
             .stream(
@@ -368,7 +369,7 @@ async fn run_remote_compaction_request_v2(
             Err(err) if !err.is_retryable() => return Err(err),
             Err(err) => {
                 handle_retryable_response_stream_error(
-                    &mut retries,
+                    &mut retry_state,
                     max_retries,
                     err,
                     client_session,

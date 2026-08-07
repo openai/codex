@@ -1,5 +1,6 @@
 //! Errors returned by the shared Codex HTTP transport.
 
+use crate::client::HttpError;
 use http::HeaderMap;
 use http::StatusCode;
 use thiserror::Error;
@@ -17,6 +18,8 @@ pub enum TransportError {
     RetryLimit,
     #[error("timeout")]
     Timeout,
+    #[error("connection failed: {0}")]
+    Connection(#[source] HttpError),
     #[error("network error: {0}")]
     Network(String),
     #[error("request build error: {0}")]
