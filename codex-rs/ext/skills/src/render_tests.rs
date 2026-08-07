@@ -20,6 +20,16 @@ use crate::catalog_prompt::render_available_skills_body;
 use crate::loader::HostSkillRoot;
 use crate::loader::load_and_merge_host_skill_roots;
 
+#[test]
+fn skill_prompt_contents_are_bounded_at_utf8_boundaries() {
+    let contents = format!("{}é", "a".repeat(MAX_SKILL_PROMPT_BYTES - 1));
+
+    let (bounded, truncated) = truncate_main_prompt_contents(&contents);
+
+    assert_eq!(bounded.len(), MAX_SKILL_PROMPT_BYTES - 1);
+    assert_eq!(truncated, true);
+}
+
 fn entry(name: &str, description: &str, short_description: Option<&str>) -> SkillCatalogEntry {
     entry_with_path(
         name,

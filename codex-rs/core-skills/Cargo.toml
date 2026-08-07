@@ -8,20 +8,13 @@ version.workspace = true
 doctest = false
 name = "codex_core_skills"
 path = "src/lib.rs"
+test = false
 
 [lints]
 workspace = true
 
 [dependencies]
-codex-analytics = { workspace = true }
-codex-context-fragments = { workspace = true }
 codex-exec-server = { workspace = true }
-codex-otel = { workspace = true }
 codex-skills = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
-codex-utils-string = { workspace = true }
-tracing = { workspace = true }
-
-[dev-dependencies]
-pretty_assertions = { workspace = true }

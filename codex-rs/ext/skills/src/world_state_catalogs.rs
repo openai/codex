@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use codex_core_skills::injection::HostSkillsCatalogInWorldState;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionWarning;
@@ -22,6 +21,7 @@ use crate::render_observability::record_catalog_render;
 use crate::sources::SkillProviders;
 use crate::state::EmittedCatalogBudgetWarnings;
 use crate::state::ExecutorSkillsStepState;
+use crate::state::HostSkillsCatalogInWorldState;
 use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;

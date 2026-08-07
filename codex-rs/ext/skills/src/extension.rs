@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::HostSkillsSnapshot;
-use codex_core_skills::injection::HostSkillsCatalogInWorldState;
-use codex_core_skills::injection::InjectedHostSkillPrompts;
+use crate::InjectedHostSkillPrompts;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -61,6 +60,7 @@ use crate::selection::collect_explicit_skill_mentions;
 use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
 use crate::state::ExecutorSkillsStepState;
+use crate::state::HostSkillsCatalogInWorldState;
 use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;

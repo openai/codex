@@ -1,7 +1,5 @@
-pub mod injection;
 pub(crate) mod invocation_utils;
 pub mod model;
-mod skill_instructions;
 
 /// Hard byte limit for one model-visible skill instruction body.
 ///
@@ -17,4 +15,3 @@ pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;
 pub use model::SkillPolicy;
-pub use skill_instructions::SkillInstructions;

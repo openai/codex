@@ -384,6 +384,9 @@ pub(crate) struct SkillsTurnState {
     pub(crate) main_prompts_injected: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HostSkillsCatalogInWorldState;
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExecutorSkillsStepState(pub(crate) SkillCatalog);
 
