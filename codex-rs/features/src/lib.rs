@@ -103,6 +103,8 @@ pub enum Feature {
     CodeModeBufferedExec,
     /// Run JavaScript code mode in the standalone host process.
     CodeModeHost,
+    /// Terminate active code mode cells when their turn is interrupted.
+    CodeModeInterrupt,
     /// Restrict model-visible tools to code mode entrypoints (`exec`, `wait`).
     CodeModeOnly,
     /// Use the single unified PTY-backed exec tool.
@@ -932,6 +934,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "code_mode_host",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::CodeModeInterrupt,
+        key: "code_mode_interrupt",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CodeModeOnly,

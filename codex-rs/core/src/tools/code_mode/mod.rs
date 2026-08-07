@@ -18,6 +18,7 @@ use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use futures::future::join_all;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
@@ -139,6 +140,23 @@ impl CodeModeService {
         cell_id: CellId,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
         self.session().await?.terminate(cell_id).await
+    }
+
+    pub(crate) async fn interrupt_active_cells(&self) {
+        let Some(session) = self.session.get() else {
+            return;
+        };
+        join_all(
+            self.dispatch_broker
+                .active_cell_ids()
+                .into_iter()
+                .map(|cell_id| async move {
+                    if let Err(error) = session.terminate(cell_id.clone()).await {
+                        tracing::warn!(%cell_id, %error, "failed to terminate interrupted code-mode cell");
+                    }
+                }),
+        )
+        .await;
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {

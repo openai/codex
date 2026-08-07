@@ -45,6 +45,15 @@ impl CodeModeDispatchBroker {
         remove_dispatch_gate(&self.dispatch_gates, cell_id);
     }
 
+    pub(super) fn active_cell_ids(&self) -> Vec<CellId> {
+        self.dispatch_gates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     pub(super) fn start_turn_worker(
         &self,
         exec: ExecContext,
@@ -105,12 +114,13 @@ impl CodeModeDispatchBroker {
                         }
                         let host = Arc::clone(&host);
                         tokio::spawn(async move {
+                            let invocation =
+                                host.invoke_tool(invocation, cancellation_token.clone());
+                            tokio::pin!(invocation);
                             let response = tokio::select! {
-                                response = host.invoke_tool(
-                                    invocation,
-                                    cancellation_token.clone(),
-                                ) => response,
-                                _ = cancellation_token.cancelled() => return,
+                                biased;
+                                _ = cancellation_token.cancelled() => invocation.await,
+                                response = &mut invocation => response,
                             };
                             let _ = response_tx.send(response);
                         });

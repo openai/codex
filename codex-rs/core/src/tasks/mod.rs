@@ -876,6 +876,18 @@ impl Session {
             .complete_task_end(&sub_id);
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
+        if reason == TurnAbortReason::Interrupted
+            && task
+                .turn_context
+                .config
+                .features
+                .enabled(Feature::CodeModeInterrupt)
+        {
+            self.services
+                .code_mode_service
+                .interrupt_active_cells()
+                .await;
+        }
         task.turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
