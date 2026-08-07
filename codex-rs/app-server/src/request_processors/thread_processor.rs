@@ -194,6 +194,42 @@ fn merge_persisted_approvals_reviewer(
     });
 }
 
+fn latest_persisted_approval_policy(
+    history: &[RolloutItem],
+) -> Option<codex_protocol::protocol::AskForApproval> {
+    history
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, item)| match item {
+            RolloutItem::TurnContext(turn_context) => {
+                let updated_policy = turn_context.turn_id.as_ref().and_then(|turn_id| {
+                    let turn_start = history[..index].iter().rposition(|item| {
+                        matches!(
+                            item,
+                            RolloutItem::EventMsg(EventMsg::TurnStarted(event))
+                                if &event.turn_id == turn_id
+                        )
+                    })?;
+                    history[turn_start + 1..index]
+                        .iter()
+                        .rev()
+                        .find_map(|item| match item {
+                            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                                Some(event.thread_settings.approval_policy)
+                            }
+                            _ => None,
+                        })
+                });
+                Some(updated_policy.unwrap_or(turn_context.approval_policy))
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                Some(event.thread_settings.approval_policy)
+            }
+            _ => None,
+        })
+}
+
 fn normalize_thread_list_cwd_filters(
     cwd: Option<ThreadListCwdFilter>,
 ) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
@@ -3190,6 +3226,27 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        if typesafe_overrides.approval_policy.is_none()
+            && let Some(value) = request_overrides
+                .as_mut()
+                .and_then(|overrides| overrides.remove("approval_policy"))
+        {
+            let approval_policy = match serde_json::from_value(value) {
+                Ok(approval_policy) => approval_policy,
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            invalid_params(format!(
+                                "invalid `approval_policy` config override: {err}"
+                            )),
+                        )
+                        .await;
+                    return Ok(());
+                }
+            };
+            typesafe_overrides.approval_policy = Some(approval_policy);
+        }
         let has_explicit_model_resume_override =
             has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
         let persisted_metadata = self
@@ -3470,6 +3527,10 @@ impl ThreadRequestProcessor {
             request_overrides.as_ref(),
             typesafe_overrides,
         );
+        if typesafe_overrides.approval_policy.is_none() {
+            typesafe_overrides.approval_policy =
+                latest_persisted_approval_policy(&resumed_history.history);
+        }
         let state_db_ctx = self.state_db.clone()?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)

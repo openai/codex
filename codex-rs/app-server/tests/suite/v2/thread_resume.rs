@@ -717,6 +717,134 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_restores_persisted_approval_policy() -> Result<()> {
+    assert_thread_resume_approval_policy(
+        ThreadHistoryMode::Legacy,
+        /*approval_policy*/ None,
+        AskForApproval::Never,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn paginated_thread_resume_restores_persisted_approval_policy() -> Result<()> {
+    assert_thread_resume_approval_policy(
+        ThreadHistoryMode::Paginated,
+        /*approval_policy*/ None,
+        AskForApproval::Never,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn thread_resume_approval_policy_override_wins_over_persisted_policy() -> Result<()> {
+    assert_thread_resume_approval_policy(
+        ThreadHistoryMode::Legacy,
+        Some(AskForApproval::OnRequest),
+        AskForApproval::OnRequest,
+    )
+    .await
+}
+
+async fn assert_thread_resume_approval_policy(
+    history_mode: ThreadHistoryMode,
+    approval_policy: Option<AskForApproval>,
+    expected_approval_policy: AskForApproval,
+) -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+model = "gpt-5.4"
+approval_policy = "never"
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+            server.uri()
+        ),
+    )?;
+
+    let thread_id = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build_initialized()
+            .await?;
+
+        let start_id = mcp
+            .send_thread_start_request(ThreadStartParams {
+                model: Some("gpt-5.4".to_string()),
+                history_mode: Some(history_mode),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadStartResponse { thread, .. } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![UserInput::Text {
+                    text: "materialize this thread".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+
+        thread.id
+    };
+
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        config.replace(
+            "approval_policy = \"never\"",
+            "approval_policy = \"on-request\"",
+        ),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            approval_policy,
+            ..Default::default()
+        })
+        .await?;
+    let ThreadResumeResponse {
+        approval_policy, ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+
+    assert_eq!(approval_policy, expected_approval_policy);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_preserves_goal_first_and_fork_approvals_reviewer() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

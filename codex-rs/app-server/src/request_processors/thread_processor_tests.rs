@@ -36,6 +36,136 @@ mod thread_list_cwd_filter_tests {
     }
 }
 
+mod persisted_resume_approval_policy_tests {
+    use super::super::latest_persisted_approval_policy;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+    use codex_protocol::protocol::ThreadSettingsSnapshot;
+    use codex_protocol::protocol::TurnContextItem;
+    use codex_protocol::protocol::TurnStartedEvent;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+
+    fn cwd() -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(std::env::current_dir().expect("current directory"))
+            .expect("absolute current directory")
+    }
+
+    fn settings_item(approval_policy: AskForApproval) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
+            ThreadSettingsAppliedEvent {
+                thread_settings: ThreadSettingsSnapshot {
+                    model: "gpt-5".to_string(),
+                    model_provider_id: "openai".to_string(),
+                    service_tier: None,
+                    approval_policy,
+                    approvals_reviewer: ApprovalsReviewer::User,
+                    permission_profile: PermissionProfile::read_only(),
+                    active_permission_profile: None,
+                    cwd: cwd(),
+                    reasoning_effort: None,
+                    reasoning_summary: None,
+                    personality: None,
+                    collaboration_mode: CollaborationMode {
+                        mode: ModeKind::Default,
+                        settings: Settings {
+                            model: "gpt-5".to_string(),
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    },
+                },
+            },
+        ))
+    }
+
+    fn turn_started_item(turn_id: &str) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }))
+    }
+
+    fn turn_context_item(turn_id: &str, approval_policy: AskForApproval) -> RolloutItem {
+        RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(turn_id.to_string()),
+            cwd: cwd(),
+            workspace_roots: None,
+            current_date: None,
+            timezone: None,
+            approval_policy,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
+            network: None,
+            file_system_sandbox_policy: None,
+            model: "gpt-5".to_string(),
+            comp_hash: None,
+            personality: None,
+            collaboration_mode: None,
+            multi_agent_version: None,
+            multi_agent_mode: None,
+            realtime_active: None,
+            effort: None,
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+        })
+    }
+
+    #[test]
+    fn latest_settings_snapshot_wins() {
+        let history = vec![
+            settings_item(AskForApproval::Never),
+            settings_item(AskForApproval::OnRequest),
+        ];
+
+        assert_eq!(
+            latest_persisted_approval_policy(&history),
+            Some(AskForApproval::OnRequest)
+        );
+    }
+
+    #[test]
+    fn settings_applied_during_turn_wins_over_stale_compaction_context() {
+        let history = vec![
+            turn_started_item("turn-1"),
+            settings_item(AskForApproval::Never),
+            turn_context_item("turn-1", AskForApproval::OnRequest),
+        ];
+
+        assert_eq!(
+            latest_persisted_approval_policy(&history),
+            Some(AskForApproval::Never)
+        );
+    }
+
+    #[test]
+    fn later_turn_context_wins_over_earlier_settings_update() {
+        let history = vec![
+            turn_started_item("turn-1"),
+            settings_item(AskForApproval::Never),
+            turn_context_item("turn-1", AskForApproval::OnRequest),
+            turn_started_item("turn-2"),
+            turn_context_item("turn-2", AskForApproval::OnRequest),
+        ];
+
+        assert_eq!(
+            latest_persisted_approval_policy(&history),
+            Some(AskForApproval::OnRequest)
+        );
+    }
+}
+
 mod background_terminal_pagination_tests {
     use super::super::paginate_background_terminals;
     use codex_app_server_protocol::ThreadBackgroundTerminal;
