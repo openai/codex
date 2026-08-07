@@ -59,9 +59,11 @@ use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
+use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_login::AuthManager;
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
@@ -370,6 +372,11 @@ pub(crate) fn finalize_tool_router(
     }
 
     let code_mode_tool_names = register_code_mode_executors(turn_context, &mut registry);
+    let include_tool_namespaces_info = turn_context
+        .config
+        .tool_registry
+        .turn_metadata_includes_tool_info
+        && turn_context.model_info.use_responses_lite;
 
     if turn_context.config.tool_registry.error_on_tool_collisions {
         if let Some(tool_name) = registry.first_collision() {
@@ -379,6 +386,7 @@ pub(crate) fn finalize_tool_router(
         }
 
         let mut namespace_descriptions = BTreeMap::new();
+        let mut namespace_owners = BTreeMap::new();
         for tool in registry.entries() {
             let owned_spec;
             let spec = if let Some(spec) = tool.runtime.immutable_spec() {
@@ -387,6 +395,27 @@ pub(crate) fn finalize_tool_router(
                 owned_spec = tool.runtime.spec();
                 &owned_spec
             };
+            if include_tool_namespaces_info && tool.exposure != ToolExposure::Hidden {
+                let namespace_name = match spec {
+                    ToolSpec::Namespace(namespace) => namespace.name.as_str(),
+                    ToolSpec::Function(_) | ToolSpec::Freeform(_) => DEFAULT_FUNCTION_NAMESPACE,
+                    ToolSpec::ToolSearch { .. } => TOOL_SEARCH_TOOL_NAME,
+                    ToolSpec::WebSearch { .. } => continue,
+                };
+                let owner = tool.runtime.mcp_server_name();
+                match namespace_owners.get(namespace_name) {
+                    Some(existing_owner) if existing_owner != &owner => {
+                        return Err(
+                            CodexErrorDetails::ToolCollision(namespace_name.to_string()).into()
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        namespace_owners.insert(namespace_name.to_string(), owner);
+                    }
+                }
+            }
+
             let ToolSpec::Namespace(namespace) = spec else {
                 continue;
             };
@@ -407,6 +436,16 @@ pub(crate) fn finalize_tool_router(
 
     let model_visible_specs =
         build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs);
+    if include_tool_namespaces_info {
+        turn_context
+            .turn_metadata_state
+            .set_tool_namespaces_info(collect_tool_namespaces_info(
+                &registry,
+                &code_mode_tool_names,
+                &model_visible_specs,
+            ));
+    }
+
     Ok(ToolRouter::from_parts(registry, model_visible_specs))
 }
 

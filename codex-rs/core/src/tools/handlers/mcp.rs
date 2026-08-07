@@ -232,6 +232,10 @@ impl CoreToolRuntime for McpHandler {
         }))
     }
 
+    fn mcp_server_name(&self) -> Option<&str> {
+        Some(&self.tool_info.server_name)
+    }
+
     fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
         let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
         if let Some(origin) = &self.tool_info.server_origin {

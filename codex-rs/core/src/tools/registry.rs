@@ -74,6 +74,11 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         None
     }
 
+    /// Returns the owning server only for MCP-backed tool runtimes.
+    fn mcp_server_name(&self) -> Option<&str> {
+        None
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             payload,

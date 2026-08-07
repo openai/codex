@@ -10,6 +10,7 @@ use codex_features::Feature;
 use codex_image_generation_extension::install as install_image_generation_extension;
 use codex_login::CodexAuth;
 use codex_login::auth::BedrockApiKeyAuth;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::InputModality;
@@ -18,10 +19,15 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_web_search_extension::install as install_web_search_extension;
+use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
@@ -158,7 +164,72 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
             "namespace": null,
         })
     );
+    assert!(turn_metadata.get("tool_namespaces_info").is_none());
     assert!(!client_metadata.contains_key("x-codex-code-mode-tool-names"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_includes_tool_namespaces_info_when_enabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url)
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            model_info.tool_mode = Some(ToolMode::CodeMode);
+            model_info.supports_search_tool = false;
+        })
+        .with_config(|config| {
+            config.tool_registry.turn_metadata_includes_tool_info = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response_mock.single_request();
+    let body = request.body_json();
+    let turn_metadata: Value = serde_json::from_str(
+        body["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .context("Responses request should include turn metadata")?,
+    )?;
+    let calendar = &turn_metadata["tool_namespaces_info"][SEARCH_CALENDAR_NAMESPACE];
+
+    assert_eq!(calendar["name"], SEARCH_CALENDAR_NAMESPACE);
+    assert_eq!(
+        calendar["functions"][SEARCH_CALENDAR_CREATE_TOOL],
+        serde_json::json!({
+            "name": SEARCH_CALENDAR_CREATE_TOOL,
+            "direct": true,
+            "deferred": false,
+            "code_mode_name": "mcp__codex_apps__calendar_create_event",
+            "source": {
+                "kind": "mcp",
+                "server_name": "codex_apps",
+            },
+        })
+    );
+
+    let compatibility_metadata: Value = serde_json::from_str(
+        request
+            .header("x-codex-turn-metadata")
+            .as_deref()
+            .context("Responses request should include compatibility turn metadata")?,
+    )?;
+    assert!(compatibility_metadata.get("tool_namespaces_info").is_none());
 
     Ok(())
 }

@@ -5,6 +5,10 @@ use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
 use crate::responses_metadata::PARENT_TURN_ID_KEY;
+use crate::responses_metadata::TOOL_NAMESPACES_INFO_KEY;
+use crate::responses_metadata::TurnToolFunctionInfo;
+use crate::responses_metadata::TurnToolNamespaceInfo;
+use crate::responses_metadata::TurnToolSource;
 use crate::responses_metadata::WINDOW_ID_KEY;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_analytics::CompactionImplementation;
@@ -550,6 +554,10 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
             "client-supplied".to_string(),
         ),
         (
+            TOOL_NAMESPACES_INFO_KEY.to_string(),
+            "client-supplied".to_string(),
+        ),
+        (
             "turn_started_at_unix_ms".to_string(),
             "client-supplied".to_string(),
         ),
@@ -569,6 +577,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     let json: Value = serde_json::from_str(&header).expect("json");
 
     assert!(json.get(CODE_MODE_TOOL_NAMES_KEY).is_none());
+    assert!(json.get(TOOL_NAMESPACES_INFO_KEY).is_none());
     assert!(json.get("turn_started_at_unix_ms").is_none());
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
@@ -644,6 +653,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             CODE_MODE_TOOL_NAMES_KEY.to_string(),
             "client-supplied".to_string(),
         ),
+        (
+            TOOL_NAMESPACES_INFO_KEY.to_string(),
+            "client-supplied".to_string(),
+        ),
         ("turn_id".to_string(), "client-supplied".to_string()),
         (WINDOW_ID_KEY.to_string(), "client-supplied".to_string()),
         ("thread_source".to_string(), "client-supplied".to_string()),
@@ -661,6 +674,24 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             ToolName::namespaced("mcp__calendar", "lookup"),
         ),
     ]));
+    state.set_tool_namespaces_info(BTreeMap::from([(
+        "mcp__calendar".to_string(),
+        TurnToolNamespaceInfo {
+            name: "mcp__calendar".to_string(),
+            functions: BTreeMap::from([(
+                "lookup".to_string(),
+                TurnToolFunctionInfo {
+                    name: "lookup".to_string(),
+                    direct: true,
+                    code_mode_name: Some("mcp__calendar__lookup".to_string()),
+                    deferred: false,
+                    source: TurnToolSource::Mcp {
+                        server_name: "calendar".to_string(),
+                    },
+                },
+            )]),
+        },
+    )]));
 
     let header = test_turn_metadata_header(&state);
     assert!(header.is_ascii());
@@ -684,6 +715,26 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "mcp__calendar__lookup": {
                 "name": "lookup",
                 "namespace": "mcp__calendar",
+            },
+        })
+    );
+    assert_eq!(
+        json[TOOL_NAMESPACES_INFO_KEY],
+        serde_json::json!({
+            "mcp__calendar": {
+                "name": "mcp__calendar",
+                "functions": {
+                    "lookup": {
+                        "name": "lookup",
+                        "direct": true,
+                        "code_mode_name": "mcp__calendar__lookup",
+                        "deferred": false,
+                        "source": {
+                            "kind": "mcp",
+                            "server_name": "calendar",
+                        },
+                    },
+                },
             },
         })
     );
@@ -727,12 +778,39 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         Some("thread-a:1")
     );
 
+    let compatibility_headers = state
+        .to_responses_metadata(
+            "installation-a".to_string(),
+            "thread-a:1".to_string(),
+            CodexResponsesRequestKind::Turn,
+        )
+        .compatibility_headers();
+    let compatibility_metadata: Value = serde_json::from_str(
+        compatibility_headers
+            .get("x-codex-turn-metadata")
+            .expect("compatibility turn metadata header")
+            .to_str()
+            .expect("valid compatibility header"),
+    )
+    .expect("compatibility metadata json");
+    assert!(
+        compatibility_metadata
+            .get(CODE_MODE_TOOL_NAMES_KEY)
+            .is_none()
+    );
+    assert!(
+        compatibility_metadata
+            .get(TOOL_NAMESPACES_INFO_KEY)
+            .is_none()
+    );
+
     let meta = state
         .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
         .expect("turn metadata should be present");
     assert_eq!(meta["model"].as_str(), Some("gpt-5.4"));
     assert_eq!(meta["reasoning_effort"].as_str(), Some("high"));
     assert!(meta.get(CODE_MODE_TOOL_NAMES_KEY).is_none());
+    assert!(meta.get(TOOL_NAMESPACES_INFO_KEY).is_none());
     assert!(meta.get(PARENT_TURN_ID_KEY).is_none());
     assert!(meta.get(WINDOW_ID_KEY).is_none());
     assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));
