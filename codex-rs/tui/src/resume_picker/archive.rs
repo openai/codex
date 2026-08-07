@@ -10,6 +10,9 @@ use super::Row;
 use super::SearchState;
 use super::SessionPickerAction;
 use super::SessionPickerLaunchContext;
+use super::SessionSelection;
+use super::SessionStatus;
+use super::SessionTarget;
 use crate::keymap::KeymapContext;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -19,11 +22,16 @@ pub(super) enum ArchiveState {
     Pending {
         thread_id: ThreadId,
     },
+    Restoring {
+        thread_id: ThreadId,
+    },
 }
 
 impl PickerState {
     pub(super) fn archive_shortcut_available(&self) -> bool {
-        if !matches!(self.action, SessionPickerAction::Resume) {
+        if !matches!(self.action, SessionPickerAction::Resume)
+            || self.status == SessionStatus::Archived
+        {
             return false;
         }
 
@@ -125,6 +133,36 @@ impl PickerState {
             let token = self.allocate_search_token();
             self.search_state = SearchState::Active { token };
             self.load_more_if_needed(LoadTrigger::Search { token });
+        }
+    }
+
+    pub(super) fn request_unarchive(&mut self, thread_id: ThreadId) {
+        if !matches!(self.archive_state, ArchiveState::Idle) {
+            return;
+        }
+
+        self.archive_state = ArchiveState::Restoring { thread_id };
+        self.request_frame();
+        (self.picker_loader)(PickerLoadRequest::Unarchive { thread_id });
+    }
+
+    pub(super) fn handle_unarchive_result(
+        &mut self,
+        thread_id: ThreadId,
+        result: std::io::Result<SessionTarget>,
+    ) -> Option<SessionSelection> {
+        if self.archive_state != (ArchiveState::Restoring { thread_id }) {
+            return None;
+        }
+        self.archive_state = ArchiveState::Idle;
+
+        match result {
+            Ok(target) => Some(SessionSelection::Resume(target)),
+            Err(error) => {
+                self.inline_error = Some(format!("Failed to restore archived session: {error}"));
+                self.request_frame();
+                None
+            }
         }
     }
 }

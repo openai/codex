@@ -49,6 +49,8 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_config::types::SessionPickerViewMode;
 use codex_protocol::ThreadId;
 use codex_utils_path as path_utils;
@@ -164,6 +166,7 @@ struct PageLoadRequest {
     search_token: Option<usize>,
     mode: PageLoadMode,
     cwd_filter: Option<PathBuf>,
+    status: SessionStatus,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
 }
@@ -178,6 +181,9 @@ enum PickerLoadRequest {
         cancellation: oneshot::Receiver<()>,
     },
     Archive {
+        thread_id: ThreadId,
+    },
+    Unarchive {
         thread_id: ThreadId,
     },
 }
@@ -213,22 +219,32 @@ impl SessionFilterMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionStatus {
+    Active,
+    Archived,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToolbarControl {
     Filter,
+    Status,
     Sort,
 }
 
 impl ToolbarControl {
-    fn previous(self) -> Self {
+    fn previous(self, action: SessionPickerAction) -> Self {
         match self {
             Self::Filter => Self::Sort,
+            Self::Status => Self::Filter,
+            Self::Sort if matches!(action, SessionPickerAction::Resume) => Self::Status,
             Self::Sort => Self::Filter,
         }
     }
 
-    fn next(self) -> Self {
+    fn next(self, action: SessionPickerAction) -> Self {
         match self {
-            Self::Filter => Self::Sort,
+            Self::Filter if matches!(action, SessionPickerAction::Resume) => Self::Status,
+            Self::Filter | Self::Status => Self::Sort,
             Self::Sort => Self::Filter,
         }
     }
@@ -286,6 +302,10 @@ enum BackgroundEvent {
         thread_id: ThreadId,
         result: std::io::Result<()>,
     },
+    Unarchive {
+        thread_id: ThreadId,
+        result: std::io::Result<SessionTarget>,
+    },
 }
 
 #[derive(Clone)]
@@ -324,8 +344,8 @@ struct SessionPickerRunOptions {
 /// lazy transcript previews, and pagination.
 ///
 /// Sessions render as compact multi-line records with stable metadata first and
-/// the conversation preview last. Users can focus Sort/Filter toolbar controls
-/// with Tab, change the focused control with the arrow keys, and expand the
+/// the conversation preview last. Users can focus the toolbar controls with
+/// Tab, change the focused control with the arrow keys, and expand the
 /// selected session with Ctrl+E to load recent transcript context on demand.
 ///
 /// Sessions are loaded on-demand via cursor-based pagination. The backend
@@ -558,7 +578,9 @@ async fn run_session_picker_with_loader(
                 }
             }
             Some(event) = background_events.next() => {
-                state.handle_background_event(event).await?;
+                if let Some(selection) = state.handle_background_event(event).await? {
+                    return Ok(selection);
+                }
             }
             else => break,
         }
@@ -631,16 +653,16 @@ fn spawn_app_server_page_loader(
             match request {
                 PickerLoadRequest::Page(request) => {
                     let cursor = request.cursor.map(|PageCursor::AppServer(cursor)| cursor);
-                    let page = load_app_server_page(
-                        &mut app_server,
+                    let params = thread_list_params(
                         cursor,
                         request.cwd_filter.as_deref(),
+                        request.status,
                         request.provider_filter,
                         request.sort_key,
                         include_non_interactive,
                         matches!(request.mode, PageLoadMode::StateDbOnly),
-                    )
-                    .await;
+                    );
+                    let page = load_app_server_page(&mut app_server, params).await;
                     let _ = bg_tx.send(BackgroundEvent::Page {
                         request_token: request.request_token,
                         search_token: request.search_token,
@@ -687,6 +709,25 @@ fn spawn_app_server_page_loader(
                         .map(|_| ())
                         .map_err(std::io::Error::other);
                     let _ = bg_tx.send(BackgroundEvent::Archive { thread_id, result });
+                }
+                PickerLoadRequest::Unarchive { thread_id } => {
+                    let result = archive_request_handle
+                        .request_typed::<ThreadUnarchiveResponse>(ClientRequest::ThreadUnarchive {
+                            request_id: RequestId::String(format!(
+                                "resume-picker-unarchive-{}",
+                                Uuid::new_v4()
+                            )),
+                            params: ThreadUnarchiveParams {
+                                thread_id: thread_id.to_string(),
+                            },
+                        })
+                        .await
+                        .map(|response| SessionTarget {
+                            path: response.thread.path,
+                            thread_id,
+                        })
+                        .map_err(std::io::Error::other);
+                    let _ = bg_tx.send(BackgroundEvent::Unarchive { thread_id, result });
                 }
             }
         }
@@ -748,6 +789,7 @@ struct PickerState {
     view_width: Option<u16>,
     provider_filter: ProviderFilter,
     filter_mode: SessionFilterMode,
+    status: SessionStatus,
     filter_cwd: Option<PathBuf>,
     local_filter_cwd: Option<PathBuf>,
     toolbar_focus: ToolbarControl,
@@ -810,22 +852,10 @@ enum LoadTrigger {
 
 async fn load_app_server_page(
     app_server: &mut AppServerSession,
-    cursor: Option<String>,
-    cwd_filter: Option<&Path>,
-    provider_filter: ProviderFilter,
-    sort_key: ThreadSortKey,
-    include_non_interactive: bool,
-    use_state_db_only: bool,
+    params: ThreadListParams,
 ) -> std::io::Result<PickerPage> {
     let response = app_server
-        .thread_list(thread_list_params(
-            cursor,
-            cwd_filter,
-            provider_filter,
-            sort_key,
-            include_non_interactive,
-            use_state_db_only,
-        ))
+        .thread_list(params)
         .await
         .map_err(std::io::Error::other)?;
     let num_scanned_files = response.data.len();
@@ -1086,6 +1116,7 @@ impl PickerState {
             view_width: None,
             provider_filter,
             filter_mode: SessionFilterMode::from_show_all(show_all, filter_cwd.as_deref()),
+            status: SessionStatus::Active,
             local_filter_cwd: filter_cwd.clone(),
             filter_cwd,
             toolbar_focus: ToolbarControl::Filter,
@@ -1313,7 +1344,7 @@ impl PickerState {
                 self.toggle_density().await;
             }
             _ if self.list_keymap.accept.is_pressed(key)
-                && matches!(self.archive_state, archive::ArchiveState::Pending { .. }) => {}
+                && !matches!(self.archive_state, archive::ArchiveState::Idle) => {}
             _ if self.list_keymap.accept.is_pressed(key) => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     let path = row.path.clone();
@@ -1328,6 +1359,10 @@ impl PickerState {
                         },
                     };
                     if let Some(thread_id) = thread_id {
+                        if self.status == SessionStatus::Archived {
+                            self.request_unarchive(thread_id);
+                            return Ok(None);
+                        }
                         return Ok(Some(self.action.selection(path, thread_id)));
                     }
                     self.inline_error = Some(match path {
@@ -1489,12 +1524,16 @@ impl PickerState {
             search_token,
             mode,
             cwd_filter: self.active_cwd_filter(),
+            status: self.status,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         }));
     }
 
-    async fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
+    async fn handle_background_event(
+        &mut self,
+        event: BackgroundEvent,
+    ) -> Result<Option<SessionSelection>> {
         match event {
             BackgroundEvent::Page {
                 request_token,
@@ -1502,7 +1541,7 @@ impl PickerState {
                 page,
             } => {
                 let Some(pending) = self.pagination.finish_load(request_token) else {
-                    return Ok(());
+                    return Ok(None);
                 };
                 let page_has_rows = matches!(&page, Ok(page) if !page.rows.is_empty());
                 // Fall back only when the initial DB listing is unusable. Once SQLite returns
@@ -1525,10 +1564,11 @@ impl PickerState {
                         search_token,
                         mode: PageLoadMode::StoreDefault,
                         cwd_filter: self.active_cwd_filter(),
+                        status: self.status,
                         provider_filter: self.provider_filter.clone(),
                         sort_key: self.sort_key,
                     }));
-                    return Ok(());
+                    return Ok(None);
                 }
                 let page = page.map_err(color_eyre::Report::from)?;
                 self.ingest_page(page);
@@ -1575,8 +1615,11 @@ impl PickerState {
             BackgroundEvent::Archive { thread_id, result } => {
                 self.handle_archive_result(thread_id, result);
             }
+            BackgroundEvent::Unarchive { thread_id, result } => {
+                return Ok(self.handle_unarchive_result(thread_id, result));
+            }
         }
-        Ok(())
+        Ok(None)
     }
 
     fn reset_pagination(&mut self) {
@@ -1811,6 +1854,7 @@ impl PickerState {
             search_token,
             mode,
             cwd_filter: self.active_cwd_filter(),
+            status: self.status,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         }));
@@ -1857,6 +1901,14 @@ impl PickerState {
         self.start_initial_load();
     }
 
+    fn toggle_status(&mut self) {
+        self.status = match self.status {
+            SessionStatus::Active => SessionStatus::Archived,
+            SessionStatus::Archived => SessionStatus::Active,
+        };
+        self.start_initial_load();
+    }
+
     fn active_cwd_filter(&self) -> Option<PathBuf> {
         match self.filter_mode {
             SessionFilterMode::Cwd => self.filter_cwd.clone(),
@@ -1865,17 +1917,18 @@ impl PickerState {
     }
 
     fn focus_previous_toolbar_control(&mut self) {
-        self.toolbar_focus = self.toolbar_focus.previous();
+        self.toolbar_focus = self.toolbar_focus.previous(self.action);
     }
 
     fn focus_next_toolbar_control(&mut self) {
-        self.toolbar_focus = self.toolbar_focus.next();
+        self.toolbar_focus = self.toolbar_focus.next(self.action);
     }
 
     fn change_focused_toolbar_value(&mut self) {
         match self.toolbar_focus {
             ToolbarControl::Sort => self.toggle_sort_key(),
             ToolbarControl::Filter => self.toggle_filter_mode(),
+            ToolbarControl::Status => self.toggle_status(),
         }
     }
 
@@ -2035,6 +2088,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
 fn thread_list_params(
     cursor: Option<String>,
     cwd_filter: Option<&Path>,
+    status: SessionStatus,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
@@ -2050,7 +2104,7 @@ fn thread_list_params(
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
         source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
-        archived: Some(false),
+        archived: Some(status == SessionStatus::Archived),
         section_id: None,
         parent_thread_id: None,
         ancestor_thread_id: None,
@@ -2135,11 +2189,11 @@ fn search_line(state: &PickerState, width: u16) -> Line<'_> {
     } else {
         format!("Search: {}", state.query).into()
     };
+    let search_width = UnicodeWidthStr::width(search.content.as_ref());
     let mut toolbar = toolbar_line(state, /*compact*/ false);
-    if toolbar.width() as u16 > width.saturating_sub(2) {
+    if search_width.saturating_add(toolbar.width()) > usize::from(width.saturating_sub(2)) {
         toolbar = toolbar_line(state, /*compact*/ true);
     }
-    let search_width = UnicodeWidthStr::width(search.content.as_ref());
     let toolbar_width = toolbar.width();
     let spacer_width = width
         .saturating_sub((search_width + toolbar_width) as u16)
@@ -2165,8 +2219,40 @@ fn search_line(state: &PickerState, width: u16) -> Line<'_> {
 
 fn toolbar_line(state: &PickerState, compact: bool) -> Line<'static> {
     let mut spans = Vec::new();
+    let separator = if compact && matches!(state.action, SessionPickerAction::Resume) {
+        " "
+    } else {
+        "   "
+    };
     spans.extend(filter_control_spans(state, compact));
-    spans.push("   ".dim());
+    spans.push(separator.dim());
+    if matches!(state.action, SessionPickerAction::Resume) {
+        let status_focused = state.toolbar_focus == ToolbarControl::Status;
+        if compact {
+            let active_status = match state.status {
+                SessionStatus::Active => "Active",
+                SessionStatus::Archived => "Archived",
+            };
+            spans.push(toolbar_value(
+                active_status,
+                /*active*/ true,
+                status_focused,
+            ));
+        } else {
+            spans.push("Status: ".dim());
+            spans.push(toolbar_value(
+                "Active",
+                state.status == SessionStatus::Active,
+                status_focused,
+            ));
+            spans.push(toolbar_value(
+                "Archived",
+                state.status == SessionStatus::Archived,
+                status_focused,
+            ));
+        }
+        spans.push(separator.dim());
+    }
     spans.extend(sort_control_spans(state, compact));
     spans.into()
 }
@@ -2389,7 +2475,11 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
         return vec![line, Line::default()];
     }
 
-    let action_label = state.action.action_label();
+    let action_label = if state.status == SessionStatus::Archived {
+        "restore"
+    } else {
+        state.action.action_label()
+    };
     let (esc_label, esc_compact_label) = if state.query.is_empty() {
         match state.launch_context {
             SessionPickerLaunchContext::Startup => ("start new", "new"),
@@ -3609,6 +3699,7 @@ mod tests {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
             cwd_filter.as_deref(),
+            SessionStatus::Active,
             ProviderFilter::MatchDefault(String::from("openai")),
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
@@ -3987,6 +4078,7 @@ mod tests {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
             Some(Path::new("repo/on/server")),
+            SessionStatus::Active,
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
@@ -4010,6 +4102,7 @@ mod tests {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
             /*cwd_filter*/ None,
+            SessionStatus::Active,
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ true,
@@ -5180,6 +5273,7 @@ session_picker_view = "dense"
         let line = search_line(&state, /*width*/ 40).to_string();
 
         assert!(line.contains("Filter:[Cwd]"));
+        assert!(line.contains("[Active]"));
         assert!(line.contains("Sort:[Updated]"));
         assert!(line.find("Filter:[Cwd]") < line.find("Sort:[Updated]"));
     }
@@ -5858,6 +5952,10 @@ session_picker_view = "dense"
             .await
             .unwrap();
         state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        state
             .handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL))
             .await
             .unwrap();
@@ -5936,7 +6034,7 @@ session_picker_view = "dense"
     }
 
     #[tokio::test]
-    async fn filter_stays_all_when_no_cwd_candidate_exists() {
+    async fn status_changes_when_directory_filter_is_unavailable() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
         let loader = page_only_loader(move |req: PageLoadRequest| {
@@ -5965,10 +6063,21 @@ session_picker_view = "dense"
             .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .await
             .unwrap();
+        state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        state
+            .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .await
+            .unwrap();
 
         let guard = recorded_requests.lock().unwrap();
-        assert_eq!(guard.len(), 1);
+        assert_eq!(guard.len(), 2);
+        assert_eq!(guard[0].status, SessionStatus::Active);
         assert_eq!(guard[0].cwd_filter, None);
+        assert_eq!(guard[1].status, SessionStatus::Archived);
+        assert_eq!(guard[1].cwd_filter, None);
     }
 
     #[tokio::test]

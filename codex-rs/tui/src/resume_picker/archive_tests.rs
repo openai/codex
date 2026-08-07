@@ -5,16 +5,21 @@ use super::super::ProviderFilter;
 use super::super::Row;
 use super::super::SessionPickerAction;
 use super::super::SessionPickerLaunchContext;
+use super::super::SessionSelection;
+use super::super::SessionStatus;
+use super::super::SessionTarget;
 use super::ArchiveState;
 use crate::key_hint::KeyBinding;
 use crate::tui::FrameRequester;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ThreadSortKey;
 use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -22,7 +27,9 @@ fn archive_picker_state() -> (PickerState, Arc<Mutex<Vec<ThreadId>>>) {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let request_sink = Arc::clone(&requests);
     let picker_loader: PickerLoader = Arc::new(move |request| {
-        if let PickerLoadRequest::Archive { thread_id } = request {
+        if let PickerLoadRequest::Archive { thread_id }
+        | PickerLoadRequest::Unarchive { thread_id } = request
+        {
             request_sink
                 .lock()
                 .expect("archive request sink")
@@ -154,4 +161,134 @@ fn archive_footer_shows_shortcut_for_resume_sessions() {
      enter resume   ctrl+a archive   esc start new   ctrl+c quit   tab focus sort/filter   ←/→ change option
      ctrl+o dense view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse
     ");
+}
+
+#[test]
+fn archived_status_preserves_directory_filter_and_hides_archive_shortcut() {
+    let requested_filters = Arc::new(Mutex::new(Vec::new()));
+    let request_sink = Arc::clone(&requested_filters);
+    let picker_loader: PickerLoader = Arc::new(move |request| {
+        if let PickerLoadRequest::Page(request) = request {
+            request_sink
+                .lock()
+                .expect("page request sink")
+                .push((request.status, request.cwd_filter));
+        }
+    });
+    let mut state = PickerState::new(
+        FrameRequester::test_dummy(),
+        picker_loader,
+        ProviderFilter::Any,
+        /*show_all*/ false,
+        Some(PathBuf::from("/tmp/project")),
+        SessionPickerAction::Resume,
+    );
+
+    state.toggle_status();
+
+    assert_eq!(state.status, SessionStatus::Archived);
+    let params = super::super::thread_list_params(
+        /*cursor*/ None,
+        Some(std::path::Path::new("/tmp/project")),
+        SessionStatus::Archived,
+        ProviderFilter::Any,
+        ThreadSortKey::UpdatedAt,
+        /*include_non_interactive*/ false,
+        /*use_state_db_only*/ false,
+    );
+    assert_eq!(params.archived, Some(true));
+
+    set_selected_session(&mut state, ThreadId::new());
+    assert!(!state.archive_shortcut_available());
+    let footer = super::super::footer_hint_lines(&state, /*width*/ 220)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(footer, @r"
+     enter restore   esc start new   ctrl+c quit   tab focus sort/filter   ←/→ change option
+     ctrl+o dense view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse
+    ");
+    insta::assert_snapshot!(
+        super::super::toolbar_line(&state, /*compact*/ true).to_string(),
+        @"Filter:[Cwd] [Archived] Sort:[Updated]"
+    );
+
+    state.toggle_filter_mode();
+
+    assert_eq!(
+        *requested_filters.lock().unwrap(),
+        vec![
+            (SessionStatus::Archived, Some(PathBuf::from("/tmp/project")),),
+            (SessionStatus::Archived, None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn archived_session_restore_resumes_after_completion() {
+    let (mut state, requests) = archive_picker_state();
+    let thread_id = ThreadId::new();
+    state.status = SessionStatus::Archived;
+    set_selected_session(&mut state, thread_id);
+
+    assert!(
+        state
+            .handle_key(KeyEvent::from(KeyCode::Enter))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(state.archive_state, ArchiveState::Restoring { thread_id });
+    assert_eq!(*requests.lock().unwrap(), vec![thread_id]);
+
+    assert!(
+        state
+            .handle_key(KeyEvent::from(KeyCode::Enter))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(*requests.lock().unwrap(), vec![thread_id]);
+
+    let selection = state.handle_unarchive_result(
+        thread_id,
+        Ok(SessionTarget {
+            path: None,
+            thread_id,
+        }),
+    );
+
+    assert!(matches!(
+        selection,
+        Some(SessionSelection::Resume(SessionTarget {
+            path: None,
+            thread_id: resumed_thread_id,
+        })) if resumed_thread_id == thread_id
+    ));
+    assert_eq!(state.archive_state, ArchiveState::Idle);
+}
+
+#[test]
+fn archived_session_restore_failure_preserves_session_and_allows_retry() {
+    let (mut state, requests) = archive_picker_state();
+    let thread_id = ThreadId::new();
+    state.status = SessionStatus::Archived;
+    set_selected_session(&mut state, thread_id);
+    state.request_unarchive(thread_id);
+
+    let selection =
+        state.handle_unarchive_result(thread_id, Err(std::io::Error::other("restore denied")));
+
+    assert!(selection.is_none());
+    assert_eq!(state.archive_state, ArchiveState::Idle);
+    assert_eq!(
+        state.inline_error.as_deref(),
+        Some("Failed to restore archived session: restore denied")
+    );
+    assert_eq!(state.filtered_rows.len(), 1);
+
+    state.request_unarchive(thread_id);
+
+    assert_eq!(*requests.lock().unwrap(), vec![thread_id, thread_id]);
 }
