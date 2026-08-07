@@ -24,6 +24,9 @@ pub use model::LogQuery;
 pub use model::LogRow;
 pub use model::Phase2JobClaimOutcome;
 pub use model::QueuedUserSubmissionRecord;
+pub use model::RolloutMigrationCursor;
+pub use model::RolloutMigrationSkippedRollout;
+pub use model::RolloutMigrationState;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 pub use sqlite::SqliteConfig;

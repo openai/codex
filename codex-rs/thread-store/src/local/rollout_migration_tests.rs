@@ -41,6 +41,7 @@ use tempfile::TempDir;
 use super::LocalThreadStore;
 use super::RolloutMigrationMode;
 use super::RolloutMigrationOptions;
+use super::RolloutMigrationProgress;
 use super::RolloutMigrationStatus;
 #[cfg(unix)]
 use super::decompress_rollout_to_path;
@@ -241,7 +242,7 @@ fn read_rollout(path: &Path) -> Vec<RolloutLine> {
 fn apply_options() -> RolloutMigrationOptions {
     RolloutMigrationOptions {
         mode: RolloutMigrationMode::Apply,
-        max_mib_per_second: 1024,
+        max_mib_per_second: Some(1024),
         ..RolloutMigrationOptions::default()
     }
 }
@@ -1516,8 +1517,11 @@ async fn dry_run_reports_migration_order() {
     let original = fs::read(&root).expect("read original root rollout");
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
 
+    let mut progress = Vec::new();
     let report = store
-        .migrate_rollouts(RolloutMigrationOptions::default())
+        .migrate_rollouts_with_progress(RolloutMigrationOptions::default(), |update| {
+            progress.push(update);
+        })
         .await
         .expect("inspect legacy rollouts");
 
@@ -1539,6 +1543,14 @@ async fn dry_run_reports_migration_order() {
             ))
             .collect::<Vec<_>>(),
         expected,
+    );
+    assert_eq!(
+        progress.last(),
+        Some(&RolloutMigrationProgress {
+            processed_paths: 5,
+            total_paths: 5,
+            outcome_status: Some(RolloutMigrationStatus::Eligible),
+        })
     );
     assert_eq!(fs::read(&root).expect("read inspected rollout"), original);
 

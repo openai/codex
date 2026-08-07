@@ -147,6 +147,8 @@ pub enum Feature {
     ExternalAgentMemoryImport,
     /// Compress cold local thread-store rollout files.
     LocalThreadStoreCompression,
+    /// Migrate legacy local rollout files to paginated history in the background.
+    BackgroundPaginatedRolloutMigration,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
@@ -1006,6 +1008,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::LocalThreadStoreCompression,
         key: "local_thread_store_compression",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::BackgroundPaginatedRolloutMigration,
+        key: "background_paginated_rollout_migration",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

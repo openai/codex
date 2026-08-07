@@ -456,6 +456,9 @@
             "auth_elicitation": {
               "type": "boolean"
             },
+            "background_paginated_rollout_migration": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -5072,6 +5075,9 @@
           ]
         },
         "auth_elicitation": {
+          "type": "boolean"
+        },
+        "background_paginated_rollout_migration": {
           "type": "boolean"
         },
         "browser_use": {

@@ -27,6 +27,7 @@ pub use local::LocalThreadStoreConfig;
 pub use local::RolloutMigrationMode;
 pub use local::RolloutMigrationOptions;
 pub use local::RolloutMigrationOutcome;
+pub use local::RolloutMigrationProgress;
 pub use local::RolloutMigrationReport;
 pub use local::RolloutMigrationStatus;
 pub use queue_store::LocalQueueStore;

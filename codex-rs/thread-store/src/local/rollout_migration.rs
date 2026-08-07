@@ -45,7 +45,9 @@ mod publish;
 mod rollback;
 mod rollback_plan;
 mod rollback_replay;
+mod startup;
 mod subagent;
+mod telemetry;
 
 use canonicalizer::LegacyRolloutCanonicalizer;
 use publish::compress_rollout_to_path;
@@ -62,6 +64,8 @@ use publish::sync_parent_directory;
 use publish::write_migration_journal;
 use rollback_plan::RollbackPlan;
 use rollback_plan::RollbackPlanner;
+use telemetry::RolloutMigrationTelemetry;
+use telemetry::RolloutMigrationTrigger;
 
 const PROJECTION_BATCH_BYTES: u64 = 256 * 1024;
 const MAX_ROLLOUT_LINE_BYTES: usize = 16 * 1024 * 1024;
@@ -98,7 +102,9 @@ pub enum RolloutMigrationMode {
 pub struct RolloutMigrationOptions {
     pub mode: RolloutMigrationMode,
     pub thread_ids: Vec<ThreadId>,
-    pub max_mib_per_second: u64,
+    /// Optional aggregate rollout I/O limit. Without one, migration runs as fast as local I/O
+    /// allows while still yielding between projection-sized batches.
+    pub max_mib_per_second: Option<u64>,
 }
 
 impl Default for RolloutMigrationOptions {
@@ -106,7 +112,7 @@ impl Default for RolloutMigrationOptions {
         Self {
             mode: RolloutMigrationMode::DryRun,
             thread_ids: Vec::new(),
-            max_mib_per_second: 8,
+            max_mib_per_second: None,
         }
     }
 }
@@ -139,10 +145,19 @@ pub struct RolloutMigrationReport {
     pub outcomes: Vec<RolloutMigrationOutcome>,
 }
 
+/// Incremental progress emitted while rollout migration scans discovered paths.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RolloutMigrationProgress {
+    pub processed_paths: usize,
+    pub total_paths: usize,
+    /// None means the scanned path was excluded by the requested thread filter.
+    pub outcome_status: Option<RolloutMigrationStatus>,
+}
+
 struct RolloutMigrationRateLimiter {
     started_at: Instant,
     bytes_processed: u64,
-    bytes_per_second: u64,
+    bytes_per_second: Option<u64>,
     bytes_since_yield: u64,
 }
 
@@ -158,13 +173,17 @@ enum RolloutMigrationKind {
 }
 
 impl RolloutMigrationRateLimiter {
-    fn new(max_mib_per_second: u64) -> ThreadStoreResult<Self> {
+    fn new(max_mib_per_second: Option<u64>) -> ThreadStoreResult<Self> {
         let bytes_per_second = max_mib_per_second
-            .checked_mul(1024 * 1024)
-            .filter(|rate| *rate > 0)
-            .ok_or_else(|| ThreadStoreError::InvalidRequest {
-                message: "--max-mib-per-second must be a positive supported integer".to_string(),
-            })?;
+            .map(|rate| {
+                rate.checked_mul(1024 * 1024)
+                    .filter(|rate| *rate > 0)
+                    .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                        message: "--max-mib-per-second must be a positive supported integer"
+                            .to_string(),
+                    })
+            })
+            .transpose()?;
         Ok(Self {
             started_at: Instant::now(),
             bytes_processed: 0,
@@ -180,8 +199,12 @@ impl RolloutMigrationRateLimiter {
             return;
         }
         self.bytes_since_yield = 0;
+        let Some(bytes_per_second) = self.bytes_per_second else {
+            tokio::task::yield_now().await;
+            return;
+        };
         let expected =
-            Duration::from_secs_f64(self.bytes_processed as f64 / self.bytes_per_second as f64);
+            Duration::from_secs_f64(self.bytes_processed as f64 / bytes_per_second as f64);
         if let Some(remaining) = expected.checked_sub(self.started_at.elapsed()) {
             tokio::time::sleep(remaining).await;
         } else {
@@ -191,10 +214,57 @@ impl RolloutMigrationRateLimiter {
 }
 
 impl LocalThreadStore {
+    /// Check whether startup needs to migrate legacy rollouts, then migrate in the background
+    /// when it does.
+    pub async fn migrate_rollouts_on_startup(&self) -> ThreadStoreResult<()> {
+        startup::migrate_rollouts_on_startup(self).await
+    }
+
     /// Inspect or migrate eligible legacy rollout files beneath active and archived sessions.
     pub async fn migrate_rollouts(
         &self,
         options: RolloutMigrationOptions,
+    ) -> ThreadStoreResult<RolloutMigrationReport> {
+        self.migrate_rollouts_with_progress_for_trigger(
+            options,
+            |_| {},
+            RolloutMigrationTrigger::Manual,
+        )
+        .await
+    }
+
+    /// Inspect or migrate rollouts while reporting each discovered path after it is processed.
+    pub async fn migrate_rollouts_with_progress(
+        &self,
+        options: RolloutMigrationOptions,
+        on_progress: impl FnMut(RolloutMigrationProgress),
+    ) -> ThreadStoreResult<RolloutMigrationReport> {
+        self.migrate_rollouts_with_progress_for_trigger(
+            options,
+            on_progress,
+            RolloutMigrationTrigger::Manual,
+        )
+        .await
+    }
+
+    async fn migrate_rollouts_with_progress_for_trigger(
+        &self,
+        options: RolloutMigrationOptions,
+        mut on_progress: impl FnMut(RolloutMigrationProgress),
+        trigger: RolloutMigrationTrigger,
+    ) -> ThreadStoreResult<RolloutMigrationReport> {
+        let telemetry = RolloutMigrationTelemetry::new(trigger, &options);
+        let result = self
+            .migrate_rollouts_with_progress_inner(options, &mut on_progress)
+            .await;
+        telemetry.finish(&result);
+        result
+    }
+
+    async fn migrate_rollouts_with_progress_inner(
+        &self,
+        options: RolloutMigrationOptions,
+        on_progress: &mut impl FnMut(RolloutMigrationProgress),
     ) -> ThreadStoreResult<RolloutMigrationReport> {
         let mut limiter = RolloutMigrationRateLimiter::new(options.max_mib_per_second)?;
         let _maintenance_guard = match options.mode {
@@ -227,15 +297,22 @@ impl LocalThreadStore {
                     .is_some_and(|thread_id| pending_thread_ids.contains(&thread_id))
             });
         }
+        let total_paths = paths.len();
         let mut report = RolloutMigrationReport::default();
 
-        for path in paths {
-            if let Some(outcome) = self
+        for (index, path) in paths.into_iter().enumerate() {
+            let outcome = self
                 .migrate_rollout_path(path, &options, &mut limiter)
-                .await?
-            {
+                .await?;
+            let outcome_status = outcome.as_ref().map(|outcome| outcome.status);
+            if let Some(outcome) = outcome {
                 report.outcomes.push(outcome);
             }
+            on_progress(RolloutMigrationProgress {
+                processed_paths: index + 1,
+                total_paths,
+                outcome_status,
+            });
         }
 
         Ok(report)
@@ -301,6 +378,7 @@ impl LocalThreadStore {
         if metadata.meta.history_mode == ThreadHistoryMode::Paginated {
             let bytes_before = limiter.bytes_processed;
             let result = if pending_published_migration {
+                let _live_writer_guard = self.live_writer_locks.lock(thread_id).await;
                 match self
                     .recover_published_migration(thread_id, &path, &journal_path, limiter)
                     .await
@@ -341,6 +419,7 @@ impl LocalThreadStore {
             )));
         }
 
+        let _live_writer_guard = self.live_writer_locks.lock(thread_id).await;
         let _writer_guard = match self.writer_lock_coordinator.acquire(thread_id) {
             Ok(guard) => guard,
             Err(ThreadStoreError::Conflict { message }) => {

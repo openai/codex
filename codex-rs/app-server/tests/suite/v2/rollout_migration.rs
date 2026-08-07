@@ -83,7 +83,7 @@ async fn migrated_legacy_thread_cold_resume_preserves_model_context() -> Result<
     let report = store
         .migrate_rollouts(RolloutMigrationOptions {
             mode: RolloutMigrationMode::Apply,
-            max_mib_per_second: 1024,
+            max_mib_per_second: Some(1024),
             ..RolloutMigrationOptions::default()
         })
         .await?;
