@@ -1119,8 +1119,8 @@ pub struct Config {
 pub struct ToolRegistryConfig {
     /// Fail the turn when multiple tools share the same effective name.
     pub error_on_tool_collisions: bool,
-    /// Include authoritative tool information in request metadata.
-    pub include_tool_metadata: bool,
+    /// Include authoritative tool information in per-turn request metadata.
+    pub turn_metadata_includes_tool_info: bool,
 }
 
 const DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS: u64 = 30_000;
@@ -3731,11 +3731,11 @@ impl Config {
                 .and_then(|features| features.tool_registry.as_ref())
                 .and_then(|config| config.error_on_tool_collisions)
                 .unwrap_or_default(),
-            include_tool_metadata: cfg
+            turn_metadata_includes_tool_info: cfg
                 .features
                 .as_ref()
                 .and_then(|features| features.tool_registry.as_ref())
-                .and_then(|config| config.include_tool_metadata)
+                .and_then(|config| config.turn_metadata_includes_tool_info)
                 .unwrap_or_default(),
         };
         let code_mode = resolve_code_mode_config(&cfg);

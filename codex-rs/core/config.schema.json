@@ -3219,8 +3219,8 @@
           "description": "Fail the turn when multiple tools share the same effective name.",
           "type": "boolean"
         },
-        "include_tool_metadata": {
-          "description": "Include authoritative tool information in request metadata.",
+        "turn_metadata_includes_tool_info": {
+          "description": "Include authoritative tool information in per-turn request metadata.",
           "type": "boolean"
         }
       },

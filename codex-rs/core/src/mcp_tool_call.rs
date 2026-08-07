@@ -1161,6 +1161,10 @@ fn build_mcp_tool_call_request_meta(
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
+    request_meta.insert(
+        "callId".to_string(),
+        serde_json::Value::String(call_id.to_string()),
+    );
 
     if let Some(turn_metadata) = turn_context
         .turn_metadata_state

@@ -248,6 +248,10 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
     let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
 
     assert_eq!(
+        apps_tool_call.pointer("/params/_meta/callId"),
+        Some(&json!(call_id))
+    );
+    assert_eq!(
         apps_tool_call
             .pointer("/params/_meta/x-codex-turn-metadata/user_input_requested_during_turn"),
         Some(&json!(true))
