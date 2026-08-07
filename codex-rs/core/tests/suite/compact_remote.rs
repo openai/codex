@@ -600,6 +600,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_metadata["request_kind"].as_str(),
         Some("compaction")
     );
+    assert_eq!(compact_metadata["sandbox_mode"].as_str(), Some("read-only"));
     assert_eq!(
         compact_metadata["window_id"].as_str(),
         compact_request.header("x-codex-window-id").as_deref()

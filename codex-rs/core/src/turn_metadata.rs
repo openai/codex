@@ -20,6 +20,7 @@ use crate::responses_metadata::TurnToolNamespacesInfo;
 use crate::responses_metadata::filter_extra_metadata;
 use crate::responses_metadata::subagent_header_value;
 use crate::responses_metadata::subagent_metadata_kind;
+use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
@@ -76,12 +77,16 @@ pub async fn detached_memory_responses_metadata(
     window_id: String,
     session_source: &SessionSource,
     cwd: &AbsolutePathBuf,
+    permission_profile: &PermissionProfile,
     sandbox: Option<&str>,
 ) -> CodexResponsesMetadata {
     CodexResponsesMetadata {
         request_kind: Some(CodexResponsesRequestKind::Memory),
         subagent_header: subagent_header_value(session_source),
         sandbox: sandbox.map(ToString::to_string),
+        sandbox_mode: Some(
+            permission_profile_policy_tag(permission_profile, cwd.as_path()).to_string(),
+        ),
         workspaces: memory_workspaces(cwd).await,
         ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     }
@@ -101,6 +106,7 @@ pub(crate) struct TurnMetadataState {
     thread_source: Option<ThreadSource>,
     turn_id: String,
     sandbox: Option<String>,
+    sandbox_mode: Option<String>,
     enriched_workspaces: RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>,
     tool_namespaces_info: RwLock<Option<TurnToolNamespacesInfo>>,
     turn_started_at_unix_ms: RwLock<Option<i64>>,
@@ -133,6 +139,8 @@ impl TurnMetadataState {
             )
             .to_string(),
         );
+        let sandbox_mode =
+            Some(permission_profile_policy_tag(permission_profile, cwd.as_path()).to_string());
         Self {
             cwd,
             repo_root,
@@ -146,6 +154,7 @@ impl TurnMetadataState {
             thread_source,
             turn_id,
             sandbox,
+            sandbox_mode,
             enriched_workspaces: RwLock::new(None),
             tool_namespaces_info: RwLock::new(None),
             turn_started_at_unix_ms: RwLock::new(None),
@@ -258,6 +267,7 @@ impl TurnMetadataState {
             subagent_kind: self.subagent_kind.clone(),
             thread_source: self.thread_source.clone(),
             sandbox: self.sandbox.clone(),
+            sandbox_mode: self.sandbox_mode.clone(),
             workspaces: self.current_workspaces(),
             tool_namespaces_info: self
                 .tool_namespaces_info

@@ -5,6 +5,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
 use crate::responses_metadata::LEGACY_CODE_MODE_TOOL_NAMES_KEY;
 use crate::responses_metadata::PARENT_TURN_ID_KEY;
+use crate::responses_metadata::SANDBOX_MODE_KEY;
 use crate::responses_metadata::TOOL_NAMESPACES_INFO_KEY;
 use crate::responses_metadata::TurnToolFunctionInfo;
 use crate::responses_metadata::TurnToolNamespaceInfo;
@@ -146,6 +147,7 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
         String::new(),
         &SessionSource::Unknown,
         &repo_path,
+        &PermissionProfile::read_only(),
         Some("none"),
     )
     .await
@@ -155,6 +157,7 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     assert!(!header.contains("東京"));
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
     assert_eq!(parsed["request_kind"].as_str(), Some("memory"));
+    assert_eq!(parsed[SANDBOX_MODE_KEY].as_str(), Some("read-only"));
     assert!(parsed.get("session_id").is_none());
     assert!(parsed.get("thread_id").is_none());
     assert!(parsed.get("forked_from_thread_id").is_none());
@@ -192,6 +195,7 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
         String::new(),
         &SessionSource::Unknown,
         &cwd,
+        &PermissionProfile::read_only(),
         /*sandbox*/ None,
     )
     .await
@@ -199,11 +203,17 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     .expect("detached memory should emit its request kind");
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
 
-    assert_eq!(parsed, serde_json::json!({"request_kind": "memory"}));
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "request_kind": "memory",
+            "sandbox_mode": "read-only",
+        })
+    );
 }
 
 #[test]
-fn turn_metadata_state_uses_platform_sandbox_tag() {
+fn turn_metadata_state_includes_sandbox_metadata() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
@@ -225,6 +235,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let header = test_turn_metadata_header(&state);
     let json: Value = serde_json::from_str(&header).expect("json");
     let sandbox_name = json.get("sandbox").and_then(Value::as_str);
+    let sandbox_mode = json.get(SANDBOX_MODE_KEY).and_then(Value::as_str);
     let session_id = json.get("session_id").and_then(Value::as_str);
     let thread_id = json.get("thread_id").and_then(Value::as_str);
 
@@ -235,6 +246,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
         /*enforce_managed_network*/ false,
     );
     assert_eq!(sandbox_name, Some(expected_sandbox));
+    assert_eq!(sandbox_mode, Some("read-only"));
     assert_eq!(session_id, Some("session-a"));
     assert_eq!(thread_id, Some("thread-a"));
     assert!(json.get("forked_from_thread_id").is_none());
@@ -570,6 +582,10 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
         ),
         ("parent_turn_id".to_string(), "client-supplied".to_string()),
         ("subagent_kind".to_string(), "client-supplied".to_string()),
+        (
+            SANDBOX_MODE_KEY.to_string(),
+            "danger-full-access".to_string(),
+        ),
     ]));
 
     let header = test_turn_metadata_header(&state);
@@ -582,6 +598,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     assert!(json.get("parent_thread_id").is_none());
     assert!(json.get("parent_turn_id").is_none());
     assert!(json.get("subagent_kind").is_none());
+    assert_eq!(json[SANDBOX_MODE_KEY].as_str(), Some("read-only"));
 }
 
 #[test]

@@ -41,6 +41,7 @@ pub(crate) const PARENT_TURN_ID_KEY: &str = "parent_turn_id";
 pub(crate) const SUBAGENT_KIND_KEY: &str = "subagent_kind";
 pub(crate) const THREAD_SOURCE_KEY: &str = "thread_source";
 pub(crate) const SANDBOX_KEY: &str = "sandbox";
+pub(crate) const SANDBOX_MODE_KEY: &str = "sandbox_mode";
 pub(crate) const WORKSPACES_KEY: &str = "workspaces";
 
 // App-server clients can specify additional metadata in the `responsesapi_client_metadata` param
@@ -67,6 +68,7 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     SUBAGENT_KIND_KEY,
     THREAD_SOURCE_KEY,
     SANDBOX_KEY,
+    SANDBOX_MODE_KEY,
     WORKSPACES_KEY,
 ];
 
@@ -201,6 +203,7 @@ pub struct CodexResponsesMetadata {
     pub(crate) subagent_kind: Option<String>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) sandbox: Option<String>,
+    pub(crate) sandbox_mode: Option<String>,
     pub(crate) workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     pub(crate) tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     pub(crate) turn_started_at_unix_ms: Option<i64>,
@@ -229,6 +232,7 @@ impl CodexResponsesMetadata {
             subagent_kind: None,
             thread_source: None,
             sandbox: None,
+            sandbox_mode: None,
             workspaces: BTreeMap::new(),
             tool_namespaces_info: None,
             turn_started_at_unix_ms: None,
@@ -339,6 +343,7 @@ impl CodexResponsesMetadata {
             subagent_kind: self.subagent_kind.as_deref(),
             thread_source: self.thread_source.as_ref(),
             sandbox: self.sandbox.as_deref(),
+            sandbox_mode: self.sandbox_mode.as_deref(),
             workspaces: non_empty_workspaces(&self.workspaces),
             tool_namespaces_info: self.tool_namespaces_info.as_ref(),
             turn_started_at_unix_ms: self.turn_started_at_unix_ms,
@@ -430,6 +435,8 @@ struct CodexTurnMetadataPayload<'a> {
     thread_source: Option<&'a ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sandbox: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sandbox_mode: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workspaces: Option<&'a BTreeMap<String, TurnMetadataWorkspace>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
