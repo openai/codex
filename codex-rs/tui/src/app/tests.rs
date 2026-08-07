@@ -76,6 +76,7 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadSettings;
@@ -1436,6 +1437,43 @@ async fn collab_receiver_notification_does_not_cache_not_found_thread() {
     )));
 
     assert_eq!(app.agent_navigation.get(&receiver_thread_id), None);
+}
+
+#[tokio::test]
+async fn archived_untracked_threads_do_not_appear_in_agent_picker() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await?;
+    let primary_thread_id = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(primary_thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await?;
+
+    let archived_thread_id = ThreadId::new();
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ThreadArchived(ThreadArchivedNotification {
+                thread_id: archived_thread_id.to_string(),
+            }),
+        )),
+    )
+    .await;
+
+    assert!(!app.thread_event_channels.contains_key(&archived_thread_id));
+
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+    assert_eq!(
+        app.agent_navigation.ordered_thread_ids(),
+        vec![primary_thread_id]
+    );
+    assert_eq!(app.active_thread_id, Some(primary_thread_id));
+    Ok(())
 }
 
 #[tokio::test]

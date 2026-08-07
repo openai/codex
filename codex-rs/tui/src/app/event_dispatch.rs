@@ -132,6 +132,9 @@ impl App {
                     /*show_all*/ false,
                     /*include_non_interactive*/ false,
                     picker_app_server,
+                    app_server.request_handle(),
+                    self.primary_thread_id
+                        .or(self.current_displayed_thread_id()),
                 )
                 .await?
                 {

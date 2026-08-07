@@ -957,8 +957,10 @@ impl App {
         if self.abandoned_side_threads.contains(&thread_id) {
             return Ok(());
         }
-        if matches!(notification, ServerNotification::ThreadSettingsUpdated(_))
-            && self.primary_thread_id.is_some()
+        if matches!(
+            notification,
+            ServerNotification::ThreadSettingsUpdated(_) | ServerNotification::ThreadArchived(_)
+        ) && self.primary_thread_id.is_some()
             && self.primary_thread_id != Some(thread_id)
             && !self.thread_event_channels.contains_key(&thread_id)
         {

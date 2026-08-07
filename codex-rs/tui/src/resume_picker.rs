@@ -38,7 +38,12 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
@@ -70,7 +75,9 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 use unicode_width::UnicodeWidthStr;
+use uuid::Uuid;
 
+mod archive;
 mod page_loading;
 
 use page_loading::PageLoadMode;
@@ -123,7 +130,7 @@ pub enum SessionPickerAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionPickerLaunchContext {
     Startup,
-    ExistingSession,
+    ExistingSession { current_thread_id: Option<ThreadId> },
 }
 
 impl SessionPickerAction {
@@ -169,6 +176,9 @@ enum PickerLoadRequest {
     Transcript {
         thread_id: ThreadId,
         cancellation: oneshot::Receiver<()>,
+    },
+    Archive {
+        thread_id: ThreadId,
     },
 }
 
@@ -272,6 +282,10 @@ enum BackgroundEvent {
         thread_id: ThreadId,
         transcript: std::io::Result<TranscriptCells>,
     },
+    Archive {
+        thread_id: ThreadId,
+        result: std::io::Result<()>,
+    },
 }
 
 #[derive(Clone)]
@@ -329,12 +343,14 @@ pub async fn run_resume_picker_with_app_server(
     include_non_interactive: bool,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
+    let archive_request_handle = app_server.request_handle();
     run_resume_picker_with_launch_context(
         tui,
         config,
         show_all,
         include_non_interactive,
         app_server,
+        archive_request_handle,
         SessionPickerLaunchContext::Startup,
     )
     .await
@@ -346,6 +362,8 @@ pub async fn run_resume_picker_from_existing_session_with_app_server(
     show_all: bool,
     include_non_interactive: bool,
     app_server: AppServerSession,
+    archive_request_handle: AppServerRequestHandle,
+    current_thread_id: Option<ThreadId>,
 ) -> Result<SessionSelection> {
     run_resume_picker_with_launch_context(
         tui,
@@ -353,7 +371,8 @@ pub async fn run_resume_picker_from_existing_session_with_app_server(
         show_all,
         include_non_interactive,
         app_server,
-        SessionPickerLaunchContext::ExistingSession,
+        archive_request_handle,
+        SessionPickerLaunchContext::ExistingSession { current_thread_id },
     )
     .await
 }
@@ -364,6 +383,7 @@ async fn run_resume_picker_with_launch_context(
     show_all: bool,
     include_non_interactive: bool,
     app_server: AppServerSession,
+    archive_request_handle: AppServerRequestHandle,
     launch_context: SessionPickerLaunchContext,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -402,6 +422,7 @@ async fn run_resume_picker_with_launch_context(
         options,
         spawn_app_server_page_loader(
             app_server,
+            archive_request_handle,
             include_non_interactive,
             raw_reasoning_visibility(config),
             (!uses_remote_workspace).then(|| config.codex_home.to_path_buf()),
@@ -418,6 +439,7 @@ pub async fn run_fork_picker_with_app_server(
     show_all: bool,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
+    let archive_request_handle = app_server.request_handle();
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
@@ -454,6 +476,7 @@ pub async fn run_fork_picker_with_app_server(
         options,
         spawn_app_server_page_loader(
             app_server,
+            archive_request_handle,
             /*include_non_interactive*/ false,
             raw_reasoning_visibility(config),
             (!uses_remote_workspace).then(|| config.codex_home.to_path_buf()),
@@ -594,6 +617,7 @@ fn picker_cwd_filter(
 
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
+    archive_request_handle: AppServerRequestHandle,
     include_non_interactive: bool,
     raw_reasoning_visibility: RawReasoningVisibility,
     codex_home: Option<PathBuf>,
@@ -647,6 +671,22 @@ fn spawn_app_server_page_loader(
                         }
                         _ = cancellation => {}
                     }
+                }
+                PickerLoadRequest::Archive { thread_id } => {
+                    let result = archive_request_handle
+                        .request_typed::<ThreadArchiveResponse>(ClientRequest::ThreadArchive {
+                            request_id: RequestId::String(format!(
+                                "resume-picker-archive-{}",
+                                Uuid::new_v4()
+                            )),
+                            params: ThreadArchiveParams {
+                                thread_id: thread_id.to_string(),
+                            },
+                        })
+                        .await
+                        .map(|_| ())
+                        .map_err(std::io::Error::other);
+                    let _ = bg_tx.send(BackgroundEvent::Archive { thread_id, result });
                 }
             }
         }
@@ -717,6 +757,7 @@ struct PickerState {
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
+    archive_state: archive::ArchiveState,
     expanded_thread_id: Option<ThreadId>,
     transcript_previews: HashMap<ThreadId, TranscriptPreviewState>,
     transcript_cells: HashMap<ThreadId, SessionTranscriptState>,
@@ -1054,6 +1095,7 @@ impl PickerState {
             action,
             sort_key: ThreadSortKey::UpdatedAt,
             inline_error: None,
+            archive_state: archive::ArchiveState::default(),
             expanded_thread_id: None,
             transcript_previews: HashMap::new(),
             transcript_cells: HashMap::new(),
@@ -1270,6 +1312,8 @@ impl PickerState {
             } /* ^O */ => {
                 self.toggle_density().await;
             }
+            _ if self.list_keymap.accept.is_pressed(key)
+                && matches!(self.archive_state, archive::ArchiveState::Pending { .. }) => {}
             _ if self.list_keymap.accept.is_pressed(key) => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     let path = row.path.clone();
@@ -1375,6 +1419,11 @@ impl PickerState {
                 let mut new_query = self.query.clone();
                 new_query.pop();
                 self.set_query(new_query);
+            }
+            _ if self.archive_shortcut_available()
+                && crate::key_hint::ctrl(KeyCode::Char('a')).is_press(key) =>
+            {
+                self.request_archive_for_selected_session();
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -1523,6 +1572,9 @@ impl PickerState {
                     self.request_frame();
                 }
             },
+            BackgroundEvent::Archive { thread_id, result } => {
+                self.handle_archive_result(thread_id, result);
+            }
         }
         Ok(())
     }
@@ -2341,14 +2393,14 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
     let (esc_label, esc_compact_label) = if state.query.is_empty() {
         match state.launch_context {
             SessionPickerLaunchContext::Startup => ("start new", "new"),
-            SessionPickerLaunchContext::ExistingSession => ("exit", "exit"),
+            SessionPickerLaunchContext::ExistingSession { .. } => ("exit", "exit"),
         }
     } else {
         ("clear search", "clear")
     };
     let ctrl_c_label = match state.launch_context {
         SessionPickerLaunchContext::Startup => "quit",
-        SessionPickerLaunchContext::ExistingSession => "exit",
+        SessionPickerLaunchContext::ExistingSession { .. } => "exit",
     };
     let density_label = match state.density {
         SessionListDensity::Comfortable => "dense view",
@@ -2365,6 +2417,14 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
             wide_label: action_label.to_string(),
             compact_label: action_label.to_string(),
             priority: 0,
+        });
+    }
+    if !state.filtered_rows.is_empty() && state.archive_shortcut_available() {
+        first_row_hints.push(PickerFooterHint {
+            key: "ctrl+a".to_string(),
+            wide_label: String::from("archive"),
+            compact_label: String::from("archive"),
+            priority: 2,
         });
     }
     if let Some(cancel) = state.list_keymap.primary_hint(ListAction::Cancel) {
@@ -4166,7 +4226,9 @@ mod tests {
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
-        state.launch_context = SessionPickerLaunchContext::ExistingSession;
+        state.launch_context = SessionPickerLaunchContext::ExistingSession {
+            current_thread_id: None,
+        };
 
         let wide = footer_lines_text(&state, /*width*/ 220);
         assert!(wide.contains("esc exit"));
