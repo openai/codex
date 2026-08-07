@@ -345,23 +345,39 @@ approvals_reviewer = "{app}"
             .expect("config should build");
 
         assert_eq!(
-            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+            mcp_approvals_reviewer(
+                &config,
+                config.model.as_deref(),
+                CODEX_APPS_MCP_SERVER_NAME,
+                Some("calendar")
+            ),
             expected_app
         );
         assert_eq!(
-            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
+            mcp_approvals_reviewer(
+                &config,
+                config.model.as_deref(),
+                CODEX_APPS_MCP_SERVER_NAME,
+                Some("drive")
+            ),
             expected_default
         );
         assert_eq!(
             mcp_approvals_reviewer(
                 &config,
+                config.model.as_deref(),
                 CODEX_APPS_MCP_SERVER_NAME,
                 /*connector_id*/ None
             ),
             expected_default
         );
         assert_eq!(
-            mcp_approvals_reviewer(&config, "custom_server", Some("calendar")),
+            mcp_approvals_reviewer(
+                &config,
+                config.model.as_deref(),
+                "custom_server",
+                Some("calendar")
+            ),
             expected_global
         );
     }
@@ -392,7 +408,12 @@ approvals_reviewer = "user"
         .expect("config should build");
 
     assert_eq!(
-        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        mcp_approvals_reviewer(
+            &config,
+            config.model.as_deref(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some("calendar")
+        ),
         ApprovalsReviewer::AutoReview
     );
 }
@@ -422,7 +443,12 @@ approvals_reviewer = "user"
         .expect("config should build");
 
     assert_eq!(
-        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        mcp_approvals_reviewer(
+            &config,
+            config.model.as_deref(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some("calendar")
+        ),
         ApprovalsReviewer::AutoReview
     );
 }

@@ -179,11 +179,15 @@ in_app_updates = false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_requirements_read_includes_new_thread_model_defaults() -> Result<()> {
+async fn config_requirements_read_includes_model_auto_review_and_new_thread_defaults() -> Result<()>
+{
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),
         r#"
+[auto_review]
+required_on_models = ["gpt-protected", "gpt-sensitive"]
+
 [models.new_thread]
 model = "gpt-managed"
 model_reasoning_effort = "medium"
@@ -200,11 +204,19 @@ service_tier = "fast"
     let response: ConfigRequirementsReadResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
-    let defaults = response
-        .requirements
-        .and_then(|requirements| requirements.models)
-        .and_then(|models| models.new_thread)
-        .expect("managed new-thread defaults");
+    let requirements = response.requirements.expect("managed requirements");
+    assert_eq!(
+        requirements
+            .auto_review
+            .expect("managed automatic-review requirements")
+            .required_on_models,
+        Some(vec![
+            "gpt-protected".to_string(),
+            "gpt-sensitive".to_string()
+        ])
+    );
+    let models = requirements.models.expect("managed model requirements");
+    let defaults = models.new_thread.expect("managed new-thread defaults");
     assert_eq!(defaults.model.as_deref(), Some("gpt-managed"));
     assert_eq!(
         defaults.model_reasoning_effort,

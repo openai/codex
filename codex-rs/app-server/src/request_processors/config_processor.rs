@@ -7,6 +7,7 @@ use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
+use codex_app_server_protocol::AutoReviewRequirements;
 use codex_app_server_protocol::BrowserUseRequirements;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
@@ -415,6 +416,11 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+        auto_review: requirements
+            .auto_review
+            .map(|auto_review| AutoReviewRequirements {
+                required_on_models: auto_review.required_on_models,
+            }),
         models: requirements.models.map(|models| ModelsRequirements {
             new_thread: models.new_thread.map(|new_thread| NewThreadModelDefaults {
                 model: new_thread.model,
@@ -648,6 +654,7 @@ mod tests {
     use super::map_requirements_toml_to_api;
     use codex_app_server_protocol::FeedbackRequirements;
     use codex_app_server_protocol::WindowsSandboxSetupMode;
+    use codex_config::AutoReviewRequirementsToml;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
     use codex_config::ModelsRequirementsToml;
@@ -717,8 +724,11 @@ mod tests {
     }
 
     #[test]
-    fn requirements_api_includes_new_thread_model_defaults() {
+    fn requirements_api_includes_model_auto_review_and_new_thread_defaults() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            auto_review: Some(AutoReviewRequirementsToml {
+                required_on_models: Some(vec!["gpt-protected".to_string()]),
+            }),
             models: Some(ModelsRequirementsToml {
                 new_thread: Some(NewThreadModelDefaultsToml {
                     model: Some("gpt-managed".to_string()),
@@ -729,10 +739,15 @@ mod tests {
             ..ConfigRequirementsToml::default()
         });
 
-        let defaults = mapped
-            .models
-            .and_then(|models| models.new_thread)
-            .expect("new-thread defaults");
+        assert_eq!(
+            mapped
+                .auto_review
+                .expect("managed automatic-review requirements")
+                .required_on_models,
+            Some(vec!["gpt-protected".to_string()])
+        );
+        let models = mapped.models.expect("managed model requirements");
+        let defaults = models.new_thread.expect("new-thread defaults");
         assert_eq!(defaults.model.as_deref(), Some("gpt-managed"));
         assert_eq!(
             defaults.model_reasoning_effort,

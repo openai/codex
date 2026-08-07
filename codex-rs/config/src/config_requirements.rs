@@ -12,6 +12,7 @@ use serde::de::Error as _;
 use serde::de::value::Error as ValueDeserializerError;
 use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
@@ -159,6 +160,7 @@ pub struct ConfigRequirements {
     pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
+    pub auto_review_required_models: Option<Sourced<BTreeSet<String>>>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub windows_sandbox_mode: ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
     pub windows_sandbox_private_desktop: Option<Sourced<bool>>,
@@ -201,6 +203,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any_from_default(),
                 /*source*/ None,
             ),
+            auto_review_required_models: None,
             permission_profile: ConstrainedWithSource::new(
                 Constrained::allow_any(PermissionProfile::read_only()),
                 /*source*/ None,
@@ -236,6 +239,29 @@ impl Default for ConfigRequirements {
 }
 
 impl ConfigRequirements {
+    /// Returns whether a model slug or its supported provider alias requires auto-review.
+    pub fn auto_review_required_for_model(&self, model: &str) -> bool {
+        let Some(protected_models) = self.auto_review_required_models.as_ref() else {
+            return false;
+        };
+
+        let model = match model.split_once('/') {
+            Some((namespace, suffix))
+                if !namespace.is_empty()
+                    && !suffix.contains('/')
+                    && namespace.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || character == '_' || character == '-'
+                    }) =>
+            {
+                suffix
+            }
+            Some(_) => return false,
+            None => model,
+        };
+
+        protected_models.value.contains(model)
+    }
+
     pub fn managed_auth_policy(&self) -> ManagedAuthPolicy {
         ManagedAuthPolicy {
             allowed_login_methods: self
@@ -930,8 +956,14 @@ pub struct ConfigRequirementsToml {
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
+    pub auto_review: Option<AutoReviewRequirementsToml>,
     pub models: Option<ModelsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AutoReviewRequirementsToml {
+    pub required_on_models: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1020,6 +1052,7 @@ pub struct ConfigRequirementsWithSources {
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
     pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
+    pub auto_review: Option<Sourced<AutoReviewRequirementsToml>>,
     pub models: Option<Sourced<ModelsRequirementsToml>>,
     pub guardian_policy_config: Option<Sourced<String>>,
 }
@@ -1074,6 +1107,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency: _,
             network: _,
             permissions: _,
+            auto_review: _,
             models: _,
             guardian_policy_config: _,
         } = &other;
@@ -1125,6 +1159,32 @@ impl ConfigRequirementsWithSources {
             }
         );
 
+        if let Some(incoming_auto_review) = other.auto_review.take() {
+            if let Some(existing_auto_review) = self.auto_review.as_mut() {
+                let mut source_contributed = false;
+                if let Some(incoming_slugs) = incoming_auto_review.required_on_models {
+                    let protected_slugs = existing_auto_review
+                        .value
+                        .required_on_models
+                        .get_or_insert_default();
+                    for slug in incoming_slugs {
+                        if !protected_slugs.contains(&slug) {
+                            protected_slugs.push(slug);
+                            source_contributed = true;
+                        }
+                    }
+                }
+                if source_contributed && existing_auto_review.source != source {
+                    existing_auto_review.source = RequirementSource::composite([
+                        existing_auto_review.source.clone(),
+                        source.clone(),
+                    ]);
+                }
+            } else {
+                self.auto_review = Some(Sourced::new(incoming_auto_review, source.clone()));
+            }
+        }
+
         if let Some(incoming_apps) = other.apps.take() {
             if let Some(existing_apps) = self.apps.as_mut() {
                 merge_app_requirements_descending(&mut existing_apps.value, incoming_apps);
@@ -1166,6 +1226,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency,
             network,
             permissions,
+            auto_review,
             models,
             guardian_policy_config,
         } = self;
@@ -1201,6 +1262,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
             permissions: permissions.map(|sourced| sourced.value),
+            auto_review: auto_review.map(|sourced| sourced.value),
             models: models.map(|sourced| sourced.value),
             guardian_policy_config: guardian_policy_config.map(|sourced| sourced.value),
         }
@@ -1329,6 +1391,12 @@ impl ConfigRequirementsToml {
             && self.enforce_residency.is_none()
             && self.network.is_none()
             && self.permissions.is_none()
+            && self.auto_review.as_ref().is_none_or(|auto_review| {
+                auto_review
+                    .required_on_models
+                    .as_ref()
+                    .is_none_or(Vec::is_empty)
+            })
             && self
                 .models
                 .as_ref()
@@ -1451,8 +1519,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
         // Profile catalog selection remains on ConfigRequirementsToml for
         // config loading and requirements API projection. Managed new-thread
-        // defaults also remain there because they are initialization values,
-        // not runtime constraints.
+        // defaults also remain there because they are initialization values;
+        // model-specific auto-review requirements are runtime constraints.
         let ConfigRequirementsWithSources {
             allowed_login_methods,
             allowed_chatgpt_workspaces,
@@ -1484,9 +1552,37 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             enforce_residency,
             network,
             permissions,
+            auto_review,
             models: _,
             guardian_policy_config,
         } = toml;
+
+        let auto_review_required_models = auto_review
+            .and_then(|auto_review| {
+                auto_review
+                    .value
+                    .required_on_models
+                    .map(|slugs| Sourced::new(slugs, auto_review.source))
+            })
+            .filter(|models| !models.value.is_empty())
+            .map(|models| {
+                let Sourced { value, source } = models;
+                let mut protected_models = BTreeSet::new();
+                for slug in value {
+                    if slug.trim().is_empty() || slug.trim() != slug || slug.contains('/') {
+                        return Err(ConstraintError::InvalidValue {
+                            field_name: "auto_review.required_on_models",
+                            candidate: format!("{slug:?}"),
+                            allowed: "non-empty model slugs without surrounding whitespace or provider namespaces"
+                                .to_string(),
+                            requirement_source: source,
+                        });
+                    }
+                    protected_models.insert(slug);
+                }
+                Ok(Sourced::new(protected_models, source))
+            })
+            .transpose()?;
 
         if let Some(requirements) = &mcp_servers {
             validate_mcp_server_requirements(
@@ -1794,6 +1890,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             feedback,
             approval_policy,
             approvals_reviewer,
+            auto_review_required_models,
             permission_profile,
             windows_sandbox_mode,
             windows_sandbox_private_desktop,
@@ -1971,6 +2068,7 @@ mod tests {
             enforce_residency,
             network,
             permissions,
+            auto_review,
             models,
             guardian_policy_config,
         } = toml;
@@ -2021,6 +2119,7 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            auto_review: auto_review.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             models: models.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2200,6 +2299,34 @@ mod tests {
     }
 
     #[test]
+    fn auto_review_required_for_model_matches_exact_provider_aliases() {
+        let requirements = ConfigRequirements {
+            auto_review_required_models: Some(Sourced::new(
+                BTreeSet::from(["protected-model".to_string()]),
+                RequirementSource::Unknown,
+            )),
+            ..Default::default()
+        };
+
+        for (model, protected) in [
+            ("protected-model", true),
+            ("protected-model-preview", false),
+            ("openai-codex/protected-model-preview", false),
+            ("provider_1/protected-model", true),
+            ("protected-modelish", false),
+            ("/protected-model", false),
+            ("bad.provider/protected-model", false),
+            ("provider/nested/protected-model", false),
+        ] {
+            assert_eq!(
+                requirements.auto_review_required_for_model(model),
+                protected,
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
     fn merge_unset_fields_copies_every_field_and_sets_sources() {
         let mut target = ConfigRequirementsWithSources::default();
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -2220,6 +2347,9 @@ mod tests {
         };
         let computer_use = ComputerUseRequirementsToml {
             allow_locked_computer_use: Some(false),
+        };
+        let auto_review = AutoReviewRequirementsToml {
+            required_on_models: Some(vec!["managed-model".to_string()]),
         };
         let models = ModelsRequirementsToml {
             new_thread: Some(NewThreadModelDefaultsToml {
@@ -2280,6 +2410,7 @@ mod tests {
             enforce_residency: Some(enforce_residency),
             network: None,
             permissions: None,
+            auto_review: Some(auto_review.clone()),
             models: Some(models.clone()),
             guardian_policy_config: Some(guardian_policy_config.clone()),
         };
@@ -2349,6 +2480,7 @@ mod tests {
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
                 permissions: None,
+                auto_review: Some(Sourced::new(auto_review, source.clone())),
                 models: Some(Sourced::new(models, source.clone())),
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
             }

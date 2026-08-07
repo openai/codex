@@ -1987,6 +1987,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             hooks: None,
             enforce_residency: None,
             network: None,
+            auto_review: None,
             models: None,
             sqlite_home: None,
             log_dir: None,

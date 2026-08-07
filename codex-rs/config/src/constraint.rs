@@ -16,6 +16,9 @@ pub enum ConstraintError {
         requirement_source: RequirementSource,
     },
 
+    #[error("To use model `{model}`, you need to use auto review.")]
+    AutoReviewRequired { model: String },
+
     #[error("field `{field_name}` cannot be empty")]
     EmptyField { field_name: String },
 

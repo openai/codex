@@ -111,6 +111,7 @@ impl ComposableRequirementsLayer {
                 rules: requirements.rules,
                 hooks: requirements.hooks,
                 permissions: requirements.permissions,
+                auto_review: requirements.auto_review,
             },
         })
     }
@@ -121,6 +122,7 @@ pub(super) struct DomainMergedRequirementsFields {
     pub(super) rules: Option<RequirementsExecPolicyToml>,
     pub(super) hooks: Option<ManagedHooksRequirementsToml>,
     pub(super) permissions: Option<crate::config_requirements::PermissionsRequirementsToml>,
+    pub(super) auto_review: Option<crate::config_requirements::AutoReviewRequirementsToml>,
 }
 
 fn parse_layer_toml(
@@ -218,6 +220,7 @@ fn strip_special_fields(layer_toml: &mut TomlValue) {
     remove_top_level_field(layer_toml, "rules");
     remove_top_level_field(layer_toml, "hooks");
     remove_nested_field_and_prune_empty(layer_toml, &["permissions", "filesystem", "deny_read"]);
+    remove_nested_field_and_prune_empty(layer_toml, &["auto_review", "required_on_models"]);
 }
 
 fn remove_top_level_field(value: &mut TomlValue, key: &str) -> Option<TomlValue> {

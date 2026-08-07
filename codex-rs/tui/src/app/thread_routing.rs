@@ -1233,6 +1233,28 @@ impl App {
         turns: Vec<Turn>,
         presentation: ThreadAttachPresentation,
     ) -> Result<()> {
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(session.approval_policy.to_core())
+        {
+            tracing::warn!(%err, "failed to sync app approval policy from thread session");
+        }
+        if let Err(err) = self
+            .config
+            .permissions
+            .set_permission_profile_from_session_snapshot(
+                PermissionProfileSnapshot::from_session_snapshot(
+                    session.permission_profile.clone(),
+                    session.active_permission_profile.clone(),
+                ),
+            )
+        {
+            tracing::warn!(%err, "failed to sync app permissions from thread session");
+        }
+        self.config.approvals_reviewer = session.approvals_reviewer;
+
         let thread_id = session.thread_id;
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session.clone());

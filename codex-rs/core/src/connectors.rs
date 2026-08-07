@@ -506,12 +506,14 @@ pub fn with_app_plugin_sources(
 
 pub(crate) fn mcp_approvals_reviewer(
     config: &Config,
+    model: Option<&str>,
     server_name: &str,
     connector_id: Option<&str>,
 ) -> ApprovalsReviewer {
     mcp_approvals_reviewer_from_layers(
         &config.config_layer_stack,
         config.approvals_reviewer,
+        model,
         server_name,
         connector_id,
     )
@@ -520,9 +522,15 @@ pub(crate) fn mcp_approvals_reviewer(
 pub(crate) fn mcp_approvals_reviewer_from_layers(
     config_layer_stack: &codex_config::ConfigLayerStack,
     default_reviewer: ApprovalsReviewer,
+    model: Option<&str>,
     server_name: &str,
     connector_id: Option<&str>,
 ) -> ApprovalsReviewer {
+    let requirements = config_layer_stack.requirements();
+    if model.is_some_and(|model| requirements.auto_review_required_for_model(model)) {
+        return ApprovalsReviewer::AutoReview;
+    }
+
     let app_reviewer = if server_name == CODEX_APPS_MCP_SERVER_NAME {
         apps_config_from_layer_stack(config_layer_stack).and_then(|apps_config| {
             connector_id
@@ -539,11 +547,7 @@ pub(crate) fn mcp_approvals_reviewer_from_layers(
     };
 
     if let Some(reviewer) = app_reviewer
-        && config_layer_stack
-            .requirements()
-            .approvals_reviewer
-            .can_set(&reviewer)
-            .is_ok()
+        && requirements.approvals_reviewer.can_set(&reviewer).is_ok()
     {
         return reviewer;
     }

@@ -975,6 +975,7 @@ interrupt_message = false
             enforce_residency: Some(ResidencyRequirement::Us),
             network: None,
             permissions: None,
+            auto_review: None,
             models: None,
         };
 

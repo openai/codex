@@ -170,6 +170,57 @@ service_tier = "fast"
 }
 
 #[test]
+fn auto_review_required_models_are_unioned_without_overwriting_new_thread_defaults() {
+    let low = layer(
+        "req_low",
+        "Low",
+        r#"[auto_review]
+required_on_models = ["low-model", "shared-model"]
+[models.new_thread]
+model = "low-priority-model"
+model_reasoning_effort = "low""#,
+    );
+    let high = layer(
+        "req_high",
+        "High",
+        r#"[auto_review]
+required_on_models = ["high-model", "shared-model"]
+[models.new_thread]
+model = "high-priority-model""#,
+    );
+    let expected_source = RequirementSource::composite([high.source.clone(), low.source.clone()]);
+    let composed = compose_requirements_for_hostname(
+        vec![
+            low,
+            high,
+            layer(
+                "req_empty",
+                "Empty",
+                "[auto_review]\nrequired_on_models = []",
+            ),
+        ],
+        /*hostname*/ None,
+    )
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed.clone().into_toml(),
+        expected_requirements(
+            r#"[auto_review]
+required_on_models = ["high-model", "shared-model", "low-model"]
+[models.new_thread]
+model = "high-priority-model"
+model_reasoning_effort = "low""#
+        )
+    );
+    assert_eq!(
+        composed.auto_review.map(|auto_review| auto_review.source),
+        Some(expected_source)
+    );
+}
+
+#[test]
 fn relative_paths_resolve_against_their_own_layer_base() {
     let low_dir = tempdir().expect("low-priority requirements directory");
     let high_dir = tempdir().expect("high-priority requirements directory");

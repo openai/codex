@@ -394,6 +394,7 @@ pub struct ConfigRequirements {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+    pub auto_review: Option<AutoReviewRequirements>,
     pub models: Option<ModelsRequirements>,
     #[schemars(with = "Option<String>")]
     pub sqlite_home: Option<PathUri>,
@@ -405,6 +406,13 @@ pub struct ConfigRequirements {
     pub allow_login_shell: Option<bool>,
     pub feedback: Option<FeedbackRequirements>,
     pub windows_sandbox_private_desktop: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AutoReviewRequirements {
+    pub required_on_models: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

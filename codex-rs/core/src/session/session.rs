@@ -109,6 +109,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) metrics_service_name: Option<String>,
     pub(super) app_server_client_name: Option<String>,
     pub(super) app_server_client_version: Option<String>,
+    /// Guardian reviewer identity is trusted only when established during an in-memory spawn.
+    pub(super) trusted_guardian_reviewer: bool,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
     /// Persisted thread history contract selected when this thread was created.
@@ -252,6 +254,38 @@ impl SessionConfiguration {
         }
     }
 
+    pub(super) fn validate_auto_review_requirement(&self) -> ConstraintResult<()> {
+        if self.trusted_guardian_reviewer {
+            return Ok(());
+        }
+
+        let requirements = self
+            .original_config_do_not_use
+            .config_layer_stack
+            .requirements();
+        let model = self.collaboration_mode.model();
+        if !requirements.auto_review_required_for_model(model) {
+            return Ok(());
+        }
+
+        if self.approval_policy.value() == AskForApproval::OnRequest
+            && self.approvals_reviewer == ApprovalsReviewer::AutoReview
+            && !self
+                .file_system_sandbox_policy()
+                .has_full_disk_write_access()
+            && self
+                .original_config_do_not_use
+                .features
+                .enabled(Feature::GuardianApproval)
+        {
+            return Ok(());
+        }
+
+        Err(ConstraintError::AutoReviewRequired {
+            model: model.to_string(),
+        })
+    }
+
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         let current_sandbox_policy = self.sandbox_policy();
@@ -304,7 +338,36 @@ impl SessionConfiguration {
             next_configuration.approval_policy.set(approval_policy)?;
         }
         if let Some(approvals_reviewer) = updates.approvals_reviewer {
+            next_configuration
+                .original_config_do_not_use
+                .config_layer_stack
+                .requirements()
+                .approvals_reviewer
+                .can_set(&approvals_reviewer)?;
             next_configuration.approvals_reviewer = approvals_reviewer;
+        }
+        if !next_configuration.trusted_guardian_reviewer
+            && self.collaboration_mode.model() != next_configuration.collaboration_mode.model()
+            && next_configuration
+                .original_config_do_not_use
+                .config_layer_stack
+                .requirements()
+                .auto_review_required_for_model(next_configuration.collaboration_mode.model())
+        {
+            if updates.approval_policy.is_none() {
+                next_configuration
+                    .approval_policy
+                    .set(AskForApproval::OnRequest)?;
+            }
+            if updates.approvals_reviewer.is_none() {
+                next_configuration
+                    .original_config_do_not_use
+                    .config_layer_stack
+                    .requirements()
+                    .approvals_reviewer
+                    .can_set(&ApprovalsReviewer::AutoReview)?;
+                next_configuration.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            }
         }
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
@@ -406,6 +469,7 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        next_configuration.validate_auto_review_requirement()?;
         Ok(next_configuration)
     }
 

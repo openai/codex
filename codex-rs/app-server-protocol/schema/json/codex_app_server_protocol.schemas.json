@@ -7385,6 +7385,20 @@
         ],
         "type": "string"
       },
+      "AutoReviewRequirements": {
+        "properties": {
+          "requiredOnModels": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "BrowserUseRequirements": {
         "properties": {
           "disableAutoReview": {
@@ -8789,6 +8803,16 @@
             "type": [
               "array",
               "null"
+            ]
+          },
+          "autoReview": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AutoReviewRequirements"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "browserUse": {

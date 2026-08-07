@@ -60,6 +60,7 @@ pub use config_requirements::AppRequirementToml;
 pub use config_requirements::AppToolRequirementToml;
 pub use config_requirements::AppToolsRequirementsToml;
 pub use config_requirements::AppsRequirementsToml;
+pub use config_requirements::AutoReviewRequirementsToml;
 pub use config_requirements::BrowserUseRequirementsToml;
 pub use config_requirements::ComputerUseRequirementsToml;
 pub use config_requirements::ConfigRequirements;

@@ -44,6 +44,7 @@ mod mcp_server_elicitation;
 mod mcp_server_status;
 mod mcp_tool;
 mod memory_reset;
+mod model_auto_review;
 mod model_list;
 mod model_provider_capabilities_read;
 mod multi_agent_v2_developer_instructions;

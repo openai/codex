@@ -1,5 +1,6 @@
 mod hooks;
 mod layer;
+mod models;
 mod permissions;
 mod rules;
 mod stack;

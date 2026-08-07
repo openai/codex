@@ -622,6 +622,46 @@ impl Session {
                 config.http_client_factory(),
             )
             .await;
+        let trusted_guardian_reviewer =
+            crate::guardian::is_guardian_reviewer_source(&session_source)
+                && !matches!(conversation_history, InitialHistory::Resumed(_));
+        if config
+            .config_layer_stack
+            .requirements()
+            .auto_review_required_for_model(&model)
+            && !trusted_guardian_reviewer
+        {
+            let config = Arc::make_mut(&mut config);
+            if matches!(
+                config.legacy_sandbox_policy(),
+                SandboxPolicy::DangerFullAccess
+            ) {
+                let permission_profile = PermissionProfile::workspace_write();
+                config
+                    .permissions
+                    .set_permission_profile(permission_profile.clone())
+                    .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+                if let Some(network) = config.permissions.network.as_ref() {
+                    config.permissions.network = Some(
+                        network
+                            .recompute_for_permission_profile(&permission_profile)
+                            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?,
+                    );
+                }
+            }
+            config
+                .permissions
+                .approval_policy
+                .set(AskForApproval::OnRequest)
+                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            config
+                .config_layer_stack
+                .requirements()
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::AutoReview)
+                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        }
         if allow_provider_model_fallback
             && let Some(requested_model) = config.model.as_ref()
             && model != *requested_model
@@ -709,6 +749,7 @@ impl Session {
             metrics_service_name,
             app_server_client_name: None,
             app_server_client_version: None,
+            trusted_guardian_reviewer,
             session_source,
             history_mode,
             forked_from_thread_id,
@@ -718,6 +759,9 @@ impl Session {
             dynamic_tools,
             user_shell_override,
         };
+        session_configuration
+            .validate_auto_review_requirement()
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
 
         // Generate a unique ID for the lifetime of this session.
         let session_source_clone = session_configuration.session_source.clone();

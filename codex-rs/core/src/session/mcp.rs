@@ -752,6 +752,7 @@ async fn review_guardian_mcp_elicitation(
             || crate::connectors::mcp_approvals_reviewer_from_layers(
                 &mcp_config.config_layer_stack,
                 ApprovalsReviewer::AutoReview,
+                Some(turn_context.model_info.slug.as_str()),
                 request.server_name.as_str(),
                 connector_id,
             ) != ApprovalsReviewer::AutoReview
@@ -821,6 +822,7 @@ async fn review_guardian_mcp_elicitation(
     let approvals_reviewer = crate::connectors::mcp_approvals_reviewer_from_layers(
         &mcp_config.config_layer_stack,
         mcp_config.approvals_reviewer,
+        Some(turn_context.model_info.slug.as_str()),
         request.server_name.as_str(),
         elicitation_connector_id(&request.elicitation),
     );

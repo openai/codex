@@ -2001,6 +2001,17 @@ fn display_permission_profile_from_thread_response(
     thread_params_mode: ThreadParamsMode,
 ) -> PermissionProfile {
     match thread_params_mode {
+        ThreadParamsMode::Embedded
+            if matches!(
+                config.permissions.effective_permission_profile(),
+                PermissionProfile::Disabled
+            ) && !matches!(
+                sandbox,
+                codex_app_server_protocol::SandboxPolicy::DangerFullAccess
+            ) =>
+        {
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd)
+        }
         ThreadParamsMode::Embedded => config.permissions.effective_permission_profile(),
         ThreadParamsMode::Remote => {
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd)

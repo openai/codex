@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AppToolApproval;
 use codex_core::config::Config;
 use codex_features::Feature;
@@ -45,6 +46,7 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
+use test_case::test_case;
 
 fn set_calendar_approval_mode(config: &mut Config, approval_mode: AppToolApproval) {
     let approval_mode = match approval_mode {
@@ -97,11 +99,12 @@ async fn submit_user_turn(
     test: &TestCodex,
     text: &str,
     approval_policy: AskForApproval,
+    permission_profile: PermissionProfile,
     collaboration_mode: Option<CollaborationMode>,
 ) -> Result<()> {
     let session_model = test.session_configured.model.clone();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, test.cwd.path());
+        turn_permission_fields(permission_profile, test.cwd.path());
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -205,6 +208,7 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
         &test,
         "Use [$calendar](app://calendar) to create a calendar event.",
         AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
         /*collaboration_mode*/ None,
     )
     .await?;
@@ -261,8 +265,11 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apps_default_prompt_with_auto_review_routes_actual_mcp_approval_to_guardian() -> Result<()>
-{
+#[test_case(false; "unmanaged model")]
+#[test_case(true; "protected model")]
+async fn apps_default_prompt_with_auto_review_routes_actual_mcp_approval_to_guardian(
+    protected_model: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -309,9 +316,13 @@ async fn apps_default_prompt_with_auto_review_routes_actual_mcp_approval_to_guar
     .await;
 
     let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
-        .with_config(|config| {
-            // Use the opposite global reviewer so this route must come from apps._default.
-            config.approvals_reviewer = ApprovalsReviewer::User;
+        .with_config(move |config| {
+            let (reviewer, app_reviewer) = if protected_model {
+                (ApprovalsReviewer::AutoReview, ApprovalsReviewer::User)
+            } else {
+                (ApprovalsReviewer::User, ApprovalsReviewer::AutoReview)
+            };
+            config.approvals_reviewer = reviewer;
             config
                 .features
                 .enable(Feature::ToolCallMcpElicitation)
@@ -319,15 +330,27 @@ async fn apps_default_prompt_with_auto_review_routes_actual_mcp_approval_to_guar
             set_default_app_approval_mode_and_reviewer(
                 config,
                 AppToolApproval::Prompt,
-                ApprovalsReviewer::AutoReview,
+                app_reviewer,
             );
         });
+    if protected_model {
+        builder = builder.with_model("gpt-5.4").with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[auto_review]\nrequired_on_models = [\"gpt-5.4\"]\n",
+            ),
+        );
+    }
     let test = builder.build(&server).await?;
 
     submit_user_turn(
         &test,
         "Use [$calendar](app://calendar) to create a calendar event.",
         AskForApproval::OnRequest,
+        if protected_model {
+            PermissionProfile::workspace_write()
+        } else {
+            PermissionProfile::Disabled
+        },
         /*collaboration_mode*/ None,
     )
     .await?;
@@ -428,6 +451,7 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
         &test,
         "Use [$calendar](app://calendar) to list events, then create one.",
         AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
         /*collaboration_mode*/ None,
     )
     .await?;
@@ -598,6 +622,7 @@ async fn mcp_tool_call_metadata_records_prior_request_user_input_tool() -> Resul
         &test,
         "Ask for confirmation, then create a calendar event.",
         AskForApproval::Never,
+        PermissionProfile::Disabled,
         Some(CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
