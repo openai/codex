@@ -8,10 +8,14 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::CapabilityRootDiscovery;
+use codex_exec_server::CapabilityTextFile;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::DiscoveredSkillFiles;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
+use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
@@ -29,6 +33,8 @@ use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::HostSkillsLoadInput;
 use codex_skills_extension::HostSkillsService;
 use codex_skills_extension::catalog::SkillAuthority;
+use codex_skills_extension::catalog::SkillCatalog;
+use codex_skills_extension::catalog::SkillCatalogEntry;
 use codex_skills_extension::catalog::SkillPackageId;
 use codex_skills_extension::catalog::SkillResourceId;
 use codex_skills_extension::catalog::SkillSourceKind;
@@ -365,6 +371,92 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
     );
 
     std::fs::remove_dir_all(test_root).expect("remove skill directory");
+}
+
+#[tokio::test]
+async fn executor_discovery_preserves_posix_and_windows_locator_alias_roots() {
+    let provider = ExecutorSkillProvider::new_with_restriction_product(
+        Arc::new(EnvironmentManager::default_for_tests()),
+        /*restriction_product*/ None,
+    );
+
+    for (root_uri, alias_root) in [
+        (
+            "file:///workspace/skills",
+            "skill://cross-platform-root/workspace/skills",
+        ),
+        (
+            "file:///C:/workspace/skills",
+            "skill://cross-platform-root/C:/workspace/skills",
+        ),
+    ] {
+        let root = PathUri::parse(root_uri).expect("executor root URI");
+        let skill_path = root.join("skill/SKILL.md").expect("executor skill URI");
+        let selected_root = SelectedCapabilityRoot {
+            id: "cross-platform-root".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "remote".to_string(),
+                path: root.clone(),
+            },
+        };
+        let discovery = ExecutorCapabilityDiscoverySnapshot::new(
+            std::slice::from_ref(&selected_root),
+            vec![Ok(Arc::new(CapabilityRootDiscovery {
+                id: selected_root.id.clone(),
+                path: root,
+                plugin: None,
+                skills: vec![DiscoveredSkillFiles {
+                    instructions: CapabilityTextFile {
+                        path: skill_path.clone(),
+                        contents: SKILL_CONTENTS.to_string(),
+                    },
+                    metadata: None,
+                }],
+                namespace_manifests: Vec::new(),
+                warnings: Vec::new(),
+                error: None,
+            }))],
+            HashMap::new(),
+        );
+        let catalog = provider
+            .list(SkillListQuery {
+                turn_id: "turn-1".to_string(),
+                executor_roots: vec![selected_root],
+                resolved_executor_roots: Vec::new(),
+                host_snapshot: None,
+                include_host_skills: false,
+                include_bundled_skills: true,
+                include_orchestrator_skills: false,
+                mcp_resources: None,
+                executor_capability_discovery: Some(discovery),
+            })
+            .await
+            .expect("list executor skills");
+        let resource = format!("{alias_root}/skill/SKILL.md");
+
+        assert_eq!(
+            catalog,
+            SkillCatalog {
+                entries: vec![
+                    SkillCatalogEntry::new(
+                        SkillPackageId(format!("{alias_root}/skill")),
+                        SkillAuthority::new(SkillSourceKind::Executor, "cross-platform-root"),
+                        "synthetic",
+                        "Synthetic executor skill.",
+                        SkillResourceId::environment_with_contents(
+                            resource.clone(),
+                            "remote",
+                            skill_path,
+                            SKILL_CONTENTS.to_string(),
+                        ),
+                    )
+                    .with_display_path(resource)
+                    .with_alias_root(alias_root)
+                ],
+                warnings: Vec::new(),
+            }
+        );
+    }
 }
 
 #[tokio::test]

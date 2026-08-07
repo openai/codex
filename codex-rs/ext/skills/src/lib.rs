@@ -1,9 +1,11 @@
+mod aliases;
 pub mod catalog;
 mod catalog_prompt;
 mod config;
 mod dynamic_skill_selector;
 mod extension;
 mod fragments;
+mod host_aliases;
 mod host_roots;
 mod host_service;
 mod host_snapshot;

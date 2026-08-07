@@ -112,9 +112,9 @@ fn catalog_from_outcome(outcome: &SkillLoadOutcome) -> SkillCatalog {
             entry = entry.with_display_path(discovery_path.to_string_lossy().replace('\\', "/"));
         }
         if let Some(root) = outcome.skill_root_for_path(&skill.path_to_skills_md) {
-            entry = entry.with_display_path_root(root.to_string_lossy().replace('\\', "/"));
+            entry = entry.with_alias_root(root.to_string_lossy().replace('\\', "/"));
             if let Some(root_order) = root_order_by_path.get(root.as_path()) {
-                entry = entry.with_display_path_root_order(*root_order);
+                entry = entry.with_alias_root_order(*root_order);
             }
         }
         catalog.push_entry(entry);

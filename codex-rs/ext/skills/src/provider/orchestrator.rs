@@ -246,6 +246,7 @@ impl SkillProvider for OrchestratorSkillProvider {
 
 fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry> {
     let uri = validated_skill_uri(resource.uri.as_str(), MAX_SKILL_PACKAGE_URI_CHARS)?;
+    let namespace = uri.strip_prefix("skill://")?.split_once('/')?.0;
     let meta = resource.meta.as_ref()?.as_object()?;
     let allow_implicit_invocation = meta
         .get("allow_implicit_invocation")
@@ -271,7 +272,8 @@ fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry>
         description,
         SkillResourceId::new(main_prompt),
     )
-    .with_display_path(uri);
+    .with_display_path(uri)
+    .with_alias_root(format!("skill://{namespace}"));
 
     Some(if allow_implicit_invocation {
         entry

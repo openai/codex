@@ -48,7 +48,7 @@ async fn host_catalog_entries_carry_their_render_metadata() -> Result<(), Box<dy
     assert_eq!(catalog.entries.len(), 1);
     assert_eq!(
         (
-            catalog.entries[0].display_path_root(),
+            catalog.entries[0].alias_root(),
             catalog.entries[0].prompt_scope(),
         ),
         (
@@ -96,7 +96,7 @@ async fn host_catalog_preserves_symlinked_skill_discovery_paths()
         (
             catalog.entries[0].main_prompt.as_str(),
             catalog.entries[0].display_path.as_deref(),
-            catalog.entries[0].display_path_root(),
+            catalog.entries[0].alias_root(),
         ),
         (
             canonical_path.to_string_lossy().as_ref(),

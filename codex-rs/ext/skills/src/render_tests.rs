@@ -200,10 +200,10 @@ fn path_aliases_are_not_used_without_budget_pressure() {
         entries: vec![
             entry("alpha", "Alpha skill.", /*short_description*/ None)
                 .with_display_path(format!("{root}/alpha/SKILL.md"))
-                .with_display_path_root(root),
+                .with_alias_root(root),
             entry("beta", "Beta skill.", /*short_description*/ None)
                 .with_display_path(format!("{root}/beta/SKILL.md"))
-                .with_display_path_root(root),
+                .with_alias_root(root),
         ],
         warnings: Vec::new(),
     };
@@ -232,7 +232,7 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
             let name = format!("shared-root-skill-{index}");
             entry(&name, "Description.", /*short_description*/ None)
                 .with_display_path(format!("{root}/skill-{index}/SKILL.md"))
-                .with_display_path_root(root)
+                .with_alias_root(root)
         })
         .collect::<Vec<_>>();
     let catalog = SkillCatalog {
@@ -240,17 +240,17 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
         warnings: Vec::new(),
     };
     let visible_entries = catalog.entries.iter().collect::<Vec<_>>();
-    let plan = build_alias_plan(
-        &visible_entries,
+    let plan = build_alias_plan(&visible_entries).expect("alias plan should build");
+    let table_cost = aliased_metadata_overhead_cost(
         SkillMetadataBudget::Characters(usize::MAX),
-    )
-    .expect("alias plan should build");
-    let alias_minimum = visible_entries.iter().fold(plan.table_cost, |cost, entry| {
+        &plan.root_lines(),
+    );
+    let alias_minimum = visible_entries.iter().fold(table_cost, |cost, entry| {
         cost.saturating_add(
             SkillLine::with_locator(
                 entry,
                 SkillCatalogRenderPolicy::ExtensionCompatible,
-                render_skill_path_with_aliases(entry, &plan),
+                render_skill_locator_with_aliases(entry, &plan),
             )
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
         )
@@ -330,9 +330,9 @@ async fn host_alias_roots_follow_core_discovery_order() -> Result<(), Box<dyn st
         .await?;
     let mut entries = catalog.entries.iter().collect::<Vec<_>>();
     SkillCatalogRenderPolicy::CoreCompatible.order_entries(&mut entries);
-    let actual = build_alias_plan(&entries, SkillMetadataBudget::Characters(usize::MAX))
+    let actual = build_alias_plan(&entries)
         .expect("alias plan should build")
-        .skill_root_lines;
+        .root_lines();
     std::fs::remove_dir_all(parent)?;
 
     assert_eq!(
@@ -359,7 +359,7 @@ fn mixed_catalogs_keep_absolute_authority_aware_rendering_under_budget_pressure(
             let name = format!("host-skill-{index}");
             entry(&name, "Description.", /*short_description*/ None)
                 .with_display_path(format!("{root}/skill-{index}/SKILL.md"))
-                .with_display_path_root(root)
+                .with_alias_root(root)
         })
         .collect::<Vec<_>>();
     entries.push(
@@ -384,13 +384,7 @@ fn mixed_catalogs_keep_absolute_authority_aware_rendering_under_budget_pressure(
         )
     });
 
-    assert!(
-        build_alias_plan(
-            &visible_entries,
-            SkillMetadataBudget::Characters(usize::MAX),
-        )
-        .is_none()
-    );
+    assert!(build_alias_plan(&visible_entries).is_none());
 
     let fragment = available_skills_fragment(
         &catalog,
@@ -488,7 +482,7 @@ fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
             .map(|name| {
                 entry(name, "", /*short_description*/ None)
                     .with_display_path(format!("{root}/{name}/SKILL.md"))
-                    .with_display_path_root(root.as_str())
+                    .with_alias_root(root.as_str())
             })
             .collect(),
         warnings: Vec::new(),
@@ -563,38 +557,79 @@ fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
     assert_eq!(host.skill_root_lines, Vec::<String>::new());
 }
 
-#[test]
-fn singleton_plugin_versions_share_the_marketplace_alias_root() {
-    let github_root = "/Users/test/.codex/plugins/cache/openai-curated/github/hash123/skills";
-    let slack_root = "/Users/test/.codex/plugins/cache/openai-curated/slack/hash456/skills";
-    let entries = [
-        entry("github", "GitHub skill.", /*short_description*/ None)
-            .with_display_path(format!("{github_root}/github/SKILL.md"))
-            .with_display_path_root(github_root),
-        entry("slack", "Slack skill.", /*short_description*/ None)
-            .with_display_path(format!("{slack_root}/slack/SKILL.md"))
-            .with_display_path_root(slack_root),
-    ];
-    let visible_entries = entries.iter().collect::<Vec<_>>();
-
-    let plan = build_alias_plan(
-        &visible_entries,
-        SkillMetadataBudget::Characters(usize::MAX),
+#[tokio::test]
+async fn singleton_plugin_versions_share_the_marketplace_alias_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let parent = std::env::temp_dir().join(format!(
+        "codex-skills-extension-marketplace-alias-{}-{unique}",
+        std::process::id()
+    ));
+    let marketplace_path = parent.join("plugins/cache/openai-curated");
+    let mut roots = Vec::new();
+    for (plugin, version) in [("github", "hash123"), ("slack", "hash456")] {
+        let root = marketplace_path.join(plugin).join(version).join("skills");
+        let skill_dir = root.join(plugin);
+        std::fs::create_dir_all(&skill_dir)?;
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {plugin}\ndescription: {plugin} skill.\n---\n"),
+        )?;
+        roots.push(HostSkillRoot::host(
+            AbsolutePathBuf::try_from(std::fs::canonicalize(root)?)?,
+            SkillScope::User,
+            Arc::clone(&LOCAL_FS),
+        ));
+    }
+    let marketplace_root = dunce::canonicalize(&marketplace_path)?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let outcome = load_and_merge_host_skill_roots(
+        roots,
+        &Semaphore::new(/*permits*/ 2),
+        /*restriction_product*/ None,
+        /*plugin_skill_snapshots*/ None,
     )
-    .expect("alias plan should build");
+    .await;
+    let catalog = HostSkillProvider::new()
+        .list(SkillListQuery {
+            turn_id: "turn-1".to_string(),
+            executor_roots: Vec::new(),
+            resolved_executor_roots: Vec::new(),
+            host_snapshot: Some(Arc::new(HostSkillsSnapshot::new(Arc::new(outcome)))),
+            include_host_skills: true,
+            include_bundled_skills: false,
+            include_orchestrator_skills: false,
+            mcp_resources: None,
+            executor_capability_discovery: None,
+        })
+        .await?;
+    let entries = catalog.entries.iter().collect::<Vec<_>>();
+    let plan = build_alias_plan(&entries).expect("alias plan should build");
+    let github = entries
+        .iter()
+        .find(|entry| entry.name == "github")
+        .ok_or("GitHub skill should be discovered")?;
+    let slack = entries
+        .iter()
+        .find(|entry| entry.name == "slack")
+        .ok_or("Slack skill should be discovered")?;
 
     assert_eq!(
-        plan.skill_root_lines,
-        vec!["- `r0` = `/Users/test/.codex/plugins/cache/openai-curated`".to_string()]
+        plan.root_lines(),
+        vec![format!("- `r0` = `{marketplace_root}`")]
     );
     assert_eq!(
-        render_skill_path_with_aliases(&entries[0], &plan),
+        render_skill_locator_with_aliases(github, &plan),
         "r0/github/hash123/skills/github/SKILL.md"
     );
     assert_eq!(
-        render_skill_path_with_aliases(&entries[1], &plan),
+        render_skill_locator_with_aliases(slack, &plan),
         "r0/slack/hash456/skills/slack/SKILL.md"
     );
+
+    std::fs::remove_dir_all(parent)?;
+    Ok(())
 }
 
 #[test]

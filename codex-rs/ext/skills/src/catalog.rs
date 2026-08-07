@@ -178,8 +178,8 @@ pub struct SkillCatalogEntry {
     pub short_description: Option<String>,
     pub main_prompt: SkillResourceId,
     pub display_path: Option<String>,
-    display_path_root: Option<String>,
-    display_path_root_order: Option<usize>,
+    alias_root: Option<String>,
+    alias_root_order: Option<usize>,
     prompt_scope: Option<SkillScope>,
     pub dependencies: Option<SkillDependencies>,
     pub enabled: bool,
@@ -202,8 +202,8 @@ impl SkillCatalogEntry {
             short_description: None,
             main_prompt,
             display_path: None,
-            display_path_root: None,
-            display_path_root_order: None,
+            alias_root: None,
+            alias_root_order: None,
             prompt_scope: None,
             dependencies: None,
             enabled: true,
@@ -221,14 +221,14 @@ impl SkillCatalogEntry {
         self
     }
 
-    /// Sets the shared filesystem prefix that may be compacted in model-visible paths.
-    pub fn with_display_path_root(mut self, display_path_root: impl Into<String>) -> Self {
-        self.display_path_root = Some(display_path_root.into());
+    /// Sets the shared locator prefix that may be compacted in model-visible skill catalogs.
+    pub fn with_alias_root(mut self, alias_root: impl Into<String>) -> Self {
+        self.alias_root = Some(alias_root.into());
         self
     }
 
-    pub(crate) fn with_display_path_root_order(mut self, display_path_root_order: usize) -> Self {
-        self.display_path_root_order = Some(display_path_root_order);
+    pub(crate) fn with_alias_root_order(mut self, alias_root_order: usize) -> Self {
+        self.alias_root_order = Some(alias_root_order);
         self
     }
 
@@ -262,12 +262,12 @@ impl SkillCatalogEntry {
             .unwrap_or_else(|| self.main_prompt.as_str())
     }
 
-    pub(crate) fn display_path_root(&self) -> Option<&str> {
-        self.display_path_root.as_deref()
+    pub(crate) fn alias_root(&self) -> Option<&str> {
+        self.alias_root.as_deref()
     }
 
-    pub(crate) fn display_path_root_order(&self) -> Option<usize> {
-        self.display_path_root_order
+    pub(crate) fn alias_root_order(&self) -> Option<usize> {
+        self.alias_root_order
     }
 
     pub(crate) fn prompt_scope(&self) -> Option<SkillScope> {

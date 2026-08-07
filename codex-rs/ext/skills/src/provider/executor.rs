@@ -89,6 +89,7 @@ impl SkillProvider for ExecutorSkillProvider {
                         &skill,
                         authority.clone(),
                         selected_root_id,
+                        path,
                         environment_id,
                         /*instructions*/ None,
                     ));
@@ -172,8 +173,10 @@ impl ExecutorSkillProvider {
         let mut catalog = SkillCatalog::default();
         for root in snapshot.roots() {
             let selected_root_id = &root.selected_root.id;
-            let CapabilityRootLocation::Environment { environment_id, .. } =
-                &root.selected_root.location;
+            let CapabilityRootLocation::Environment {
+                environment_id,
+                path,
+            } = &root.selected_root.location;
             let discovery = match &root.result {
                 Ok(discovery) => discovery.as_ref(),
                 Err(error) => {
@@ -193,6 +196,7 @@ impl ExecutorSkillProvider {
                     &skill.metadata,
                     authority.clone(),
                     selected_root_id,
+                    path,
                     environment_id,
                     Some(skill.instructions),
                 ));
@@ -206,10 +210,15 @@ fn catalog_entry_from_skill(
     skill: &EnvironmentSkillMetadata,
     authority: SkillAuthority,
     selected_root_id: &str,
+    selected_root_path: &PathUri,
     environment_id: &str,
     instructions: Option<String>,
 ) -> SkillCatalogEntry {
     let handle_prefix = format!("skill://{selected_root_id}/");
+    let alias_root = format!(
+        "{handle_prefix}{}",
+        normalized_environment_path(selected_root_path).trim_start_matches('/')
+    );
     let normalized_main_path = normalized_environment_path(&skill.path_to_skills_md);
     let normalized_package_path = skill.path_to_skills_md.parent().map_or_else(
         || normalized_main_path.clone(),
@@ -245,6 +254,7 @@ fn catalog_entry_from_skill(
     )
     .with_short_description(skill.short_description.clone())
     .with_display_path(main_resource)
+    .with_alias_root(alias_root)
     .with_dependencies(skill.dependencies.clone());
 
     if skill.allows_implicit_invocation() {
