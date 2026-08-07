@@ -44,7 +44,6 @@ members = [
     "core",
     "core-api",
     "core-plugins",
-    "core-skills",
     "diagnostics",
     "hooks",
     "http-client",
@@ -187,7 +186,6 @@ codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
-codex-core-skills = { path = "core-skills" }
 codex-diagnostics = { path = "diagnostics" }
 codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use codex_core_skills::SkillLoadOutcome;
+use crate::SkillLoadOutcome;
 use codex_skills::SkillMetadata;
 
 use crate::catalog::SkillAuthority;

@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::Arc;
 
-use codex_core_skills::SkillLoadOutcome;
+use crate::SkillLoadOutcome;
 use codex_skills::SkillMetadata;
 
 /// Immutable snapshot of host-owned skills and their source filesystems.

@@ -22,7 +22,6 @@ use tracing::instrument;
 use tracing::warn;
 
 use codex_config::SkillsConfig;
-use codex_core_skills::SkillLoadOutcome;
 use codex_skills::LoadedSkills;
 use codex_skills::SkillLoadFuture;
 use codex_skills::SkillRootLoadRequest;
@@ -31,6 +30,7 @@ use codex_skills::SkillRootSnapshots;
 use codex_skills::install_system_skills;
 
 use crate::HostSkillsSnapshot;
+use crate::SkillLoadOutcome;
 use crate::host_roots::resolve_skill_roots;
 use crate::loader::HostSkillRoot;
 use crate::loader::MAX_CONCURRENT_ROOT_SCANS;

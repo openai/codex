@@ -2729,7 +2729,6 @@ dependencies = [
  "codex-connectors",
  "codex-context-fragments",
  "codex-core-plugins",
- "codex-core-skills",
  "codex-diagnostics",
  "codex-exec-server",
  "codex-exec-server-test-support",
@@ -2908,16 +2907,6 @@ dependencies = [
  "which 8.0.0",
  "wiremock",
  "zip",
-]
-
-[[package]]
-name = "codex-core-skills"
-version = "0.0.0"
-dependencies = [
- "codex-exec-server",
- "codex-skills",
- "codex-utils-absolute-path",
- "codex-utils-path-uri",
 ]
 
 [[package]]
@@ -4171,7 +4160,6 @@ name = "codex-skills-extension"
 version = "0.0.0"
 dependencies = [
  "codex-config",
- "codex-core-skills",
  "codex-exec-server",
  "codex-extension-api",
  "codex-mcp",

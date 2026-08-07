@@ -1,4 +1,4 @@
-use codex_core_skills::SkillLoadOutcome;
+use crate::SkillLoadOutcome;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillDependencies;
 use codex_skills::SkillInterface;

@@ -14,9 +14,7 @@ use codex_utils_plugins::PluginSkillRoot;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
 
-pub use codex_core_skills::SkillError;
-pub use codex_core_skills::SkillLoadOutcome;
-pub use codex_core_skills::model;
+pub use codex_skills::SkillError;
 pub use codex_skills::SkillMetadata;
 pub use codex_skills::SkillPolicy;
 pub use codex_skills::build_skill_name_counts;
@@ -24,6 +22,7 @@ pub use codex_skills::collect_explicit_skill_mentions;
 pub use codex_skills::detect_implicit_skill_invocation_for_command;
 pub use codex_skills_extension::HostSkillsLoadInput;
 pub use codex_skills_extension::HostSkillsService;
+pub use codex_skills_extension::SkillLoadOutcome;
 pub use codex_skills_extension::bundled_skills_enabled_from_stack;
 
 #[derive(Debug, Default)]

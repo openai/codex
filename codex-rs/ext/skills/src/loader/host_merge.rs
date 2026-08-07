@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use codex_core_skills::SkillLoadOutcome;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -20,6 +19,7 @@ use super::HostSkillRoot;
 use super::MAX_CONCURRENT_ROOT_SCANS;
 use super::host::HostSkillRootSnapshot;
 use super::load_host_skill_root;
+use crate::SkillLoadOutcome;
 
 pub(crate) async fn load_and_merge_host_skill_roots(
     roots: Vec<HostSkillRoot>,

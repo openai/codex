@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering;
 
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
-use codex_core_skills::SkillLoadOutcome;
 use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
@@ -46,6 +45,7 @@ use codex_skills_extension::HostSkillsLoadInput;
 use codex_skills_extension::HostSkillsService;
 use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::InjectedHostSkillPrompts;
+use codex_skills_extension::SkillLoadOutcome;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;

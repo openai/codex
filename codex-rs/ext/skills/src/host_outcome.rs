@@ -6,12 +6,8 @@ use std::sync::Arc;
 
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
-pub use codex_skills::SkillDependencies;
-pub use codex_skills::SkillError;
-pub use codex_skills::SkillInterface;
-pub use codex_skills::SkillMetadata;
-pub use codex_skills::SkillPolicy;
-pub use codex_skills::SkillToolDependency;
+use codex_skills::SkillError;
+use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 
@@ -76,13 +72,21 @@ impl SkillLoadOutcome {
 
     pub fn with_disabled_paths(mut self, disabled_paths: HashSet<AbsolutePathBuf>) -> Self {
         self.disabled_paths = disabled_paths;
-        let (by_scripts_dir, by_doc_path) = crate::build_implicit_skill_path_indexes(
-            self.skills
-                .iter()
-                .filter(|skill| self.is_skill_enabled(skill))
-                .cloned()
-                .collect(),
-        );
+        let mut by_scripts_dir = HashMap::new();
+        let mut by_doc_path = HashMap::new();
+        for skill in self
+            .skills
+            .iter()
+            .filter(|skill| self.is_skill_enabled(skill))
+        {
+            let skill_doc_path = canonicalize_if_exists(&skill.path_to_skills_md);
+            by_doc_path.insert(skill_doc_path, skill.clone());
+
+            if let Some(skill_dir) = skill.path_to_skills_md.parent() {
+                let scripts_dir = canonicalize_if_exists(&skill_dir.join("scripts"));
+                by_scripts_dir.insert(scripts_dir, skill.clone());
+            }
+        }
         self.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
         self.implicit_skills_by_doc_path = Arc::new(by_doc_path);
         self
@@ -180,4 +184,8 @@ impl fmt::Debug for SkillFileSystemsByPath {
             .field("len", &self.values.len())
             .finish()
     }
+}
+
+fn canonicalize_if_exists(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.clone())
 }

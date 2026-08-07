@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 codex-config = { workspace = true }
-codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-mcp = { workspace = true }
