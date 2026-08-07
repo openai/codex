@@ -32,7 +32,7 @@ const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct ExecServerHarness {
-    _codex_home: TempDir,
+    codex_home: TempDir,
     _helper_paths: TestCodexHelperPaths,
     child: Child,
     websocket_url: String,
@@ -104,7 +104,7 @@ where
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;
     let (websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
     Ok(ExecServerHarness {
-        _codex_home: codex_home,
+        codex_home,
         _helper_paths: helper_paths,
         child,
         websocket_url,
@@ -114,6 +114,10 @@ where
 }
 
 impl ExecServerHarness {
+    pub(crate) fn codex_home(&self) -> &std::path::Path {
+        self.codex_home.path()
+    }
+
     pub(crate) fn websocket_url(&self) -> &str {
         &self.websocket_url
     }

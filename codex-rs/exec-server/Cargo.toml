@@ -17,6 +17,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 clatter = { workspace = true }
 codex-api = { workspace = true }
+codex-config = { workspace = true }
 codex-http-client = { workspace = true }
 codex-exec-server-protocol = { workspace = true }
 codex-file-system = { workspace = true }
@@ -25,10 +26,12 @@ codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-home-dir = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 codex-websocket-client = { workspace = true }
+dirs = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 prost = "0.14.3"

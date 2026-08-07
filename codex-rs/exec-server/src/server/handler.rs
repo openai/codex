@@ -16,8 +16,12 @@ use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingRouteAwareHttpBodyStream;
 use crate::client::http_client::RouteAwareHttpClient;
 use crate::client::http_client::RouteAwareHttpRequestRunner;
+use crate::environment_config::ReadEnvironmentConfigError;
+use crate::environment_config::read_environment_config;
 use crate::protocol::CapabilityRootsDiscoverParams;
 use crate::protocol::CapabilityRootsDiscoverResponse;
+use crate::protocol::EnvironmentConfigReadParams;
+use crate::protocol::EnvironmentConfigReadResponse;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::EnvironmentStatus;
 use crate::protocol::EnvironmentStatusKind;
@@ -173,6 +177,19 @@ impl ExecServerHandler {
     pub(crate) fn environment_info(&self) -> Result<EnvironmentInfo, JSONRPCErrorError> {
         self.require_initialized_for("environment info")?;
         Ok(EnvironmentInfo::local())
+    }
+
+    pub(crate) async fn environment_config_read(
+        &self,
+        params: EnvironmentConfigReadParams,
+    ) -> Result<EnvironmentConfigReadResponse, JSONRPCErrorError> {
+        self.require_initialized_for("environment config")?;
+        read_environment_config(crate::LOCAL_FS.as_ref(), params)
+            .await
+            .map_err(|error| match error {
+                ReadEnvironmentConfigError::InvalidParams(message) => invalid_params(message),
+                ReadEnvironmentConfigError::Internal(message) => internal_error(message),
+            })
     }
 
     pub(crate) fn environment_status(&self) -> Result<EnvironmentStatus, JSONRPCErrorError> {
