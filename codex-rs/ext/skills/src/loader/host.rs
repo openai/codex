@@ -4,12 +4,12 @@ use std::sync::Arc;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::ParsedSkillFrontmatter;
+use codex_skills::SkillError;
 use codex_skills::SkillMetadata;
 use codex_skills::parse_skill_frontmatter_metadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginIdentity;
-#[cfg(test)]
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
 use futures::StreamExt;
@@ -61,7 +61,6 @@ impl HostSkillRoot {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn plugin(root: PluginSkillRoot, file_system: Arc<dyn ExecutorFileSystem>) -> Self {
         Self {
             path: root.path,
@@ -88,6 +87,16 @@ impl HostSkillRoot {
         self.plugin.as_ref().map(|plugin| &plugin.root)
     }
 
+    pub(crate) fn plugin_skill_root(&self) -> Option<PluginSkillRoot> {
+        self.plugin.as_ref().map(|plugin| PluginSkillRoot {
+            path: self.path.clone(),
+            plugin_identity: plugin.identity.clone(),
+            plugin_namespace: plugin.namespace.clone(),
+            plugin_root: plugin.root.clone(),
+            discovery_mode: plugin.discovery_mode,
+        })
+    }
+
     pub(crate) fn discovery_mode(&self) -> SkillDiscoveryMode {
         self.plugin
             .as_ref()
@@ -97,20 +106,15 @@ impl HostSkillRoot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HostSkillError {
-    pub path: AbsolutePathBuf,
-    pub message: String,
-}
-
 /// Skills and errors loaded from one canonical host root.
 #[derive(Clone)]
 pub struct HostSkillRootSnapshot {
     pub root: AbsolutePathBuf,
     pub skills: Vec<SkillMetadata>,
     pub skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
-    pub errors: Vec<HostSkillError>,
+    pub errors: Vec<SkillError>,
     pub file_system: Arc<dyn ExecutorFileSystem>,
+    pub is_agent_plugin: bool,
 }
 
 struct ResolvedDiscoveredSkill {
@@ -120,6 +124,7 @@ struct ResolvedDiscoveredSkill {
 }
 
 pub async fn load_host_skill_root(root: HostSkillRoot) -> HostSkillRootSnapshot {
+    let is_agent_plugin = root.discovery_mode() == SkillDiscoveryMode::DirectChildren;
     let canonical_root =
         canonicalize_for_skill_identity(root.file_system.as_ref(), &root.path).await;
     let (skills, skill_discovery_path_by_path, errors) =
@@ -130,6 +135,7 @@ pub async fn load_host_skill_root(root: HostSkillRoot) -> HostSkillRootSnapshot 
         skill_discovery_path_by_path,
         errors,
         file_system: root.file_system,
+        is_agent_plugin,
     }
 }
 
@@ -139,7 +145,7 @@ async fn load_skills_under_root(
 ) -> (
     Vec<SkillMetadata>,
     Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
-    Vec<HostSkillError>,
+    Vec<SkillError>,
 ) {
     let file_system = skill_root.file_system.as_ref();
     let plugin_identity = skill_root.plugin_identity();
@@ -309,7 +315,7 @@ async fn load_skills_under_root(
                 loaded_skills.push(skill);
             }
             Err(message) if skill_root.scope != SkillScope::System => {
-                errors.push(HostSkillError { path, message });
+                errors.push(SkillError { path, message });
             }
             Err(_) => {}
         }

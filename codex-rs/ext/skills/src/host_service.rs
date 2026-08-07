@@ -7,6 +7,7 @@ use std::sync::Weak;
 
 use codex_config::ConfigLayerStack;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -31,11 +32,16 @@ use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::SkillRootSnapshot;
 use codex_core_skills::loader::load_skill_root_snapshot;
+use codex_skills::LoadedSkills;
+use codex_skills::SkillLoadFuture;
+use codex_skills::SkillRootLoadRequest;
+use codex_skills::SkillRootLoader;
 use codex_skills::install_system_skills;
 
 use crate::HostSkillsSnapshot;
 use crate::host_roots::resolve_skill_roots;
 use crate::loader::HostSkillRoot;
+use crate::loader::load_and_merge_host_skill_roots;
 use crate::loader::load_host_skill_root;
 
 #[derive(Debug, Clone)]
@@ -402,6 +408,32 @@ impl HostSkillsService {
         if let Err(err) = install_system_skills(&self.codex_home) {
             tracing::error!("failed to install system skills: {err}");
         }
+    }
+}
+
+impl SkillRootLoader<PluginSkillRoot> for HostSkillsService {
+    fn load_roots(
+        &self,
+        request: SkillRootLoadRequest<PluginSkillRoot>,
+    ) -> SkillLoadFuture<'_, LoadedSkills> {
+        Box::pin(async move {
+            let roots = request
+                .roots
+                .into_iter()
+                .map(|root| HostSkillRoot::plugin(root, Arc::clone(&LOCAL_FS)))
+                .collect();
+            let outcome = load_and_merge_host_skill_roots(
+                roots,
+                &self.root_scan_slots,
+                request.restriction_product,
+                request.snapshots.as_ref(),
+            )
+            .await;
+            LoadedSkills {
+                skills: outcome.skills,
+                errors: outcome.errors,
+            }
+        })
     }
 }
 

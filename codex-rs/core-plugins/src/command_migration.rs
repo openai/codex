@@ -15,7 +15,6 @@ const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
 
 pub(crate) use plugin::migrate_plugin_commands;
-pub(crate) use plugin::migrated_command_skills_root;
 
 /// Describes source-specific terms that should be rewritten in migrated command skills.
 #[derive(Clone, Copy)]
