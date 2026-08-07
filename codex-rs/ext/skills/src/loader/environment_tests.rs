@@ -1,18 +1,92 @@
 use std::fs;
 
-use codex_core_skills::loader::load_environment_skills_from_root;
 use codex_exec_server::CapabilityRootDiscoverRequest;
 use codex_exec_server::CapabilityRootsDiscoverParams;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::discover_capability_roots;
+use codex_protocol::protocol::Product;
+use codex_skills::EnvironmentSkillMetadata;
+use codex_skills::SkillDependencies;
+use codex_skills::SkillPolicy;
+use codex_skills::SkillToolDependency;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 use super::load_environment_skills_from_discovery;
+use super::load_environment_skills_from_root;
 
 #[tokio::test]
-async fn executor_bundle_parser_matches_the_existing_environment_loader() {
+async fn direct_environment_loader_preserves_plugin_dependencies_and_product_policy() {
+    let root = tempdir().expect("tempdir");
+    let skill_dir = root.path().join("skills/deploy");
+    fs::create_dir_all(root.path().join(".codex-plugin")).expect("manifest dir");
+    fs::create_dir_all(skill_dir.join("agents")).expect("metadata dir");
+    fs::write(
+        root.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"demo-plugin"}"#,
+    )
+    .expect("manifest");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: deploy\ndescription: Deploy the service.\n---\n",
+    )
+    .expect("skill");
+    fs::write(
+        skill_dir.join("agents/openai.yaml"),
+        r#"
+dependencies:
+  tools:
+    - type: mcp
+      value: deploy-server
+      description: Deploy MCP
+      transport: stdio
+      command: deploy-mcp
+policy:
+  allow_implicit_invocation: false
+  products: [codex, atlas]
+"#,
+    )
+    .expect("metadata");
+
+    let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
+    let outcome =
+        load_environment_skills_from_root(LOCAL_FS.as_ref(), &root_uri, Some(Product::Codex)).await;
+
+    assert_eq!(
+        outcome.skills,
+        vec![EnvironmentSkillMetadata {
+            path_to_skills_md: PathUri::from_host_native_path(skill_dir.join("SKILL.md")).unwrap(),
+            name: "demo-plugin:deploy".to_string(),
+            description: "Deploy the service.".to_string(),
+            short_description: None,
+            dependencies: Some(SkillDependencies {
+                tools: vec![SkillToolDependency {
+                    r#type: "mcp".to_string(),
+                    value: "deploy-server".to_string(),
+                    description: Some("Deploy MCP".to_string()),
+                    transport: Some("stdio".to_string()),
+                    command: Some("deploy-mcp".to_string()),
+                    url: None,
+                }],
+            }),
+            policy: Some(SkillPolicy {
+                allow_implicit_invocation: Some(false),
+                products: vec![Product::Codex, Product::Atlas],
+            }),
+        }]
+    );
+    let atlas =
+        load_environment_skills_from_root(LOCAL_FS.as_ref(), &root_uri, Some(Product::Atlas)).await;
+    assert_eq!(atlas.skills, outcome.skills);
+    let filtered =
+        load_environment_skills_from_root(LOCAL_FS.as_ref(), &root_uri, Some(Product::Chatgpt))
+            .await;
+    assert!(filtered.skills.is_empty());
+}
+
+#[tokio::test]
+async fn executor_bundle_parser_matches_direct_environment_loader() {
     let root = tempdir().expect("tempdir");
     let plugin_manifest = root.path().join(".codex-plugin/plugin.json");
     let nested_manifest = root.path().join("nested/.claude-plugin/plugin.json");

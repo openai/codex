@@ -20,7 +20,7 @@ use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::loader::PluginSkillInventory;
 use crate::loader::load_plugin_apps;
 use crate::loader::load_plugin_mcp_servers;
-use crate::loader::load_plugin_skill_inventory_with_loader;
+use crate::loader::load_plugin_skill_inventory;
 use crate::manager::ConfiguredMarketplacePlugin;
 use crate::manager::remote_plugin_install_required_description;
 use crate::manifest::PluginManifestFormat;
@@ -230,7 +230,7 @@ async fn load_plugin_metadata(
         remote_plugin_id: None,
     };
     let manifest = loaded_manifest.manifest;
-    let skill_inventory = load_plugin_skill_inventory_with_loader(
+    let skill_inventory = load_plugin_skill_inventory(
         plugin_root,
         &plugin_identity,
         &manifest,

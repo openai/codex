@@ -180,3 +180,7 @@ impl ResolvedSkillNamespace {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "namespace_tests.rs"]
+mod tests;

@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
-use codex_core_skills::loader::SkillRoot;
-use codex_core_skills::loader::load_environment_skills_from_root as load_legacy_environment_skills_from_root;
-use codex_core_skills::loader::load_skills_from_roots;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirementsToml;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
@@ -25,9 +25,9 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::Product;
-use codex_protocol::protocol::SkillScope;
 use codex_skills_extension::ExecutorSkillProvider;
-use codex_skills_extension::HostSkillsSnapshot;
+use codex_skills_extension::HostSkillsLoadInput;
+use codex_skills_extension::HostSkillsService;
 use codex_skills_extension::catalog::SkillAuthority;
 use codex_skills_extension::catalog::SkillPackageId;
 use codex_skills_extension::catalog::SkillResourceId;
@@ -203,31 +203,47 @@ impl ExecutorFileSystem for SyntheticFileSystem {
 async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
     let test_root =
         std::env::temp_dir().join(format!("codex-executor-skill-fs-{}", std::process::id()));
-    let alias_root = AbsolutePathBuf::from_absolute_path_checked(test_root.join("alias"))
-        .expect("absolute path");
+    let project_folder = AbsolutePathBuf::from_absolute_path_checked(test_root.join(".codex"))
+        .expect("absolute project folder");
+    let alias_root = project_folder.join("skills");
     let canonical_root = AbsolutePathBuf::from_absolute_path_checked(test_root.join("canonical"))
         .expect("absolute path");
     assert!(!alias_root.as_path().exists());
     assert!(!canonical_root.as_path().exists());
 
-    let outcome = load_skills_from_roots(
-        [SkillRoot {
-            path: alias_root.clone(),
-            scope: SkillScope::User,
-            file_system: Arc::new(SyntheticFileSystem {
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::Project {
+                dot_codex_folder: project_folder,
+            },
+            toml::Value::Table(Default::default()),
+        )],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid project config stack");
+    let cwd = AbsolutePathBuf::from_absolute_path_checked(test_root).expect("absolute test root");
+    let service = HostSkillsService::new_with_restriction_product(
+        cwd.clone(),
+        /*bundled_skills_enabled*/ false,
+        /*restriction_product*/ None,
+    );
+    let snapshot = service
+        .snapshot_for_config(
+            &HostSkillsLoadInput::new(
+                cwd,
+                Vec::new(),
+                config_layer_stack,
+                /*bundled_skills_enabled*/ false,
+            ),
+            Some(Arc::new(SyntheticFileSystem {
                 alias_root: PathUri::from_abs_path(&alias_root),
                 canonical_root: PathUri::from_abs_path(&canonical_root),
                 has_plugin_manifest: false,
-            }),
-            plugin_identity: None,
-            plugin_namespace: None,
-            plugin_root: None,
-            discovery_mode: Default::default(),
-        }],
-        /*plugin_skill_snapshots*/ None,
-        Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
-    )
-    .await;
+            })),
+        )
+        .await;
+    let outcome = snapshot.outcome();
     assert_eq!(outcome.errors, Vec::new());
     assert_eq!(outcome.skills.len(), 1);
 
@@ -237,9 +253,8 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         skill.path_to_skills_md,
         canonical_root.join("skill/SKILL.md")
     );
-    let loaded = HostSkillsSnapshot::new(Arc::new(outcome));
     assert_eq!(
-        loaded.read_skill_text(&skill).await.expect("skill body"),
+        snapshot.read_skill_text(&skill).await.expect("skill body"),
         SKILL_CONTENTS
     );
 }
@@ -441,16 +456,6 @@ async fn executor_discovery_routes_produce_equivalent_catalog_metadata() {
         executor_capability_discovery,
     };
 
-    let legacy_file_system = manager
-        .get_environment("local")
-        .expect("local environment")
-        .get_filesystem();
-    let legacy = load_legacy_environment_skills_from_root(
-        legacy_file_system.as_ref(),
-        &PathUri::from_host_native_path(&test_root).expect("skill root URI"),
-        Some(Product::Codex),
-    )
-    .await;
     let direct = provider
         .list(query(None))
         .await
@@ -484,36 +489,8 @@ async fn executor_discovery_routes_produce_equivalent_catalog_metadata() {
             .collect::<Vec<_>>()
     };
     assert_eq!(comparable_entries(&bundled), comparable_entries(&direct));
-    assert_eq!(legacy.warnings, direct.warnings);
     assert_eq!(direct.warnings.len(), 1);
     assert!(direct.warnings[0].contains("missing field `description`"));
-    let legacy_metadata = legacy
-        .skills
-        .iter()
-        .map(|skill| {
-            (
-                skill.name.clone(),
-                skill.description.clone(),
-                skill.short_description.clone(),
-                skill.dependencies.clone(),
-                skill.allows_implicit_invocation(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let catalog_metadata = direct
-        .entries
-        .iter()
-        .map(|entry| {
-            (
-                entry.name.clone(),
-                entry.description.clone(),
-                entry.short_description.clone(),
-                entry.dependencies.clone(),
-                entry.prompt_visible,
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(catalog_metadata, legacy_metadata);
     let entry = direct
         .entries
         .iter()
@@ -692,16 +669,6 @@ async fn direct_executor_discovery_preserves_hidden_nested_and_probed_metadata()
         },
     };
     let manager = Arc::new(EnvironmentManager::default_for_tests());
-    let legacy_file_system = manager
-        .get_environment("local")
-        .expect("local environment")
-        .get_filesystem();
-    let legacy = load_legacy_environment_skills_from_root(
-        legacy_file_system.as_ref(),
-        &root_uri,
-        /*restriction_product*/ None,
-    )
-    .await;
     let provider = ExecutorSkillProvider::new_with_restriction_product(
         manager, /*restriction_product*/ None,
     );
@@ -720,18 +687,7 @@ async fn direct_executor_discovery_preserves_hidden_nested_and_probed_metadata()
         .await
         .expect("list directly discovered executor skills");
 
-    assert_eq!(direct.warnings, legacy.warnings);
-    let legacy_metadata = legacy
-        .skills
-        .iter()
-        .map(|skill| {
-            (
-                skill.name.clone(),
-                skill.description.clone(),
-                skill.allows_implicit_invocation(),
-            )
-        })
-        .collect::<Vec<_>>();
+    assert_eq!(direct.warnings, Vec::<String>::new());
     let catalog_metadata = direct
         .entries
         .iter()
@@ -743,7 +699,6 @@ async fn direct_executor_discovery_preserves_hidden_nested_and_probed_metadata()
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(catalog_metadata, legacy_metadata);
     assert_eq!(
         catalog_metadata,
         vec![

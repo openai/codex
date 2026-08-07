@@ -218,3 +218,7 @@ fn discover_skill_metadata(
         SkillMetadataDiscovery::Probe(metadata_path)
     }
 }
+
+#[cfg(test)]
+#[path = "discovery_tests.rs"]
+mod tests;

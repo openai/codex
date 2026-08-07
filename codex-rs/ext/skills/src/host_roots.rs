@@ -7,7 +7,6 @@ use codex_config::ConfigLayerStack;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
-use codex_core_skills::loader::SkillRoot;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::SkillScope;
@@ -15,7 +14,6 @@ use codex_skills::system_cache_root_dir;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
-use codex_utils_plugins::SkillDiscoveryMode;
 use dirs::home_dir;
 use futures::StreamExt;
 use toml::Value as TomlValue;
@@ -32,7 +30,7 @@ pub(crate) async fn resolve_skill_roots(
     cwd: &AbsolutePathBuf,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
-) -> Vec<SkillRoot> {
+) -> Vec<HostSkillRoot> {
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     resolve_skill_roots_with_home_dir(
@@ -53,33 +51,20 @@ async fn resolve_skill_roots_with_home_dir(
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
-) -> Vec<SkillRoot> {
+) -> Vec<HostSkillRoot> {
     let mut roots =
-        roots_from_layer_stack(config_layer_stack, home_dir, repository_file_system.clone())
+        roots_from_layer_stack(config_layer_stack, home_dir, repository_file_system.clone());
+    roots.extend(
+        plugin_skill_roots
             .into_iter()
-            .map(host_root_to_skill_root)
-            .collect::<Vec<_>>();
-    roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
-        path: root.path,
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_identity: Some(root.plugin_identity),
-        plugin_namespace: Some(root.plugin_namespace),
-        plugin_root: Some(root.plugin_root),
-        discovery_mode: root.discovery_mode,
-    }));
+            .map(|root| HostSkillRoot::plugin(root, Arc::clone(&LOCAL_FS))),
+    );
     roots.extend(
         extra_skill_roots
             .into_iter()
-            .map(|path| local_root(path, SkillScope::User))
-            .map(host_root_to_skill_root),
+            .map(|path| local_root(path, SkillScope::User)),
     );
-    roots.extend(
-        repo_agents_skill_roots(repository_file_system, config_layer_stack, cwd)
-            .await
-            .into_iter()
-            .map(host_root_to_skill_root),
-    );
+    roots.extend(repo_agents_skill_roots(repository_file_system, config_layer_stack, cwd).await);
     dedupe_skill_roots_by_path(&mut roots);
     roots
 }
@@ -145,18 +130,6 @@ fn roots_from_layer_stack(
 
 fn local_root(path: AbsolutePathBuf, scope: SkillScope) -> HostSkillRoot {
     HostSkillRoot::host(path, scope, Arc::clone(&LOCAL_FS))
-}
-
-fn host_root_to_skill_root(root: HostSkillRoot) -> SkillRoot {
-    SkillRoot {
-        path: root.path,
-        scope: root.scope,
-        file_system: root.file_system,
-        plugin_identity: None,
-        plugin_namespace: None,
-        plugin_root: None,
-        discovery_mode: SkillDiscoveryMode::Recursive,
-    }
 }
 
 async fn repo_agents_skill_roots(
@@ -285,7 +258,7 @@ fn dirs_between_project_root_and_cwd(
     directories
 }
 
-fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
+fn dedupe_skill_roots_by_path(roots: &mut Vec<HostSkillRoot>) {
     let mut seen = HashSet::new();
     roots.retain(|root| seen.insert(root.path.clone()));
 }

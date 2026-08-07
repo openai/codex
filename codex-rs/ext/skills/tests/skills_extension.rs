@@ -4,11 +4,10 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirementsToml;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
-use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
-use codex_core_skills::loader::SkillRoot;
-use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
@@ -44,6 +43,8 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_skills::SkillMetadata;
 use codex_skills_extension::HostSkillProvider;
+use codex_skills_extension::HostSkillsLoadInput;
+use codex_skills_extension::HostSkillsService;
 use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
@@ -70,7 +71,6 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
-use tokio::sync::Semaphore;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -1876,22 +1876,34 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
     }
     let root = AbsolutePathBuf::try_from(std::fs::canonicalize(root)?)?;
     let rendered_root = root.to_string_lossy().replace('\\', "/");
-    let outcome = load_skills_from_roots(
-        [SkillRoot {
-            path: root,
-            scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_identity: None,
-            plugin_namespace: None,
-            plugin_root: None,
-            discovery_mode: Default::default(),
-        }],
-        /*plugin_skill_snapshots*/ None,
-        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
-    )
-    .await;
-    assert_eq!(outcome.errors, Vec::new());
-    assert_eq!(outcome.skills.len(), 12 + usize::from(cfg!(unix)));
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+    let codex_home = AbsolutePathBuf::try_from(test_root.clone())?;
+    let service = HostSkillsService::new_with_restriction_product(
+        codex_home.clone(),
+        /*bundled_skills_enabled*/ false,
+        /*restriction_product*/ None,
+    );
+    service.set_extra_roots(vec![root]);
+    let snapshot = service
+        .snapshot_for_config(
+            &HostSkillsLoadInput::new(
+                codex_home,
+                Vec::new(),
+                config_layer_stack,
+                /*bundled_skills_enabled*/ false,
+            ),
+            Some(Arc::clone(&LOCAL_FS)),
+        )
+        .await;
+    assert_eq!(snapshot.outcome().errors, Vec::new());
+    assert_eq!(
+        snapshot.outcome().skills.len(),
+        12 + usize::from(cfg!(unix))
+    );
 
     let mut builder = ExtensionRegistryBuilder::new();
     install(&mut builder, skills_extension_config);
@@ -1916,7 +1928,7 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
     model_info.context_window = Some(10_000);
     thread_store.insert(model_info);
     let turn_store = ExtensionData::new("turn-1");
-    turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
+    turn_store.insert(snapshot);
 
     let fragments = registry.turn_input_contributors()[0]
         .contribute(

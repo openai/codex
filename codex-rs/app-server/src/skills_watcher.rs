@@ -126,7 +126,7 @@ impl SkillsWatcher {
             .into_iter()
             // Plugin roots have explicit lifecycle invalidation; generated system skills are
             // installed before this watcher starts.
-            .filter(|root| root.plugin_identity.is_none() && root.scope != SkillScope::System)
+            .filter(|root| root.plugin_identity().is_none() && root.scope != SkillScope::System)
             .map(|root| WatchPath {
                 path: root.path.into_path_buf(),
                 recursive: true,

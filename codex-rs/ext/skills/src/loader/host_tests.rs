@@ -119,7 +119,7 @@ async fn loads_host_frontmatter_dependencies_and_policy() {
       description: Demo tool
 policy:
   allow_implicit_invocation: false
-  products: [codex]
+  products: [codex, CHATGPT, atlas]
 "##,
     );
 
@@ -145,7 +145,7 @@ policy:
             }),
             policy: Some(SkillPolicy {
                 allow_implicit_invocation: Some(false),
-                products: vec![Product::Codex],
+                products: vec![Product::Codex, Product::Chatgpt, Product::Atlas],
             }),
             path_to_skills_md: skill_path,
             scope: SkillScope::User,
@@ -434,6 +434,41 @@ async fn plugin_root_accepts_maximum_length_qualified_skill_name() {
 }
 
 #[tokio::test]
+async fn plugin_root_rejects_overlong_qualified_skill_name() {
+    let root = TempDir::new().expect("temp dir");
+    let skill_name = "s".repeat(MAX_NAME_LEN);
+    write_skill(
+        &root,
+        "skills/search",
+        &format!("name: {skill_name}\ndescription: Search skill"),
+    );
+    let plugin_root = AbsolutePathBuf::from_absolute_path(root.path()).expect("plugin root");
+
+    let snapshot = load_host_skill_root(HostSkillRoot::plugin(
+        PluginSkillRoot {
+            path: plugin_root.join("skills"),
+            plugin_identity: PluginIdentity {
+                plugin_id: "demo@test".to_string(),
+                remote_plugin_id: None,
+            },
+            plugin_namespace: "p".repeat(MAX_NAME_LEN + 1),
+            plugin_root,
+            discovery_mode: SkillDiscoveryMode::Recursive,
+        },
+        Arc::clone(&LOCAL_FS),
+    ))
+    .await;
+
+    assert_eq!(snapshot.skills, Vec::new());
+    assert_eq!(snapshot.errors.len(), 1);
+    assert!(
+        snapshot.errors[0]
+            .message
+            .contains("invalid qualified name")
+    );
+}
+
+#[tokio::test]
 async fn recursive_plugin_root_preserves_owner_namespace_and_shared_asset_policy() {
     let root = TempDir::new().expect("temp dir");
     let skill_path = write_skill(
@@ -638,7 +673,7 @@ async fn recursive_plugin_root_preserves_symlinked_skill_discovery_path() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn follows_directory_symlinks_for_user_but_not_system_scope() {
+async fn follows_directory_symlinks_except_for_system_scope() {
     use std::os::unix::fs::symlink;
 
     let root = TempDir::new().expect("temp dir");
@@ -646,18 +681,25 @@ async fn follows_directory_symlinks_for_user_but_not_system_scope() {
     let target_skill = write_skill(&target, "demo", "name: demo\ndescription: Symlinked skill");
     symlink(target.path().join("demo"), root.path().join("alias")).expect("create symlink");
 
-    let user_snapshot = load_host_skill_root(root_for(&root, SkillScope::User)).await;
-    let system_snapshot = load_host_skill_root(root_for(&root, SkillScope::System)).await;
+    for scope in [SkillScope::User, SkillScope::Repo, SkillScope::Admin] {
+        let snapshot = load_host_skill_root(root_for(&root, scope)).await;
 
-    assert_eq!(user_snapshot.errors, Vec::new());
-    assert_eq!(user_snapshot.skills.len(), 1);
-    assert_eq!(user_snapshot.skills[0].path_to_skills_md, target_skill);
-    assert_eq!(
-        user_snapshot
-            .skill_discovery_path_by_path
-            .get(&target_skill),
-        Some(&user_snapshot.root.join("alias/SKILL.md"))
-    );
+        assert_eq!(snapshot.errors, Vec::new());
+        assert_eq!(snapshot.skills.len(), 1);
+        assert_eq!(
+            (
+                &snapshot.skills[0].path_to_skills_md,
+                snapshot.skills[0].scope
+            ),
+            (&target_skill, scope)
+        );
+        assert_eq!(
+            snapshot.skill_discovery_path_by_path.get(&target_skill),
+            Some(&snapshot.root.join("alias/SKILL.md"))
+        );
+    }
+
+    let system_snapshot = load_host_skill_root(root_for(&root, SkillScope::System)).await;
     assert_eq!(system_snapshot.errors, Vec::new());
     assert_eq!(system_snapshot.skills, Vec::new());
 }

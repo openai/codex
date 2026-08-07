@@ -75,7 +75,8 @@ impl HostSkillRoot {
         }
     }
 
-    pub(crate) fn plugin_identity(&self) -> Option<&PluginIdentity> {
+    /// Returns the owning plugin identity when this root belongs to a plugin.
+    pub fn plugin_identity(&self) -> Option<&PluginIdentity> {
         self.plugin.as_ref().map(|plugin| &plugin.identity)
     }
 
@@ -404,3 +405,7 @@ async fn canonicalize_for_skill_identity(
 #[cfg(test)]
 #[path = "host_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "host_io_tests.rs"]
+mod io_tests;
