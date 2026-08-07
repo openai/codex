@@ -9,6 +9,8 @@ use crate::session::session::Session;
 use crate::user_message_admission::PendingUserMessageAdmissionState;
 use crate::user_message_admission::UserMessageAdmission;
 use crate::user_message_admission::UserMessageAdmissionError;
+use codex_diagnostics::Gauge;
+use codex_diagnostics::GaugeGuard;
 use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
@@ -65,6 +67,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use codex_rollout::state_db::StateDbHandle;
+
+static LIVE_THREADS: Gauge = Gauge::new("core.threads.live");
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -199,6 +203,7 @@ pub struct CodexThread {
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitations: Mutex<OutOfBandElicitations>,
+    _diagnostics_guard: GaugeGuard,
 }
 
 #[derive(Default)]
@@ -232,6 +237,7 @@ impl CodexThread {
             session_configured,
             rollout_path,
             out_of_band_elicitations: Mutex::new(OutOfBandElicitations::default()),
+            _diagnostics_guard: LIVE_THREADS.track(),
         }
     }
 

@@ -2729,6 +2729,7 @@ dependencies = [
  "codex-context-fragments",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-diagnostics",
  "codex-exec-server",
  "codex-exec-server-test-support",
  "codex-execpolicy",
@@ -2938,6 +2939,14 @@ dependencies = [
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "zip",
+]
+
+[[package]]
+name = "codex-diagnostics"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pretty_assertions",
 ]
 
 [[package]]

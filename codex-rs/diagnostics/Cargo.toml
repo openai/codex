@@ -1,0 +1,19 @@
+[package]
+name = "codex-diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_diagnostics"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

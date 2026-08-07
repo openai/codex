@@ -800,6 +800,12 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 
     assert_eq!(manager.list_thread_ids().await, Vec::new());
     assert!(manager.get_thread(thread.thread_id).await.is_err());
+    assert!(
+        codex_diagnostics::snapshot()
+            .gauges
+            .iter()
+            .any(|gauge| gauge.name == "core.threads.live" && gauge.value > 0)
+    );
 
     let report = manager
         .shutdown_all_threads_bounded(Duration::from_secs(10))
