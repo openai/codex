@@ -47,13 +47,24 @@ async fn server_diagnostics_exposes_process_and_registered_thread_gauge() -> Res
     assert!(diagnostics.process.physical_footprint_bytes.is_some());
     #[cfg(not(target_os = "macos"))]
     assert_eq!(diagnostics.process.physical_footprint_bytes, None);
-    assert_eq!(
-        diagnostics.gauges,
-        vec![ServerDiagnosticsGauge {
+    for expected_gauge in [
+        ServerDiagnosticsGauge {
+            name: "app.requests.in_flight".to_string(),
+            value: 1,
+        },
+        ServerDiagnosticsGauge {
             name: "core.threads.live".to_string(),
             value: 1,
-        }]
-    );
+        },
+    ] {
+        assert_eq!(
+            diagnostics
+                .gauges
+                .iter()
+                .find(|gauge| gauge.name == expected_gauge.name),
+            Some(&expected_gauge)
+        );
+    }
 
     Ok(())
 }

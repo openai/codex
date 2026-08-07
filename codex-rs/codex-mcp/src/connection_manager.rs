@@ -54,6 +54,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::McpServerTransportConfig;
+use codex_diagnostics::Gauge;
+use codex_diagnostics::GaugeGuard;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
@@ -71,10 +73,13 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::warn;
 
+static LIVE_CONNECTIONS: Gauge = Gauge::new("mcp.connections.live");
+
 pub(crate) struct McpServerConnection {
     identity: Option<McpServerConnectionIdentity>,
     client: AsyncManagedClient,
     startup_trigger: Option<watch::Sender<bool>>,
+    _diagnostics_guard: GaugeGuard,
 }
 
 impl McpServerConnection {
@@ -440,6 +445,7 @@ impl McpConnectionSet {
                         identity: Some(connection_identity),
                         client: async_managed_client.clone(),
                         startup_trigger,
+                        _diagnostics_guard: LIVE_CONNECTIONS.track(),
                     }),
                     metadata,
                     tool_filter: configured_tool_filter,

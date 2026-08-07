@@ -6,6 +6,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_app_server_protocol::ClientRequestSerializationScope;
+use codex_diagnostics::Gauge;
+use codex_diagnostics::GaugeGuard;
 use futures::future::join_all;
 use tokio::sync::Mutex;
 use tracing::Instrument;
@@ -14,6 +16,8 @@ use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::outgoing_message::ConnectionId;
 
 type BoxFutureUnit = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+static QUEUED_REQUESTS: Gauge = Gauge::new("app.requests.queued");
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RequestSerializationQueueKey {
@@ -138,6 +142,7 @@ impl QueuedInitializedRequest {
 struct QueuedSerializedRequest {
     access: RequestSerializationAccess,
     request: QueuedInitializedRequest,
+    _diagnostics_guard: GaugeGuard,
 }
 
 #[derive(Clone, Default)]
@@ -167,7 +172,11 @@ impl RequestSerializationQueues {
         access: RequestSerializationAccess,
         request: QueuedInitializedRequest,
     ) {
-        let request = QueuedSerializedRequest { access, request };
+        let request = QueuedSerializedRequest {
+            access,
+            request,
+            _diagnostics_guard: QUEUED_REQUESTS.track(),
+        };
         let should_spawn = {
             let mut queues = self.inner.lock().await;
             match queues.get_mut(&key) {

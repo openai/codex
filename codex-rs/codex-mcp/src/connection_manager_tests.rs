@@ -116,6 +116,7 @@ impl McpConnectionSet {
                     identity: None,
                     client,
                     startup_trigger: None,
+                    _diagnostics_guard: LIVE_CONNECTIONS.track(),
                 }),
                 metadata: McpServerMetadata {
                     environment_id: String::new(),
@@ -3508,6 +3509,7 @@ async fn manager_with_reusable_ready_server(
                 identity: Some(reusable_server_identity(config, runtime_context)),
                 client: create_ready_async_managed_client(tools).await,
                 startup_trigger: None,
+                _diagnostics_guard: LIVE_CONNECTIONS.track(),
             }),
             metadata: McpServerMetadata::from(&server),
             tool_filter: ToolFilter::from_config(config),
@@ -3641,6 +3643,7 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
                     cancel_token: CancellationToken::new(),
                 },
                 startup_trigger: None,
+                _diagnostics_guard: LIVE_CONNECTIONS.track(),
             }),
             metadata: McpServerMetadata::from(&server),
             tool_filter: ToolFilter::from_config(&config),
@@ -3948,6 +3951,7 @@ async fn reconciliation_replaces_closed_connections() -> anyhow::Result<()> {
             cancel_token: CancellationToken::new(),
         },
         startup_trigger: None,
+        _diagnostics_guard: LIVE_CONNECTIONS.track(),
     });
 
     assert!(!client.is_closed().await);

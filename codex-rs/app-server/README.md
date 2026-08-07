@@ -499,9 +499,14 @@ Enable `capabilities.experimentalApi` during initialization, then use `thread/li
         "residentMemoryBytes": 4194304,
         "physicalFootprintBytes": 5242880
     },
-    "gauges": [{ "name": "core.threads.live", "value": 1 }]
+    "gauges": [
+        { "name": "app.requests.in_flight", "value": 1 },
+        { "name": "core.threads.live", "value": 1 }
+    ]
 } }
 ```
+
+Gauges register when first used. Depending on process activity, the snapshot can also include `app.requests.queued`, `app.server_requests.pending`, `core.mailbox.pending`, `core.turns.active`, and `mcp.connections.live`. The diagnostics request itself is included in `app.requests.in_flight`.
 
 ### Example: Track thread status changes
 
