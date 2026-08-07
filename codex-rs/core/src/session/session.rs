@@ -570,7 +570,7 @@ impl Session {
 
         let thread_id = match &initial_history {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                ThreadId::default()
+                agent_control.generate_thread_id()
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };

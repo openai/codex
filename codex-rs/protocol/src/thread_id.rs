@@ -24,6 +24,13 @@ impl ThreadId {
         }
     }
 
+    /// Construct an identifier from a UUID's 128-bit representation.
+    pub fn from_u128(value: u128) -> Self {
+        Self {
+            uuid: Uuid::from_u128(value),
+        }
+    }
+
     pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
         Ok(Self {
             uuid: Uuid::parse_str(s)?,
@@ -98,6 +105,7 @@ impl JsonSchema for ThreadId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_thread_id_default_is_not_zeroes() {
         let id = ThreadId::default();

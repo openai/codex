@@ -16,7 +16,9 @@ use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
+use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_manager::default_thread_id_generator;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
@@ -93,7 +95,7 @@ pub(crate) struct ListedAgent {
 /// An `AgentControl` instance is intended to be created at most once per root thread/session
 /// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct AgentControl {
     /// ID shared by the whole agent control session. This means every sub-agents from a common
     /// root share the same session ID.
@@ -102,6 +104,8 @@ pub(crate) struct AgentControl {
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
+    /// Captured at construction so delegates retain their manager's allocation policy.
+    thread_id_generator: ThreadIdGenerator,
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
@@ -109,15 +113,31 @@ pub(crate) struct AgentControl {
     rollout_budget: Arc<RolloutBudget>,
 }
 
+impl Default for AgentControl {
+    fn default() -> Self {
+        Self::new(
+            Weak::default(),
+            default_thread_id_generator(),
+            /*rollout_budget*/ None,
+        )
+    }
+}
+
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(
         manager: Weak<ThreadManagerState>,
+        thread_id_generator: ThreadIdGenerator,
         rollout_budget: Option<RolloutBudgetConfig>,
     ) -> Self {
         let control = Self {
+            session_id: SessionId::default(),
             manager,
-            ..Default::default()
+            thread_id_generator,
+            state: Arc::default(),
+            v2_residency: Arc::default(),
+            agent_execution_limiter: Arc::default(),
+            rollout_budget: Arc::default(),
         };
         if let Some(rollout_budget) = rollout_budget {
             control.rollout_budget.configure(rollout_budget);
@@ -133,6 +153,10 @@ impl AgentControl {
 
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub(crate) fn generate_thread_id(&self) -> ThreadId {
+        (self.thread_id_generator)()
     }
 
     pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
