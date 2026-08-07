@@ -50,6 +50,7 @@ use rmcp::model::ServerResult;
 use rmcp::model::Tool;
 use rmcp::service::ClientCacheConfig;
 use rmcp::service::ClientServiceExt;
+use rmcp::service::RequestHandle;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::transport::AuthorizationManager;
@@ -70,6 +71,8 @@ use tracing::instrument;
 use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
+use crate::event_notification_transport::capture_event_notifications;
+use crate::event_notification_transport::event_notification_channel;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
@@ -342,6 +345,12 @@ pub struct ToolWithConnectorId {
 pub struct ListToolsWithConnectorIdResult {
     pub next_cursor: Option<String>,
     pub tools: Vec<ToolWithConnectorId>,
+}
+
+/// An active Plugin Runtime event request and its request-scoped notifications.
+pub struct CancellableEventStreamRequest {
+    pub handle: RequestHandle<RoleClient>,
+    pub notifications: crate::EventNotificationReceiver,
 }
 
 /// MCP client implemented on top of the official `rmcp` SDK.
@@ -846,9 +855,19 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<ServerResult> {
+        self.send_custom_request_with_timeout(method, params, /*timeout*/ None)
+            .await
+    }
+
+    pub async fn send_custom_request_with_timeout(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<ServerResult> {
         self.refresh_oauth_if_needed().await?;
         let response = self
-            .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
+            .run_service_operation("requests/custom", timeout, move |service| {
                 let params = params.clone();
                 async move {
                     service
@@ -862,6 +881,29 @@ impl RmcpClient {
             .await?;
         self.persist_oauth_tokens().await;
         Ok(response)
+    }
+
+    /// Starts a Plugin Runtime event stream without waiting for its final response.
+    pub async fn send_event_stream_request(
+        &self,
+        params: Option<serde_json::Value>,
+    ) -> Result<CancellableEventStreamRequest> {
+        let service = self.service().await?;
+        let (sender, notifications) = event_notification_channel();
+        let mut request = CustomRequest::new("events/stream", params);
+        request.extensions.insert(sender);
+        let handle = service
+            .peer()
+            .send_cancellable_request(
+                ClientRequest::CustomRequest(request),
+                rmcp::service::PeerRequestOptions::no_options(),
+            )
+            .await?;
+
+        Ok(CancellableEventStreamRequest {
+            handle,
+            notifications,
+        })
     }
 
     async fn service(&self) -> Result<Arc<RunningService<RoleClient, ElicitationClientService>>> {
@@ -1139,7 +1181,7 @@ impl RmcpClient {
             ),
             PendingTransport::StreamableHttp { transport } => (
                 client_service
-                    .serve_with_lifecycle(transport, lifecycle)
+                    .serve_with_lifecycle(capture_event_notifications(transport), lifecycle)
                     .boxed(),
                 None,
             ),

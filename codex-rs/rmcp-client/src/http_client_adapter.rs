@@ -12,6 +12,7 @@ use std::io;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
+use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -41,6 +42,7 @@ use rmcp::model::ErrorCode;
 use rmcp::model::ErrorData;
 use rmcp::model::JsonRpcMessage;
 use rmcp::model::ProtocolVersion;
+use rmcp::model::RequestId;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::model::ServerResult;
 use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
@@ -51,7 +53,9 @@ use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
 use sse_stream::SseStream;
+use tokio::sync::oneshot;
 
+use crate::event_notification_transport::MAX_EVENT_NOTIFICATION_BYTES;
 use crate::incoming_jsonrpc::deserialize_incoming_jsonrpc_message;
 use crate::incoming_jsonrpc::normalize_sse_jsonrpc_message;
 use crate::local_stdio_transport::MAX_MCP_STDIO_LINE_BYTES;
@@ -65,6 +69,7 @@ const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 const LEGACY_HTTP_PREVALIDATION_ERROR_CODE: ErrorCode = ErrorCode(-32000);
+const EVENT_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamableHttpRedirectMode {
@@ -77,9 +82,24 @@ pub(crate) struct StreamableHttpClientAdapter {
     http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
     auth_provider: Option<SharedAuthProvider>,
+    event_stream_cancellations: Arc<Mutex<HashMap<RequestId, oneshot::Sender<()>>>>,
     has_configured_headers: bool,
     redirect_mode: StreamableHttpRedirectMode,
     initialize_deadline: Arc<Mutex<Option<Instant>>>,
+}
+
+struct EventStreamCancellation {
+    request_id: RequestId,
+    cancellations: Arc<Mutex<HashMap<RequestId, oneshot::Sender<()>>>>,
+}
+
+impl Drop for EventStreamCancellation {
+    fn drop(&mut self) {
+        self.cancellations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.request_id);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -107,6 +127,7 @@ impl StreamableHttpClientAdapter {
             http_client,
             default_headers,
             auth_provider,
+            event_stream_cancellations: Arc::default(),
             has_configured_headers,
             redirect_mode,
             initialize_deadline,
@@ -163,13 +184,18 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             )?;
         }
 
-        let maximum_response_bytes = (mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE)
-            || headers
-                .get(HEADER_MCP_PROTOCOL_VERSION)
-                .and_then(|value| value.to_str().ok())
-                == Some(ProtocolVersion::V_2026_07_28.as_str()))
-        .then_some(MAX_MCP_STDIO_LINE_BYTES);
-        let redirect_policy = if mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE) {
+        let is_discovery_request = mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE);
+        let is_event_stream_request = mcp_method.as_deref() == Some("events/stream");
+        let uses_modern_protocol = headers
+            .get(HEADER_MCP_PROTOCOL_VERSION)
+            .and_then(|value| value.to_str().ok())
+            == Some(ProtocolVersion::V_2026_07_28.as_str());
+        let maximum_response_bytes = if is_event_stream_request {
+            Some(MAX_EVENT_NOTIFICATION_BYTES)
+        } else {
+            (is_discovery_request || uses_modern_protocol).then_some(MAX_MCP_STDIO_LINE_BYTES)
+        };
+        let redirect_policy = if is_discovery_request {
             HttpRedirectPolicy::Stop
         } else {
             self.redirect_policy(&headers)
@@ -197,19 +223,40 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 
         let body = serde_json::to_vec(&message).map_err(StreamableHttpError::Deserialize)?;
         let has_authorization_header = headers.contains_key(AUTHORIZATION);
-        let response = self
-            .http_client
-            .http_request_stream(HttpRequestParams {
-                method: "POST".to_string(),
-                url: uri.to_string(),
-                headers: protocol_headers(&headers),
-                body: Some(body.into()),
-                timeout_ms,
-                redirect_policy,
-                request_id: "buffered-request".to_string(),
-                stream_response: true,
-            })
-            .await;
+        if let JsonRpcMessage::Notification(notification) = &message
+            && let ClientNotification::CancelledNotification(cancelled) = &notification.notification
+            && let Some(request_id) = cancelled.params.request_id.as_ref()
+            && let Some(cancellation) = self
+                .event_stream_cancellations
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(request_id)
+        {
+            let _ = cancellation.send(());
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
+
+        let request = self.http_client.http_request_stream(HttpRequestParams {
+            method: "POST".to_string(),
+            url: uri.to_string(),
+            headers: protocol_headers(&headers),
+            body: Some(body.into()),
+            timeout_ms,
+            redirect_policy,
+            request_id: "buffered-request".to_string(),
+            stream_response: true,
+        });
+        let response = if is_event_stream_request {
+            tokio::time::timeout(EVENT_STREAM_RESPONSE_TIMEOUT, request)
+                .await
+                .map_err(|_| {
+                    StreamableHttpError::UnexpectedServerResponse(
+                        "timed out waiting for MCP event stream response headers".into(),
+                    )
+                })?
+        } else {
+            request.await
+        };
         let (response, mut body_stream) = match response {
             Ok(response) => response,
             Err(error) => {
@@ -309,7 +356,11 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         }
         match content_type.as_deref() {
             Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
-                let mut event_stream = sse_stream_from_body(body_stream, maximum_response_bytes);
+                let mut event_stream = sse_stream_from_body(
+                    body_stream,
+                    maximum_response_bytes,
+                    is_discovery_request || uses_modern_protocol,
+                );
                 if mcp_method.as_deref() == Some(DiscoverRequestMethod::VALUE) {
                     while let Some(event) = event_stream.next().await {
                         let event = event.map_err(StreamableHttpError::Sse)?;
@@ -339,6 +390,35 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                     return Err(StreamableHttpError::UnexpectedServerResponse(
                         "empty sse stream".into(),
                     ));
+                }
+                if is_event_stream_request && let JsonRpcMessage::Request(request) = &message {
+                    let (cancel, cancelled) = oneshot::channel();
+                    let cancellation = EventStreamCancellation {
+                        request_id: request.id.clone(),
+                        cancellations: Arc::clone(&self.event_stream_cancellations),
+                    };
+                    cancellation
+                        .cancellations
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(cancellation.request_id.clone(), cancel);
+
+                    event_stream = stream::unfold(
+                        Some((event_stream, cancelled, cancellation)),
+                        |state| async move {
+                            let (mut event_stream, mut cancelled, cancellation) = state?;
+
+                            tokio::select! {
+                                biased;
+
+                                _ = &mut cancelled => None,
+                                event = event_stream.next() => event.map(|event| {
+                                    (event, Some((event_stream, cancelled, cancellation)))
+                                }),
+                            }
+                        },
+                    )
+                    .boxed();
                 }
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
@@ -507,12 +587,16 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             }
         }
 
-        let maximum_response_bytes = headers
+        let uses_modern_protocol = headers
             .get(HEADER_MCP_PROTOCOL_VERSION)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|version| version == ProtocolVersion::V_2026_07_28.as_str())
-            .then_some(MAX_MCP_STDIO_LINE_BYTES);
-        Ok(sse_stream_from_body(body_stream, maximum_response_bytes))
+            .is_some_and(|version| version == ProtocolVersion::V_2026_07_28.as_str());
+        let maximum_response_bytes = uses_modern_protocol.then_some(MAX_MCP_STDIO_LINE_BYTES);
+        Ok(sse_stream_from_body(
+            body_stream,
+            maximum_response_bytes,
+            uses_modern_protocol,
+        ))
     }
 }
 
@@ -863,8 +947,8 @@ async fn collect_body(
 fn sse_stream_from_body(
     body_stream: HttpResponseBodyStream,
     maximum_event_bytes: Option<usize>,
+    modern_session: bool,
 ) -> BoxStream<'static, std::result::Result<Sse, sse_stream::Error>> {
-    let modern_session = maximum_event_bytes.is_some();
     SseStream::from_bytes_stream(stream::unfold(
         (body_stream, SseEventSizeLimit::new(maximum_event_bytes)),
         |(mut body_stream, mut size_limit)| async move {

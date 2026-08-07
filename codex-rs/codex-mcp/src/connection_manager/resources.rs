@@ -156,7 +156,10 @@ impl McpConnectionSet {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    async fn client_by_name(&self, name: &str) -> Result<(ManagedClient, Option<Duration>)> {
+    pub(crate) async fn client_by_name(
+        &self,
+        name: &str,
+    ) -> Result<(ManagedClient, Option<Duration>)> {
         let view = self
             .servers
             .get(name)
