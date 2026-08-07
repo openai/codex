@@ -25,6 +25,9 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::any;
 use axum::routing::get;
+use axum::serve::Listener;
+use axum::serve::ListenerExt;
+use axum::serve::TapIo;
 use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::FramedReader;
@@ -38,6 +41,7 @@ use futures::stream::SplitStream;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tracing::info;
 use tracing::warn;
@@ -222,10 +226,22 @@ fn parse_listen_url(listen_url: &str) -> Result<ListenTransport> {
     );
 }
 
-async fn run_websocket_listener(bind_address: SocketAddr) -> Result<()> {
+async fn bind_websocket_listener(
+    bind_address: SocketAddr,
+) -> Result<TapIo<TcpListener, impl FnMut(&mut TcpStream) + Send + 'static>> {
     let listener = TcpListener::bind(bind_address)
         .await
         .with_context(|| format!("failed to bind code-mode host websocket to {bind_address}"))?;
+
+    Ok(listener.tap_io(|stream| {
+        if let Err(error) = stream.set_nodelay(/*nodelay*/ true) {
+            warn!(%error, "failed to enable TCP_NODELAY for code-mode host connection");
+        }
+    }))
+}
+
+async fn run_websocket_listener(bind_address: SocketAddr) -> Result<()> {
+    let listener = bind_websocket_listener(bind_address).await?;
     let local_addr = listener
         .local_addr()
         .context("failed to read code-mode host websocket listen address")?;

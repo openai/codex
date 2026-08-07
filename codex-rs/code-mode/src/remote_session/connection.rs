@@ -656,11 +656,13 @@ async fn connect_websocket_transport(
             "failed to build code-mode host websocket request: {error}"
         ))
     })?;
-    let connector = WebSocketConnector::new(http_client_factory).map_err(|error| {
-        ConnectionError::Other(format!(
-            "failed to configure code-mode host websocket TLS: {error}"
-        ))
-    })?;
+    let connector = WebSocketConnector::new(http_client_factory)
+        .map_err(|error| {
+            ConnectionError::Other(format!(
+                "failed to configure code-mode host websocket TLS: {error}"
+            ))
+        })?
+        .with_tcp_nodelay();
     let websocket_config = WebSocketConfig::default()
         .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
         .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
