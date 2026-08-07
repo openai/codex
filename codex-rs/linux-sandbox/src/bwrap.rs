@@ -271,6 +271,13 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         "--bind".to_string(),
         "/".to_string(),
         "/".to_string(),
+        // Preserve nodev on the root bind while exposing only standard devices.
+        "--dev".to_string(),
+        "/dev".to_string(),
+        // Restore shared memory without exposing other host devices.
+        "--bind-try".to_string(),
+        "/dev/shm".to_string(),
+        "/dev/shm".to_string(),
         // Always enter a fresh user namespace so root inside a container does
         // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
         "--unshare-user".to_string(),
@@ -1401,6 +1408,11 @@ mod tests {
                 "--bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+                "--bind-try".to_string(),
+                "/dev/shm".to_string(),
+                "/dev/shm".to_string(),
                 "--unshare-user".to_string(),
                 "--unshare-pid".to_string(),
                 "--unshare-net".to_string(),

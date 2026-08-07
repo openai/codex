@@ -17,9 +17,11 @@ use std::io::Read;
 use std::io::Write;
 use std::net::Ipv4Addr;
 use std::net::TcpListener;
+use std::os::unix::fs::MetadataExt;
 use std::process::Output;
 use std::process::Stdio;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use tokio::process::Command;
 
 const BWRAP_UNAVAILABLE_ERR: &str = "bubblewrap is unavailable: no system bwrap was found";
@@ -167,6 +169,82 @@ fn linux_sandbox_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd
+}
+
+#[tokio::test]
+async fn managed_proxy_full_filesystem_uses_minimal_dev_nodes() {
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
+        return;
+    }
+
+    let host_dev = std::fs::metadata("/dev").expect("host /dev should exist");
+    let host_dev_id = format!("{}:{}", host_dev.dev(), host_dev.ino());
+    let shared_memory_file = match NamedTempFile::new_in("/dev/shm") {
+        Ok(file) => {
+            std::fs::write(file.path(), "host-before").expect("seed /dev/shm file");
+            Some(file)
+        }
+        Err(err) => {
+            eprintln!("skipping /dev/shm interoperability check: {err}");
+            None
+        }
+    };
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+    if let Some(file) = &shared_memory_file {
+        env.insert(
+            "CODEX_TEST_SHM_PATH".to_string(),
+            file.path().to_string_lossy().into_owned(),
+        );
+    }
+
+    let output = run_linux_sandbox_direct(
+        &[
+            "bash",
+            "-c",
+            concat!(
+                "set -e; ",
+                "for node in null zero urandom; do test -c \"/dev/$node\"; done; ",
+                "printf test >/dev/null; ",
+                "head -c 1 /dev/zero >/dev/null; ",
+                "head -c 1 /dev/urandom >/dev/null; ",
+                "if command -v python3 >/dev/null 2>&1; then ",
+                "python3 -c 'import os; assert len(os.urandom(16)) == 16'; ",
+                "fi; ",
+                "if [ -n \"${CODEX_TEST_SHM_PATH:-}\" ]; then ",
+                "test \"$(cat \"$CODEX_TEST_SHM_PATH\")\" = host-before; ",
+                "printf sandbox-after >\"$CODEX_TEST_SHM_PATH\"; ",
+                "fi; ",
+                "stat -c '%d:%i' /dev",
+            ),
+        ],
+        &PermissionProfile::Disabled,
+        /*allow_network_for_proxy*/ true,
+        env,
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(
+        output.status.success(),
+        true,
+        "standard devices should be usable; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_ne!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        host_dev_id,
+        "/dev should be synthetic rather than inherited from the host"
+    );
+    if let Some(file) = shared_memory_file {
+        assert_eq!(
+            std::fs::read_to_string(file.path()).expect("read /dev/shm file"),
+            "sandbox-after"
+        );
+    }
 }
 
 #[tokio::test]
