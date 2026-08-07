@@ -62,6 +62,30 @@ fn resume_accepts_output_flags_after_subcommand() {
 }
 
 #[test]
+fn fork_parses_prompt_after_global_flags() {
+    const PROMPT: &str = "continue on the fork";
+    let cli = Cli::parse_from([
+        "codex-exec",
+        "fork",
+        "session-123",
+        "--json",
+        "--model",
+        "gpt-5.2-codex",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        PROMPT,
+    ]);
+
+    assert!(cli.json);
+    assert!(cli.ephemeral);
+    let Some(Command::Fork(args)) = cli.command else {
+        panic!("expected fork command");
+    };
+    assert_eq!(args.session_id, "session-123");
+    assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+}
+
+#[test]
 fn parses_config_isolation_flags() {
     let cli = Cli::parse_from([
         "codex-exec",

@@ -31,6 +31,8 @@ use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread as AppServerThread;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -163,6 +165,7 @@ const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
 
 enum InitialOperation {
+    ForkOnly,
     UserTurn {
         items: Vec<UserInput>,
         output_schema: Option<Value>,
@@ -730,6 +733,37 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 prompt_text,
             )
         }
+        (Some(ExecCommand::Fork(args)), root_prompt, imgs) => {
+            let prompt_arg = args.prompt.clone().or(root_prompt);
+            if let Some(prompt_arg) = prompt_arg {
+                let prompt_text = resolve_prompt(Some(prompt_arg));
+                let mut items: Vec<UserInput> = imgs
+                    .into_iter()
+                    .chain(args.images.iter().cloned())
+                    .map(|path| UserInput::LocalImage { path, detail: None })
+                    .collect();
+                items.push(UserInput::Text {
+                    text: prompt_text.clone(),
+                    text_elements: Vec::new(),
+                });
+                let output_schema = load_output_schema(output_schema_path);
+                (
+                    InitialOperation::UserTurn {
+                        items,
+                        output_schema,
+                    },
+                    prompt_text,
+                )
+            } else if !imgs.is_empty() || !args.images.is_empty() {
+                anyhow::bail!("Forking with images requires a prompt");
+            } else if output_schema_path.is_some() || last_message_file.is_some() {
+                anyhow::bail!("Forking with output options requires a prompt");
+            } else if config.ephemeral {
+                anyhow::bail!("Ephemeral forks require a prompt");
+            } else {
+                (InitialOperation::ForkOnly, String::new())
+            }
+        }
         (None, root_prompt, imgs) => {
             let prompt_text = resolve_root_prompt(root_prompt);
             let mut items: Vec<UserInput> = imgs
@@ -769,8 +803,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             anyhow::anyhow!("failed to initialize in-process app-server client: {err}")
         })?;
 
-    // Handle resume subcommand through existing `thread/list` + `thread/resume`
-    // APIs so exec no longer reaches into rollout storage directly.
+    // Resolve resume and fork through existing app-server thread lifecycle APIs.
     let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
         command.as_ref()
     {
@@ -811,6 +844,71 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     .map_err(anyhow::Error::msg)?;
             (session_configured.thread_id, session_configured)
         }
+    } else if let Some(ExecCommand::Fork(args)) = command.as_ref() {
+        let source_args = crate::cli::ResumeArgs {
+            session_id: Some(args.session_id.clone()),
+            last: false,
+            all: true,
+            images: Vec::new(),
+            prompt: None,
+        };
+        let source_thread_id =
+            resolve_resume_thread_id(&client, &config, state_db.as_ref(), &source_args)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Session not found: {}", args.session_id))?;
+        let permissions = permissions_selection_from_config(&config);
+        let sandbox = permissions.is_none().then(|| {
+            sandbox_mode_from_permission_profile(
+                &config.permissions.effective_permission_profile(),
+                config.cwd.as_path(),
+            )
+        });
+        let response: ThreadForkResponse = send_request_with_response(
+            &client,
+            ClientRequest::ThreadFork {
+                request_id: request_ids.next(),
+                params: ThreadForkParams {
+                    thread_id: source_thread_id,
+                    model: config.model.clone(),
+                    model_provider: Some(config.model_provider_id.clone()),
+                    cwd: Some(config.cwd.to_string_lossy().to_string()),
+                    runtime_workspace_roots: Some(config.workspace_roots.clone()),
+                    approval_policy: Some(config.permissions.approval_policy.value().into()),
+                    approvals_reviewer: resume_approvals_reviewer_override,
+                    sandbox: sandbox.flatten(),
+                    permissions,
+                    config: thread_config_overrides_from_config(&config),
+                    ephemeral: config.ephemeral,
+                    thread_source: Some(ThreadSource::User),
+                    exclude_turns: true,
+                    defer_goal_continuation: !config.ephemeral,
+                    ..ThreadForkParams::default()
+                },
+            },
+            "thread/fork",
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        let session_configured = session_configured_from_thread_response(
+            &response.thread.session_id,
+            &response.thread.id,
+            response.thread.forked_from_id.as_deref(),
+            response.thread.parent_thread_id.as_deref(),
+            response.thread.thread_source.clone().map(Into::into),
+            response.thread.name.clone(),
+            response.thread.path.clone(),
+            response.model,
+            response.model_provider,
+            response.service_tier,
+            response.approval_policy.to_core(),
+            response.approvals_reviewer.to_core(),
+            config.permissions.effective_permission_profile(),
+            response.active_permission_profile.map(Into::into),
+            response.cwd,
+            response.reasoning_effort,
+        )
+        .map_err(anyhow::Error::msg)?;
+        (session_configured.thread_id, session_configured)
     } else {
         let response: ThreadStartResponse = send_request_with_response(
             &client,
@@ -856,6 +954,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     });
 
     let task_id = match initial_operation {
+        InitialOperation::ForkOnly => {
+            request_shutdown(&client, &mut request_ids, &primary_thread_id_for_span)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            client
+                .shutdown()
+                .await
+                .map_err(|err| anyhow::anyhow!("in-process app-server shutdown failed: {err}"))?;
+            event_processor.print_final_output();
+            return Ok(());
+        }
         InitialOperation::UserTurn {
             items,
             output_schema,
@@ -1152,6 +1261,7 @@ fn session_configured_from_thread_start_response(
     session_configured_from_thread_response(
         &response.thread.session_id,
         &response.thread.id,
+        response.thread.forked_from_id.as_deref(),
         response.thread.parent_thread_id.as_deref(),
         response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
@@ -1175,6 +1285,7 @@ fn session_configured_from_thread_resume_response(
     session_configured_from_thread_response(
         &response.thread.session_id,
         &response.thread.id,
+        response.thread.forked_from_id.as_deref(),
         response.thread.parent_thread_id.as_deref(),
         response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
@@ -1207,6 +1318,7 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
 fn session_configured_from_thread_response(
     session_id: &str,
     thread_id: &str,
+    forked_from_id: Option<&str>,
     parent_thread_id: Option<&str>,
     thread_source: Option<codex_protocol::protocol::ThreadSource>,
     thread_name: Option<String>,
@@ -1225,6 +1337,10 @@ fn session_configured_from_thread_response(
         .map_err(|err| format!("session id `{session_id}` is invalid: {err}"))?;
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
+    let forked_from_id = forked_from_id
+        .map(ThreadId::from_string)
+        .transpose()
+        .map_err(|err| format!("forked-from thread id is invalid: {err}"))?;
     let parent_thread_id = parent_thread_id
         .map(ThreadId::from_string)
         .transpose()
@@ -1233,7 +1349,7 @@ fn session_configured_from_thread_response(
     Ok(SessionConfiguredEvent {
         session_id,
         thread_id,
-        forked_from_id: None,
+        forked_from_id,
         parent_thread_id,
         thread_source,
         thread_name,
