@@ -583,6 +583,10 @@ fn append_matcher_groups(
                     }
                     *display_order += 1;
                 }
+                HookHandlerConfig::McpTool { .. } => warnings.push(format!(
+                    "skipping MCP tool hook in {}: MCP tool hooks are not supported yet",
+                    source.path.display()
+                )),
                 HookHandlerConfig::Prompt {} => warnings.push(format!(
                     "skipping prompt hook in {}: prompt hooks are not supported yet",
                     source.path.display()

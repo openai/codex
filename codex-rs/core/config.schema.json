@@ -1309,6 +1309,43 @@
         },
         {
           "properties": {
+            "input": {
+              "additionalProperties": true,
+              "default": {},
+              "type": "object"
+            },
+            "server": {
+              "type": "string"
+            },
+            "statusMessage": {
+              "default": null,
+              "type": "string"
+            },
+            "timeout": {
+              "default": null,
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mcp_tool"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "server",
+            "tool",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "enum": [
                 "prompt"

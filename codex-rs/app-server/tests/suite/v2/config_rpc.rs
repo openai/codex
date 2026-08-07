@@ -62,6 +62,14 @@ async fn config_requirements_read_includes_remote_control_and_managed_hooks() ->
 type = "command"
 command = "echo managed"
 additionalContextLimit = 4096
+
+[[hooks.SessionStart.hooks]]
+type = "mcp_tool"
+server = "security"
+tool = "scan"
+input = { path = "${tool_input.file_path}", metadata = { enabled = true, retries = 2 } }
+timeout = 30
+statusMessage = "Scanning file"
 "#,
     )?;
     let mut mcp = TestAppServer::builder()
@@ -83,14 +91,26 @@ additionalContextLimit = 4096
             .expect("managed hooks should be returned")
             .session_start[0]
             .hooks,
-        vec![ConfiguredHookHandler::Command {
-            command: "echo managed".to_string(),
-            command_windows: None,
-            timeout_sec: None,
-            r#async: false,
-            status_message: None,
-            additional_context_limit: Some(4_096),
-        }]
+        vec![
+            ConfiguredHookHandler::Command {
+                command: "echo managed".to_string(),
+                command_windows: None,
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+                additional_context_limit: Some(4_096),
+            },
+            ConfiguredHookHandler::McpTool {
+                server: "security".to_string(),
+                tool: "scan".to_string(),
+                input: serde_json::from_value(json!({
+                    "path": "${tool_input.file_path}",
+                    "metadata": { "enabled": true, "retries": 2 },
+                }))?,
+                timeout_sec: Some(30),
+                status_message: Some("Scanning file".to_string()),
+            },
+        ]
     );
     Ok(())
 }

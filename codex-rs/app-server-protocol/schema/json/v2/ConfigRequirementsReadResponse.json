@@ -307,6 +307,49 @@
         },
         {
           "properties": {
+            "input": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "server": {
+              "type": "string"
+            },
+            "statusMessage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeoutSec": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mcp_tool"
+              ],
+              "title": "McpToolConfiguredHookHandlerType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "input",
+            "server",
+            "tool",
+            "type"
+          ],
+          "title": "McpToolConfiguredHookHandler",
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "enum": [
                 "prompt"

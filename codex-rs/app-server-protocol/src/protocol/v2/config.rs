@@ -519,6 +519,19 @@ pub enum ConfiguredHookHandler {
         #[ts(rename = "additionalContextLimit")]
         additional_context_limit: Option<usize>,
     },
+    #[serde(rename = "mcp_tool")]
+    #[ts(rename = "mcp_tool")]
+    McpTool {
+        server: String,
+        tool: String,
+        input: serde_json::Map<String, serde_json::Value>,
+        #[serde(rename = "timeoutSec")]
+        #[ts(rename = "timeoutSec")]
+        timeout_sec: Option<u64>,
+        #[serde(rename = "statusMessage")]
+        #[ts(rename = "statusMessage")]
+        status_message: Option<String>,
+    },
     #[serde(rename = "prompt")]
     #[ts(rename = "prompt")]
     Prompt {},
