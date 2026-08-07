@@ -62,9 +62,14 @@ impl ChildTerminator for PipeChildTerminator {
     }
 
     fn kill(&mut self) -> io::Result<()> {
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             crate::process_group::kill_process_group(self.process_group_id)
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            crate::process_group::kill_process_group_with_member_fallback(self.process_group_id)
         }
 
         #[cfg(windows)]
