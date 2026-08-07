@@ -61,6 +61,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         // cache report `supports_personality = false`.
         // todo(sayan): fix, maybe make roundtrip use ModelInfo only
         supports_personality: false,
+        multi_agent_version: preset.multi_agent_version.map(Into::into),
         additional_speed_tiers: preset.additional_speed_tiers.clone(),
         service_tiers: preset
             .service_tiers
@@ -177,6 +178,7 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         "truncation_policy": {"mode": "bytes", "limit": 10_000},
         "supports_parallel_tool_calls": false,
         "supports_image_detail_original": false,
+        "multi_agent_version": "v2",
         "context_window": 272_000,
         "max_context_window": 272_000,
         "experimental_supported_tools": [],

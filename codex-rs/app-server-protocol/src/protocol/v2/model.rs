@@ -7,6 +7,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
+use codex_protocol::protocol::MultiAgentVersion as CoreMultiAgentVersion;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -20,6 +21,15 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum ModelVerification from CoreModelVerification {
         TrustedAccessForCyber
+    }
+);
+
+v2_enum_from_core!(
+    /// Multi-agent runtime supported by a model.
+    pub enum MultiAgentVersion from CoreMultiAgentVersion {
+        Disabled,
+        V1,
+        V2
     }
 );
 
@@ -96,6 +106,8 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    /// Multi-agent runtime declared by this model, when available.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Deprecated: use `serviceTiers` instead.
     #[serde(default)]
     pub additional_speed_tiers: Vec<String>,

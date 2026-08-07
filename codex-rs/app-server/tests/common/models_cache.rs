@@ -68,7 +68,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         auto_review_model_override: None,
         model_specialty: None,
         tool_mode: None,
-        multi_agent_version: None,
+        multi_agent_version: preset.multi_agent_version,
     }
 }
 
