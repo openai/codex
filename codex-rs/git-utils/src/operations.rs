@@ -120,6 +120,7 @@ where
         }
     }
     command.args(&args_vec);
+    crate::scrub_non_inheritable_environment(&mut command);
     let output = command.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

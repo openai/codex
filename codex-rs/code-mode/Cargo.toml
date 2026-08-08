@@ -16,6 +16,7 @@ workspace = true
 codex-code-mode-protocol = { workspace = true }
 codex-http-client = { workspace = true }
 codex-install-context = { workspace = true }
+codex-protocol = { workspace = true }
 codex-websocket-client = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
@@ -24,6 +25,5 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
-codex-protocol = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

@@ -124,12 +124,14 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 }
 
 fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
-    let out = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .args(["-c", crate::SAFE_BARE_REPOSITORY_CONFIG])
         .arg("rev-parse")
         .arg("--show-toplevel")
-        .current_dir(cwd)
-        .output()?;
+        .current_dir(cwd);
+    crate::scrub_non_inheritable_environment(&mut command);
+    let out = command.output()?;
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
         return Err(io::Error::other(format!(
@@ -158,6 +160,7 @@ fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, 
     for a in args {
         cmd.arg(a);
     }
+    crate::scrub_non_inheritable_environment(&mut cmd);
     let out = cmd.current_dir(cwd).output()?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -338,6 +341,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     for p in &existing {
         cmd.arg(OsStr::new(p));
     }
+    crate::scrub_non_inheritable_environment(&mut cmd);
     let out = cmd.current_dir(git_root).output()?;
     let _code = out.status.code().unwrap_or(-1);
     // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.

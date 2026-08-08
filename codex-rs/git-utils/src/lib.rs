@@ -48,3 +48,7 @@ pub use info::recent_commits;
 pub use info::resolve_root_git_project_for_trust;
 pub use platform::create_symlink;
 pub use status::get_has_changes_in_repo;
+
+pub(crate) fn scrub_non_inheritable_environment(command: &mut std::process::Command) {
+    codex_protocol::shell_environment::scrub_non_inheritable_env_vars(command);
+}

@@ -51,6 +51,7 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
     let request_env = HashMap::from([
         ("HOME".to_string(), "/client-home".to_string()),
         ("PATH".to_string(), "/sandbox-path".to_string()),
+        ("OpenAI_Federation_Rule_Id".to_string(), "rule".to_string()),
         ("SHELL_SET".to_string(), "policy".to_string()),
         ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
         (
@@ -81,12 +82,16 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
 }
 
 #[test]
-fn exec_env_policy_excludes_runtime_permission_profile() {
+fn exec_env_policy_excludes_non_inheritable_and_runtime_variables() {
     let policy = ShellEnvironmentPolicy {
         r#set: HashMap::from([
             (
                 "codex_permission_profile".to_string(),
                 "stale-profile".to_string(),
+            ),
+            (
+                "openai_identity_token_file".to_string(),
+                "/run/identity-token".to_string(),
             ),
             ("KEEP".to_string(), "value".to_string()),
         ]),

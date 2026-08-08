@@ -33,6 +33,7 @@ use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
 use codex_code_mode_protocol::host::TransportLane;
 use codex_http_client::HttpClientFactory;
+use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use codex_websocket_client::WebSocketConnector;
 use futures::StreamExt;
 use tokio::io::AsyncBufReadExt;
@@ -215,16 +216,16 @@ impl Connection {
         let mut command = Command::new(host_program);
         #[cfg(unix)]
         command.process_group(0);
-        let mut child = command
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| ConnectionError::Spawn {
-                host_program: host_program.to_path_buf(),
-                error,
-            })?;
+            .kill_on_drop(true);
+        scrub_non_inheritable_env_vars(command.as_std_mut());
+        let mut child = command.spawn().map_err(|error| ConnectionError::Spawn {
+            host_program: host_program.to_path_buf(),
+            error,
+        })?;
 
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {

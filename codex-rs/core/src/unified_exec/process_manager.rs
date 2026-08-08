@@ -66,6 +66,7 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_protocol::shell_environment::is_non_inheritable_env_var;
 use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
@@ -123,7 +124,10 @@ fn exec_env_policy_from_shell_policy(
         .collect::<Vec<_>>();
     exclude.push(CODEX_PERMISSION_PROFILE_ENV_VAR.to_string());
     let mut r#set = policy.r#set.clone();
-    r#set.retain(|key, _| !key.eq_ignore_ascii_case(CODEX_PERMISSION_PROFILE_ENV_VAR));
+    r#set.retain(|key, _| {
+        !key.eq_ignore_ascii_case(CODEX_PERMISSION_PROFILE_ENV_VAR)
+            && !is_non_inheritable_env_var(key)
+    });
     codex_exec_server::ExecEnvPolicy {
         inherit: policy.inherit.clone(),
         ignore_default_excludes: policy.ignore_default_excludes,
@@ -144,8 +148,9 @@ fn env_overlay_for_exec_server(
     request_env
         .iter()
         .filter(|(key, value)| {
-            key.as_str() == CODEX_PERMISSION_PROFILE_ENV_VAR
-                || local_policy_env.get(*key) != Some(*value)
+            !is_non_inheritable_env_var(key)
+                && (key.as_str() == CODEX_PERMISSION_PROFILE_ENV_VAR
+                    || local_policy_env.get(*key) != Some(*value))
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()

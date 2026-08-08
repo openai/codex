@@ -1082,10 +1082,16 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
         "-lc".to_string(),
         "printf '%s' \"$OPENAI_API_KEY\"".to_string(),
     ];
-    let explicit_env_overrides = HashMap::from([(
-        "OPENAI_API_KEY".to_string(),
-        "super-secret-value".to_string(),
-    )]);
+    let explicit_env_overrides = HashMap::from([
+        (
+            "OPENAI_API_KEY".to_string(),
+            "super-secret-value".to_string(),
+        ),
+        (
+            "openai_identity_token_file".to_string(),
+            "/run/identity-token".to_string(),
+        ),
+    ]);
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
@@ -1099,6 +1105,7 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
     );
 
     assert!(!rewritten[2].contains("super-secret-value"));
+    assert!(!rewritten[2].contains("openai_identity_token_file"));
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
         .env("OPENAI_API_KEY", "super-secret-value")

@@ -649,6 +649,7 @@ fn child_env(params: &ExecParams) -> HashMap<String, String> {
         None => params.env.clone(),
     };
     env.remove(crate::CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE_ENV_VAR);
+    env.retain(|name, _| !shell_environment::is_non_inheritable_env_var(name));
     env
 }
 
@@ -1268,12 +1269,19 @@ mod tests {
         let mut params = test_exec_params(HashMap::from([
             ("OVERLAY".to_string(), "overlay".to_string()),
             ("POLICY_SET".to_string(), "overlay-wins".to_string()),
+            (
+                "openai_identity_token_file".to_string(),
+                "/run/identity-token".to_string(),
+            ),
         ]));
         params.env_policy = Some(ExecEnvPolicy {
             inherit: ShellEnvironmentPolicyInherit::None,
             ignore_default_excludes: true,
             exclude: Vec::new(),
-            r#set: HashMap::from([("POLICY_SET".to_string(), "policy".to_string())]),
+            r#set: HashMap::from([
+                ("POLICY_SET".to_string(), "policy".to_string()),
+                ("OpenAI_Federation_Rule_Id".to_string(), "rule".to_string()),
+            ]),
             include_only: Vec::new(),
         });
 

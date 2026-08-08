@@ -29,6 +29,7 @@ impl Drop for KillGitProcessTreeOnDrop {
 }
 
 fn spawn_git_command(command: &mut Command) -> Option<(Child, KillGitProcessTreeOnDrop)> {
+    crate::scrub_non_inheritable_environment(command.as_std_mut());
     #[cfg(unix)]
     command.process_group(0);
     command.kill_on_drop(true);

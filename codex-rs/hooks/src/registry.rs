@@ -28,6 +28,7 @@ use async_channel::Receiver;
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
+use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -271,5 +272,6 @@ pub fn command_from_argv(argv: &[String]) -> Option<Command> {
     }
     let mut command = Command::new(program);
     command.args(args);
+    scrub_non_inheritable_env_vars(command.as_std_mut());
     Some(command)
 }

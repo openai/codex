@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use socket2::Socket;
 use tokio::process::Command;
@@ -341,6 +342,7 @@ async fn handle_escalate_session_with_policy(
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .kill_on_drop(true);
+            scrub_non_inheritable_env_vars(command.as_std_mut());
             unsafe {
                 command.pre_exec(move || {
                     for (dst_fd, src_fd) in msg.fds.iter().zip(&fds) {

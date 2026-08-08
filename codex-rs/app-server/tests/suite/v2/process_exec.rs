@@ -42,7 +42,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
                 "while (!(Test-Path -LiteralPath $env:CODEX_PROCESS_EXEC_RELEASE_FILE)) { ",
                 "Start-Sleep -Milliseconds 20 ",
                 "}; ",
-                "[Console]::Out.Write('process-out'); ",
+                "[Console]::Out.Write(('process-out|{0}|{1}' -f $env:OpenAI_Federation_Rule_Id, $env:OPENAI_IDENTITY_TOKEN_FILE)); ",
                 "[Console]::Error.Write('process-err')",
             )
             .to_string(),
@@ -54,7 +54,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             concat!(
                 "printf process > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; ",
                 "while [ ! -e \"$CODEX_PROCESS_EXEC_RELEASE_FILE\" ]; do sleep 0.05; done; ",
-                "printf process-out; ",
+                "printf 'process-out|%s|%s' \"$OpenAI_Federation_Rule_Id\" \"$OPENAI_IDENTITY_TOKEN_FILE\"; ",
                 "printf process-err >&2",
             )
             .to_string(),
@@ -68,6 +68,14 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
         (
             "CODEX_PROCESS_EXEC_RELEASE_FILE".to_string(),
             Some(release_file.display().to_string()),
+        ),
+        (
+            "OpenAI_Federation_Rule_Id".to_string(),
+            Some("rule".to_string()),
+        ),
+        (
+            "OPENAI_IDENTITY_TOKEN_FILE".to_string(),
+            Some("/run/identity-token".to_string()),
         ),
     ]);
     let spawn_request_id = mcp
@@ -94,7 +102,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
         ProcessExitedNotification {
             process_handle,
             exit_code: 0,
-            stdout: "process-out".to_string(),
+            stdout: "process-out||".to_string(),
             stdout_cap_reached: false,
             stderr: "process-err".to_string(),
             stderr_cap_reached: false,

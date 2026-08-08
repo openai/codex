@@ -113,7 +113,8 @@ struct PowershellParserProcess {
 
 impl PowershellParserProcess {
     fn spawn(executable: &str) -> std::io::Result<Self> {
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -123,8 +124,9 @@ impl PowershellParserProcess {
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::null());
+        codex_protocol::shell_environment::scrub_non_inheritable_env_vars(&mut command);
+        let mut child = command.spawn()?;
         let stdin = match take_child_stdin(&mut child) {
             Ok(stdin) => stdin,
             Err(error) => {

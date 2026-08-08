@@ -4,6 +4,44 @@ use crate::config_types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+pub const OPENAI_FEDERATION_RULE_ID_ENV_VAR: &str = "OPENAI_FEDERATION_RULE_ID";
+pub const OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR: &str = "OPENAI_IDENTITY_TOKEN_FILE";
+
+/// Environment variables that model-reachable child processes must not inherit.
+pub const NON_INHERITABLE_ENV_VARS: &[&str] = &[
+    OPENAI_FEDERATION_RULE_ID_ENV_VAR,
+    OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
+];
+
+pub fn is_non_inheritable_env_var(name: &str) -> bool {
+    NON_INHERITABLE_ENV_VARS
+        .iter()
+        .any(|restricted| restricted.eq_ignore_ascii_case(name))
+}
+
+/// Configures a child command to omit non-inheritable variables from the
+/// process environment and explicit command overrides.
+///
+/// This prevents accidental propagation of Codex launch context; it is not a
+/// filesystem security boundary for the referenced identity-token file.
+pub fn scrub_non_inheritable_env_vars(command: &mut std::process::Command) {
+    let configured_names = command
+        .get_envs()
+        .map(|(name, _)| name.to_os_string())
+        .collect::<Vec<_>>();
+
+    for name in NON_INHERITABLE_ENV_VARS {
+        command.env_remove(name);
+    }
+    for name in std::env::vars_os()
+        .map(|(name, _)| name)
+        .chain(configured_names)
+    {
+        if name.to_str().is_some_and(is_non_inheritable_env_var) {
+            command.env_remove(name);
+        }
+    }
+}
 
 /// Construct a shell environment from the supplied process environment and
 /// shell-environment policy.
@@ -106,6 +144,10 @@ where
         env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
     }
 
+    // Restricted launch context cannot be restored through user-provided shell
+    // environment overrides.
+    env_map.retain(|name, _| !is_non_inheritable_env_var(name));
+
     env_map
 }
 
@@ -147,6 +189,10 @@ pub const WINDOWS_CORE_ENV_VARS: &[&str] = &[
     "POWERSHELL",
     "PWSH",
 ];
+
+#[cfg(test)]
+#[path = "shell_environment_tests.rs"]
+mod tests;
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_tests {

@@ -8,6 +8,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::Sender;
+use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 #[cfg(windows)]
 use codex_utils_pty::JobObject;
 use tokio::io::AsyncWriteExt;
@@ -395,6 +396,7 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
         command.arg(&handler.command);
     }
     command.envs(&handler.env);
+    scrub_non_inheritable_env_vars(command.as_std_mut());
     command
 }
 

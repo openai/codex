@@ -23,6 +23,7 @@ pub(crate) use codex_network_proxy::is_managed_proxy_env_var;
 pub(crate) use codex_network_proxy::strip_managed_proxy_env;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::shell_environment::is_non_inheritable_env_var;
 use codex_sandboxing::SandboxCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -304,6 +305,7 @@ fn build_override_exports(
         .keys()
         .map(String::as_str)
         .chain(restore_even_when_absent.iter().copied())
+        .filter(|key| !is_non_inheritable_env_var(key))
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
     keys.sort_unstable();

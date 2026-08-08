@@ -1,6 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
+use codex_protocol::shell_environment::is_non_inheritable_env_var;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
@@ -16,13 +17,17 @@ pub(crate) fn create_env_for_mcp_server(
     env_vars: &[McpServerEnvVar],
 ) -> Result<HashMap<OsString, OsString>> {
     let additional_env_vars = local_stdio_env_var_names(env_vars)?;
-    let env = DEFAULT_ENV_VARS
+    let mut env: HashMap<OsString, OsString> = DEFAULT_ENV_VARS
         .iter()
         .copied()
         .chain(additional_env_vars)
         .filter_map(|var| env::var_os(var).map(|value| (OsString::from(var), value)))
         .chain(extra_env.unwrap_or_default())
         .collect();
+    env.retain(|name, _| {
+        name.to_str()
+            .is_none_or(|name| !is_non_inheritable_env_var(name))
+    });
     Ok(env)
 }
 
@@ -33,18 +38,24 @@ pub(crate) fn create_env_overlay_for_remote_mcp_server(
     // Remote stdio should inherit PATH/HOME/etc. from the executor side, not
     // from the orchestrator process. Only forward variables explicitly named
     // by the MCP config plus literal env overrides from that config.
-    env_vars
+    let mut env: HashMap<OsString, OsString> = env_vars
         .iter()
         .filter(|var| !var.is_remote_source())
         .filter_map(|var| env::var_os(var.name()).map(|value| (OsString::from(var.name()), value)))
         .chain(extra_env.unwrap_or_default())
-        .collect()
+        .collect();
+    env.retain(|name, _| {
+        name.to_str()
+            .is_none_or(|name| !is_non_inheritable_env_var(name))
+    });
+    env
 }
 
 pub(crate) fn remote_mcp_env_var_names(env_vars: &[McpServerEnvVar]) -> Vec<String> {
     env_vars
         .iter()
         .filter(|var| var.is_remote_source())
+        .filter(|var| !is_non_inheritable_env_var(var.name()))
         .map(|var| var.name().to_string())
         .collect()
 }
@@ -56,7 +67,10 @@ fn local_stdio_env_var_names(env_vars: &[McpServerEnvVar]) -> Result<impl Iterat
             remote_var.name()
         ));
     }
-    Ok(env_vars.iter().map(McpServerEnvVar::name))
+    Ok(env_vars
+        .iter()
+        .map(McpServerEnvVar::name)
+        .filter(|name| !is_non_inheritable_env_var(name)))
 }
 
 pub(crate) fn build_default_headers(
@@ -182,11 +196,18 @@ mod tests {
         let value = "custom".to_string();
         let expected = OsString::from(&value);
         let env = create_env_for_mcp_server(
-            Some(HashMap::from([(OsString::from("TZ"), expected.clone())])),
+            Some(HashMap::from([
+                (OsString::from("TZ"), expected.clone()),
+                (
+                    OsString::from("openai_identity_token_file"),
+                    OsString::from("/run/identity-token"),
+                ),
+            ])),
             &[],
         )
         .expect("local MCP env should build");
         assert_eq!(env.get(OsStr::new("TZ")), Some(&expected));
+        assert!(!env.contains_key(OsStr::new("openai_identity_token_file")));
     }
 
     #[test]
@@ -210,8 +231,13 @@ mod tests {
         let _default_guard = EnvVarGuard::set(default_var, "from-default");
         let _custom_guard = EnvVarGuard::set(custom_var, &custom_value);
 
-        let env =
-            create_env_overlay_for_remote_mcp_server(/*extra_env*/ None, &[custom_var.into()]);
+        let env = create_env_overlay_for_remote_mcp_server(
+            Some(HashMap::from([(
+                OsString::from("OpenAI_Federation_Rule_Id"),
+                OsString::from("rule"),
+            )])),
+            &[custom_var.into()],
+        );
 
         assert_eq!(
             env,
@@ -258,6 +284,10 @@ mod tests {
             },
             McpServerEnvVar::Config {
                 name: "REMOTE".to_string(),
+                source: Some("remote".to_string()),
+            },
+            McpServerEnvVar::Config {
+                name: "openai_identity_token_file".to_string(),
                 source: Some("remote".to_string()),
             },
         ]);
