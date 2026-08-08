@@ -344,7 +344,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
 
     emit_failed_exec_end_for_unified_exec(
         Arc::clone(&context.session),
-        Arc::clone(&context.turn),
+        Arc::clone(&context.step_context.turn),
         context.call_id.clone(),
         request.command.clone(),
         cwd,
@@ -449,12 +449,13 @@ impl UnifiedExecProcessManager {
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
-            context.turn.as_ref(),
+            context.step_context.turn.as_ref(),
             &context.call_id,
             /*turn_diff_tracker*/ None,
         );
         let plugin_attribution = cwd.to_abs_path().ok().and_then(|cwd| {
             context
+                .step_context
                 .turn
                 .plugin_attribution_for_command(&request.command, &cwd)
         });
@@ -627,7 +628,7 @@ impl UnifiedExecProcessManager {
             let exit = exit_code.unwrap_or(-1);
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
-                Arc::clone(&context.turn),
+                Arc::clone(&context.step_context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
                 cwd.clone(),
@@ -655,7 +656,12 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
-            truncation_policy: context.turn.model_info.truncation_policy.into(),
+            truncation_policy: context
+                .step_context
+                .turn
+                .model_info
+                .truncation_policy
+                .into(),
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
             exit_code,
@@ -952,7 +958,7 @@ impl UnifiedExecProcessManager {
         spawn_exit_watcher(
             Arc::clone(&process),
             Arc::clone(&context.session),
-            Arc::clone(&context.turn),
+            Arc::clone(&context.step_context.turn),
             context.call_id.clone(),
             command.to_vec(),
             cwd,
@@ -1132,8 +1138,9 @@ impl UnifiedExecProcessManager {
         cwd: PathUri,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
+        let turn = &context.step_context.turn;
         let local_policy_env = create_env(
-            &context.turn.config.permissions.shell_environment_policy,
+            &turn.config.permissions.shell_environment_policy,
             /*thread_id*/ None,
         );
         let mut env = local_policy_env.clone();
@@ -1146,7 +1153,7 @@ impl UnifiedExecProcessManager {
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
             policy: exec_env_policy_from_shell_policy(
-                &context.turn.config.permissions.shell_environment_policy,
+                &turn.config.permissions.shell_environment_policy,
             ),
             local_policy_env,
         };
@@ -1158,9 +1165,9 @@ impl UnifiedExecProcessManager {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
-                approval_policy: context.turn.approval_policy(),
+                approval_policy: turn.approval_policy(),
                 permission_profile: request.turn_environment.permission_profile().clone(),
-                windows_sandbox_level: context.turn.windows_sandbox_level,
+                windows_sandbox_level: turn.windows_sandbox_level,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
@@ -1180,8 +1187,7 @@ impl UnifiedExecProcessManager {
             turn_environment: request.turn_environment.clone(),
             env,
             exec_server_env_config: Some(exec_server_env_config),
-            explicit_env_overrides: context
-                .turn
+            explicit_env_overrides: turn
                 .config
                 .permissions
                 .shell_environment_policy
@@ -1198,18 +1204,12 @@ impl UnifiedExecProcessManager {
         };
         let tool_ctx = ToolCtx {
             session: context.session.clone(),
-            turn: context.turn.clone(),
+            step_context: Arc::clone(&context.step_context),
             call_id: context.call_id.clone(),
             tool_name: ToolName::plain("exec_command"),
         };
         orchestrator
-            .run(
-                &mut runtime,
-                &req,
-                &tool_ctx,
-                &context.turn,
-                context.turn.approval_policy(),
-            )
+            .run(&mut runtime, &req, &tool_ctx, turn, turn.approval_policy())
             .await
             .map(|result| (result.output, result.deferred_network_approval))
             .map_err(|err| match err {

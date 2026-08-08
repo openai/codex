@@ -49,7 +49,11 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
             .await?,
     );
     let (session, turn, rx_event) = make_session_and_context_with_rx().await;
-    let context = UnifiedExecContext::new(session, turn, "streaming-output-test".to_string());
+    let context = UnifiedExecContext::new(
+        session,
+        crate::session::step_context::StepContext::for_test(turn),
+        "streaming-output-test".to_string(),
+    );
     let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
     start_streaming_output(&process, &context, Arc::clone(&transcript));
 
@@ -154,11 +158,11 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
     late_denial_armed_rx.await.expect("late denial armed");
 
     #[allow(deprecated)]
-    let cwd = context.turn.cwd.clone().into();
+    let cwd = context.step_context.turn.cwd.clone().into();
     spawn_exit_watcher(
         Arc::clone(&process),
         Arc::clone(&context.session),
-        Arc::clone(&context.turn),
+        Arc::clone(&context.step_context.turn),
         context.call_id,
         vec!["proof".to_string()],
         cwd,

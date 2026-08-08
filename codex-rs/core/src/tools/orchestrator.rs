@@ -63,7 +63,7 @@ impl ToolOrchestrator {
     {
         let network_approval = match begin_network_approval(
             &tool_ctx.session,
-            &tool_ctx.turn.sub_id,
+            &tool_ctx.step_context.turn.sub_id,
             managed_network_active,
             tool.network_approval_spec(req, tool_ctx),
         )
@@ -75,7 +75,7 @@ impl ToolOrchestrator {
 
         let attempt_tool_ctx = ToolCtx {
             session: tool_ctx.session.clone(),
-            turn: tool_ctx.turn.clone(),
+            step_context: Arc::clone(&tool_ctx.step_context),
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
@@ -172,7 +172,7 @@ impl ToolOrchestrator {
                             ToolError::Rejected(format!("could not prepare approval action: {err}"))
                         })?;
                     let approval_ctx = ApprovalContext {
-                        turn: Arc::clone(&tool_ctx.turn),
+                        step_context: Arc::clone(&tool_ctx.step_context),
                         call_id: tool_ctx.call_id.clone(),
                         tool_name: tool_ctx.tool_name.clone(),
                         strict_auto_review,
@@ -204,7 +204,7 @@ impl ToolOrchestrator {
                         ToolError::Rejected(format!("could not prepare approval action: {err}"))
                     })?;
                 let approval_ctx = ApprovalContext {
-                    turn: Arc::clone(&tool_ctx.turn),
+                    step_context: Arc::clone(&tool_ctx.step_context),
                     call_id: tool_ctx.call_id.clone(),
                     tool_name: tool_ctx.tool_name.clone(),
                     strict_auto_review,
@@ -400,7 +400,7 @@ impl ToolOrchestrator {
                             ToolError::Rejected(format!("could not prepare approval action: {err}"))
                         })?;
                     let approval_ctx = ApprovalContext {
-                        turn: Arc::clone(&tool_ctx.turn),
+                        step_context: Arc::clone(&tool_ctx.step_context),
                         call_id: tool_ctx.call_id.clone(),
                         tool_name: tool_ctx.tool_name.clone(),
                         strict_auto_review,

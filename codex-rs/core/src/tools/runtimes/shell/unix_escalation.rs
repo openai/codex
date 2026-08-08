@@ -4,6 +4,7 @@ use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianReviewContext;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -199,8 +200,8 @@ pub(super) async fn try_run_zsh_fork(
         arg0,
         sandbox_policy_cwd,
         windows_sandbox_workspace_roots,
-        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
+        codex_linux_sandbox_exe: ctx.step_context.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.step_context.turn.config.features.use_legacy_landlock(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -234,11 +235,11 @@ pub(super) async fn try_run_zsh_fork(
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
-        turn: Arc::clone(&ctx.turn),
+        review_context: GuardianReviewContext::from(&ctx.step_context),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::Shell,
-        approval_policy: ctx.turn.approval_policy(),
+        approval_policy: ctx.step_context.turn.approval_policy(),
         permission_profile: command_executor.permission_profile.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
@@ -314,17 +315,17 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         arg0: exec_request.arg0.clone(),
         sandbox_policy_cwd,
         windows_sandbox_workspace_roots: exec_request.windows_sandbox_workspace_roots.clone(),
-        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
+        codex_linux_sandbox_exe: ctx.step_context.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.step_context.turn.config.features.use_legacy_landlock(),
     };
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
-        turn: Arc::clone(&ctx.turn),
+        review_context: GuardianReviewContext::from(&ctx.step_context),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::UnifiedExec,
-        approval_policy: ctx.turn.approval_policy(),
+        approval_policy: ctx.step_context.turn.approval_policy(),
         permission_profile: exec_request.permission_profile.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions: approval_sandbox_permissions(
@@ -354,7 +355,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
 struct CoreShellActionProvider {
     policy: Arc<RwLock<Policy>>,
     session: Arc<crate::session::session::Session>,
-    turn: Arc<crate::session::turn_context::TurnContext>,
+    review_context: GuardianReviewContext,
     call_id: String,
     environment_id: String,
     tool_name: GuardianCommandSource,
@@ -442,7 +443,8 @@ impl CoreShellActionProvider {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.clone();
         let session = self.session.clone();
-        let turn = self.turn.clone();
+        let review_context = self.review_context.clone();
+        let turn = Arc::clone(review_context.turn());
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let environment_id = Some(self.environment_id.clone());
@@ -477,7 +479,7 @@ impl CoreShellActionProvider {
                 if let Some(review_id) = guardian_review_id {
                     return review_approval_request(
                         &session,
-                        &turn,
+                        review_context,
                         review_id,
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
@@ -615,7 +617,7 @@ impl CoreShellActionProvider {
                 InterceptedExecPolicyContext {
                     approval_policy: self.approval_policy,
                     permission_profile: self.permission_profile.clone(),
-                    windows_sandbox_level: self.turn.windows_sandbox_level,
+                    windows_sandbox_level: self.review_context.turn().windows_sandbox_level,
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,

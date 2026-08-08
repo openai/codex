@@ -11,7 +11,6 @@ use serde_json::Value;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
@@ -28,6 +27,7 @@ use super::GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::GUARDIAN_RECENT_ENTRY_LIMIT;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
+use super::GuardianReviewContext;
 use super::TRUNCATION_TAG;
 use super::approval_request::format_guardian_action_pretty;
 
@@ -103,7 +103,7 @@ pub(crate) async fn build_guardian_prompt_items(
 ) -> serde_json::Result<GuardianPromptItems> {
     build_guardian_prompt_items_with_parent_turn(
         session,
-        /*parent_turn*/ None,
+        /*parent_context*/ None,
         ApprovalRequestReasons {
             approval: None,
             retry: retry_reason,
@@ -116,7 +116,7 @@ pub(crate) async fn build_guardian_prompt_items(
 
 pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     session: &Session,
-    parent_turn: Option<&TurnContext>,
+    parent_context: Option<&GuardianReviewContext>,
     reasons: ApprovalRequestReasons,
     request: GuardianApprovalRequest,
     mode: GuardianPromptMode,
@@ -201,7 +201,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     if let Some(note) = omission_note {
         push_text(format!("\n{note}\n"));
     }
-    if let Some(denied_reads_context) = parent_turn.and_then(parent_turn_denied_reads_context) {
+    if let Some(denied_reads_context) = parent_context.and_then(parent_turn_denied_reads_context) {
         push_text("\n>>> PARENT TURN PERMISSION CONTEXT START\n".to_string());
         push_text(denied_reads_context);
         push_text(">>> PARENT TURN PERMISSION CONTEXT END\n".to_string());
@@ -254,9 +254,9 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     })
 }
 
-fn parent_turn_denied_reads_context(turn: &TurnContext) -> Option<String> {
-    // TODO(sayan): Pass StepContext through Guardian so it sees environments that become ready mid-turn.
-    let environment = turn.environments.primary();
+fn parent_turn_denied_reads_context(context: &GuardianReviewContext) -> Option<String> {
+    let turn = context.turn();
+    let environment = context.environments().primary();
     #[allow(deprecated)]
     let cwd = environment
         .and_then(|environment| environment.cwd().to_abs_path().ok())

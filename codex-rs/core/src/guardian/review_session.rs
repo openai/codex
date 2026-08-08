@@ -56,6 +56,7 @@ use codex_utils_path_uri::PathUri;
 use super::ApprovalRequestReasons;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
+use super::GuardianReviewContext;
 use super::prompt::BUNDLED_GUARDIAN_POLICY;
 use super::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 use super::prompt::GuardianPromptMode;
@@ -79,7 +80,7 @@ pub(crate) enum GuardianReviewSessionOutcome {
 
 pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
-    pub(crate) parent_turn: Arc<TurnContext>,
+    pub(crate) parent_context: GuardianReviewContext,
     pub(crate) spawn_config: Config,
     pub(crate) request: GuardianApprovalRequest,
     pub(crate) reasons: ApprovalRequestReasons,
@@ -358,7 +359,7 @@ impl GuardianReviewSessionManager {
             let spawn_cancel_guard = spawn_cancel_token.clone().drop_guard();
             let review_session = spawn_guardian_review_session(
                 &parent_session,
-                &parent_turn,
+                &GuardianReviewContext::from(parent_turn),
                 spawn_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -459,7 +460,7 @@ impl GuardianReviewSessionManager {
                         &spawn_cancel_token,
                         Box::pin(spawn_guardian_review_session(
                             &params.parent_session,
-                            &params.parent_turn,
+                            &params.parent_context,
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
@@ -678,7 +679,7 @@ impl GuardianReviewSessionManager {
             &spawn_cancel_token,
             Box::pin(spawn_guardian_review_session(
                 &params.parent_session,
-                &params.parent_turn,
+                &params.parent_context,
                 fork_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -721,7 +722,7 @@ impl GuardianReviewSessionManager {
 
 async fn spawn_guardian_review_session(
     parent_session: &Arc<Session>,
-    parent_turn: &Arc<TurnContext>,
+    parent_context: &GuardianReviewContext,
     spawn_config: Config,
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
@@ -746,7 +747,8 @@ async fn spawn_guardian_review_session(
         parent_session.services.auth_manager.clone(),
         parent_session.services.models_manager.clone(),
         Arc::clone(parent_session),
-        Arc::clone(parent_turn),
+        Arc::clone(parent_context.turn()),
+        parent_context.environments().clone(),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -836,7 +838,7 @@ async fn run_review_on_session(
 
             build_guardian_prompt_items_with_parent_turn(
                 params.parent_session.as_ref(),
-                Some(params.parent_turn.as_ref()),
+                Some(&params.parent_context),
                 params.reasons.clone(),
                 params.request.clone(),
                 prompt_mode,
@@ -867,15 +869,15 @@ async fn run_review_on_session(
         .await
         .unwrap_or_default();
     let guardian_permission_profile = PermissionProfile::read_only();
-    let parent_turn_environments = params.parent_turn.environments.to_selections();
+    let parent_turn_environments = params.parent_context.environments().to_selections();
     // TODO(anp): Migrate guardian review thread settings to a PathUri fallback cwd so foreign
     // parent environments do not fall back to the host-native config cwd.
     let parent_turn_legacy_fallback_cwd = params
-        .parent_turn
-        .environments
+        .parent_context
+        .environments()
         .primary()
         .and_then(|environment| environment.cwd().to_abs_path().ok())
-        .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
+        .unwrap_or_else(|| params.parent_context.turn().config.cwd.clone());
 
     let submission = review_session.io.submit_with_trace(
         Op::UserInput {
@@ -905,7 +907,7 @@ async fn run_review_on_session(
             },
         },
         /*trace*/ None,
-        Some(params.parent_turn.sub_id.clone()),
+        Some(params.parent_context.turn().sub_id.clone()),
     );
     let submit_result = run_before_review_deadline(
         deadline,
@@ -1308,7 +1310,7 @@ mod tests {
 
         GuardianReviewSessionParams {
             parent_session: Arc::new(session),
-            parent_turn: Arc::new(turn),
+            parent_context: GuardianReviewContext::from(Arc::new(turn)),
             spawn_config,
             request: GuardianApprovalRequest::Shell {
                 id: "shell-1".to_string(),
@@ -1338,7 +1340,10 @@ mod tests {
         let params = test_review_params().await;
         let manager = GuardianReviewSessionManager::default();
         manager
-            .initialize(params.parent_session, params.parent_turn)
+            .initialize(
+                params.parent_session,
+                Arc::clone(params.parent_context.turn()),
+            )
             .await
             .expect("initialize Guardian session");
         let mode = manager

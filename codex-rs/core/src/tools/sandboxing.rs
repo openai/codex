@@ -7,7 +7,7 @@
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::state::SessionServices;
 use crate::tools::hook_names::HookToolName;
@@ -348,7 +348,7 @@ pub(crate) trait Sandboxable {
 
 pub(crate) struct ToolCtx {
     pub session: Arc<Session>,
-    pub turn: Arc<TurnContext>,
+    pub step_context: Arc<StepContext>,
     pub call_id: String,
     pub tool_name: ToolName,
 }

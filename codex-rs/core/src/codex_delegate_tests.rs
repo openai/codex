@@ -201,6 +201,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
         crate::session::tests::make_session_and_context_with_rx().await;
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
+    let parent_environments = parent_ctx.environments.clone();
 
     let result = timeout(
         Duration::from_secs(/*secs*/ 1),
@@ -210,6 +211,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             Arc::clone(&parent_session.services.models_manager),
             parent_session,
             parent_ctx,
+            parent_environments,
             cancel_token,
             SubAgentSource::Review,
             /*initial_history*/ None,

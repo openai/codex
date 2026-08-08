@@ -10,6 +10,7 @@ use crate::apply_patch;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::ApplyPatchToolOutput;
@@ -397,7 +398,7 @@ impl ApplyPatchHandler {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let tool_ctx = ToolCtx {
                     session,
-                    turn,
+                    step_context: Arc::clone(&step_context),
                     call_id,
                     tool_name,
                 };
@@ -487,11 +488,12 @@ pub(crate) async fn intercept_apply_patch(
     fs: &dyn ExecutorFileSystem,
     turn_environment: TurnEnvironment,
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
+    let turn = &step_context.turn;
     let sandbox =
         turn.file_system_sandbox_context(/*additional_permissions*/ None, &turn_environment);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
@@ -500,7 +502,7 @@ pub(crate) async fn intercept_apply_patch(
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             let tool_ctx = ToolCtx {
                 session,
-                turn,
+                step_context,
                 call_id: call_id.to_string(),
                 tool_name: ToolName::plain(tool_name),
             };
@@ -533,7 +535,7 @@ async fn execute_verified_patch(
             .await
             .unwrap_or_else(|_| patch_permissions_without_path_matching(&action));
     let apply = apply_patch::prepare_apply_patch(
-        tool_ctx.turn.as_ref(),
+        tool_ctx.step_context.turn.as_ref(),
         turn_environment.permission_profile(),
         &file_system_sandbox_policy,
         action,
@@ -546,7 +548,7 @@ async fn execute_verified_patch(
     );
     let event_ctx = ToolEventCtx::new(
         tool_ctx.session.as_ref(),
-        tool_ctx.turn.as_ref(),
+        tool_ctx.step_context.turn.as_ref(),
         &tool_ctx.call_id,
         tracker,
     );
@@ -568,8 +570,8 @@ async fn execute_verified_patch(
             &mut runtime,
             &request,
             &tool_ctx,
-            tool_ctx.turn.as_ref(),
-            tool_ctx.turn.approval_policy(),
+            tool_ctx.step_context.turn.as_ref(),
+            tool_ctx.step_context.turn.approval_policy(),
         )
         .await
         .map(|result| result.output);
@@ -579,7 +581,7 @@ async fn execute_verified_patch(
     };
     let event_ctx = ToolEventCtx::new(
         tool_ctx.session.as_ref(),
-        tool_ctx.turn.as_ref(),
+        tool_ctx.step_context.turn.as_ref(),
         &tool_ctx.call_id,
         tracker,
     );

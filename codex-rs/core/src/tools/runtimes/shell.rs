@@ -101,7 +101,7 @@ impl ShellRuntime {
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
-            sub_id: ctx.turn.sub_id.clone(),
+            sub_id: ctx.step_context.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
         })

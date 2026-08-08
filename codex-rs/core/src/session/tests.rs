@@ -1291,7 +1291,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
     let mut tool = ProbeToolRuntime::default();
     let tool_ctx = crate::tools::sandboxing::ToolCtx {
         session: Arc::clone(&session),
-        turn: Arc::clone(&turn),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
         call_id: "probe-call".to_string(),
         tool_name: codex_tools::ToolName::plain("probe"),
     };
@@ -6477,7 +6477,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
                 .selection();
             session
                 .request_permissions_for_environment(
-                    &turn_context,
+                    turn_context.as_ref(),
                     call_id,
                     codex_protocol::request_permissions::RequestPermissionsArgs {
                         environment_id: None,
@@ -6727,7 +6727,7 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
                 .selection();
             session
                 .request_permissions_for_environment(
-                    &turn_context,
+                    turn_context.as_ref(),
                     call_id,
                     codex_protocol::request_permissions::RequestPermissionsArgs {
                         environment_id: None,
@@ -6819,7 +6819,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
         .selection();
     let response = session
         .request_permissions_for_environment(
-            &turn_context,
+            turn_context.as_ref(),
             call_id,
             codex_protocol::request_permissions::RequestPermissionsArgs {
                 environment_id: None,

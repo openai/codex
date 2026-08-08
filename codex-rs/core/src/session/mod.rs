@@ -2478,12 +2478,14 @@ impl Session {
     )]
     pub(crate) async fn request_permissions_for_environment(
         self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        review_context: impl Into<crate::guardian::GuardianReviewContext>,
         call_id: String,
         args: RequestPermissionsArgs,
         environment: TurnEnvironmentSelection,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        let review_context = review_context.into();
+        let turn_context = review_context.turn();
         match turn_context.as_ref().approval_policy() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2527,7 +2529,6 @@ impl Session {
             };
             let review_id = crate::guardian::new_guardian_review_id();
             let session = Arc::clone(self);
-            let turn = Arc::clone(turn_context);
             let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
                 id: call_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -2536,7 +2537,7 @@ impl Session {
             };
             let review_rx = crate::guardian::spawn_approval_request_review(
                 session,
-                turn,
+                review_context.clone(),
                 review_id,
                 request,
                 /*retry_reason*/ None,

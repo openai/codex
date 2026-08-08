@@ -1391,6 +1391,178 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_guardian_uses_newly_ready_step_environment() -> Result<()> {
+    const WAIT_CALL_ID: &str = "wait-for-guardian-environment";
+    const EXEC_CALL_ID: &str = "guardian-ready-environment-command";
+    const DENIAL_RATIONALE: &str = "The remote environment policy denies this action.";
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let completed_response =
+        |id: &str, item| sse(vec![ev_response_created(id), item, ev_completed(id)]);
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            completed_response(
+                "resp-guardian-wait",
+                ev_function_call(
+                    WAIT_CALL_ID,
+                    "wait_for_environment",
+                    &json!({ "environment_id": REMOTE_ENVIRONMENT_ID }).to_string(),
+                ),
+            ),
+            completed_response(
+                "resp-guardian-command",
+                ev_function_call(
+                    EXEC_CALL_ID,
+                    "exec_command",
+                    &json!({
+                        "cmd": "printf guardian-should-not-run",
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+                        "justification": "Review the newly ready remote environment.",
+                    })
+                    .to_string(),
+                ),
+            ),
+            completed_response(
+                "resp-guardian-review",
+                ev_assistant_message(
+                    "msg-guardian-review",
+                    &json!({ "outcome": "deny", "rationale": DENIAL_RATIONALE }).to_string(),
+                ),
+            ),
+            completed_response(
+                "resp-guardian-done",
+                ev_assistant_message("msg-guardian-done", "done"),
+            ),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
+        .with_config(|config| {
+            config.project_doc_max_bytes = 0;
+            config.use_experimental_unified_exec_tool = true;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+        });
+    let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let exec_server = tokio::spawn(serve_environment_with_agents_md(
+        listener,
+        "",
+        attach_rx,
+        shutdown_rx,
+    ));
+    let test = timeout(
+        Duration::from_secs(5),
+        builder.build_with_remote_and_local_env(&server),
+    )
+    .await
+    .context("thread startup should not wait for the remote environment")??;
+    let remote_cwd = test.cwd.path().join("guardian-remote").abs();
+    let local_cwd = test.cwd.path().abs();
+    fs::create_dir_all(remote_cwd.as_path())?;
+    let remote_denied_path = remote_cwd.canonicalize()?.join("private");
+    let local_denied_path = local_cwd.canonicalize()?.join("private");
+    let remote_selection = TurnEnvironmentSelection {
+        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
+        workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+    };
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some("private".to_string())),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "review a command after the remote environment becomes ready".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![remote_selection, local(local_cwd.clone())],
+                )),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_response_request_count(&responses, /*expected_count*/ 1).await;
+    attach_tx.send(()).expect("attach remote environment");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert!(
+        requests[1]
+            .function_call_output_content_and_success(WAIT_CALL_ID)
+            .is_some(),
+        "the reviewed command should follow the ready-environment step"
+    );
+    let guardian_request = requests
+        .iter()
+        .find(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .context("expected Guardian review request")?;
+    let guardian_context = guardian_request.message_input_texts("user").join("\n");
+    for expected in [
+        "<environment id=\"remote\" primary=\"true\">".to_string(),
+        format!("<cwd>{}</cwd>", remote_cwd.display()),
+        format!("- path `{}`", remote_denied_path.display()),
+    ] {
+        assert!(
+            guardian_context.contains(&expected),
+            "Guardian omitted `{expected}` from the ready environment context: {guardian_context}"
+        );
+    }
+    assert!(
+        !guardian_context.contains(&format!("- path `{}`", local_denied_path.display())),
+        "Guardian used the stale local environment's denied-read policy: {guardian_context}"
+    );
+    let rejection = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text(EXEC_CALL_ID))
+        .context("Guardian denial should be returned to the parent model")?;
+    assert!(rejection.contains(DENIAL_RATIONALE));
+
+    shutdown_tx
+        .send(())
+        .expect("stop remote environment server");
+    exec_server.await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deferred_executor_loads_agents_md_when_environment_becomes_ready() -> Result<()> {
     const AGENTS_CONTENT: &str = "REMOTE_AGENTS_INSTRUCTIONS";
 

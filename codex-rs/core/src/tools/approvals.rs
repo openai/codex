@@ -8,6 +8,7 @@ use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
@@ -35,7 +36,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct ApprovalContext {
-    pub(crate) turn: Arc<TurnContext>,
+    pub(crate) step_context: Arc<StepContext>,
     pub(crate) call_id: String,
     pub(crate) tool_name: ToolName,
     pub(crate) strict_auto_review: bool,
@@ -308,7 +309,7 @@ impl Session {
         // 2. If StrictAutoReview || Guardian enabled, then Guardian. Else, user.
         let resolution = match run_permission_request_hooks(
             self,
-            &ctx.turn,
+            &ctx.step_context.turn,
             permission_request_run_id.as_deref().unwrap_or(&ctx.call_id),
             action.permission_request_payload(),
         )
@@ -336,7 +337,7 @@ impl Session {
         let reviewer = if ctx.strict_auto_review {
             ApprovalReviewer::Guardian
         } else {
-            ApprovalReviewer::for_turn(&ctx.turn)
+            ApprovalReviewer::for_turn(&ctx.step_context.turn)
         };
 
         let decision = match reviewer {
@@ -368,7 +369,7 @@ impl Session {
 
         review_approval_request(
             self,
-            &ctx.turn,
+            &ctx.step_context,
             review_id,
             action,
             ApprovalRequestReasons {
@@ -422,7 +423,7 @@ impl Session {
                     .or_else(|| justification.clone());
                 with_cached_approval(&self.services, tool_name, action.cache_keys(), || async {
                     self.request_command_approval(
-                        &ctx.turn,
+                        &ctx.step_context.turn,
                         ctx.call_id.clone(),
                         /*approval_id*/ None,
                         Some(environment_id.clone()),
@@ -454,7 +455,7 @@ impl Session {
                 if reason.is_some() {
                     return self
                         .request_patch_approval(
-                            &ctx.turn,
+                            &ctx.step_context.turn,
                             ctx.call_id.clone(),
                             changes.as_ref().clone(),
                             reason,
@@ -468,7 +469,7 @@ impl Session {
                     action.cache_keys(),
                     || async {
                         self.request_patch_approval(
-                            &ctx.turn,
+                            &ctx.step_context.turn,
                             ctx.call_id.clone(),
                             changes.as_ref().clone(),
                             /*reason*/ None,
@@ -490,7 +491,7 @@ fn record_resolution(ctx: &ApprovalContext, resolution: &ApprovalResolution) {
         ApprovalResolutionSource::User => ToolDecisionSource::User,
     };
     let tool_name = flat_tool_name(&ctx.tool_name);
-    ctx.turn.session_telemetry.tool_decision(
+    ctx.step_context.turn.session_telemetry.tool_decision(
         tool_name.as_ref(),
         &ctx.call_id,
         &resolution.decision,

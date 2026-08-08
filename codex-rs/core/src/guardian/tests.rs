@@ -487,10 +487,11 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
 async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> anyhow::Result<()> {
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
     seed_guardian_parent_history(&session, &turn).await;
+    let context = GuardianReviewContext::from(&turn);
 
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        Some(turn.as_ref()),
+        Some(&context),
         ApprovalRequestReasons {
             approval: Some("A policy rule requires approval.".to_string()),
             retry: Some("The sandbox blocked the initial command.".to_string()),
@@ -518,6 +519,7 @@ async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> an
 async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::Result<()> {
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
     seed_guardian_parent_history(&session, &turn).await;
+    let context = GuardianReviewContext::from(&turn);
     let approval_reason = format!("policy-start {} policy-end", "x".repeat(10_000));
     let expected_reason = codex_utils_output_truncation::truncate_text(
         &approval_reason,
@@ -526,7 +528,7 @@ async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::
 
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        Some(turn.as_ref()),
+        Some(&context),
         ApprovalRequestReasons {
             approval: Some(approval_reason),
             retry: None,
@@ -618,10 +620,11 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;
+    let context = GuardianReviewContext::from(&turn);
 
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        Some(turn.as_ref()),
+        Some(&context),
         ApprovalRequestReasons {
             approval: None,
             retry: Some("Sandbox denied reading /repo/private/secret.txt.".to_string()),
