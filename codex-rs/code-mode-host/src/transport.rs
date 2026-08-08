@@ -308,7 +308,7 @@ async fn websocket_upgrade_handler(
             )
             .await
             {
-                warn!(%peer_addr, "code-mode host websocket connection failed: {err:#}");
+                warn!(%peer_addr, "code-mode host session failed: {err:#}");
             }
         })
 }

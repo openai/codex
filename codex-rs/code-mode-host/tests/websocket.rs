@@ -877,7 +877,7 @@ async fn malformed_websocket_frame_does_not_stop_the_listener() -> Result<()> {
                 .next_line()
                 .await?
                 .context("code-mode host exited before reporting the malformed frame")?;
-            if line.contains("code-mode host websocket connection failed") {
+            if line.contains("code-mode host session failed") {
                 return Ok::<_, anyhow::Error>(line);
             }
         }

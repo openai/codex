@@ -31,7 +31,9 @@ use codex_code_mode_protocol::host::TransportLane;
 use codex_code_mode_runtime::InProcessCodeModeSession;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
+use tokio::sync::TryAcquireError;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -43,9 +45,11 @@ use self::transport::BulkConnectionRegistry;
 use self::transport::ConnectionReader;
 use self::transport::ConnectionWriter;
 
+pub use self::grpc::GrpcCodeModeHost;
 pub use self::transport::DEFAULT_LISTEN_URL;
 
 mod delegate;
+mod grpc;
 mod peer;
 mod transport;
 
@@ -74,6 +78,14 @@ impl HostLimits {
             request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
             active_cell_permits: Arc::new(Semaphore::new(MAX_ACTIVE_CELLS)),
         }
+    }
+
+    fn request_permit(&self) -> Result<OwnedSemaphorePermit, TryAcquireError> {
+        Arc::clone(&self.request_permits).try_acquire_owned()
+    }
+
+    fn cell_permit(&self) -> Result<OwnedSemaphorePermit, TryAcquireError> {
+        Arc::clone(&self.active_cell_permits).try_acquire_owned()
     }
 }
 
@@ -141,11 +153,10 @@ async fn run_connection(
     };
     let state = Arc::new(HostState {
         sessions: Mutex::new(HashMap::new()),
+        limits,
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
         request_tasks: TaskTracker::new(),
-        request_permits: Arc::clone(&limits.request_permits),
-        active_cell_permits: Arc::clone(&limits.active_cell_permits),
         closing: AtomicBool::new(false),
         peer: Arc::clone(&peer),
     });
@@ -368,11 +379,10 @@ async fn negotiate(
 
 struct HostState {
     sessions: Mutex<HashMap<SessionId, Arc<InProcessCodeModeSession>>>,
+    limits: Arc<HostLimits>,
     seen_session_ids: Mutex<SeenSessionIds>,
     requests: Mutex<RequestRegistry>,
     request_tasks: TaskTracker,
-    request_permits: Arc<Semaphore>,
-    active_cell_permits: Arc<Semaphore>,
     closing: AtomicBool,
     peer: Arc<HostPeer>,
 }
@@ -388,7 +398,7 @@ impl HostState {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .start(request_id, RequestKind::from(&request))?;
-        let Ok(permit) = Arc::clone(&self.request_permits).try_acquire_owned() else {
+        let Ok(permit) = self.limits.request_permit() else {
             self.respond(
                 request_id,
                 Err("code-mode host has too many in-flight requests".to_string()),
@@ -468,9 +478,7 @@ impl HostState {
                         return;
                     }
                 };
-                let Ok(active_cell_permit) =
-                    Arc::clone(&self.active_cell_permits).try_acquire_owned()
-                else {
+                let Ok(active_cell_permit) = self.limits.cell_permit() else {
                     self.respond(
                         request_id,
                         Err("code-mode host has too many active cells".to_string()),

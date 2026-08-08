@@ -38,8 +38,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
+use super::HostLimits;
 use super::HostState;
-use super::MAX_ACTIVE_CELLS;
 use super::MAX_IN_FLIGHT_REQUESTS;
 use super::MAX_RECENT_REQUEST_IDS;
 use super::RequestKind;
@@ -588,11 +588,10 @@ async fn request_task_panic_disconnects_host() {
     let peer = Arc::new(HostPeer::new(outgoing_tx));
     let state = HostState {
         sessions: Mutex::new(HashMap::new()),
+        limits: Arc::new(HostLimits::new()),
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
         request_tasks: TaskTracker::new(),
-        request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
-        active_cell_permits: Arc::new(Semaphore::new(MAX_ACTIVE_CELLS)),
         closing: AtomicBool::new(false),
         peer: Arc::clone(&peer),
     };
@@ -617,11 +616,10 @@ async fn execute_request_id_remains_active_until_initial_response() {
     let peer = Arc::new(HostPeer::new(outgoing_tx));
     let state = Arc::new(HostState {
         sessions: Mutex::new(HashMap::new()),
+        limits: Arc::new(HostLimits::new()),
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
         request_tasks: TaskTracker::new(),
-        request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
-        active_cell_permits: Arc::new(Semaphore::new(MAX_ACTIVE_CELLS)),
         closing: AtomicBool::new(false),
         peer,
     });
@@ -679,11 +677,13 @@ async fn active_cell_limit_rejects_execute_without_disconnecting() {
     let peer = Arc::new(HostPeer::new(outgoing_tx));
     let state = HostState {
         sessions: Mutex::new(HashMap::new()),
+        limits: Arc::new(HostLimits {
+            request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
+            active_cell_permits: Arc::new(Semaphore::new(/*permits*/ 0)),
+        }),
         seen_session_ids: Mutex::new(SeenSessionIds::default()),
         requests: Mutex::new(RequestRegistry::default()),
         request_tasks: TaskTracker::new(),
-        request_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
-        active_cell_permits: Arc::new(Semaphore::new(/*permits*/ 0)),
         closing: AtomicBool::new(false),
         peer: Arc::clone(&peer),
     };

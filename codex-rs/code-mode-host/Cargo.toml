@@ -22,18 +22,21 @@ axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 clap = { workspace = true, features = ["derive"] }
 codex-code-mode-protocol = { workspace = true }
 codex-code-mode-runtime = { workspace = true }
+codex-protocol = { workspace = true }
 futures = { workspace = true }
+prost = "0.14.3"
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
+tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 codex-code-mode = { workspace = true }
-codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio-tungstenite = { workspace = true }
