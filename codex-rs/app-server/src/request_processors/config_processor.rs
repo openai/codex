@@ -420,6 +420,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .auto_review
             .map(|auto_review| AutoReviewRequirements {
                 required_on_models: auto_review.required_on_models,
+                ignore_rules: auto_review.ignore_rules,
             }),
         models: requirements.models.map(|models| ModelsRequirements {
             new_thread: models.new_thread.map(|new_thread| NewThreadModelDefaults {
@@ -652,6 +653,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_app_server_protocol::AutoReviewRequirements;
     use codex_app_server_protocol::FeedbackRequirements;
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::AutoReviewRequirementsToml;
@@ -728,7 +730,7 @@ mod tests {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
             auto_review: Some(AutoReviewRequirementsToml {
                 required_on_models: Some(vec!["gpt-protected".to_string()]),
-                ignore_rules: None,
+                ignore_rules: Some(vec!["gpt-protected".to_string()]),
             }),
             models: Some(ModelsRequirementsToml {
                 new_thread: Some(NewThreadModelDefaultsToml {
@@ -741,11 +743,11 @@ mod tests {
         });
 
         assert_eq!(
-            mapped
-                .auto_review
-                .expect("managed automatic-review requirements")
-                .required_on_models,
-            Some(vec!["gpt-protected".to_string()])
+            mapped.auto_review,
+            Some(AutoReviewRequirements {
+                required_on_models: Some(vec!["gpt-protected".to_string()]),
+                ignore_rules: Some(vec!["gpt-protected".to_string()]),
+            })
         );
         let models = mapped.models.expect("managed model requirements");
         let defaults = models.new_thread.expect("new-thread defaults");

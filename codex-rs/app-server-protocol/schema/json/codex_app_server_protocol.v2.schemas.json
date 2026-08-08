@@ -1246,6 +1246,15 @@
     },
     "AutoReviewRequirements": {
       "properties": {
+        "ignoreRules": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "requiredOnModels": {
           "items": {
             "type": "string"

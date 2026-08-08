@@ -187,6 +187,7 @@ async fn config_requirements_read_includes_model_auto_review_and_new_thread_defa
         r#"
 [auto_review]
 required_on_models = ["gpt-protected", "gpt-sensitive"]
+ignore_rules = ["gpt-protected"]
 
 [models.new_thread]
 model = "gpt-managed"
@@ -205,15 +206,19 @@ service_tier = "fast"
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let requirements = response.requirements.expect("managed requirements");
+    let auto_review = requirements
+        .auto_review
+        .expect("managed automatic-review requirements");
     assert_eq!(
-        requirements
-            .auto_review
-            .expect("managed automatic-review requirements")
-            .required_on_models,
+        auto_review.required_on_models,
         Some(vec![
             "gpt-protected".to_string(),
             "gpt-sensitive".to_string()
         ])
+    );
+    assert_eq!(
+        auto_review.ignore_rules,
+        Some(vec!["gpt-protected".to_string()])
     );
     let models = requirements.models.expect("managed model requirements");
     let defaults = models.new_thread.expect("managed new-thread defaults");

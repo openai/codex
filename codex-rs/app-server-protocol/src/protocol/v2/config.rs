@@ -413,6 +413,7 @@ pub struct ConfigRequirements {
 #[ts(export_to = "v2/")]
 pub struct AutoReviewRequirements {
     pub required_on_models: Option<Vec<String>>,
+    pub ignore_rules: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
