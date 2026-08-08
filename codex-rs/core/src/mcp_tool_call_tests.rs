@@ -22,7 +22,6 @@ use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_features::Features;
-use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::PermissionProfile;
@@ -203,20 +202,18 @@ print({hook_output:?})
         hook_list.hooks,
     );
 
-    session
-        .services
-        .hooks
-        .store(Arc::new(Hooks::new(HooksConfig {
-            feature_enabled: true,
-            config_layer_stack: Some(trusted_config_layer_stack),
-            shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
-            shell_args: if cfg!(windows) {
-                Vec::new()
-            } else {
-                vec!["-c".to_string()]
-            },
-            ..HooksConfig::default()
-        })));
+    let hooks = session.hooks().reconfigured(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(trusted_config_layer_stack),
+        shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
+        shell_args: if cfg!(windows) {
+            Vec::new()
+        } else {
+            vec!["-c".to_string()]
+        },
+        ..HooksConfig::default()
+    });
+    session.services.hooks.store(Arc::new(hooks));
 
     log_path.to_path_buf()
 }

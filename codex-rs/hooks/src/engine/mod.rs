@@ -26,6 +26,7 @@ use crate::output_spill::AdditionalContextLimit;
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
@@ -45,6 +46,7 @@ pub(crate) struct CommandShell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
     pub event_name: codex_protocol::protocol::HookEventName,
+    pub execution_mode: HookExecutionMode,
     pub matcher: Option<String>,
     pub command: String,
     pub timeout_sec: u64,
@@ -57,6 +59,11 @@ pub(crate) struct ConfiguredHandler {
 }
 
 impl ConfiguredHandler {
+    /// Only synchronous hooks can apply control effects.
+    pub(crate) fn can_apply_control_effects(&self) -> bool {
+        self.execution_mode == HookExecutionMode::Sync
+    }
+
     pub fn run_id(&self) -> String {
         format!(
             "{}:{}:{}",
@@ -107,7 +114,7 @@ pub struct HookListEntry {
 pub(crate) struct ClaudeHooksEngine {
     handlers: Vec<ConfiguredHandler>,
     warnings: Vec<String>,
-    command_runtime: CommandHookRuntime,
+    pub(crate) command_runtime: CommandHookRuntime,
 }
 
 impl ClaudeHooksEngine {
@@ -168,7 +175,10 @@ impl ClaudeHooksEngine {
         Duration::from_secs(
             self.handlers
                 .iter()
-                .filter(|handler| handler.event_name == HookEventName::PermissionRequest)
+                .filter(|handler| {
+                    handler.event_name == HookEventName::PermissionRequest
+                        && handler.execution_mode == HookExecutionMode::Sync
+                })
                 .map(|handler| handler.timeout_sec)
                 .max()
                 .unwrap_or_default(),
@@ -206,14 +216,13 @@ impl ClaudeHooksEngine {
         &self,
         request: PostToolUseRequest,
     ) -> PostToolUseOutcome {
-        let session_id = request.session_id;
         let mut outcome =
             crate::events::post_tool_use::run(&self.handlers, &self.command_runtime, request).await;
         if let Some(feedback_message) = outcome.feedback_message.take() {
             outcome.feedback_message = Some(
                 self.command_runtime
                     .output_spiller()
-                    .maybe_spill_text(session_id, feedback_message)
+                    .maybe_spill_text(feedback_message)
                     .await,
             );
         }
@@ -266,13 +275,12 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
-        let session_id = request.session_id;
         let mut outcome =
             crate::events::stop::run(&self.handlers, &self.command_runtime, request).await;
         outcome.continuation_fragments = self
             .command_runtime
             .output_spiller()
-            .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
+            .maybe_spill_prompt_fragments(outcome.continuation_fragments)
             .await;
         outcome
     }

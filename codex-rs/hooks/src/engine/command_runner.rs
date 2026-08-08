@@ -1,45 +1,162 @@
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::time::Duration;
 use std::time::Instant;
 
+use async_channel::Sender;
 #[cfg(windows)]
 use codex_utils_pty::JobObject;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tracing::Span;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::dispatcher::ParsedHandler;
 use super::dispatcher::hook_event_name_label;
 use super::dispatcher::hook_execution_mode_label;
 use super::dispatcher::hook_handler_type_label;
 use super::dispatcher::hook_scope_label;
 use super::dispatcher::hook_source_label;
 use super::dispatcher::scope_for_event;
+use crate::output_spill::AdditionalContext;
 use crate::output_spill::HookOutputSpiller;
-use codex_protocol::protocol::HookExecutionMode;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookHandlerType;
+use codex_protocol::protocol::HookOutputEntry;
+use codex_protocol::protocol::HookOutputEntryKind;
 
-/// Owns the shell and output spiller shared by a session's command hooks.
+const MAX_CONCURRENT_ASYNC_HOOKS: usize = 8;
+
+/// Owns command execution and bounded asynchronous work for one session.
 #[derive(Clone)]
 pub(crate) struct CommandHookRuntime {
     shell: CommandShell,
+    result_sender: Sender<HookCompletedEvent>,
+    state: Arc<Mutex<CommandHookRuntimeState>>,
     output_spiller: HookOutputSpiller,
 }
 
+struct CommandHookRuntimeState {
+    concurrency_limit: Arc<Semaphore>,
+    tasks: JoinSet<()>,
+}
+
+impl Default for CommandHookRuntimeState {
+    fn default() -> Self {
+        Self {
+            concurrency_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_ASYNC_HOOKS)),
+            tasks: JoinSet::new(),
+        }
+    }
+}
+
 impl CommandHookRuntime {
-    pub(crate) fn new(shell: CommandShell) -> Self {
+    pub(crate) fn new(
+        shell: CommandShell,
+        thread_id: ThreadId,
+        result_sender: Sender<HookCompletedEvent>,
+    ) -> Self {
         Self {
             shell,
-            output_spiller: HookOutputSpiller::new(),
+            result_sender,
+            state: Arc::new(Mutex::new(CommandHookRuntimeState::default())),
+            output_spiller: HookOutputSpiller::new(thread_id),
+        }
+    }
+
+    fn lock_state(&self) -> MutexGuard<'_, CommandHookRuntimeState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn reconfigured(&self, shell: CommandShell) -> Self {
+        Self {
+            shell,
+            result_sender: self.result_sender.clone(),
+            state: Arc::clone(&self.state),
+            output_spiller: self.output_spiller.clone(),
         }
     }
 
     pub(crate) fn output_spiller(&self) -> &HookOutputSpiller {
         &self.output_spiller
+    }
+
+    pub(crate) fn schedule_async_hook<T: 'static>(
+        &self,
+        handler: ConfiguredHandler,
+        input_json: String,
+        cwd: std::path::PathBuf,
+        turn_id: Option<String>,
+        parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
+    ) {
+        let mut state = self.lock_state();
+        if self.result_sender.is_closed() || state.concurrency_limit.is_closed() {
+            return;
+        }
+
+        while state.tasks.try_join_next().is_some() {}
+        let result_sender = self.result_sender.clone();
+        let concurrency_limit = Arc::clone(&state.concurrency_limit);
+        let runtime = self.clone();
+        state.tasks.spawn(async move {
+            let Ok(_permit) = concurrency_limit.acquire_owned().await else {
+                return;
+            };
+            let result = run_command(&runtime, &handler, &input_json, &cwd).await;
+            let mut hook_result = parse(&handler, result, turn_id).completed;
+            let mut entries = Vec::new();
+            let mut warnings = Vec::new();
+
+            for entry in std::mem::take(&mut hook_result.run.entries) {
+                match entry.kind {
+                    HookOutputEntryKind::Context => {
+                        if let Some(text) = runtime
+                            .output_spiller
+                            .maybe_spill_additional_contexts(vec![AdditionalContext {
+                                text: entry.text,
+                                limit: handler.additional_context_limit,
+                            }])
+                            .await
+                            .into_iter()
+                            .next()
+                        {
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Context,
+                                text,
+                            });
+                        }
+                    }
+                    HookOutputEntryKind::Warning => warnings.push(entry),
+                    HookOutputEntryKind::Error => entries.push(entry),
+                    HookOutputEntryKind::Stop | HookOutputEntryKind::Feedback => {}
+                }
+            }
+
+            entries.extend(warnings);
+            hook_result.run.entries = entries;
+            let _ = result_sender.try_send(hook_result);
+        });
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let mut tasks = {
+            let mut state = self.lock_state();
+            state.concurrency_limit.close();
+            std::mem::take(&mut state.tasks)
+        };
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
     }
 }
 
@@ -61,11 +178,10 @@ pub(crate) struct CommandRunResult {
     fields(
         hook.event_name = hook_event_name_label(handler.event_name),
         hook.handler_type = hook_handler_type_label(HookHandlerType::Command),
-        hook.execution_mode = hook_execution_mode_label(HookExecutionMode::Sync),
+        hook.execution_mode = hook_execution_mode_label(handler.execution_mode),
         hook.scope = hook_scope_label(scope_for_event(handler.event_name)),
         hook.source = hook_source_label(handler.source),
         hook.display_order = handler.display_order,
-        hook.configured_order = configured_order,
         hook.timeout_sec = handler.timeout_sec,
         hook.command_outcome = tracing::field::Empty,
     )
@@ -73,7 +189,6 @@ pub(crate) struct CommandRunResult {
 pub(crate) async fn run_command(
     runtime: &CommandHookRuntime,
     handler: &ConfiguredHandler,
-    configured_order: usize,
     input_json: &str,
     cwd: &Path,
 ) -> CommandRunResult {

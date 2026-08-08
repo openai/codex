@@ -216,24 +216,26 @@ fn parse_completed(
                             text: system_message,
                         });
                     }
-                    if let Some(invalid_reason) = parsed.invalid_reason {
-                        status = HookRunStatus::Failed;
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Error,
-                            text: invalid_reason,
-                        });
-                    } else if let Some(parsed_decision) = parsed.decision {
-                        match parsed_decision {
-                            output_parser::PermissionRequestDecision::Allow => {
-                                decision = Some(PermissionRequestDecision::Allow);
-                            }
-                            output_parser::PermissionRequestDecision::Deny { message } => {
-                                status = HookRunStatus::Blocked;
-                                entries.push(HookOutputEntry {
-                                    kind: HookOutputEntryKind::Feedback,
-                                    text: message.clone(),
-                                });
-                                decision = Some(PermissionRequestDecision::Deny { message });
+                    if handler.can_apply_control_effects() {
+                        if let Some(invalid_reason) = parsed.invalid_reason {
+                            status = HookRunStatus::Failed;
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Error,
+                                text: invalid_reason,
+                            });
+                        } else if let Some(parsed_decision) = parsed.decision {
+                            match parsed_decision {
+                                output_parser::PermissionRequestDecision::Allow => {
+                                    decision = Some(PermissionRequestDecision::Allow);
+                                }
+                                output_parser::PermissionRequestDecision::Deny { message } => {
+                                    status = HookRunStatus::Blocked;
+                                    entries.push(HookOutputEntry {
+                                        kind: HookOutputEntryKind::Feedback,
+                                        text: message.clone(),
+                                    });
+                                    decision = Some(PermissionRequestDecision::Deny { message });
+                                }
                             }
                         }
                     }
@@ -245,7 +247,7 @@ fn parse_completed(
                     });
                 }
             }
-            Some(2) => {
+            Some(2) if handler.can_apply_control_effects() => {
                 if let Some(message) = common::trimmed_non_empty(&run_result.stderr) {
                     status = HookRunStatus::Blocked;
                     entries.push(HookOutputEntry {

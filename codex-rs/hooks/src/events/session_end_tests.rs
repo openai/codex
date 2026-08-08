@@ -61,6 +61,7 @@ fn session_end_ignores_successful_output() {
 fn handler(matcher: Option<&str>) -> ConfiguredHandler {
     ConfiguredHandler {
         event_name: HookEventName::SessionEnd,
+        execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         matcher: matcher.map(str::to_string),
         command: "echo hook".to_string(),
         timeout_sec: 2,

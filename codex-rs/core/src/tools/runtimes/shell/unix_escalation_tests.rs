@@ -15,7 +15,6 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
-use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
@@ -536,16 +535,14 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         .derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
-    session
-        .services
-        .hooks
-        .store(Arc::new(Hooks::new(HooksConfig {
-            feature_enabled: true,
-            config_layer_stack: Some(trusted_config_layer_stack),
-            shell_program: Some(hook_shell_program),
-            shell_args: hook_shell_argv,
-            ..HooksConfig::default()
-        })));
+    let hooks = session.hooks().reconfigured(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(trusted_config_layer_stack),
+        shell_program: Some(hook_shell_program),
+        shell_args: hook_shell_argv,
+        ..HooksConfig::default()
+    });
+    session.services.hooks.store(Arc::new(hooks));
 
     Arc::make_mut(&mut turn_context.config)
         .permissions

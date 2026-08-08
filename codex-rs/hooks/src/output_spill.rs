@@ -42,10 +42,11 @@ pub(crate) struct HookOutputSpiller {
 }
 
 impl HookOutputSpiller {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(thread_id: ThreadId) -> Self {
         Self {
             output_dir: AbsolutePathBuf::resolve_path_against_base(std::env::temp_dir(), "/")
-                .join(HOOK_OUTPUTS_DIR),
+                .join(HOOK_OUTPUTS_DIR)
+                .join(thread_id.to_string()),
         }
     }
 
@@ -55,14 +56,13 @@ impl HookOutputSpiller {
     /// `<temp_dir>/hook_outputs/<thread_id>/`
     /// and replaced with the same head/tail preview style used for other truncated
     /// output, plus a path back to the preserved full text.
-    pub(crate) async fn maybe_spill_text(&self, thread_id: ThreadId, text: String) -> String {
-        self.maybe_spill_text_with_limit(thread_id, text, AdditionalContextLimit::default())
+    pub(crate) async fn maybe_spill_text(&self, text: String) -> String {
+        self.maybe_spill_text_with_limit(text, AdditionalContextLimit::default())
             .await
     }
 
     async fn maybe_spill_text_with_limit(
         &self,
-        thread_id: ThreadId,
         text: String,
         limit: AdditionalContextLimit,
     ) -> String {
@@ -71,7 +71,7 @@ impl HookOutputSpiller {
             return text;
         }
 
-        let path = hook_output_path(&self.output_dir, thread_id);
+        let path = self.output_dir.join(format!("{}.txt", Uuid::new_v4()));
         if let Some(parent) = path.parent()
             && let Err(err) = fs::create_dir_all(parent.as_ref()).await
         {
@@ -92,13 +92,12 @@ impl HookOutputSpiller {
 
     pub(crate) async fn maybe_spill_additional_contexts(
         &self,
-        thread_id: ThreadId,
         contexts: Vec<AdditionalContext>,
     ) -> Vec<String> {
         let mut spilled = Vec::with_capacity(contexts.len());
         for context in contexts {
             spilled.push(
-                self.maybe_spill_text_with_limit(thread_id, context.text, context.limit)
+                self.maybe_spill_text_with_limit(context.text, context.limit)
                     .await,
             );
         }
@@ -107,24 +106,17 @@ impl HookOutputSpiller {
 
     pub(crate) async fn maybe_spill_prompt_fragments(
         &self,
-        thread_id: ThreadId,
         fragments: Vec<HookPromptFragment>,
     ) -> Vec<HookPromptFragment> {
         let mut spilled = Vec::with_capacity(fragments.len());
         for fragment in fragments {
             spilled.push(HookPromptFragment {
-                text: self.maybe_spill_text(thread_id, fragment.text).await,
+                text: self.maybe_spill_text(fragment.text).await,
                 hook_run_id: fragment.hook_run_id,
             });
         }
         spilled
     }
-}
-
-fn hook_output_path(output_dir: &AbsolutePathBuf, thread_id: ThreadId) -> AbsolutePathBuf {
-    output_dir
-        .join(thread_id.to_string())
-        .join(format!("{}.txt", Uuid::new_v4()))
 }
 
 /// Builds the model-visible replacement for a spilled hook output.

@@ -112,7 +112,6 @@ pub(crate) async fn run(
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
-    let session_id = request.session_id;
     let matched = dispatcher::select_handlers(
         handlers,
         request.target.event_name(),
@@ -203,7 +202,7 @@ pub(crate) async fn run(
     );
     let additional_contexts = runtime
         .output_spiller()
-        .maybe_spill_additional_contexts(session_id, additional_contexts)
+        .maybe_spill_additional_contexts(additional_contexts)
         .await;
 
     SessionStartOutcome {
@@ -269,7 +268,8 @@ fn parse_completed(
                         );
                     }
                     let _ = parsed.universal.suppress_output;
-                    if handler.event_name == HookEventName::SessionStart
+                    if handler.can_apply_control_effects()
+                        && handler.event_name == HookEventName::SessionStart
                         && !parsed.universal.continue_processing
                     {
                         status = HookRunStatus::Stopped;
@@ -541,6 +541,7 @@ mod tests {
     fn handler_for(event_name: HookEventName) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 600,

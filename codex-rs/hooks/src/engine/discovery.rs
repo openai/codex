@@ -30,6 +30,7 @@ use crate::events::session_end::SESSION_END_DEFAULT_TIMEOUT_SEC;
 use crate::events::session_end::SESSION_END_MAX_TIMEOUT_SEC;
 use crate::output_spill::AdditionalContextLimit;
 use crate::output_spill::DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
@@ -473,14 +474,6 @@ fn append_matcher_groups(
                     } else {
                         command
                     };
-                    if r#async && event_name != codex_protocol::protocol::HookEventName::SessionEnd
-                    {
-                        warnings.push(format!(
-                            "skipping async hook in {}: async hooks are not supported yet",
-                            source.path.display()
-                        ));
-                        continue;
-                    }
                     if command.trim().is_empty() {
                         warnings.push(format!(
                             "skipping empty hook command in {}",
@@ -494,7 +487,14 @@ fn append_matcher_groups(
                         source.path.as_path(),
                         warnings,
                     );
-                    if r#async {
+                    let execution_mode = if r#async
+                        && event_name != codex_protocol::protocol::HookEventName::SessionEnd
+                    {
+                        HookExecutionMode::Async
+                    } else {
+                        HookExecutionMode::Sync
+                    };
+                    if r#async && execution_mode == HookExecutionMode::Sync {
                         warnings.push(format!(
                             "running async SessionEnd hook synchronously in {}",
                             source.path.display()
@@ -568,6 +568,7 @@ fn append_matcher_groups(
                     {
                         handlers.push(ConfiguredHandler {
                             event_name,
+                            execution_mode,
                             matcher: matcher.map(ToOwned::to_owned),
                             command,
                             timeout_sec,
@@ -956,6 +957,7 @@ mod tests {
             handlers,
             vec![ConfiguredHandler {
                 event_name: HookEventName::UserPromptSubmit,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 matcher: None,
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
@@ -992,6 +994,7 @@ mod tests {
             handlers,
             vec![ConfiguredHandler {
                 event_name: HookEventName::PreToolUse,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 matcher: Some("^Bash$".to_string()),
                 command: "echo hello".to_string(),
                 timeout_sec: 600,

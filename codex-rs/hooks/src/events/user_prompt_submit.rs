@@ -66,7 +66,6 @@ pub(crate) async fn run(
     runtime: &CommandHookRuntime,
     request: UserPromptSubmitRequest,
 ) -> UserPromptSubmitOutcome {
-    let session_id = request.session_id;
     let matched = dispatcher::select_handlers(
         handlers,
         HookEventName::UserPromptSubmit,
@@ -125,7 +124,7 @@ pub(crate) async fn run(
     );
     let additional_contexts = runtime
         .output_spiller()
-        .maybe_spill_additional_contexts(session_id, additional_contexts)
+        .maybe_spill_additional_contexts(additional_contexts)
         .await;
 
     UserPromptSubmitOutcome {
@@ -168,7 +167,8 @@ fn parse_completed(
                             text: system_message,
                         });
                     }
-                    if parsed.invalid_block_reason.is_none()
+                    if (!handler.can_apply_control_effects()
+                        || parsed.invalid_block_reason.is_none())
                         && let Some(additional_context) = parsed.additional_context
                     {
                         common::append_additional_context(
@@ -179,31 +179,33 @@ fn parse_completed(
                         );
                     }
                     let _ = parsed.universal.suppress_output;
-                    if !parsed.universal.continue_processing {
-                        status = HookRunStatus::Stopped;
-                        should_stop = true;
-                        stop_reason = parsed.universal.stop_reason.clone();
-                        if let Some(stop_reason_text) = parsed.universal.stop_reason {
+                    if handler.can_apply_control_effects() {
+                        if !parsed.universal.continue_processing {
+                            status = HookRunStatus::Stopped;
+                            should_stop = true;
+                            stop_reason = parsed.universal.stop_reason.clone();
+                            if let Some(stop_reason_text) = parsed.universal.stop_reason {
+                                entries.push(HookOutputEntry {
+                                    kind: HookOutputEntryKind::Stop,
+                                    text: stop_reason_text,
+                                });
+                            }
+                        } else if let Some(invalid_block_reason) = parsed.invalid_block_reason {
+                            status = HookRunStatus::Failed;
                             entries.push(HookOutputEntry {
-                                kind: HookOutputEntryKind::Stop,
-                                text: stop_reason_text,
+                                kind: HookOutputEntryKind::Error,
+                                text: invalid_block_reason,
                             });
-                        }
-                    } else if let Some(invalid_block_reason) = parsed.invalid_block_reason {
-                        status = HookRunStatus::Failed;
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Error,
-                            text: invalid_block_reason,
-                        });
-                    } else if parsed.should_block {
-                        status = HookRunStatus::Blocked;
-                        should_stop = true;
-                        stop_reason = parsed.reason.clone();
-                        if let Some(reason) = parsed.reason {
-                            entries.push(HookOutputEntry {
-                                kind: HookOutputEntryKind::Feedback,
-                                text: reason,
-                            });
+                        } else if parsed.should_block {
+                            status = HookRunStatus::Blocked;
+                            should_stop = true;
+                            stop_reason = parsed.reason.clone();
+                            if let Some(reason) = parsed.reason {
+                                entries.push(HookOutputEntry {
+                                    kind: HookOutputEntryKind::Feedback,
+                                    text: reason,
+                                });
+                            }
                         }
                     }
                 } else if output_parser::looks_like_json(&run_result.stdout) {
@@ -222,7 +224,7 @@ fn parse_completed(
                     );
                 }
             }
-            Some(2) => {
+            Some(2) if handler.can_apply_control_effects() => {
                 if let Some(reason) = common::trimmed_non_empty(&run_result.stderr) {
                     status = HookRunStatus::Blocked;
                     should_stop = true;
@@ -284,6 +286,7 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> UserPr
 #[cfg(test)]
 mod tests {
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
@@ -377,13 +380,10 @@ mod tests {
 
     #[test]
     fn claude_block_decision_requires_reason() {
+        let stdout = r#"{"decision":"block","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"do not inject"}}"#;
         let parsed = parse_completed(
             &handler(),
-            run_result(
-                Some(0),
-                r#"{"decision":"block","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"do not inject"}}"#,
-                "",
-            ),
+            run_result(Some(0), stdout, ""),
             Some("turn-1".to_string()),
         );
 
@@ -403,6 +403,22 @@ mod tests {
                 text: "UserPromptSubmit hook returned decision:block without a non-empty reason"
                     .to_string(),
             }]
+        );
+
+        let mut async_handler = handler();
+        async_handler.execution_mode = HookExecutionMode::Async;
+        let parsed = parse_completed(
+            &async_handler,
+            run_result(Some(0), stdout, ""),
+            Some("turn-1".to_string()),
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Context,
+                text: "do not inject".to_string(),
+            }],
         );
     }
 
@@ -430,11 +446,22 @@ mod tests {
                 text: "blocked by policy".to_string(),
             }]
         );
+
+        let mut async_handler = handler();
+        async_handler.execution_mode = HookExecutionMode::Async;
+        let parsed = parse_completed(
+            &async_handler,
+            run_result(Some(2), "", "blocked by policy\n"),
+            Some("turn-1".to_string()),
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert!(!parsed.data.should_stop);
     }
 
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::UserPromptSubmit,
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 5,

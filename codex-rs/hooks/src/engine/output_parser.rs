@@ -62,12 +62,6 @@ pub(crate) struct StopOutput {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PreCompactOutput {
-    pub universal: UniversalOutput,
-    pub invalid_reason: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct StatelessHookOutput {
     pub universal: UniversalOutput,
     pub invalid_reason: Option<String>,
@@ -238,10 +232,10 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
     })
 }
 
-pub(crate) fn parse_pre_compact(stdout: &str) -> Option<PreCompactOutput> {
+pub(crate) fn parse_pre_compact(stdout: &str) -> Option<StatelessHookOutput> {
     let wire: PreCompactCommandOutputWire = parse_json(stdout)?;
     let universal = UniversalOutput::from(wire.universal);
-    Some(PreCompactOutput {
+    Some(StatelessHookOutput {
         universal,
         invalid_reason: None,
     })
@@ -519,6 +513,25 @@ mod tests {
     use serde_json::json;
 
     use super::parse_permission_request;
+    use super::parse_user_prompt_submit;
+
+    #[test]
+    fn structured_output_rejects_invalid_shapes_and_types() {
+        for stdout in [
+            "[]",
+            r#"{"systemMessage":123}"#,
+            r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":123}}"#,
+            r#"{"hookSpecificOutput":{"additionalContext":"missing event name"}}"#,
+            r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","updatedInput":{}}}"#,
+            r#"{"unexpectedField":true}"#,
+            "{",
+        ] {
+            assert!(
+                parse_user_prompt_submit(stdout).is_none(),
+                "invalid structured output should fail: {stdout}",
+            );
+        }
+    }
 
     #[test]
     fn permission_request_rejects_reserved_updated_input_field() {

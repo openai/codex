@@ -590,6 +590,9 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     }
     let _ = sess.conversation.shutdown().await;
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    sess.hooks().shutdown().await;
+    sess.async_hook_results.close();
+    while sess.async_hook_results.try_recv().is_ok() {}
     sess.services
         .unified_exec_manager
         .terminate_all_processes()

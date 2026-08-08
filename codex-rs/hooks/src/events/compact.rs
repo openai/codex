@@ -230,86 +230,13 @@ fn parse_pre_completed(
     run_result: CommandRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<CompactHandlerData> {
-    let mut entries = Vec::new();
-    let mut status = HookRunStatus::Completed;
-    let mut should_stop = false;
-    let mut stop_reason = None;
-
-    match run_result.error.as_deref() {
-        Some(error) => {
-            status = HookRunStatus::Failed;
-            entries.push(HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: error.to_string(),
-            });
-        }
-        None => match run_result.exit_code {
-            Some(0) => {
-                let trimmed_stdout = run_result.stdout.trim();
-                if trimmed_stdout.is_empty() {
-                } else if let Some(parsed) = output_parser::parse_pre_compact(&run_result.stdout) {
-                    if let Some(system_message) = parsed.universal.system_message {
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Warning,
-                            text: system_message,
-                        });
-                    }
-                    let _ = parsed.universal.suppress_output;
-                    if !parsed.universal.continue_processing {
-                        status = HookRunStatus::Stopped;
-                        should_stop = true;
-                        stop_reason = parsed.universal.stop_reason.clone();
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Stop,
-                            text: parsed
-                                .universal
-                                .stop_reason
-                                .unwrap_or_else(|| "PreCompact hook stopped execution".to_string()),
-                        });
-                    } else if let Some(invalid_reason) = parsed.invalid_reason {
-                        status = HookRunStatus::Failed;
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Error,
-                            text: invalid_reason,
-                        });
-                    }
-                } else if output_parser::looks_like_json(&run_result.stdout) {
-                    status = HookRunStatus::Failed;
-                    entries.push(HookOutputEntry {
-                        kind: HookOutputEntryKind::Error,
-                        text: "hook returned invalid PreCompact hook JSON output".to_string(),
-                    });
-                }
-            }
-            Some(code) => {
-                status = HookRunStatus::Failed;
-                entries.push(HookOutputEntry {
-                    kind: HookOutputEntryKind::Error,
-                    text: common::trimmed_non_empty(&run_result.stderr)
-                        .unwrap_or_else(|| format!("hook exited with code {code}")),
-                });
-            }
-            None => {
-                status = HookRunStatus::Failed;
-                entries.push(HookOutputEntry {
-                    kind: HookOutputEntryKind::Error,
-                    text: "hook process terminated without an exit code".to_string(),
-                });
-            }
-        },
-    }
-
-    dispatcher::ParsedHandler {
-        completed: HookCompletedEvent {
-            turn_id,
-            run: dispatcher::completed_summary(handler, &run_result, status, entries),
-        },
-        data: CompactHandlerData {
-            should_stop,
-            stop_reason,
-        },
-        completion_order: 0,
-    }
+    parse_completed(
+        handler,
+        run_result,
+        turn_id,
+        "PreCompact",
+        output_parser::parse_pre_compact,
+    )
 }
 
 fn parse_post_completed(
@@ -358,23 +285,24 @@ fn parse_completed(
                         });
                     }
                     let _ = parsed.universal.suppress_output;
-                    if !parsed.universal.continue_processing {
-                        status = HookRunStatus::Stopped;
-                        should_stop = true;
-                        stop_reason = parsed.universal.stop_reason.clone();
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Stop,
-                            text: parsed
-                                .universal
-                                .stop_reason
-                                .unwrap_or_else(|| format!("{event_label} hook stopped execution")),
-                        });
-                    } else if let Some(invalid_reason) = parsed.invalid_reason {
-                        status = HookRunStatus::Failed;
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Error,
-                            text: invalid_reason,
-                        });
+                    if handler.can_apply_control_effects() {
+                        if !parsed.universal.continue_processing {
+                            status = HookRunStatus::Stopped;
+                            should_stop = true;
+                            stop_reason = parsed.universal.stop_reason.clone();
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Stop,
+                                text: parsed.universal.stop_reason.unwrap_or_else(|| {
+                                    format!("{event_label} hook stopped execution")
+                                }),
+                            });
+                        } else if let Some(invalid_reason) = parsed.invalid_reason {
+                            status = HookRunStatus::Failed;
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Error,
+                                text: invalid_reason,
+                            });
+                        }
                     }
                 } else if output_parser::looks_like_json(&run_result.stdout) {
                     status = HookRunStatus::Failed;
@@ -598,6 +526,7 @@ mod tests {
     fn handler(event_name: HookEventName) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             matcher: None,
             command: "python3 compact_hook.py".to_string(),
             timeout_sec: 5,

@@ -73,7 +73,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         id: handler.run_id(),
         event_name: handler.event_name,
         handler_type: HookHandlerType::Command,
-        execution_mode: HookExecutionMode::Sync,
+        execution_mode: handler.execution_mode,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
         source: handler.source,
@@ -87,7 +87,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     }
 }
 
-pub(crate) async fn execute_handlers<T>(
+pub(crate) async fn execute_handlers<T: 'static>(
     runtime: &CommandHookRuntime,
     handlers: Vec<ConfiguredHandler>,
     input_json: String,
@@ -97,10 +97,20 @@ pub(crate) async fn execute_handlers<T>(
 ) -> Vec<ParsedHandler<T>> {
     let mut pending = FuturesUnordered::new();
     for (configured_order, handler) in handlers.into_iter().enumerate() {
+        if handler.execution_mode == HookExecutionMode::Async {
+            runtime.schedule_async_hook(
+                handler,
+                input_json.clone(),
+                cwd.to_path_buf(),
+                turn_id.clone(),
+                parse,
+            );
+            continue;
+        }
         let input_json = input_json.clone();
         let turn_id = turn_id.clone();
         pending.push(async move {
-            let result = run_command(runtime, &handler, configured_order, &input_json, cwd).await;
+            let result = run_command(runtime, &handler, &input_json, cwd).await;
             (configured_order, parse(&handler, result, turn_id))
         });
     }
@@ -126,7 +136,7 @@ pub(crate) fn completed_summary(
         id: handler.run_id(),
         event_name: handler.event_name,
         handler_type: HookHandlerType::Command,
-        execution_mode: HookExecutionMode::Sync,
+        execution_mode: handler.execution_mode,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
         source: handler.source,
@@ -232,6 +242,7 @@ mod tests {
     ) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             matcher: matcher.map(str::to_owned),
             command: command.to_string(),
             timeout_sec: 5,
