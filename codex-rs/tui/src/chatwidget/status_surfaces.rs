@@ -1115,7 +1115,12 @@ fn permissions_display(config: &Config) -> String {
         return "Workspace".to_string();
     }
     if permission_profile == PermissionProfile::Disabled {
-        return "Full Access".to_string();
+        let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
+        return if approval_policy == AskForApproval::Never {
+            "Full Access".to_string()
+        } else {
+            "No Sandbox".to_string()
+        };
     }
 
     "Custom permissions".to_string()
