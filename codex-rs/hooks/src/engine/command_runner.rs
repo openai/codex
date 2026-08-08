@@ -4,6 +4,8 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(windows)]
+use codex_utils_pty::JobObject;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -17,8 +19,29 @@ use super::dispatcher::hook_handler_type_label;
 use super::dispatcher::hook_scope_label;
 use super::dispatcher::hook_source_label;
 use super::dispatcher::scope_for_event;
+use crate::output_spill::HookOutputSpiller;
 use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
+
+/// Owns the shell and output spiller shared by a session's command hooks.
+#[derive(Clone)]
+pub(crate) struct CommandHookRuntime {
+    shell: CommandShell,
+    output_spiller: HookOutputSpiller,
+}
+
+impl CommandHookRuntime {
+    pub(crate) fn new(shell: CommandShell) -> Self {
+        Self {
+            shell,
+            output_spiller: HookOutputSpiller::new(),
+        }
+    }
+
+    pub(crate) fn output_spiller(&self) -> &HookOutputSpiller {
+        &self.output_spiller
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct CommandRunResult {
@@ -48,7 +71,7 @@ pub(crate) struct CommandRunResult {
     )
 )]
 pub(crate) async fn run_command(
-    shell: &CommandShell,
+    runtime: &CommandHookRuntime,
     handler: &ConfiguredHandler,
     configured_order: usize,
     input_json: &str,
@@ -57,7 +80,7 @@ pub(crate) async fn run_command(
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
 
-    let mut command = build_command(shell, handler);
+    let mut command = build_command(&runtime.shell, handler);
     command
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -65,7 +88,27 @@ pub(crate) async fn run_command(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let mut child = match command.spawn() {
+    #[cfg(unix)]
+    command.process_group(0);
+
+    #[cfg(windows)]
+    let mut process_tree_job = JobObject::create().ok();
+    #[cfg(windows)]
+    let child = match process_tree_job.as_ref() {
+        Some(job) => match job.spawn_contained(&mut command) {
+            Ok(child) => Ok(child),
+            Err(_) => {
+                process_tree_job = None;
+                command.creation_flags(0);
+                command.spawn()
+            }
+        },
+        None => command.spawn(),
+    };
+    #[cfg(not(windows))]
+    let child = command.spawn();
+
+    let mut child = match child {
         Ok(child) => child,
         Err(err) => {
             return finish_command_run(
@@ -80,6 +123,12 @@ pub(crate) async fn run_command(
                 },
             );
         }
+    };
+
+    let mut process_tree_guard = ProcessTreeGuard {
+        process_id: child.id(),
+        #[cfg(windows)]
+        job: process_tree_job,
     };
 
     if let Some(mut stdin) = child.stdin.take()
@@ -102,17 +151,25 @@ pub(crate) async fn run_command(
 
     let timeout_duration = Duration::from_secs(handler.timeout_sec);
     match timeout(timeout_duration, child.wait_with_output()).await {
-        Ok(Ok(output)) => finish_command_run(
-            started_at,
-            started,
-            CommandRunCompletion {
-                exit_code: output.status.code(),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                error: None,
-                outcome: "completed",
-            },
-        ),
+        Ok(Ok(output)) => {
+            // Successfully completed hooks may intentionally leave detached helpers running.
+            #[cfg(windows)]
+            if let Some(job) = process_tree_guard.job.as_ref() {
+                let _ = job.preserve_descendants();
+            }
+            process_tree_guard.process_id = None;
+            finish_command_run(
+                started_at,
+                started,
+                CommandRunCompletion {
+                    exit_code: output.status.code(),
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    error: None,
+                    outcome: "completed",
+                },
+            )
+        }
         Ok(Err(err)) => finish_command_run(
             started_at,
             started,
@@ -135,6 +192,40 @@ pub(crate) async fn run_command(
                 outcome: "timeout",
             },
         ),
+    }
+}
+
+// Needed only until command hooks move to the exec server, which owns process-tree cleanup.
+struct ProcessTreeGuard {
+    process_id: Option<u32>,
+    #[cfg(windows)]
+    job: Option<JobObject>,
+}
+
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {
+        let Some(process_id) = self.process_id else {
+            return;
+        };
+
+        #[cfg(unix)]
+        {
+            let _ = codex_utils_pty::process_group::kill_process_group(process_id);
+        }
+
+        #[cfg(windows)]
+        {
+            if let Some(job) = self.job.as_ref() {
+                let _ = job.terminate();
+            } else {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &process_id.to_string(), "/T", "/F"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+            }
+        }
     }
 }
 

@@ -10,8 +10,8 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
+use crate::engine::command_runner::CommandHookRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -71,7 +71,7 @@ pub(crate) fn preview_pre(
 
 pub(crate) async fn run_pre(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    runtime: &CommandHookRuntime,
     request: PreCompactRequest,
 ) -> PreCompactOutcome {
     let matched = dispatcher::select_handlers(
@@ -103,7 +103,7 @@ pub(crate) async fn run_pre(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
+        runtime,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -153,7 +153,7 @@ pub(crate) fn preview_post(
 
 pub(crate) async fn run_post(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
+    runtime: &CommandHookRuntime,
     request: PostCompactRequest,
 ) -> StatelessHookOutcome {
     let matched = dispatcher::select_handlers(
@@ -185,7 +185,7 @@ pub(crate) async fn run_post(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
+        runtime,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -436,7 +436,8 @@ mod tests {
 
     #[test]
     fn pre_compact_input_includes_lifecycle_metadata() {
-        let input_json = pre_command_input_json(&pre_request()).expect("serialize command input");
+        let request = pre_request();
+        let input_json = pre_command_input_json(&request).expect("serialize command input");
         let input: serde_json::Value =
             serde_json::from_str(&input_json).expect("parse command input");
 
@@ -456,7 +457,8 @@ mod tests {
 
     #[test]
     fn post_compact_input_includes_lifecycle_metadata() {
-        let input_json = post_command_input_json(&post_request()).expect("serialize command input");
+        let request = post_request();
+        let input_json = post_command_input_json(&request).expect("serialize command input");
         let input: serde_json::Value =
             serde_json::from_str(&input_json).expect("parse command input");
 

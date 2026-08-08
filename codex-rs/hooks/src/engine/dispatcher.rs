@@ -11,8 +11,8 @@ use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookScope;
 
-use super::CommandShell;
 use super::ConfiguredHandler;
+use super::command_runner::CommandHookRuntime;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
 use crate::events::common::matches_matcher;
@@ -88,7 +88,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
 }
 
 pub(crate) async fn execute_handlers<T>(
-    shell: &CommandShell,
+    runtime: &CommandHookRuntime,
     handlers: Vec<ConfiguredHandler>,
     input_json: String,
     cwd: &Path,
@@ -100,7 +100,7 @@ pub(crate) async fn execute_handlers<T>(
         let input_json = input_json.clone();
         let turn_id = turn_id.clone();
         pending.push(async move {
-            let result = run_command(shell, &handler, configured_order, &input_json, cwd).await;
+            let result = run_command(runtime, &handler, configured_order, &input_json, cwd).await;
             (configured_order, parse(&handler, result, turn_id))
         });
     }

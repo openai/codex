@@ -8,6 +8,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
+use super::CommandHookRuntime;
 use super::CommandShell;
 use super::ConfiguredHandler;
 use super::run_command;
@@ -51,7 +52,7 @@ async fn cmd_shell_runs_quoted_hook_command_path() {
 
     for shell in shells {
         let result = run_command(
-            &shell,
+            &CommandHookRuntime::new(shell),
             &handler,
             /*configured_order*/ 0,
             "{}",
@@ -89,7 +90,7 @@ async fn fast_exiting_hook_preserves_stdout_when_stdin_is_not_consumed() {
     let input_json = format!(r#"{{"padding":"{}"}}"#, "x".repeat(1024 * 1024));
 
     let result = run_command(
-        &shell,
+        &CommandHookRuntime::new(shell),
         &handler,
         /*configured_order*/ 0,
         &input_json,

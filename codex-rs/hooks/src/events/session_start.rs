@@ -10,13 +10,12 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
-use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
+use crate::engine::command_runner::CommandHookRuntime;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::output_spill::AdditionalContext;
-use crate::output_spill::HookOutputSpiller;
 use crate::schema::NullableString;
 use crate::schema::SessionStartCommandInput;
 use crate::schema::SubagentStartCommandInput;
@@ -109,8 +108,7 @@ pub(crate) fn preview(
 
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
-    shell: &CommandShell,
-    output_spiller: &HookOutputSpiller,
+    runtime: &CommandHookRuntime,
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
@@ -185,7 +183,7 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
+        runtime,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -203,7 +201,8 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
-    let additional_contexts = output_spiller
+    let additional_contexts = runtime
+        .output_spiller()
         .maybe_spill_additional_contexts(session_id, additional_contexts)
         .await;
 

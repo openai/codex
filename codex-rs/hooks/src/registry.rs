@@ -6,6 +6,7 @@ use tokio::process::Command;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
+use crate::engine::command_runner::CommandHookRuntime;
 use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactOutcome;
 use crate::events::compact::PreCompactRequest;
@@ -67,16 +68,17 @@ impl Hooks {
             .map(crate::notify_hook)
             .into_iter()
             .collect();
+        let command_runtime = CommandHookRuntime::new(CommandShell {
+            program: config.shell_program.unwrap_or_default(),
+            args: config.shell_args,
+        });
         let engine = ClaudeHooksEngine::new(
             config.feature_enabled,
             config.bypass_hook_trust,
             config.config_layer_stack.as_ref(),
             config.plugin_hook_sources,
             config.plugin_hook_load_warnings,
-            CommandShell {
-                program: config.shell_program.unwrap_or_default(),
-                args: config.shell_args,
-            },
+            command_runtime,
         );
         Self {
             after_agent,

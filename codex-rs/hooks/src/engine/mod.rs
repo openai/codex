@@ -23,10 +23,8 @@ use crate::events::stop::StopRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::AdditionalContextLimit;
-use crate::output_spill::HookOutputSpiller;
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
-use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunSummary;
@@ -35,6 +33,8 @@ use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::time::Duration;
+
+use command_runner::CommandHookRuntime;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -107,8 +107,7 @@ pub struct HookListEntry {
 pub(crate) struct ClaudeHooksEngine {
     handlers: Vec<ConfiguredHandler>,
     warnings: Vec<String>,
-    shell: CommandShell,
-    output_spiller: HookOutputSpiller,
+    command_runtime: CommandHookRuntime,
 }
 
 impl ClaudeHooksEngine {
@@ -118,14 +117,13 @@ impl ClaudeHooksEngine {
         config_layer_stack: Option<&ConfigLayerStack>,
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
-        shell: CommandShell,
+        command_runtime: CommandHookRuntime,
     ) -> Self {
         if !enabled {
             return Self {
                 handlers: Vec::new(),
                 warnings: Vec::new(),
-                shell,
-                output_spiller: HookOutputSpiller::new(),
+                command_runtime,
             };
         }
 
@@ -136,11 +134,11 @@ impl ClaudeHooksEngine {
             plugin_hook_load_warnings,
             bypass_hook_trust,
         );
+
         Self {
             handlers: discovered.handlers,
             warnings: discovered.warnings,
-            shell,
-            output_spiller: HookOutputSpiller::new(),
+            command_runtime,
         }
     }
 
@@ -189,26 +187,19 @@ impl ClaudeHooksEngine {
         request: SessionStartRequest,
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
-        crate::events::session_start::run(
-            &self.handlers,
-            &self.shell,
-            &self.output_spiller,
-            request,
-            turn_id,
-        )
-        .await
+        crate::events::session_start::run(&self.handlers, &self.command_runtime, request, turn_id)
+            .await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
-        crate::events::pre_tool_use::run(&self.handlers, &self.shell, &self.output_spiller, request)
-            .await
+        crate::events::pre_tool_use::run(&self.handlers, &self.command_runtime, request).await
     }
 
     pub(crate) async fn run_permission_request(
         &self,
         request: PermissionRequestRequest,
     ) -> PermissionRequestOutcome {
-        crate::events::permission_request::run(&self.handlers, &self.shell, request).await
+        crate::events::permission_request::run(&self.handlers, &self.command_runtime, request).await
     }
 
     pub(crate) async fn run_post_tool_use(
@@ -216,16 +207,16 @@ impl ClaudeHooksEngine {
         request: PostToolUseRequest,
     ) -> PostToolUseOutcome {
         let session_id = request.session_id;
-        let mut outcome = crate::events::post_tool_use::run(
-            &self.handlers,
-            &self.shell,
-            &self.output_spiller,
-            request,
-        )
-        .await;
-        outcome.feedback_message = self
-            .maybe_spill_text(session_id, outcome.feedback_message)
-            .await;
+        let mut outcome =
+            crate::events::post_tool_use::run(&self.handlers, &self.command_runtime, request).await;
+        if let Some(feedback_message) = outcome.feedback_message.take() {
+            outcome.feedback_message = Some(
+                self.command_runtime
+                    .output_spiller()
+                    .maybe_spill_text(session_id, feedback_message)
+                    .await,
+            );
+        }
         outcome
     }
 
@@ -234,7 +225,7 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) async fn run_pre_compact(&self, request: PreCompactRequest) -> PreCompactOutcome {
-        crate::events::compact::run_pre(&self.handlers, &self.shell, request).await
+        crate::events::compact::run_pre(&self.handlers, &self.command_runtime, request).await
     }
 
     pub(crate) fn preview_post_compact(&self, request: &PostCompactRequest) -> Vec<HookRunSummary> {
@@ -245,7 +236,7 @@ impl ClaudeHooksEngine {
         &self,
         request: PostCompactRequest,
     ) -> StatelessHookOutcome {
-        crate::events::compact::run_post(&self.handlers, &self.shell, request).await
+        crate::events::compact::run_post(&self.handlers, &self.command_runtime, request).await
     }
 
     pub(crate) fn preview_user_prompt_submit(
@@ -259,13 +250,7 @@ impl ClaudeHooksEngine {
         &self,
         request: UserPromptSubmitRequest,
     ) -> UserPromptSubmitOutcome {
-        crate::events::user_prompt_submit::run(
-            &self.handlers,
-            &self.shell,
-            &self.output_spiller,
-            request,
-        )
-        .await
+        crate::events::user_prompt_submit::run(&self.handlers, &self.command_runtime, request).await
     }
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
@@ -277,33 +262,19 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
-        crate::events::session_end::run(&self.handlers, &self.shell, request).await
+        crate::events::session_end::run(&self.handlers, &self.command_runtime, request).await
     }
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         let session_id = request.session_id;
-        let mut outcome = crate::events::stop::run(&self.handlers, &self.shell, request).await;
+        let mut outcome =
+            crate::events::stop::run(&self.handlers, &self.command_runtime, request).await;
         outcome.continuation_fragments = self
+            .command_runtime
+            .output_spiller()
             .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
             .await;
         outcome
-    }
-
-    async fn maybe_spill_text(&self, session_id: ThreadId, text: Option<String>) -> Option<String> {
-        match text {
-            Some(text) => Some(self.output_spiller.maybe_spill_text(session_id, text).await),
-            None => None,
-        }
-    }
-
-    async fn maybe_spill_prompt_fragments(
-        &self,
-        session_id: ThreadId,
-        fragments: Vec<codex_protocol::items::HookPromptFragment>,
-    ) -> Vec<codex_protocol::items::HookPromptFragment> {
-        self.output_spiller
-            .maybe_spill_prompt_fragments(session_id, fragments)
-            .await
     }
 }
 
