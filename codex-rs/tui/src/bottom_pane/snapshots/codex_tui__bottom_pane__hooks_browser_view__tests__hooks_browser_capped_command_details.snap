@@ -14,6 +14,7 @@ expression: "render_lines(&view, 44)"
   Command   one two three four five six     
             seven eight nine ten eleven     
             twelve thirteen fourteen…       
+  Mode      Sync                            
   Timeout   30s                             
   Trust     Trusted                         
                                             

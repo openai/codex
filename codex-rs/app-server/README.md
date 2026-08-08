@@ -1926,6 +1926,8 @@ For linked Git worktrees, project hook declarations come from the matching `.cod
 
 Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
 
+`executionMode` reports how a command hook runs. `sync` hooks participate in the current operation, while `async` hooks run in the background and deliver informational output through the existing steer-based injection path. Output is injected immediately into an active turn or persisted without starting a new turn when the session is idle.
+
 For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
@@ -1948,6 +1950,7 @@ For unmanaged hooks, `currentHash` and `trustStatus` describe whether the curren
         "key": "/Users/me/.codex/config.toml:pre_tool_use:0:0",
         "eventName": "pre_tool_use",
         "handlerType": "command",
+        "executionMode": "sync",
         "isManaged": false,
         "matcher": "Bash",
         "command": "python3 /Users/me/hook.py",

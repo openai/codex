@@ -8,6 +8,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookExecutionMode;
 use codex_app_server_protocol::HookHandlerType;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
@@ -45,6 +46,7 @@ fn command_hook_hash(
     matcher: Option<&str>,
     command: &str,
     timeout_sec: u64,
+    execution_mode: HookExecutionMode,
     status_message: Option<&str>,
     additional_context_limit: Option<usize>,
 ) -> String {
@@ -56,7 +58,7 @@ fn command_hook_hash(
                 command: command.to_string(),
                 command_windows: None,
                 timeout_sec: Some(timeout_sec),
-                r#async: false,
+                r#async: execution_mode == HookExecutionMode::Async,
                 status_message: status_message.map(ToOwned::to_owned),
                 additional_context_limit,
             }],
@@ -80,6 +82,7 @@ matcher = "Bash"
 type = "command"
 command = "python3 /tmp/listed-hook.py"
 timeout = 5
+async = true
 statusMessage = "running listed hook"
 additionalContextLimit = 4096
 "#,
@@ -161,6 +164,7 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
                 key: format!("{}:pre_tool_use:0:0", config_path.as_path().display()),
                 event_name: HookEventName::PreToolUse,
                 handler_type: HookHandlerType::Command,
+                execution_mode: HookExecutionMode::Async,
                 matcher: Some("Bash".to_string()),
                 command: Some("python3 /tmp/listed-hook.py".to_string()),
                 timeout_sec: 5,
@@ -177,6 +181,7 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
                     Some("Bash"),
                     "python3 /tmp/listed-hook.py",
                     /*timeout_sec*/ 5,
+                    HookExecutionMode::Async,
                     Some("running listed hook"),
                     /*additional_context_limit*/ Some(4_096),
                 ),
@@ -240,6 +245,7 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
                 key: "demo@test:hooks/hooks.json:pre_tool_use:0:0".to_string(),
                 event_name: HookEventName::PreToolUse,
                 handler_type: HookHandlerType::Command,
+                execution_mode: HookExecutionMode::Sync,
                 matcher: Some("Bash".to_string()),
                 command: Some("echo plugin hook".to_string()),
                 timeout_sec: 7,
@@ -256,6 +262,7 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
                     Some("Bash"),
                     "echo plugin hook",
                     /*timeout_sec*/ 7,
+                    HookExecutionMode::Sync,
                     Some("running plugin hook"),
                     /*additional_context_limit*/ None,
                 ),
@@ -436,6 +443,7 @@ timeout = 5
                     ),
                     event_name: HookEventName::PreToolUse,
                     handler_type: HookHandlerType::Command,
+                    execution_mode: HookExecutionMode::Sync,
                     matcher: Some("Bash".to_string()),
                     command: Some("echo project hook".to_string()),
                     timeout_sec: 5,
@@ -452,6 +460,7 @@ timeout = 5
                         Some("Bash"),
                         "echo project hook",
                         /*timeout_sec*/ 5,
+                        HookExecutionMode::Sync,
                         /*status_message*/ None,
                         /*additional_context_limit*/ None,
                     ),
