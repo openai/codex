@@ -17,6 +17,8 @@ use anyhow::bail;
 use codex_exec_server::Environment;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::shell_environment::policy_explicitly_includes_inherited_rust_log;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use tokio::fs;
@@ -33,6 +35,7 @@ pub(crate) struct ShellSnapshot {
 struct ShellSnapshotConfig {
     codex_home: AbsolutePathBuf,
     session_id: ThreadId,
+    shell_environment_policy: ShellEnvironmentPolicy,
     session_telemetry: SessionTelemetry,
     state_db: Option<StateDbHandle>,
 }
@@ -50,6 +53,7 @@ impl ShellSnapshot {
     pub(crate) fn new(
         codex_home: AbsolutePathBuf,
         session_id: ThreadId,
+        shell_environment_policy: ShellEnvironmentPolicy,
         session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
     ) -> Self {
@@ -57,6 +61,7 @@ impl ShellSnapshot {
             config: Some(Arc::new(ShellSnapshotConfig {
                 codex_home,
                 session_id,
+                shell_environment_policy,
                 session_telemetry,
                 state_db,
             })),
@@ -100,6 +105,7 @@ impl ShellSnapshot {
                 config.session_id,
                 &cwd,
                 &shell,
+                &config.shell_environment_policy,
                 config.state_db.clone(),
             )
             .await;
@@ -123,6 +129,7 @@ impl ShellSnapshot {
         session_id: ThreadId,
         session_cwd: &AbsolutePathBuf,
         shell: &Shell,
+        shell_environment_policy: &ShellEnvironmentPolicy,
         state_db: Option<StateDbHandle>,
     ) -> std::result::Result<ShellSnapshotFile, &'static str> {
         // File to store the snapshot
@@ -153,7 +160,14 @@ impl ShellSnapshot {
         });
 
         // Make the new snapshot.
-        if let Err(err) = write_shell_snapshot(shell.shell_type, &temp_path, session_cwd).await {
+        if let Err(err) = write_shell_snapshot(
+            shell.shell_type,
+            &temp_path,
+            session_cwd,
+            shell_environment_policy,
+        )
+        .await
+        {
             tracing::warn!(
                 "Failed to create shell snapshot for {}: {err:?}",
                 shell.name()
@@ -165,7 +179,9 @@ impl ShellSnapshot {
             temp_path.display()
         );
 
-        if let Err(err) = validate_snapshot(shell, &temp_path, session_cwd).await {
+        if let Err(err) =
+            validate_snapshot(shell, &temp_path, session_cwd, shell_environment_policy).await
+        {
             tracing::error!("Shell snapshot validation failed: {err:?}");
             remove_snapshot_file(&temp_path).await;
             return Err("validation_failed");
@@ -202,6 +218,7 @@ async fn write_shell_snapshot(
     shell_type: ShellType,
     output_path: &AbsolutePathBuf,
     cwd: &AbsolutePathBuf,
+    shell_environment_policy: &ShellEnvironmentPolicy,
 ) -> Result<()> {
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
@@ -209,7 +226,7 @@ async fn write_shell_snapshot(
     let shell = get_shell(shell_type, /*path*/ None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
 
-    let raw_snapshot = capture_snapshot(&shell, cwd).await?;
+    let raw_snapshot = capture_snapshot(&shell, cwd, shell_environment_policy).await?;
     let snapshot = strip_snapshot_preamble(&raw_snapshot)?;
 
     if let Some(parent) = output_path.parent() {
@@ -227,13 +244,37 @@ async fn write_shell_snapshot(
     Ok(())
 }
 
-async fn capture_snapshot(shell: &Shell, cwd: &AbsolutePathBuf) -> Result<String> {
+async fn capture_snapshot(
+    shell: &Shell,
+    cwd: &AbsolutePathBuf,
+    shell_environment_policy: &ShellEnvironmentPolicy,
+) -> Result<String> {
     let shell_type = shell.shell_type;
     match shell_type {
-        ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script(), cwd).await,
-        ShellType::Bash => run_shell_script(shell, &bash_snapshot_script(), cwd).await,
-        ShellType::Sh => run_shell_script(shell, &sh_snapshot_script(), cwd).await,
-        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script(), cwd).await,
+        ShellType::Zsh => {
+            run_shell_script(shell, &zsh_snapshot_script(), cwd, shell_environment_policy).await
+        }
+        ShellType::Bash => {
+            run_shell_script(
+                shell,
+                &bash_snapshot_script(),
+                cwd,
+                shell_environment_policy,
+            )
+            .await
+        }
+        ShellType::Sh => {
+            run_shell_script(shell, &sh_snapshot_script(), cwd, shell_environment_policy).await
+        }
+        ShellType::PowerShell => {
+            run_shell_script(
+                shell,
+                powershell_snapshot_script(),
+                cwd,
+                shell_environment_policy,
+            )
+            .await
+        }
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
 }
@@ -251,12 +292,14 @@ async fn validate_snapshot(
     shell: &Shell,
     snapshot_path: &AbsolutePathBuf,
     cwd: &AbsolutePathBuf,
+    shell_environment_policy: &ShellEnvironmentPolicy,
 ) -> Result<()> {
     let snapshot_path_display = snapshot_path.display();
     let script = format!("set -e; . \"{snapshot_path_display}\"");
     run_script_with_timeout(
         shell,
         &script,
+        shell_environment_policy,
         SNAPSHOT_TIMEOUT,
         /*use_login_shell*/ false,
         cwd,
@@ -265,10 +308,16 @@ async fn validate_snapshot(
     .map(|_| ())
 }
 
-async fn run_shell_script(shell: &Shell, script: &str, cwd: &AbsolutePathBuf) -> Result<String> {
+async fn run_shell_script(
+    shell: &Shell,
+    script: &str,
+    cwd: &AbsolutePathBuf,
+    shell_environment_policy: &ShellEnvironmentPolicy,
+) -> Result<String> {
     run_script_with_timeout(
         shell,
         script,
+        shell_environment_policy,
         SNAPSHOT_TIMEOUT,
         /*use_login_shell*/ true,
         cwd,
@@ -279,6 +328,7 @@ async fn run_shell_script(shell: &Shell, script: &str, cwd: &AbsolutePathBuf) ->
 async fn run_script_with_timeout(
     shell: &Shell,
     script: &str,
+    shell_environment_policy: &ShellEnvironmentPolicy,
     snapshot_timeout: Duration,
     use_login_shell: bool,
     cwd: &AbsolutePathBuf,
@@ -290,6 +340,7 @@ async fn run_script_with_timeout(
     // returns a ref of handler.
     let mut handler = Command::new(&args[0]);
     handler.args(&args[1..]);
+    apply_inherited_rust_log_policy(&mut handler, shell_environment_policy);
     handler.stdin(Stdio::null());
     handler.current_dir(cwd);
     #[cfg(unix)]
@@ -312,6 +363,15 @@ async fn run_script_with_timeout(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn apply_inherited_rust_log_policy(
+    handler: &mut Command,
+    shell_environment_policy: &ShellEnvironmentPolicy,
+) {
+    if !policy_explicitly_includes_inherited_rust_log(shell_environment_policy) {
+        handler.env_remove("RUST_LOG");
+    }
 }
 
 fn excluded_exports_regex() -> String {
