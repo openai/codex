@@ -15,6 +15,7 @@ use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
+use crate::ensure_unique_hunk_paths;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
@@ -194,6 +195,7 @@ async fn try_verify_apply_patch_args(
         .map(|dir| cwd.join(dir))
         .transpose()?
         .unwrap_or_else(|| cwd.clone());
+    ensure_unique_hunk_paths(&hunks, &effective_cwd)?;
     let mut changes = HashMap::new();
     for hunk in hunks {
         let path = hunk.resolve_path(&effective_cwd)?;
@@ -523,6 +525,39 @@ mod tests {
             )
             .await,
             MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_verified_rejects_duplicate_hunk_paths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        fs::write(&path, "first\nsecond\n").unwrap();
+        let argv = vec![
+            "apply_patch".to_string(),
+            r#"*** Begin Patch
+*** Update File: source.txt
+@@
+-first
++FIRST
+*** Update File: source.txt
+@@
+-second
++SECOND
+*** End Patch"#
+                .to_string(),
+        ];
+
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute test path");
+        let result =
+            maybe_parse_apply_patch_verified(&argv, &cwd, LOCAL_FS.as_ref(), /*sandbox*/ None)
+                .await;
+
+        assert_eq!(
+            result,
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::DuplicateFilePath(
+                path.display().to_string()
+            ))
         );
     }
 
