@@ -964,6 +964,7 @@ pub struct ConfigRequirementsToml {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AutoReviewRequirementsToml {
     pub required_on_models: Option<Vec<String>>,
+    pub ignore_rules: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1173,6 +1174,12 @@ impl ConfigRequirementsWithSources {
                             source_contributed = true;
                         }
                     }
+                }
+                if existing_auto_review.value.ignore_rules.is_none()
+                    && let Some(ignore_rules) = incoming_auto_review.ignore_rules
+                {
+                    existing_auto_review.value.ignore_rules = Some(ignore_rules);
+                    source_contributed = true;
                 }
                 if source_contributed && existing_auto_review.source != source {
                     existing_auto_review.source = RequirementSource::composite([
@@ -1392,10 +1399,11 @@ impl ConfigRequirementsToml {
             && self.network.is_none()
             && self.permissions.is_none()
             && self.auto_review.as_ref().is_none_or(|auto_review| {
-                auto_review
-                    .required_on_models
-                    .as_ref()
-                    .is_none_or(Vec::is_empty)
+                auto_review.ignore_rules.as_ref().is_none_or(Vec::is_empty)
+                    && auto_review
+                        .required_on_models
+                        .as_ref()
+                        .is_none_or(Vec::is_empty)
             })
             && self
                 .models
@@ -2350,6 +2358,7 @@ mod tests {
         };
         let auto_review = AutoReviewRequirementsToml {
             required_on_models: Some(vec!["managed-model".to_string()]),
+            ignore_rules: None,
         };
         let models = ModelsRequirementsToml {
             new_thread: Some(NewThreadModelDefaultsToml {

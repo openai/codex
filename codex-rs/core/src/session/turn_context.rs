@@ -1,5 +1,6 @@
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::TrustedPluginRoots;
@@ -8,6 +9,7 @@ use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -204,6 +206,23 @@ impl TurnContext {
 
     pub(crate) fn approval_policy(&self) -> AskForApproval {
         self.config.permissions.approval_policy.value()
+    }
+
+    pub(crate) fn allow_prefix_rules(&self) -> AllowPrefixRules {
+        let ignore_rules = self
+            .config
+            .config_layer_stack
+            .requirements_toml()
+            .auto_review
+            .as_ref()
+            .and_then(|auto_review| auto_review.ignore_rules.as_ref())
+            .is_some_and(|models| models.contains(&self.model_info.slug));
+        if self.model_info.model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER) || ignore_rules
+        {
+            AllowPrefixRules::IgnoreForCyberModel
+        } else {
+            AllowPrefixRules::Honor
+        }
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {

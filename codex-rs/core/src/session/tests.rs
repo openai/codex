@@ -11599,6 +11599,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             windows_sandbox_level: turn_context.windows_sandbox_level,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            allow_prefix_rules: turn_context.allow_prefix_rules(),
         })
         .await;
     assert!(matches!(

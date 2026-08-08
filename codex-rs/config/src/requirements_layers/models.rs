@@ -47,6 +47,7 @@ impl AutoReviewModelsMergeState {
             *target = Some(Sourced::new(
                 AutoReviewRequirementsToml {
                     required_on_models: Some(self.slugs),
+                    ignore_rules: None,
                 },
                 source,
             ));

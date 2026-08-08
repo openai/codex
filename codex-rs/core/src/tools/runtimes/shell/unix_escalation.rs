@@ -172,7 +172,12 @@ pub(super) async fn try_run_zsh_fork(
             .unwrap_or(crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
     );
     let exec_policy = Arc::new(RwLock::new(
-        ctx.session.services.exec_policy.current().as_ref().clone(),
+        ctx.session
+            .services
+            .exec_policy
+            .current_for_prefix_rules(ctx.turn.allow_prefix_rules())
+            .as_ref()
+            .clone(),
     ));
     // TODO(anp): Keep PathUri through the shell escalation boundary.
     let sandbox_cwd = sandbox_cwd
@@ -280,7 +285,12 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     }
 
     let exec_policy = Arc::new(RwLock::new(
-        ctx.session.services.exec_policy.current().as_ref().clone(),
+        ctx.session
+            .services
+            .exec_policy
+            .current_for_prefix_rules(ctx.turn.allow_prefix_rules())
+            .as_ref()
+            .clone(),
     ));
     // TODO(anp): Keep PathUri through the zsh-fork executor boundary.
     let cwd = exec_request

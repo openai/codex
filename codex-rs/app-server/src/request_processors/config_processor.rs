@@ -728,6 +728,7 @@ mod tests {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
             auto_review: Some(AutoReviewRequirementsToml {
                 required_on_models: Some(vec!["gpt-protected".to_string()]),
+                ignore_rules: None,
             }),
             models: Some(ModelsRequirementsToml {
                 new_thread: Some(NewThreadModelDefaultsToml {

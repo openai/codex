@@ -142,6 +142,10 @@ impl Session {
                 .and_then(|instructions| instructions.end.as_deref()),
         ));
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
+        let exec_policy = self
+            .services
+            .exec_policy
+            .current_for_prefix_rules(turn_context.allow_prefix_rules());
         if turn_context.config.include_permissions_instructions {
             let environment = step_context.environments.primary();
             let permission_profile = environment
@@ -162,7 +166,6 @@ impl Session {
                 .and_then(|environment| environment.cwd().to_abs_path().ok())
                 .unwrap_or_else(|| turn_context.cwd.clone());
             let model_messages = turn_context.model_info.model_messages.as_ref();
-            let exec_policy = self.services.exec_policy.current();
             world_state.add_section(PermissionsState::new(
                 &permission_profile,
                 turn_context.approval_policy(),
@@ -183,7 +186,6 @@ impl Session {
                     .enabled(Feature::RequestPermissionsTool),
             ));
         } else {
-            let exec_policy = self.services.exec_policy.current();
             world_state.add_section(CompactPermissionsState::new(exec_policy.as_ref()));
         }
         if turn_context.config.include_collaboration_mode_instructions {

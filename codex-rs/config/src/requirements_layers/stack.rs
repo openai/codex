@@ -242,7 +242,7 @@ fn populate_merged_regular_fields_with_sources(
         enforce_residency,
         network,
         permissions,
-        auto_review: _,
+        auto_review,
         models,
         guardian_policy_config,
     } = requirements;
@@ -273,6 +273,7 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(allow_managed_hooks_only, &["allow_managed_hooks_only"]);
     set_sourced!(allow_appshots, &["allow_appshots"]);
     set_sourced!(allow_remote_control, &["allow_remote_control"]);
+    set_sourced!(auto_review, &["auto_review"]);
     set_sourced!(computer_use, &["computer_use"]);
     set_sourced!(browser_use, &["browser_use"]);
     set_sourced!(windows, &["windows"]);
