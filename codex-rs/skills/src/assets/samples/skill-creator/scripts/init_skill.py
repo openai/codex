@@ -6,17 +6,21 @@ Usage:
     init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples] [--interface key=value]
 
 Examples:
-    init_skill.py my-new-skill --path skills/public
-    init_skill.py my-new-skill --path skills/public --resources scripts,references
-    init_skill.py my-api-helper --path skills/private --resources scripts --examples
-    init_skill.py custom-skill --path /custom/location
-    init_skill.py my-skill --path skills/public --interface short_description="Short UI label"
+    init_skill.py my-repo-skill --path /path/to/repo/.agents/skills
+    init_skill.py my-user-skill --path "$HOME/.agents/skills"
+    init_skill.py my-api-helper --path /path/to/repo/.agents/skills --resources scripts --examples
+    init_skill.py custom-skill --path /custom/registered-extra-skill-root
+    init_skill.py my-skill --path /path/to/repo/.agents/skills --interface short_description="Short UI label"
 """
 
 import argparse
 import re
 import sys
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 from generate_openai_yaml import write_openai_yaml
 
@@ -338,7 +342,14 @@ def main():
         description="Create a new skill directory with a SKILL.md template.",
     )
     parser.add_argument("skill_name", help="Skill name (normalized to hyphen-case)")
-    parser.add_argument("--path", required=True, help="Output directory for the skill")
+    parser.add_argument(
+        "--path",
+        required=True,
+        help=(
+            "Output skill root. For repository skills use <repo>/.agents/skills; "
+            "for user skills use $HOME/.agents/skills."
+        ),
+    )
     parser.add_argument(
         "--resources",
         default="",
