@@ -97,6 +97,7 @@ members = [
     "tools",
     "v8-poc",
     "websocket-client",
+    "workload-identity",
     "utils/absolute-path",
     "utils/audio",
     "utils/path-uri",
