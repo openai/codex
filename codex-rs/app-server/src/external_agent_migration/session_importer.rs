@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -170,7 +171,7 @@ impl ExternalAgentSessionImporter {
                     record_import_error(
                         &mut item_result,
                         stage,
-                        Some(sub_error_type),
+                        Some(sub_error_type.as_str()),
                         message,
                         Some(source_path.display().to_string()),
                     );
@@ -408,8 +409,25 @@ impl ExternalAgentSessionImporter {
             )
             .await
             .map_err(|err| {
+                let io_kind = match err.kind() {
+                    ErrorKind::NotFound => "not_found",
+                    ErrorKind::PermissionDenied => "permission_denied",
+                    ErrorKind::AlreadyExists => "already_exists",
+                    ErrorKind::InvalidInput => "invalid_input",
+                    ErrorKind::InvalidData => "invalid_data",
+                    ErrorKind::IsADirectory => "is_a_directory",
+                    ErrorKind::NotADirectory => "not_a_directory",
+                    ErrorKind::TimedOut => "timed_out",
+                    ErrorKind::WriteZero => "write_zero",
+                    ErrorKind::UnexpectedEof => "unexpected_eof",
+                    ErrorKind::StorageFull => "storage_full",
+                    ErrorKind::QuotaExceeded => "quota_exceeded",
+                    ErrorKind::FileTooLarge => "file_too_large",
+                    ErrorKind::ReadOnlyFilesystem => "read_only_filesystem",
+                    _ => "other",
+                };
                 SessionImportStepFailure::new(
-                    "failed_to_load_session_config",
+                    format!("failed_to_load_session_config_{io_kind}"),
                     format!("failed to load imported session config: {err}"),
                 )
             })?;
@@ -583,18 +601,18 @@ struct SessionImportFailure {
     source_path: PathBuf,
     message: String,
     stage: &'static str,
-    sub_error_type: &'static str,
+    sub_error_type: String,
 }
 
 struct SessionImportStepFailure {
-    sub_error_type: &'static str,
+    sub_error_type: String,
     message: String,
 }
 
 impl SessionImportStepFailure {
-    fn new(sub_error_type: &'static str, message: String) -> Self {
+    fn new(sub_error_type: impl Into<String>, message: String) -> Self {
         Self {
-            sub_error_type,
+            sub_error_type: sub_error_type.into(),
             message,
         }
     }

@@ -1380,6 +1380,111 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
 }
 
 #[tokio::test]
+async fn external_agent_config_import_reports_session_config_error_subtype() -> Result<()> {
+    let analytics_server = start_analytics_events_server().await?;
+    let codex_home = TempDir::new()?;
+    write_analytics_config(codex_home.path(), &analytics_server.uri())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let project_root = codex_home.path().join("repo");
+    let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
+    let session_path = session_dir.join("session.jsonl");
+    let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    std::fs::create_dir_all(&project_root)?;
+    std::fs::create_dir_all(&session_dir)?;
+    std::fs::write(
+        &session_path,
+        serde_json::json!({
+            "type": "user",
+            "cwd": &project_root,
+            "timestamp": &recent_timestamp,
+            "message": { "content": "first request" },
+        })
+        .to_string(),
+    )?;
+
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "chatgpt_base_url = [",
+    )?;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({
+                "source": "test_import",
+                "providerId": "test-provider-42",
+                "migrationItems": [{
+                    "itemType": "SESSIONS",
+                    "description": "Migrate recent sessions",
+                    "cwd": null,
+                    "details": {
+                        "sessions": [{
+                            "path": session_path,
+                            "cwd": project_root,
+                            "title": "first request"
+                        }]
+                    }
+                }]
+            })),
+        )
+        .await?;
+    let response: ExternalAgentConfigImportResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    let import_id = assert_import_response(response);
+    let completed: ExternalAgentConfigImportCompletedNotification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_notification("externalAgentConfig/import/completed"),
+    )
+    .await??;
+    assert_eq!(completed.import_id, import_id);
+    assert_eq!(completed.item_type_results.len(), 1);
+    assert_eq!(completed.item_type_results[0].successes.len(), 0);
+    assert_eq!(completed.item_type_results[0].failures.len(), 1);
+    let failure = &completed.item_type_results[0].failures[0];
+    assert_eq!(failure.failure_stage, "session_persist");
+    assert_eq!(
+        failure.sub_error_type.as_deref(),
+        Some("failed_to_load_session_config_invalid_data")
+    );
+
+    let event = wait_for_analytics_event(
+        &analytics_server,
+        DEFAULT_TIMEOUT,
+        "codex_onboarding_external_agent_import_failure",
+    )
+    .await?;
+    let event_params = &event["event_params"];
+    assert_eq!(event_params["import_id"], serde_json::json!(import_id));
+    assert_eq!(event_params["source"], "test_import");
+    assert_eq!(event_params["provider_id"], "test-provider-42");
+    assert_eq!(event_params["type"], "SESSIONS");
+    assert_eq!(event_params["failure_stage"], "session_persist");
+    assert_eq!(
+        event_params["sub_error_type"],
+        "failed_to_load_session_config_invalid_data"
+    );
+    assert!(event_params.get("raw_errors").is_none());
+    assert!(event_params.get("message").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_agent_config_import_reinstalls_plugins_from_known_marketplaces() -> Result<()> {
     let codex_home = TempDir::new()?;
     let analytics_server = start_analytics_events_server().await?;
