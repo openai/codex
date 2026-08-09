@@ -10,9 +10,9 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::command_runner::CommandHookRuntime;
-use crate::engine::command_runner::CommandRunResult;
+use crate::engine::HandlerRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::output_spill::AdditionalContext;
@@ -107,13 +107,12 @@ pub(crate) fn preview(
 }
 
 pub(crate) async fn run(
-    handlers: &[ConfiguredHandler],
-    runtime: &CommandHookRuntime,
+    engine: &ClaudeHooksEngine,
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
     let matched = dispatcher::select_handlers(
-        handlers,
+        &engine.handlers,
         request.target.event_name(),
         Some(request.target.matcher_input()),
     );
@@ -182,7 +181,7 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        runtime,
+        engine,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -200,7 +199,8 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
-    let additional_contexts = runtime
+    let additional_contexts = engine
+        .command_runtime
         .output_spiller()
         .maybe_spill_additional_contexts(additional_contexts)
         .await;
@@ -221,7 +221,7 @@ pub(crate) async fn run(
 /// `continue:false`; `SubagentStart` stays context-injection-only.
 fn parse_completed(
     handler: &ConfiguredHandler,
-    run_result: CommandRunResult,
+    run_result: HandlerRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<SessionStartHandlerData> {
     let mut entries = Vec::new();
@@ -364,7 +364,7 @@ mod tests {
     use super::SessionStartHandlerData;
     use super::parse_completed;
     use crate::engine::ConfiguredHandler;
-    use crate::engine::command_runner::CommandRunResult;
+    use crate::engine::HandlerRunResult;
     use crate::output_spill::AdditionalContext;
     use crate::output_spill::AdditionalContextLimit;
 
@@ -541,21 +541,23 @@ mod tests {
     fn handler_for(event_name: HookEventName) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
-            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             matcher: None,
-            command: "echo hook".to_string(),
             timeout_sec: 600,
             status_message: None,
             additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
-            env: std::collections::HashMap::new(),
+            kind: crate::engine::ConfiguredHandlerKind::Command {
+                command: "echo hook".to_string(),
+                r#async: false,
+                env: std::collections::HashMap::new(),
+            },
         }
     }
 
-    fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> CommandRunResult {
-        CommandRunResult {
+    fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
+        HandlerRunResult {
             started_at: 1,
             completed_at: 2,
             duration_ms: 1,

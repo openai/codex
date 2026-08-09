@@ -11,9 +11,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 
 use super::common;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::command_runner::CommandHookRuntime;
-use crate::engine::command_runner::CommandRunResult;
+use crate::engine::HandlerRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::output_spill::AdditionalContext;
@@ -70,13 +70,12 @@ pub(crate) fn preview(
 }
 
 pub(crate) async fn run(
-    handlers: &[ConfiguredHandler],
-    runtime: &CommandHookRuntime,
+    engine: &ClaudeHooksEngine,
     request: PreToolUseRequest,
 ) -> PreToolUseOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
     let matched = dispatcher::select_handlers_for_matcher_inputs(
-        handlers,
+        &engine.handlers,
         HookEventName::PreToolUse,
         &matcher_inputs,
     );
@@ -104,7 +103,7 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        runtime,
+        engine,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -122,7 +121,8 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
-    let additional_contexts = runtime
+    let additional_contexts = engine
+        .command_runtime
         .output_spiller()
         .maybe_spill_additional_contexts(additional_contexts)
         .await;
@@ -192,7 +192,7 @@ fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json:
 
 fn parse_completed(
     handler: &ConfiguredHandler,
-    run_result: CommandRunResult,
+    run_result: HandlerRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<PreToolUseHandlerData> {
     let mut entries = Vec::new();
@@ -323,7 +323,6 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PreToo
 mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
-    use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
@@ -337,7 +336,7 @@ mod tests {
     use super::parse_completed;
     use super::preview;
     use crate::engine::ConfiguredHandler;
-    use crate::engine::command_runner::CommandRunResult;
+    use crate::engine::HandlerRunResult;
     use crate::events::common;
     use crate::output_spill::AdditionalContext;
     use crate::output_spill::AdditionalContextLimit;
@@ -466,8 +465,7 @@ mod tests {
             }]
         );
 
-        let mut async_handler = handler();
-        async_handler.execution_mode = HookExecutionMode::Async;
+        let async_handler = handler_with_async(/*async*/ true);
         let parsed = parse_completed(
             &async_handler,
             run_result(Some(0), stdout, ""),
@@ -770,23 +768,29 @@ mod tests {
     }
 
     fn handler() -> ConfiguredHandler {
+        handler_with_async(/*async*/ false)
+    }
+
+    fn handler_with_async(r#async: bool) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::PreToolUse,
-            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             matcher: Some("^Bash$".to_string()),
-            command: "echo hook".to_string(),
             timeout_sec: 5,
             status_message: None,
             additional_context_limit: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
-            env: std::collections::HashMap::new(),
+            kind: crate::engine::ConfiguredHandlerKind::Command {
+                command: "echo hook".to_string(),
+                r#async,
+                env: std::collections::HashMap::new(),
+            },
         }
     }
 
-    fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> CommandRunResult {
-        CommandRunResult {
+    fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
+        HandlerRunResult {
             started_at: 1,
             completed_at: 2,
             duration_ms: 1,

@@ -8,7 +8,6 @@ use async_channel::Receiver;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
-use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
@@ -20,6 +19,8 @@ use tempfile::tempdir;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
+use super::super::ClaudeHooksEngine;
+use super::super::ConfiguredHandlerKind;
 use super::CommandHookRuntime;
 use super::CommandShell;
 use super::ConfiguredHandler;
@@ -41,18 +42,22 @@ async fn cmd_shell_runs_quoted_hook_command_path() {
     .expect("write hook command");
     let source_path =
         AbsolutePathBuf::try_from(hook_path.clone()).expect("absolute hook command path");
+    let command = format!(r#""{}" notify"#, hook_path.display());
+    let env = HashMap::new();
     let handler = ConfiguredHandler {
         event_name: HookEventName::SessionStart,
-        execution_mode: HookExecutionMode::Sync,
         matcher: None,
-        command: format!(r#""{}" notify"#, hook_path.display()),
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
         source_path,
         source: HookSource::User,
         display_order: 0,
-        env: HashMap::new(),
+        kind: ConfiguredHandlerKind::Command {
+            command: command.clone(),
+            r#async: false,
+            env: env.clone(),
+        },
     };
     let shells = [
         CommandShell {
@@ -68,7 +73,7 @@ async fn cmd_shell_runs_quoted_hook_command_path() {
     for shell in shells {
         let (result_sender, _result_receiver) = async_channel::unbounded();
         let runtime = CommandHookRuntime::new(shell, ThreadId::new(), result_sender);
-        let result = run_command(&runtime, &handler, "{}", temp.path()).await;
+        let result = run_command(&runtime, &handler, &command, &env, "{}", temp.path()).await;
 
         assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
         assert_eq!(result.stdout.trim(), "hook-ran");
@@ -81,23 +86,27 @@ async fn fast_exiting_hook_preserves_stdout_when_stdin_is_not_consumed() {
     let temp = tempdir().expect("create temp dir");
     let source_path = AbsolutePathBuf::try_from(temp.path().join("hooks.json"))
         .expect("absolute hook configuration path");
+    let command = "echo hook-ran";
+    let env = HashMap::new();
     let handler = ConfiguredHandler {
         event_name: HookEventName::SessionStart,
-        execution_mode: HookExecutionMode::Sync,
         matcher: None,
-        command: "echo hook-ran".to_string(),
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
         source_path,
         source: HookSource::User,
         display_order: 0,
-        env: HashMap::new(),
+        kind: ConfiguredHandlerKind::Command {
+            command: command.to_string(),
+            r#async: false,
+            env: env.clone(),
+        },
     };
     let input_json = format!(r#"{{"padding":"{}"}}"#, "x".repeat(1024 * 1024));
     let (runtime, _result_receiver) = runtime();
 
-    let result = run_command(&runtime, &handler, &input_json, temp.path()).await;
+    let result = run_command(&runtime, &handler, command, &env, &input_json, temp.path()).await;
 
     assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout.trim(), "hook-ran");
@@ -125,9 +134,7 @@ fn write_handler(temp: &TempDir, source: &str) -> ConfiguredHandler {
     std::fs::write(&script_path, source).expect("write async test hook");
     ConfiguredHandler {
         event_name: HookEventName::UserPromptSubmit,
-        execution_mode: HookExecutionMode::Async,
         matcher: None,
-        command: format!("python3 {}", script_path.display()),
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
@@ -135,15 +142,22 @@ fn write_handler(temp: &TempDir, source: &str) -> ConfiguredHandler {
             .expect("absolute test hook path"),
         source: HookSource::User,
         display_order: 0,
-        env: HashMap::new(),
+        kind: ConfiguredHandlerKind::Command {
+            command: format!("python3 {}", script_path.display()),
+            r#async: true,
+            env: HashMap::new(),
+        },
     }
 }
 
 async fn schedule(runtime: &CommandHookRuntime, handler: ConfiguredHandler, cwd: &Path) {
-    crate::events::user_prompt_submit::run(
-        &[handler],
-        runtime,
-        UserPromptSubmitRequest {
+    let engine = ClaudeHooksEngine {
+        handlers: vec![handler],
+        warnings: Vec::new(),
+        command_runtime: runtime.clone(),
+    };
+    engine
+        .run_user_prompt_submit(UserPromptSubmitRequest {
             session_id: ThreadId::new(),
             turn_id: "async-test-turn".to_string(),
             subagent: None,
@@ -152,9 +166,8 @@ async fn schedule(runtime: &CommandHookRuntime, handler: ConfiguredHandler, cwd:
             model: "test-model".to_string(),
             permission_mode: "default".to_string(),
             prompt: "test prompt".to_string(),
-        },
-    )
-    .await;
+        })
+        .await;
 }
 
 #[tokio::test]

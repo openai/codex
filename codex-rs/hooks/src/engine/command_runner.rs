@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
@@ -20,6 +21,8 @@ use tracing::Span;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
+use super::HandlerRunResult;
 use super::dispatcher::ParsedHandler;
 use super::dispatcher::hook_event_name_label;
 use super::dispatcher::hook_execution_mode_label;
@@ -99,7 +102,7 @@ impl CommandHookRuntime {
         input_json: String,
         cwd: std::path::PathBuf,
         turn_id: Option<String>,
-        parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
+        parse: fn(&ConfiguredHandler, HandlerRunResult, Option<String>) -> ParsedHandler<T>,
     ) {
         let mut state = self.lock_state();
         if self.result_sender.is_closed() || state.concurrency_limit.is_closed() {
@@ -114,7 +117,11 @@ impl CommandHookRuntime {
             let Ok(_permit) = concurrency_limit.acquire_owned().await else {
                 return;
             };
-            let result = run_command(&runtime, &handler, &input_json, &cwd).await;
+            let result = match &handler.kind {
+                ConfiguredHandlerKind::Command { command, env, .. } => {
+                    run_command(&runtime, &handler, command, env, &input_json, &cwd).await
+                }
+            };
             let mut hook_result = parse(&handler, result, turn_id).completed;
             let mut entries = Vec::new();
             let mut warnings = Vec::new();
@@ -161,17 +168,6 @@ impl CommandHookRuntime {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct CommandRunResult {
-    pub started_at: i64,
-    pub completed_at: i64,
-    pub duration_ms: i64,
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    pub error: Option<String>,
-}
-
 #[tracing::instrument(
     name = "codex.hooks.command",
     level = "trace",
@@ -179,7 +175,7 @@ pub(crate) struct CommandRunResult {
     fields(
         hook.event_name = hook_event_name_label(handler.event_name),
         hook.handler_type = hook_handler_type_label(HookHandlerType::Command),
-        hook.execution_mode = hook_execution_mode_label(handler.execution_mode),
+        hook.execution_mode = hook_execution_mode_label(handler.execution_mode()),
         hook.scope = hook_scope_label(scope_for_event(handler.event_name)),
         hook.source = hook_source_label(handler.source),
         hook.display_order = handler.display_order,
@@ -190,13 +186,15 @@ pub(crate) struct CommandRunResult {
 pub(crate) async fn run_command(
     runtime: &CommandHookRuntime,
     handler: &ConfiguredHandler,
+    command: &str,
+    env: &HashMap<String, String>,
     input_json: &str,
     cwd: &Path,
-) -> CommandRunResult {
+) -> HandlerRunResult {
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
 
-    let mut command = build_command(&runtime.shell, handler);
+    let mut command = build_command(&runtime.shell, command, env);
     command
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -357,9 +355,9 @@ fn finish_command_run(
     started_at: i64,
     started: Instant,
     completion: CommandRunCompletion,
-) -> CommandRunResult {
+) -> HandlerRunResult {
     Span::current().record("hook.command_outcome", completion.outcome);
-    CommandRunResult {
+    HandlerRunResult {
         started_at,
         completed_at: chrono::Utc::now().timestamp(),
         duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
@@ -370,7 +368,11 @@ fn finish_command_run(
     }
 }
 
-fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
+fn build_command(
+    shell: &CommandShell,
+    command_line: &str,
+    env: &HashMap<String, String>,
+) -> Command {
     let mut command = if shell.program.is_empty() {
         default_shell_command()
     } else {
@@ -378,24 +380,24 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
     };
     if shell.program.is_empty() {
         #[cfg(windows)]
-        command.raw_arg(format!(r#""{}""#, handler.command));
+        command.raw_arg(format!(r#""{command_line}""#));
 
         #[cfg(not(windows))]
-        command.arg(&handler.command);
+        command.arg(command_line);
     } else {
         command.args(&shell.args);
 
         #[cfg(windows)]
         if shell.args.iter().any(|arg| arg.eq_ignore_ascii_case("/c")) {
-            command.raw_arg(format!(r#""{}""#, handler.command));
+            command.raw_arg(format!(r#""{command_line}""#));
         } else {
-            command.arg(&handler.command);
+            command.arg(command_line);
         }
 
         #[cfg(not(windows))]
-        command.arg(&handler.command);
+        command.arg(command_line);
     }
-    command.envs(&handler.env);
+    command.envs(env);
     scrub_non_inheritable_env_vars(command.as_std_mut());
     command
 }

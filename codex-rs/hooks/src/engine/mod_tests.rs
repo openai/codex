@@ -22,7 +22,6 @@ use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
-use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
@@ -35,6 +34,7 @@ use super::ClaudeHooksEngine;
 use super::CommandHookRuntime;
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 use crate::events::pre_tool_use::PreToolUseRequest;
 
 fn cwd() -> AbsolutePathBuf {
@@ -59,22 +59,31 @@ fn permission_request_timeout_only_counts_synchronous_handlers() {
             args: Vec::new(),
         }),
     );
+    let command = "echo synchronous permission hook";
     let synchronous_handler = ConfiguredHandler {
         event_name: HookEventName::PermissionRequest,
-        execution_mode: HookExecutionMode::Sync,
         matcher: None,
-        command: "echo synchronous permission hook".to_string(),
         timeout_sec: 5,
         status_message: None,
         additional_context_limit: Default::default(),
         source_path: cwd().join("hooks.json"),
         source: HookSource::User,
         display_order: 0,
-        env: HashMap::new(),
+        kind: ConfiguredHandlerKind::Command {
+            command: command.to_string(),
+            r#async: false,
+            env: HashMap::new(),
+        },
     };
-    let mut asynchronous_handler = synchronous_handler.clone();
-    asynchronous_handler.execution_mode = HookExecutionMode::Async;
-    asynchronous_handler.timeout_sec = 600;
+    let asynchronous_handler = ConfiguredHandler {
+        timeout_sec: 600,
+        kind: ConfiguredHandlerKind::Command {
+            command: command.to_string(),
+            r#async: true,
+            env: HashMap::new(),
+        },
+        ..synchronous_handler.clone()
+    };
 
     engine.handlers = vec![synchronous_handler, asynchronous_handler.clone()];
     assert_eq!(
@@ -772,7 +781,14 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
         tool_input: serde_json::json!({ "command": "echo hello" }),
     });
     assert_eq!(preview.len(), 1);
-    assert_eq!(engine.handlers[0].command, "echo hi");
+    assert_eq!(
+        engine.handlers[0].kind,
+        ConfiguredHandlerKind::Command {
+            command: "echo hi".to_string(),
+            r#async: false,
+            env: HashMap::new(),
+        }
+    );
     assert_eq!(
         engine.handlers[0].source_path,
         AbsolutePathBuf::try_from(missing_dir).expect("absolute missing dir")
@@ -1052,14 +1068,16 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
         engine
             .handlers
             .iter()
-            .map(|handler| handler.command.as_str())
+            .map(|handler| match &handler.kind {
+                ConfiguredHandlerKind::Command { command, .. } => Some(command.as_str()),
+            })
             .collect::<Vec<_>>(),
         vec![
-            "python3 /tmp/requirements-hook.py",
-            "python3 /tmp/mdm-hook.py",
-            "python3 /tmp/system-hook.py",
-            "python3 /tmp/legacy-file-hook.py",
-            "python3 /tmp/legacy-mdm-hook.py",
+            Some("python3 /tmp/requirements-hook.py"),
+            Some("python3 /tmp/mdm-hook.py"),
+            Some("python3 /tmp/system-hook.py"),
+            Some("python3 /tmp/legacy-file-hook.py"),
+            Some("python3 /tmp/legacy-mdm-hook.py"),
         ]
     );
     let discovered = super::discovery::discover_handlers(
@@ -1519,32 +1537,32 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
     );
 
     assert_eq!(
-        engine.handlers[0].command,
-        format!(
-            "run {} {} {} {}",
-            plugin_root.display(),
-            plugin_root.display(),
-            plugin_data_root.display(),
-            plugin_data_root.display()
-        )
-    );
-    assert_eq!(
-        engine.handlers[0].env,
-        HashMap::from([
-            ("PLUGIN_ROOT".to_string(), plugin_root.display().to_string()),
-            (
-                "CLAUDE_PLUGIN_ROOT".to_string(),
-                plugin_root.display().to_string()
+        engine.handlers[0].kind,
+        ConfiguredHandlerKind::Command {
+            command: format!(
+                "run {} {} {} {}",
+                plugin_root.display(),
+                plugin_root.display(),
+                plugin_data_root.display(),
+                plugin_data_root.display()
             ),
-            (
-                "PLUGIN_DATA".to_string(),
-                plugin_data_root.display().to_string()
-            ),
-            (
-                "CLAUDE_PLUGIN_DATA".to_string(),
-                plugin_data_root.display().to_string()
-            ),
-        ])
+            r#async: false,
+            env: HashMap::from([
+                ("PLUGIN_ROOT".to_string(), plugin_root.display().to_string()),
+                (
+                    "CLAUDE_PLUGIN_ROOT".to_string(),
+                    plugin_root.display().to_string(),
+                ),
+                (
+                    "PLUGIN_DATA".to_string(),
+                    plugin_data_root.display().to_string(),
+                ),
+                (
+                    "CLAUDE_PLUGIN_DATA".to_string(),
+                    plugin_data_root.display().to_string(),
+                ),
+            ]),
+        }
     );
 }
 

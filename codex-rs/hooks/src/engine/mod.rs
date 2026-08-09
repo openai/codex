@@ -46,22 +46,47 @@ pub(crate) struct CommandShell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
     pub event_name: codex_protocol::protocol::HookEventName,
-    pub execution_mode: HookExecutionMode,
     pub matcher: Option<String>,
-    pub command: String,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub additional_context_limit: AdditionalContextLimit,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
     pub display_order: i64,
-    pub env: HashMap<String, String>,
+    pub kind: ConfiguredHandlerKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfiguredHandlerKind {
+    Command {
+        command: String,
+        env: HashMap<String, String>,
+        r#async: bool,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct HandlerRunResult {
+    pub started_at: i64,
+    pub completed_at: i64,
+    pub duration_ms: i64,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub error: Option<String>,
 }
 
 impl ConfiguredHandler {
+    pub(crate) fn execution_mode(&self) -> HookExecutionMode {
+        match self.kind {
+            ConfiguredHandlerKind::Command { r#async: true, .. } => HookExecutionMode::Async,
+            ConfiguredHandlerKind::Command { r#async: false, .. } => HookExecutionMode::Sync,
+        }
+    }
+
     /// Only synchronous hooks can apply control effects.
     pub(crate) fn can_apply_control_effects(&self) -> bool {
-        self.execution_mode == HookExecutionMode::Sync
+        self.execution_mode() == HookExecutionMode::Sync
     }
 
     pub fn run_id(&self) -> String {
@@ -86,6 +111,12 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+        }
+    }
+
+    fn handler_type(&self) -> HookHandlerType {
+        match &self.kind {
+            ConfiguredHandlerKind::Command { .. } => HookHandlerType::Command,
         }
     }
 }
@@ -113,7 +144,7 @@ pub struct HookListEntry {
 
 #[derive(Clone)]
 pub(crate) struct ClaudeHooksEngine {
-    handlers: Vec<ConfiguredHandler>,
+    pub(crate) handlers: Vec<ConfiguredHandler>,
     warnings: Vec<String>,
     pub(crate) command_runtime: CommandHookRuntime,
 }
@@ -178,7 +209,7 @@ impl ClaudeHooksEngine {
                 .iter()
                 .filter(|handler| {
                     handler.event_name == HookEventName::PermissionRequest
-                        && handler.execution_mode == HookExecutionMode::Sync
+                        && handler.can_apply_control_effects()
                 })
                 .map(|handler| handler.timeout_sec)
                 .max()
@@ -198,27 +229,25 @@ impl ClaudeHooksEngine {
         request: SessionStartRequest,
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
-        crate::events::session_start::run(&self.handlers, &self.command_runtime, request, turn_id)
-            .await
+        crate::events::session_start::run(self, request, turn_id).await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
-        crate::events::pre_tool_use::run(&self.handlers, &self.command_runtime, request).await
+        crate::events::pre_tool_use::run(self, request).await
     }
 
     pub(crate) async fn run_permission_request(
         &self,
         request: PermissionRequestRequest,
     ) -> PermissionRequestOutcome {
-        crate::events::permission_request::run(&self.handlers, &self.command_runtime, request).await
+        crate::events::permission_request::run(self, request).await
     }
 
     pub(crate) async fn run_post_tool_use(
         &self,
         request: PostToolUseRequest,
     ) -> PostToolUseOutcome {
-        let mut outcome =
-            crate::events::post_tool_use::run(&self.handlers, &self.command_runtime, request).await;
+        let mut outcome = crate::events::post_tool_use::run(self, request).await;
         if let Some(feedback_message) = outcome.feedback_message.take() {
             outcome.feedback_message = Some(
                 self.command_runtime
@@ -235,7 +264,7 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) async fn run_pre_compact(&self, request: PreCompactRequest) -> PreCompactOutcome {
-        crate::events::compact::run_pre(&self.handlers, &self.command_runtime, request).await
+        crate::events::compact::run_pre(self, request).await
     }
 
     pub(crate) fn preview_post_compact(&self, request: &PostCompactRequest) -> Vec<HookRunSummary> {
@@ -246,7 +275,7 @@ impl ClaudeHooksEngine {
         &self,
         request: PostCompactRequest,
     ) -> StatelessHookOutcome {
-        crate::events::compact::run_post(&self.handlers, &self.command_runtime, request).await
+        crate::events::compact::run_post(self, request).await
     }
 
     pub(crate) fn preview_user_prompt_submit(
@@ -260,7 +289,7 @@ impl ClaudeHooksEngine {
         &self,
         request: UserPromptSubmitRequest,
     ) -> UserPromptSubmitOutcome {
-        crate::events::user_prompt_submit::run(&self.handlers, &self.command_runtime, request).await
+        crate::events::user_prompt_submit::run(self, request).await
     }
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
@@ -272,12 +301,11 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
-        crate::events::session_end::run(&self.handlers, &self.command_runtime, request).await
+        crate::events::session_end::run(self, request).await
     }
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
-        let mut outcome =
-            crate::events::stop::run(&self.handlers, &self.command_runtime, request).await;
+        let mut outcome = crate::events::stop::run(self, request).await;
         outcome.continuation_fragments = self
             .command_runtime
             .output_spiller()

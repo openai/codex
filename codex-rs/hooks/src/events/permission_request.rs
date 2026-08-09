@@ -16,9 +16,9 @@
 use std::path::PathBuf;
 
 use super::common;
+use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
-use crate::engine::command_runner::CommandHookRuntime;
-use crate::engine::command_runner::CommandRunResult;
+use crate::engine::HandlerRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PermissionRequestCommandInput;
@@ -85,13 +85,12 @@ pub(crate) fn preview(
 }
 
 pub(crate) async fn run(
-    handlers: &[ConfiguredHandler],
-    runtime: &CommandHookRuntime,
+    engine: &ClaudeHooksEngine,
     request: PermissionRequestRequest,
 ) -> PermissionRequestOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
     let matched = dispatcher::select_handlers_for_matcher_inputs(
-        handlers,
+        &engine.handlers,
         HookEventName::PermissionRequest,
         &matcher_inputs,
     );
@@ -119,7 +118,7 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        runtime,
+        engine,
         matched,
         input_json,
         request.cwd.as_path(),
@@ -188,7 +187,7 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
 
 fn parse_completed(
     handler: &ConfiguredHandler,
-    run_result: CommandRunResult,
+    run_result: HandlerRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<PermissionRequestHandlerData> {
     let mut entries = Vec::new();

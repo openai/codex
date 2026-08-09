@@ -68,7 +68,7 @@ fn hooks_file_deserializes_mcp_tool_handler_with_json_inputs() {
                     "tool": "scan",
                     "input": {
                         "file_path": "${tool_input.file_path}",
-                        "optional": null,
+                        "include_ignored": false,
                     },
                     "timeout": 30,
                     "statusMessage": "Scanning file",
@@ -88,12 +88,45 @@ fn hooks_file_deserializes_mcp_tool_handler_with_json_inputs() {
                     "file_path".to_string(),
                     serde_json::Value::String("${tool_input.file_path}".to_string()),
                 ),
-                ("optional".to_string(), serde_json::Value::Null),
+                (
+                    "include_ignored".to_string(),
+                    serde_json::Value::Bool(false)
+                ),
             ]),
             timeout_sec: Some(30),
             status_message: Some("Scanning file".to_string()),
         }]
     );
+}
+
+#[test]
+fn hooks_file_rejects_mcp_tool_handler_with_null_input() {
+    for input in [
+        serde_json::json!({ "optional": null }),
+        serde_json::json!({ "metadata": { "optional": null } }),
+        serde_json::json!({ "values": [null] }),
+    ] {
+        let error = serde_json::from_value::<HooksFile>(serde_json::json!({
+            "hooks": {
+                "PostToolUse": [{
+                    "hooks": [{
+                        "type": "mcp_tool",
+                        "server": "security",
+                        "tool": "scan",
+                        "input": input,
+                    }],
+                }],
+            },
+        }))
+        .expect_err("literal null MCP hook arguments should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("MCP hook input must be representable as TOML"),
+            "unexpected parse error: {error}"
+        );
+    }
 }
 
 #[test]
