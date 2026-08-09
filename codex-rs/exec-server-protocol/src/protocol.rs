@@ -112,6 +112,9 @@ pub struct EnvironmentCapabilities {
     /// Whether capability discovery applies the filesystem sandbox sent with each root.
     #[serde(default)]
     pub capability_discovery_sandbox: bool,
+    /// Whether this executor supports the `environmentConfig/read` request.
+    #[serde(default)]
+    pub environment_config_read: bool,
 }
 
 /// Status returned by an initialized exec-server connection.
@@ -169,6 +172,7 @@ impl EnvironmentInfo {
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
+                environment_config_read: true,
             },
         }
     }
@@ -904,6 +908,24 @@ mod tests {
     }
 
     #[test]
+    fn environment_capabilities_accept_legacy_response_without_environment_config_read() {
+        let capabilities: EnvironmentCapabilities = serde_json::from_value(serde_json::json!({
+            "networkProxyLaunch": true,
+            "capabilityDiscoverySandbox": true,
+        }))
+        .expect("legacy environment capabilities should deserialize");
+
+        assert_eq!(
+            capabilities,
+            EnvironmentCapabilities {
+                network_proxy_launch: true,
+                capability_discovery_sandbox: true,
+                environment_config_read: false,
+            }
+        );
+    }
+
+    #[test]
     fn environment_info_preserves_executor_temporary_directories() {
         let expected = serde_json::json!({
             "shell": { "name": "powershell", "path": "powershell.exe" },
@@ -912,6 +934,7 @@ mod tests {
             "capabilities": {
                 "networkProxyLaunch": false,
                 "capabilityDiscoverySandbox": false,
+                "environmentConfigRead": false,
             },
         });
         let info: EnvironmentInfo = serde_json::from_value(expected.clone())
