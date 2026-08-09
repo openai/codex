@@ -66,6 +66,7 @@ use crate::startup_sync::sync_openai_plugins_repo;
 use crate::store::PluginInstallResult as StorePluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
+use crate::store::error_context_sub_error_type;
 use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::PluginInstallSource;
@@ -1555,6 +1556,7 @@ impl PluginsManager {
     }
 
     fn track_plugin_install_resolution_failed(&self, err: &MarketplaceError) {
+        let sub_error_type = marketplace_error_sub_error_type(err);
         let plugin_id = match err {
             MarketplaceError::PluginNotFound {
                 plugin_name,
@@ -1574,14 +1576,24 @@ impl PluginsManager {
             self.track_plugin_install_failed(
                 &plugin_id,
                 marketplace_error_type(err),
-                /*sub_error_type*/ None,
+                sub_error_type,
                 err.to_string(),
             );
         } else {
             tracing::warn!(
                 error_type = %marketplace_error_type(err),
+                sub_error_type = sub_error_type.as_deref(),
                 error = %err,
                 "plugin install failed while resolving marketplace plugin"
+            );
+            self.emit_plugin_install_failed(
+                PluginTelemetryMetadata {
+                    plugin_id: None,
+                    remote_plugin_id: None,
+                    capability_summary: None,
+                },
+                marketplace_error_type(err),
+                sub_error_type,
             );
         }
     }
@@ -1600,13 +1612,26 @@ impl PluginsManager {
             error = %error_message,
             "plugin install failed"
         );
+        self.emit_plugin_install_failed(
+            self.telemetry_metadata_for_plugin_id(plugin_id),
+            error_type,
+            sub_error_type,
+        );
+    }
+
+    fn emit_plugin_install_failed(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        error_type: &'static str,
+        sub_error_type: Option<String>,
+    ) {
         let analytics_events_client = match self.analytics_events_client.read() {
             Ok(client) => client.clone(),
             Err(err) => err.into_inner().clone(),
         };
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_install_failed(
-                self.telemetry_metadata_for_plugin_id(plugin_id),
+                plugin,
                 self.plugin_install_source,
                 error_type.to_string(),
                 sub_error_type,
@@ -3053,8 +3078,11 @@ impl PluginInstallError {
 
     pub fn sub_error_type(&self) -> Option<String> {
         match self {
+            Self::Marketplace(err) => marketplace_error_sub_error_type(err),
+            Self::Remote(err) => err.sub_error_type(),
             Self::Store(err) => err.sub_error_type(),
-            Self::Marketplace(_) | Self::Remote(_) | Self::Config(_) | Self::Join(_) => None,
+            Self::Config(_) => Some("failed_to_enable_plugin".to_string()),
+            Self::Join(_) => Some("plugin_install_task_failed".to_string()),
         }
     }
 }
@@ -3078,6 +3106,18 @@ fn marketplace_error_type(err: &MarketplaceError) -> &'static str {
         MarketplaceError::PluginNotAvailable { .. } => "plugin_not_available",
         MarketplaceError::PluginsDisabled => "plugins_disabled",
         MarketplaceError::InvalidPlugin(_) => "invalid_plugin",
+    }
+}
+
+fn marketplace_error_sub_error_type(err: &MarketplaceError) -> Option<String> {
+    match err {
+        MarketplaceError::Io { context, .. } => Some(error_context_sub_error_type(context)),
+        MarketplaceError::MarketplaceNotFound { .. }
+        | MarketplaceError::InvalidMarketplaceFile { .. }
+        | MarketplaceError::PluginNotFound { .. }
+        | MarketplaceError::PluginNotAvailable { .. }
+        | MarketplaceError::PluginsDisabled
+        | MarketplaceError::InvalidPlugin(_) => None,
     }
 }
 

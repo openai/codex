@@ -1,4 +1,5 @@
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::error_subtype::http_status_sub_error_type;
 use crate::http_client_selector::HttpClientSelector;
 use crate::loader::plugin_app_declarations_from_value;
 use crate::store::PLUGINS_CACHE_DIR;
@@ -456,6 +457,36 @@ pub enum RemotePluginCatalogError {
 
     #[error("{0}")]
     CacheRemove(String),
+}
+
+impl RemotePluginCatalogError {
+    /// Stable low-cardinality detail for plugin-install failure telemetry.
+    pub fn sub_error_type(&self) -> Option<String> {
+        match self {
+            Self::UnexpectedStatus { status, .. } => {
+                Some(http_status_sub_error_type(*status).to_string())
+            }
+            Self::AuthRequired
+            | Self::UnsupportedAuthMode
+            | Self::AuthToken(_)
+            | Self::Request { .. }
+            | Self::Decode { .. }
+            | Self::InvalidBaseUrl(_)
+            | Self::InvalidBaseUrlPath
+            | Self::UnknownMarketplace { .. }
+            | Self::UnexpectedPluginId { .. }
+            | Self::UnexpectedSkillName { .. }
+            | Self::UnexpectedEnabledState { .. }
+            | Self::InvalidPluginPath { .. }
+            | Self::PluginShareCheckoutNotAvailable { .. }
+            | Self::Archive { .. }
+            | Self::ArchiveJoin(_)
+            | Self::ArchiveTooLarge { .. }
+            | Self::MissingUploadEtag
+            | Self::UnexpectedResponse(_)
+            | Self::CacheRemove(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]

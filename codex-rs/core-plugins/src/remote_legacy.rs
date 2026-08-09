@@ -1,3 +1,4 @@
+use crate::error_subtype::http_status_sub_error_type;
 use crate::remote::RemotePluginServiceConfig;
 use codex_http_client::RouteAwareRequestError;
 use codex_login::CodexAuth;
@@ -71,6 +72,25 @@ pub enum RemotePluginMutationError {
         expected_enabled: bool,
         actual_enabled: bool,
     },
+}
+
+impl RemotePluginMutationError {
+    pub(crate) fn sub_error_type(&self) -> Option<String> {
+        match self {
+            Self::UnexpectedStatus { status, .. } => {
+                Some(http_status_sub_error_type(*status).to_string())
+            }
+            Self::AuthRequired
+            | Self::UnsupportedAuthMode
+            | Self::AuthToken(_)
+            | Self::InvalidBaseUrl(_)
+            | Self::InvalidBaseUrlPath
+            | Self::Request { .. }
+            | Self::Decode { .. }
+            | Self::UnexpectedPluginId { .. }
+            | Self::UnexpectedEnabledState { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

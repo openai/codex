@@ -1,3 +1,4 @@
+use crate::error_subtype::http_status_sub_error_type;
 use crate::plugin_bundle_archive::PluginBundleUnpackError;
 use crate::plugin_bundle_archive::unpack_plugin_bundle_tar_gz;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
@@ -143,6 +144,9 @@ impl RemotePluginBundleInstallError {
         match self {
             Self::Io { context, .. } => Some(error_context_sub_error_type(context)),
             Self::Store(err) => err.sub_error_type(),
+            Self::DownloadStatus { status, .. } => {
+                Some(http_status_sub_error_type(*status).to_string())
+            }
             Self::MissingReleaseVersion { .. }
             | Self::InvalidReleaseVersion { .. }
             | Self::MissingBundleDownloadUrl { .. }
@@ -150,7 +154,6 @@ impl RemotePluginBundleInstallError {
             | Self::UnsupportedBundleDownloadUrlScheme { .. }
             | Self::InvalidPluginId { .. }
             | Self::DownloadRequest { .. }
-            | Self::DownloadStatus { .. }
             | Self::DownloadBody { .. }
             | Self::DownloadTooLarge { .. }
             | Self::UnsupportedBundleDownloadFinalUrl { .. }

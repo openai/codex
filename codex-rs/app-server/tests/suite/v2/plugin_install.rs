@@ -589,6 +589,79 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
         event_params["error_type"],
         "remote_catalog_unexpected_status"
     );
+    assert_eq!(event_params["sub_error_type"], "http_404");
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_tracks_analytics_when_remote_install_is_rate_limited() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes("linear")?,
+    )
+    .await;
+    configure_remote_plugin_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/backend-api/ps/plugins/{REMOTE_PLUGIN_ID}/install"
+        )))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(/*status_code*/ 429).set_body_string("rate limited"))
+        .mount(&server)
+        .await;
+    mount_backend_analytics_events(&server).await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32603);
+    assert!(err.error.message.contains("failed with status 429"));
+    wait_for_remote_plugin_request_count(
+        &server,
+        "GET",
+        "/bundles/linear.tar.gz",
+        /*expected_count*/ 1,
+    )
+    .await?;
+    wait_for_remote_plugin_request_count(
+        &server,
+        "POST",
+        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}/install"),
+        /*expected_count*/ 1,
+    )
+    .await?;
+    let payload = wait_for_plugin_analytics_payload(&server).await?;
+    let event_params = &payload["events"][0]["event_params"];
+    assert_eq!(
+        payload["events"][0]["event_type"],
+        "codex_plugin_install_failed"
+    );
+    assert_eq!(event_params["plugin_id"], "linear@openai-curated-remote");
+    assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
+    assert_eq!(event_params["source"], "manual");
+    assert_eq!(
+        event_params["error_type"],
+        "remote_catalog_unexpected_status"
+    );
+    assert_eq!(event_params["sub_error_type"], "http_429");
     Ok(())
 }
 
@@ -612,6 +685,7 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
     )
     .await;
     mount_empty_remote_installed_plugins(&server).await;
+    mount_backend_analytics_events(&server).await;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -649,6 +723,16 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
             .join("plugins/cache/openai-curated-remote/linear")
             .exists()
     );
+    let payload = wait_for_plugin_analytics_payload(&server).await?;
+    let event_params = &payload["events"][0]["event_params"];
+    assert_eq!(
+        payload["events"][0]["event_type"],
+        "codex_plugin_install_failed"
+    );
+    assert_eq!(event_params["plugin_id"], "linear@openai-curated-remote");
+    assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(event_params["error_type"], "remote_plugin_not_available");
+    assert_eq!(event_params["sub_error_type"], "disabled_by_admin");
     Ok(())
 }
 
@@ -665,6 +749,7 @@ async fn plugin_install_rejects_remote_plugin_not_available() -> Result<()> {
     )
     .await;
     mount_empty_remote_installed_plugins(&server).await;
+    mount_backend_analytics_events(&server).await;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -688,6 +773,19 @@ async fn plugin_install_rejects_remote_plugin_not_available() -> Result<()> {
         /*expected_count*/ 0,
     )
     .await?;
+    let payload = wait_for_plugin_analytics_payload(&server).await?;
+    let event_params = &payload["events"][0]["event_params"];
+    assert_eq!(
+        payload["events"][0]["event_type"],
+        "codex_plugin_install_failed"
+    );
+    assert_eq!(event_params["plugin_id"], "linear@openai-curated-remote");
+    assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(event_params["error_type"], "remote_plugin_not_available");
+    assert_eq!(
+        event_params["sub_error_type"],
+        "install_policy_not_available"
+    );
     Ok(())
 }
 
@@ -789,6 +887,64 @@ async fn plugin_install_returns_invalid_request_for_missing_marketplace_file() -
     assert_eq!(err.error.code, -32600);
     assert!(err.error.message.contains("marketplace file"));
     assert!(err.error.message.contains("does not exist"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_tracks_analytics_when_marketplace_file_cannot_be_read() -> Result<()> {
+    let analytics_server = start_analytics_events_server().await?;
+    let codex_home = TempDir::new()?;
+    write_analytics_config(codex_home.path(), &analytics_server.uri())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let marketplace_path = codex_home.path().join("marketplace-dir");
+    std::fs::create_dir_all(&marketplace_path)?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(AbsolutePathBuf::try_from(marketplace_path)?),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32603);
+    assert!(
+        err.error
+            .message
+            .contains("failed to read marketplace file")
+    );
+
+    let payload = wait_for_plugin_analytics_payload(&analytics_server).await?;
+    let event_params = &payload["events"][0]["event_params"];
+    assert_eq!(
+        payload["events"][0]["event_type"],
+        "codex_plugin_install_failed"
+    );
+    assert_eq!(event_params["plugin_id"], json!(null));
+    assert_eq!(event_params["remote_plugin_id"], json!(null));
+    assert_eq!(event_params["error_type"], "marketplace_io");
+    assert_eq!(
+        event_params["sub_error_type"],
+        "failed_to_read_marketplace_file"
+    );
     Ok(())
 }
 
@@ -1135,6 +1291,7 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
     assert_eq!(event_params["source"], "manual");
     assert_eq!(event_params["error_type"], "remote_bundle_download_status");
+    assert_eq!(event_params["sub_error_type"], "http_5xx");
     assert!(
         !codex_home
             .path()
