@@ -4,11 +4,11 @@ expression: "snapshots.join(\"\\n\\n\")"
 ---
 element
 "    KEEP"
-"next    "
-"        "
+" nex    "
+"t       "
 
 
 highlight
 "    KEEP"
-"next    "
-"        "
+" nex    "
+"t       "
