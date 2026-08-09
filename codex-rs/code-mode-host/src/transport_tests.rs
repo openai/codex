@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use axum::serve::Listener;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tokio::net::TcpStream;
 
@@ -9,6 +10,7 @@ use super::ListenTransport;
 use super::MAX_PENDING_BULK_CONNECTIONS;
 use super::bind_websocket_listener;
 use super::parse_listen_url;
+use crate::grpc_transport::bind_tcp_listener;
 
 #[tokio::test]
 async fn websocket_listener_disables_nagle() {
@@ -31,6 +33,31 @@ async fn websocket_listener_disables_nagle() {
         .expect("accepted websocket socket should expose TCP_NODELAY");
 
     assert!(stream);
+}
+
+#[tokio::test]
+async fn grpc_listener_disables_nagle() {
+    let bind_address = "127.0.0.1:0"
+        .parse()
+        .expect("gRPC test listener should have a valid bind address");
+    let mut listener = bind_tcp_listener(bind_address)
+        .await
+        .expect("gRPC test listener should bind");
+    let local_addr = listener
+        .local_addr()
+        .expect("gRPC test listener should have a local address");
+    let _client = TcpStream::connect(local_addr)
+        .await
+        .expect("gRPC test client should connect");
+    let nodelay = listener
+        .next()
+        .await
+        .expect("gRPC test listener should accept a connection")
+        .expect("gRPC test listener should return a valid socket")
+        .nodelay()
+        .expect("accepted gRPC socket should expose TCP_NODELAY");
+
+    assert!(nodelay);
 }
 
 #[test]

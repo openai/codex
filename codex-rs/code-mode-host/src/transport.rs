@@ -49,6 +49,7 @@ use uuid::Uuid;
 
 use crate::HostLimits;
 use crate::MAX_IN_FLIGHT_REQUESTS;
+use crate::grpc_transport;
 
 /// The default transport retains the standalone host's original stdio behavior.
 pub const DEFAULT_LISTEN_URL: &str = "stdio";
@@ -63,6 +64,7 @@ type BoxedWriter = Box<dyn AsyncWrite + Send + Unpin>;
 enum ListenTransport {
     Stdio,
     WebSocket(SocketAddr),
+    Grpc(SocketAddr),
 }
 
 pub(crate) enum ConnectionReader {
@@ -204,6 +206,7 @@ pub(crate) async fn run_transport(listen_url: &str) -> Result<()> {
     match parse_listen_url(listen_url)? {
         ListenTransport::Stdio => crate::run_stdio().await,
         ListenTransport::WebSocket(bind_address) => run_websocket_listener(bind_address).await,
+        ListenTransport::Grpc(bind_address) => grpc_transport::run_tcp_listener(bind_address).await,
     }
 }
 
@@ -221,8 +224,17 @@ fn parse_listen_url(listen_url: &str) -> Result<ListenTransport> {
             });
     }
 
+    if let Some(socket_addr) = listen_url.strip_prefix("grpc://") {
+        return socket_addr
+            .parse::<SocketAddr>()
+            .map(ListenTransport::Grpc)
+            .with_context(|| {
+                format!("invalid gRPC --listen URL `{listen_url}`; expected `grpc://IP:PORT`")
+            });
+    }
+
     anyhow::bail!(
-        "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT`, `stdio`, or `stdio://`"
+        "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT`, `grpc://IP:PORT`, `stdio`, or `stdio://`"
     );
 }
 

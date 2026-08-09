@@ -50,6 +50,7 @@ pub use self::transport::DEFAULT_LISTEN_URL;
 
 mod delegate;
 mod grpc;
+mod grpc_transport;
 mod peer;
 mod transport;
 
