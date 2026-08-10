@@ -714,7 +714,7 @@ pub(super) async fn submission_loop(
         debug!(?sub, "Submission");
         let dispatch_span = submission_dispatch_span(&sub);
         let should_exit = async {
-            match sub.op.clone() {
+            match sub.op {
                 Op::Interrupt => {
                     interrupt(&sess).await;
                     false
@@ -758,11 +758,11 @@ pub(super) async fn submission_loop(
                     realtime_conversation_list_voices(&sess, sub.id.clone()).await;
                     false
                 }
-                Op::UserInput { .. } => {
+                op @ Op::UserInput { .. } => {
                     user_input_or_turn(
                         &sess,
                         sub.id.clone(),
-                        sub.op,
+                        op,
                         sub.client_user_message_id,
                         sub.parent_turn_id,
                     )

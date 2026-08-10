@@ -110,6 +110,32 @@ type CapturedOps = Vec<(ThreadId, Op)>;
 type SharedCapturedOps = Arc<std::sync::Mutex<CapturedOps>>;
 pub(crate) type ThreadIdGenerator = Arc<dyn Fn() -> ThreadId + Send + Sync>;
 
+// `Op` is intentionally not `Clone`. Thread-manager tests only snapshot the
+// small subset of ops they inspect.
+fn capture_test_op(op: &Op) -> Option<Op> {
+    match op {
+        Op::Interrupt => Some(Op::Interrupt),
+        Op::UserInput {
+            items,
+            final_output_json_schema,
+            responsesapi_client_metadata,
+            additional_context,
+            thread_settings,
+        } => Some(Op::UserInput {
+            items: items.clone(),
+            final_output_json_schema: final_output_json_schema.clone(),
+            responsesapi_client_metadata: responsesapi_client_metadata.clone(),
+            additional_context: additional_context.clone(),
+            thread_settings: thread_settings.clone(),
+        }),
+        Op::InterAgentCommunication { communication } => Some(Op::InterAgentCommunication {
+            communication: communication.clone(),
+        }),
+        Op::Shutdown => Some(Op::Shutdown),
+        _ => None,
+    }
+}
+
 pub(crate) fn default_thread_id_generator() -> ThreadIdGenerator {
     Arc::new(ThreadId::new)
 }
@@ -1240,7 +1266,15 @@ impl ThreadManager {
         self.state
             .ops_log
             .as_ref()
-            .and_then(|ops_log| ops_log.lock().ok().map(|log| log.clone()))
+            .and_then(|ops_log| {
+                ops_log.lock().ok().map(|log| {
+                    log.iter()
+                        .filter_map(|(thread_id, op)| {
+                            capture_test_op(op).map(|op| (*thread_id, op))
+                        })
+                        .collect()
+                })
+            })
             .unwrap_or_default()
     }
 }
@@ -1344,8 +1378,9 @@ impl ThreadManagerState {
         let thread = self.get_thread(thread_id).await?;
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
+            && let Some(captured_op) = capture_test_op(&op)
         {
-            log.push((thread_id, op.clone()));
+            log.push((thread_id, captured_op));
         }
         thread
             .io

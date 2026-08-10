@@ -171,7 +171,7 @@ impl GitSha {
 }
 
 /// Submission Queue Entry - requests from user
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Submission {
     /// Unique id for this Submission to correlate with Events
     pub id: String,
@@ -524,7 +524,7 @@ pub struct AdditionalContextEntry {
 }
 
 /// Submission operation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 pub enum Op {

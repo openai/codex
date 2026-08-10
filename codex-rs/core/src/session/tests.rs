@@ -7675,7 +7675,7 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
     let (_tx_event, rx_event) = async_channel::unbounded();
     let session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = rx_sub.recv().await.expect("shutdown submission");
-        assert_eq!(shutdown.op, Op::Shutdown);
+        assert!(matches!(shutdown.op, Op::Shutdown));
         tokio::time::sleep(StdDuration::from_millis(50)).await;
     });
     let io = Arc::new(SessionIo {
@@ -7766,7 +7766,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
             .recv()
             .await
             .expect("child shutdown submission");
-        assert_eq!(shutdown.op, Op::Shutdown);
+        assert!(matches!(shutdown.op, Op::Shutdown));
         child_shutdown_tx
             .send(())
             .expect("child shutdown signal should be delivered");
@@ -7851,7 +7851,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
             .recv()
             .await
             .expect("child shutdown submission");
-        assert_eq!(shutdown.op, Op::Shutdown);
+        assert!(matches!(shutdown.op, Op::Shutdown));
         child_shutdown_tx
             .send(())
             .expect("child shutdown signal should be delivered");

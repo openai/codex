@@ -177,17 +177,25 @@ async fn forward_ops_preserves_submission_trace_context() {
         }),
         parent_turn_id: Some("parent-turn".to_string()),
     };
-    tx_ops.send(submission.clone()).await.unwrap();
+    tx_ops.send(submission).await.unwrap();
     drop(tx_ops);
 
     let forwarded = timeout(Duration::from_secs(1), rx_sub.recv())
         .await
         .expect("forward_ops hung")
         .expect("forwarded submission missing");
-    assert_eq!(submission.id, forwarded.id);
-    assert_eq!(submission.op, forwarded.op);
-    assert_eq!(submission.trace, forwarded.trace);
-    assert_eq!(submission.parent_turn_id, forwarded.parent_turn_id);
+    assert_eq!("sub-1", forwarded.id);
+    assert!(matches!(forwarded.op, Op::Interrupt));
+    assert_eq!(
+        forwarded.trace,
+        Some(codex_protocol::protocol::W3cTraceContext {
+            traceparent: Some(
+                "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01".to_string(),
+            ),
+            tracestate: Some("vendor=state".to_string()),
+        })
+    );
+    assert_eq!(Some("parent-turn".to_string()), forwarded.parent_turn_id);
 
     timeout(Duration::from_secs(1), forward)
         .await
@@ -321,13 +329,11 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         .await
         .expect("request_permissions response timed out")
         .expect("request_permissions response missing");
-    assert_eq!(
-        submission.op,
-        Op::RequestPermissionsResponse {
-            id: call_id,
-            response: expected_response,
-        }
-    );
+    let Op::RequestPermissionsResponse { id, response } = submission.op else {
+        panic!("expected request permissions response");
+    };
+    assert_eq!(id, call_id);
+    assert_eq!(response, expected_response);
 }
 
 #[tokio::test]
@@ -415,13 +421,11 @@ async fn handle_request_user_input_preserves_non_blocking_flag_for_round_trip() 
         .await
         .expect("request_user_input response timed out")
         .expect("request_user_input response missing");
-    assert_eq!(
-        submission.op,
-        Op::UserInputAnswer {
-            id: child_event_id,
-            response: expected_response,
-        }
-    );
+    let Op::UserInputAnswer { id, response } = submission.op else {
+        panic!("expected user input answer");
+    };
+    assert_eq!(id, child_event_id);
+    assert_eq!(response, expected_response);
 }
 
 #[tokio::test]
@@ -538,14 +542,17 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         .await
         .expect("exec approval response timed out")
         .expect("exec approval response missing");
-    assert_eq!(
-        submission.op,
-        Op::ExecApproval {
-            id: "callback-approval-1".to_string(),
-            turn_id: Some("child-turn-1".to_string()),
-            decision: ReviewDecision::Abort,
-        }
-    );
+    let Op::ExecApproval {
+        id,
+        turn_id,
+        decision,
+    } = submission.op
+    else {
+        panic!("expected exec approval");
+    };
+    assert_eq!(id, "callback-approval-1");
+    assert_eq!(turn_id, Some("child-turn-1".to_string()));
+    assert_eq!(decision, ReviewDecision::Abort);
 }
 
 #[tokio::test]
