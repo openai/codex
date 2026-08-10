@@ -36,7 +36,6 @@ pub use host_service::HostSkillsRequest;
 pub use host_service::HostSkillsService;
 pub use host_service::bundled_skills_enabled_from_stack;
 pub use host_snapshot::HostSkillsSnapshot;
-pub use loader::HostSkillRoot;
 pub use provider::ExecutorSkillProvider;
 pub use provider::HostSkillProvider;
 pub use provider::OrchestratorSkillProvider;

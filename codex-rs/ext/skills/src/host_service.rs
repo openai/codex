@@ -197,7 +197,24 @@ impl HostSkillsService {
         .await
     }
 
-    pub async fn skill_roots_for_config(
+    /// Returns filesystem roots whose changes should invalidate discovered host skills.
+    ///
+    /// Plugin roots have their own lifecycle invalidation, and bundled roots are installed before
+    /// filesystem watching begins.
+    pub async fn watchable_skill_root_paths(
+        &self,
+        input: &HostSkillsLoadInput,
+        fs: Arc<dyn ExecutorFileSystem>,
+    ) -> Vec<AbsolutePathBuf> {
+        self.skill_roots_for_config(input, Some(fs))
+            .await
+            .into_iter()
+            .filter(|root| root.plugin_identity().is_none() && root.scope != SkillScope::System)
+            .map(|root| root.path)
+            .collect()
+    }
+
+    async fn skill_roots_for_config(
         &self,
         input: &HostSkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,

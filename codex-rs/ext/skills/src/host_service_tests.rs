@@ -208,6 +208,40 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
 }
 
 #[tokio::test]
+async fn watchable_skill_root_paths_exclude_plugin_and_system_roots() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_plugin_skill(
+        &codex_home,
+        "test",
+        "sample",
+        "search",
+        "search",
+        "plugin skill",
+    );
+    let plugin_skill_root = plugin_skill_root_for_skill_path(&skill_path, "sample@test", "sample");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let input = HostSkillsLoadInput::new(
+        cwd.path().abs(),
+        vec![plugin_skill_root.clone()],
+        config_layer_stack,
+        /*bundled_skills_enabled*/ true,
+    );
+    let skills_service = HostSkillsService::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let watchable_paths = skills_service
+        .watchable_skill_root_paths(&input, Arc::clone(&LOCAL_FS))
+        .await;
+
+    assert!(watchable_paths.contains(&codex_home.path().join("skills").abs()));
+    assert!(!watchable_paths.contains(&plugin_skill_root.path));
+    assert!(!watchable_paths.contains(&codex_home.path().join("skills/.system").abs()));
+}
+
+#[tokio::test]
 async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");

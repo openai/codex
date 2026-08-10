@@ -15,7 +15,6 @@ use codex_file_watcher::Receiver;
 use codex_file_watcher::ThrottledWatchReceiver;
 use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
-use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_skills::system_cache_root_dir;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -121,14 +120,11 @@ impl SkillsWatcher {
         );
         let roots = thread_manager
             .skills_service()
-            .skill_roots_for_config(&skills_input, Some(environment.get_filesystem()))
+            .watchable_skill_root_paths(&skills_input, environment.get_filesystem())
             .await
             .into_iter()
-            // Plugin roots have explicit lifecycle invalidation; generated system skills are
-            // installed before this watcher starts.
-            .filter(|root| root.plugin_identity().is_none() && root.scope != SkillScope::System)
-            .map(|root| WatchPath {
-                path: root.path.into_path_buf(),
+            .map(|path| WatchPath {
+                path: path.into_path_buf(),
                 recursive: true,
             })
             .collect();
