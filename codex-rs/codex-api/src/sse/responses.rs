@@ -174,7 +174,15 @@ pub struct ResponsesStreamEvent {
     text: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_present_value")]
     safety_buffering: Option<Value>,
+}
+
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl ResponsesStreamEvent {
@@ -240,7 +248,17 @@ impl ResponsesStreamEvent {
         &self,
         treatment: &SafetyBufferingTreatment,
     ) -> Option<SafetyBuffering> {
-        let value = self.safety_buffering.as_ref()?;
+        let value = self.safety_buffering.as_ref().or_else(|| {
+            if self.kind() != "response.metadata" {
+                return None;
+            }
+
+            let metadata = self.metadata.as_ref()?;
+            if metadata.get("type").and_then(Value::as_str) != Some("safety_buffering") {
+                return None;
+            }
+            Some(metadata)
+        })?;
         let retry_model_present = value.as_object()?.contains_key("retry_model");
         let mut buffering: SafetyBuffering = serde_json::from_value(value.clone()).ok()?;
         buffering.show_buffering_ui = true;
@@ -1578,6 +1596,126 @@ mod tests {
                     show_buffering_ui: true,
                     faster_model: expected_faster_model.map(str::to_string),
                 }
+            );
+        }
+    }
+
+    #[test]
+    fn safety_buffering_falls_back_to_response_metadata() {
+        let treatment = SafetyBufferingTreatment {
+            faster_model: Some("gpt-fast-header".to_string()),
+        };
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.metadata",
+            "metadata": {
+                "type": "safety_buffering",
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"]
+            }
+        }))
+        .expect("deserialize safety buffering metadata event");
+
+        assert_eq!(
+            event.safety_buffering(&treatment),
+            Some(SafetyBuffering {
+                use_cases: vec!["cyber".to_string()],
+                reasons: vec!["user_risk".to_string()],
+                show_buffering_ui: true,
+                faster_model: Some("gpt-fast-header".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn safety_buffering_top_level_presence_wins_over_response_metadata() {
+        let treatment = SafetyBufferingTreatment::default();
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.metadata",
+            "safety_buffering": {
+                "use_cases": ["top_level"],
+                "reasons": ["top_level_reason"]
+            },
+            "metadata": {
+                "type": "safety_buffering",
+                "use_cases": ["nested"],
+                "reasons": ["nested_reason"]
+            }
+        }))
+        .expect("deserialize safety buffering metadata event");
+
+        assert_eq!(
+            event.safety_buffering(&treatment),
+            Some(SafetyBuffering {
+                use_cases: vec!["top_level".to_string()],
+                reasons: vec!["top_level_reason".to_string()],
+                show_buffering_ui: true,
+                faster_model: None,
+            })
+        );
+
+        for top_level in [json!(false), json!({"use_cases": ["cyber"]}), Value::Null] {
+            let event: ResponsesStreamEvent = serde_json::from_value(json!({
+                "type": "response.metadata",
+                "safety_buffering": top_level,
+                "metadata": {
+                    "type": "safety_buffering",
+                    "use_cases": ["nested"],
+                    "reasons": ["nested_reason"]
+                }
+            }))
+            .expect("deserialize safety buffering metadata event");
+
+            assert_eq!(event.safety_buffering(&treatment), None);
+        }
+    }
+
+    #[test]
+    fn safety_buffering_ignores_metadata_field_for_other_event_kinds() {
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "metadata": {
+                "type": "safety_buffering",
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"]
+            }
+        }))
+        .expect("deserialize safety buffering metadata event");
+
+        assert_eq!(
+            event.safety_buffering(&SafetyBufferingTreatment::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn safety_buffering_ignores_response_metadata_without_safety_buffering_type() {
+        for metadata in [
+            json!({
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"]
+            }),
+            json!({
+                "type": "other_metadata",
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"]
+            }),
+            json!({
+                "type": "safety_buffering",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            }),
+        ] {
+            let event: ResponsesStreamEvent = serde_json::from_value(json!({
+                "type": "response.metadata",
+                "metadata": metadata
+            }))
+            .expect("deserialize response metadata event");
+
+            assert_eq!(
+                event.safety_buffering(&SafetyBufferingTreatment::default()),
+                None
             );
         }
     }

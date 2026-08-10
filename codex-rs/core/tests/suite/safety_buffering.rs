@@ -19,20 +19,30 @@ use serde_json::json;
 const FASTER_MODEL: &str = "faster-model";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn emits_safety_buffering_with_the_header_fallback_model() -> anyhow::Result<()> {
+async fn emits_safety_buffering_from_response_metadata_with_the_header_fallback_model()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut created = ev_response_created("resp-1");
-    created["safety_buffering"] = json!({
-        "use_cases": ["cyber"],
-        "reasons": ["policy-check"],
+    let metadata = json!({
+        "type": "response.metadata",
+        "sequence_number": 1,
+        "response_id": "resp-1",
+        "metadata": {
+            "type": "safety_buffering",
+            "use_cases": ["cyber"],
+            "reasons": ["policy-check"],
+        }
     });
     mount_response_once(
         &server,
-        sse_response(sse(vec![created, ev_completed("resp-1")]))
-            .insert_header("x-codex-safety-buffering-enabled", "true")
-            .insert_header("x-codex-safety-buffering-faster-model", FASTER_MODEL),
+        sse_response(sse(vec![
+            ev_response_created("resp-1"),
+            metadata,
+            ev_completed("resp-1"),
+        ]))
+        .insert_header("x-codex-safety-buffering-enabled", "true")
+        .insert_header("x-codex-safety-buffering-faster-model", FASTER_MODEL),
     )
     .await;
 
