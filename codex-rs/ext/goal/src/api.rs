@@ -54,6 +54,7 @@ pub struct GoalSetRequest<'a> {
     pub objective: GoalObjectiveUpdate<'a>,
     pub status: Option<ThreadGoalStatus>,
     pub token_budget: GoalTokenBudgetUpdate,
+    pub max_goal_token_budget: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -150,6 +151,7 @@ impl GoalService {
             objective,
             status,
             token_budget,
+            max_goal_token_budget,
         } = request;
         let status = status.map(state_status_from_protocol);
         let objective = match objective {
@@ -158,14 +160,16 @@ impl GoalService {
         };
         let token_budget = match token_budget {
             GoalTokenBudgetUpdate::Keep => None,
-            GoalTokenBudgetUpdate::Set(token_budget) => Some(token_budget),
+            GoalTokenBudgetUpdate::Set(token_budget) => {
+                Some(token_budget.or(max_goal_token_budget))
+            }
         };
 
         if let Some(objective) = objective {
             validate_thread_goal_objective(objective).map_err(GoalServiceError::InvalidRequest)?;
         }
         if objective.is_some() || token_budget.is_some() {
-            validate_goal_budget(token_budget.flatten())
+            validate_goal_budget(token_budget.flatten(), max_goal_token_budget)
                 .map_err(GoalServiceError::InvalidRequest)?;
         }
 
@@ -225,7 +229,7 @@ impl GoalService {
                         thread_id,
                         objective,
                         status.unwrap_or(codex_state::ThreadGoalStatus::Active),
-                        token_budget.flatten(),
+                        token_budget.flatten().or(max_goal_token_budget),
                     )
                     .await
                     .map_err(|err| {

@@ -18,6 +18,7 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
+use codex_goal_extension::GoalExtensionConfig;
 use codex_goal_extension::GoalService;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -89,7 +90,10 @@ where
             codex_otel::global(),
             thread_manager,
             goal_service,
-            |config: &Config| config.features.enabled(codex_features::Feature::Goals),
+            |config: &Config| GoalExtensionConfig {
+                enabled: config.features.enabled(codex_features::Feature::Goals),
+                max_goal_token_budget: config.max_goal_token_budget,
+            },
         );
     }
     codex_git_attribution::install(

@@ -36,6 +36,7 @@ pub(crate) struct GoalToolExecutor {
     analytics: GoalAnalytics,
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
+    max_goal_token_budget: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
@@ -89,6 +90,7 @@ impl GoalToolExecutor {
             analytics,
             event_emitter,
             metrics,
+            max_goal_token_budget: None,
         }
     }
 
@@ -99,6 +101,7 @@ impl GoalToolExecutor {
         analytics: GoalAnalytics,
         event_emitter: GoalEventEmitter,
         metrics: GoalMetrics,
+        max_goal_token_budget: Option<i64>,
     ) -> Self {
         Self {
             kind: GoalToolKind::Create,
@@ -108,6 +111,7 @@ impl GoalToolExecutor {
             analytics,
             event_emitter,
             metrics,
+            max_goal_token_budget,
         }
     }
 
@@ -127,6 +131,7 @@ impl GoalToolExecutor {
             analytics,
             event_emitter,
             metrics,
+            max_goal_token_budget: None,
         }
     }
 }
@@ -185,7 +190,9 @@ impl GoalToolExecutor {
         request.objective = request.objective.trim().to_string();
         validate_thread_goal_objective(&request.objective)
             .map_err(FunctionCallError::RespondToModel)?;
-        validate_goal_budget(request.token_budget).map_err(FunctionCallError::RespondToModel)?;
+        request.token_budget = request.token_budget.or(self.max_goal_token_budget);
+        validate_goal_budget(request.token_budget, self.max_goal_token_budget)
+            .map_err(FunctionCallError::RespondToModel)?;
 
         let goal = self
             .state_db
@@ -397,11 +404,22 @@ where
         .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
 }
 
-pub(crate) fn validate_goal_budget(value: Option<i64>) -> Result<(), String> {
+pub(crate) fn validate_goal_budget(
+    value: Option<i64>,
+    max_goal_token_budget: Option<i64>,
+) -> Result<(), String> {
     if let Some(value) = value
         && value <= 0
     {
         return Err("goal budgets must be positive when provided".to_string());
+    }
+    if let Some(value) = value
+        && let Some(max_goal_token_budget) = max_goal_token_budget
+        && value > max_goal_token_budget
+    {
+        return Err(format!(
+            "goal token budget {value} exceeds the maximum allowed goal token budget of {max_goal_token_budget}"
+        ));
     }
     Ok(())
 }

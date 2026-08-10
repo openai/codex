@@ -2052,6 +2052,103 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_goal_set_enforces_configured_maximum_token_budget() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    let config = config.replace("personality = true\n", "personality = true\ngoals = true\n");
+    std::fs::write(
+        config_path,
+        format!("{config}\n[goals]\nmax_goal_token_budget = 200\n"),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            config: Some(
+                [("goals.max_goal_token_budget".to_string(), json!(100))]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+
+    let oversized_creation_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "objective": "oversized goal",
+                "tokenBudget": 101,
+            })),
+        )
+        .await?;
+    let creation_error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(oversized_creation_id)),
+    )
+    .await??;
+    assert_eq!(
+        creation_error.error.message,
+        "goal token budget 101 exceeds the maximum allowed goal token budget of 100"
+    );
+
+    let creation_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "objective": "bounded goal",
+            })),
+        )
+        .await?;
+    let creation: ThreadGoalSetResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(creation_id)).await??;
+    assert_eq!(creation.goal.token_budget, Some(100));
+
+    let clear_budget_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({ "threadId": thread.id, "tokenBudget": null })),
+        )
+        .await?;
+    let clear_budget: ThreadGoalSetResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(clear_budget_id)).await??;
+    assert_eq!(clear_budget.goal.token_budget, Some(100));
+
+    let oversized_update_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "tokenBudget": 101,
+            })),
+        )
+        .await?;
+    let update_error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(oversized_update_id)),
+    )
+    .await??;
+    assert_eq!(
+        update_error.error.message,
+        "goal token budget 101 exceeds the maximum allowed goal token budget of 100"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

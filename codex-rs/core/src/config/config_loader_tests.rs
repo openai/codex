@@ -801,6 +801,36 @@ extra = true
 }
 
 #[tokio::test]
+async fn managed_goal_token_budget_overrides_user_config() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let managed_path = tmp.path().join("managed_config.toml");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "[goals]\nmax_goal_token_budget = 20000\n",
+    )?;
+    std::fs::write(&managed_path, "[goals]\nmax_goal_token_budget = 5000\n")?;
+
+    let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(
+        state
+            .effective_config()
+            .get("goals")
+            .and_then(|goals| goals.get("max_goal_token_budget")),
+        Some(&TomlValue::Integer(5_000))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn returns_empty_when_all_layers_missing() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
