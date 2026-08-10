@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use semver::Version;
+use serde::Deserialize;
 
 const BIN_DIRNAME: &str = "bin";
 const CODE_MODE_HOST_EXECUTABLE_NAME: &str = if cfg!(windows) {
@@ -35,6 +37,12 @@ pub struct CodexPackageLayout {
     pub resources_dir: Option<AbsolutePathBuf>,
     /// Folder that should be prepended to the PATH, when present.
     pub path_dir: Option<AbsolutePathBuf>,
+}
+
+/// Version metadata recorded in a bundled Codex runtime package.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct CodexPackageManifest {
+    pub version: Version,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,6 +134,15 @@ impl InstallContext {
                 method_override,
             )
         })
+    }
+
+    /// Read the manifest for the package that contains the current executable.
+    pub fn package_manifest(&self) -> Option<CodexPackageManifest> {
+        let package_layout = self.package_layout.as_ref()?;
+        let manifest =
+            std::fs::read_to_string(package_layout.package_dir.join(PACKAGE_METADATA_FILENAME))
+                .ok()?;
+        serde_json::from_str(&manifest).ok()
     }
 
     pub fn rg_command(&self) -> PathBuf {
@@ -227,11 +244,18 @@ impl CodexPackageLayout {
         let exe_dir = canonical_exe.parent()?;
         match exe_dir.file_name() {
             Some(name) if name == OsStr::new(BIN_DIRNAME) => Self::from_package_bin_dir(exe_dir),
+            Some(name) if name == OsStr::new(RESOURCES_DIRNAME) => {
+                let package_dir = exe_dir.parent()?;
+                Self::from_package_bin_dir(package_dir.join(BIN_DIRNAME))
+            }
             Some(_) | None => None,
         }
     }
 
     fn from_package_bin_dir(bin_dir: AbsolutePathBuf) -> Option<Self> {
+        if !bin_dir.is_dir() {
+            return None;
+        }
         let package_dir = bin_dir.parent()?;
         if !package_dir.join(PACKAGE_METADATA_FILENAME).is_file() {
             return None;
@@ -495,7 +519,19 @@ mod tests {
         fs::create_dir_all(&bin_dir)?;
         fs::create_dir_all(&resources_dir)?;
         fs::create_dir_all(&path_dir)?;
-        fs::write(package_dir.path().join(PACKAGE_METADATA_FILENAME), "{}")?;
+        fs::write(
+            package_dir.path().join(PACKAGE_METADATA_FILENAME),
+            r#"{
+  "layoutVersion": 1,
+  "version": "1.2.3",
+  "target": "x86_64-unknown-linux-musl",
+  "variant": "codex",
+  "entrypoint": "bin/codex",
+  "resourcesDir": "codex-resources",
+  "pathDir": "codex-path"
+}
+"#,
+        )?;
         let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
         fs::write(&exe_path, "")?;
         fs::write(bin_dir.join(CODE_MODE_HOST_EXECUTABLE_NAME), "")?;
@@ -531,6 +567,12 @@ mod tests {
                 method: InstallMethod::Other,
                 package_layout: Some(package_layout),
             }
+        );
+        assert_eq!(
+            context.package_manifest(),
+            Some(CodexPackageManifest {
+                version: Version::new(1, 2, 3),
+            })
         );
         assert_eq!(
             context.code_mode_host_program_from_exe(Some(&exe_path)),
