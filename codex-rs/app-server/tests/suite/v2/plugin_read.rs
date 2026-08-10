@@ -1878,6 +1878,7 @@ async fn plugin_read_stops_batching_after_app_metadata_failure() -> Result<()> {
     let request_id = mcp
         .send_apps_read_request(AppsReadParams {
             app_ids: vec!["app-000".to_string(), "app-100".to_string()],
+            thread_id: None,
             include_tools: false,
         })
         .await?;

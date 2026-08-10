@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -23,6 +24,8 @@ use codex_app_server_protocol::ConnectorMetadata;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -287,6 +290,73 @@ async fn app_read_refetches_metadata_only_cache_entries_when_tools_are_requested
 }
 
 #[tokio::test]
+async fn app_read_thread_id_uses_effective_thread_config() -> Result<()> {
+    let state = BatchServerState::new(
+        json!({
+            "apps": [app_response("alpha", "Alpha", /*icon_url*/ None)]
+        }),
+        "chatgpt-token",
+        "codex",
+    );
+    let (server_url, server_handle) = start_batch_server(state.clone()).await?;
+    let codex_home = TempDir::new()?;
+    write_apps_config(
+        codex_home.path(),
+        &server_url,
+        /*apps_mcp_product_sku*/ None,
+    )?;
+    write_auth(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    assert_eq!(
+        read_apps(&mut mcp, vec!["alpha"], /*include_tools*/ false).await?,
+        AppsReadResponse {
+            apps: vec![metadata_without_tools(
+                "alpha", "Alpha", /*icon_url*/ None
+            )],
+            missing_app_ids: Vec::new(),
+        }
+    );
+
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            config: Some(HashMap::from([(
+                "features.connectors".to_string(),
+                json!(false),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    let request_id = mcp
+        .send_apps_read_request(AppsReadParams {
+            app_ids: vec!["alpha".to_string()],
+            thread_id: Some(thread.id),
+            include_tools: false,
+        })
+        .await?;
+    let response: AppsReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        response,
+        AppsReadResponse {
+            apps: Vec::new(),
+            missing_app_ids: vec!["alpha".to_string()],
+        }
+    );
+    assert_eq!(state.requests().len(), 1);
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn app_read_backend_failure_preserves_fresh_cached_records() -> Result<()> {
     let state = BatchServerState::new(
         json!({
@@ -322,6 +392,7 @@ async fn app_read_backend_failure_preserves_fresh_cached_records() -> Result<()>
     let request_id = mcp
         .send_apps_read_request(AppsReadParams {
             app_ids: vec!["cached".to_string(), "uncached".to_string()],
+            thread_id: None,
             include_tools: true,
         })
         .await?;
@@ -443,6 +514,7 @@ async fn app_read_rejects_more_than_one_hundred_input_ids() -> Result<()> {
     let request_id = mcp
         .send_apps_read_request(AppsReadParams {
             app_ids: (0..101).map(|index| format!("app-{index}")).collect(),
+            thread_id: None,
             include_tools: false,
         })
         .await?;
@@ -474,6 +546,7 @@ async fn read_apps_raw(
     let request_id = mcp
         .send_apps_read_request(AppsReadParams {
             app_ids: app_ids.into_iter().map(str::to_string).collect(),
+            thread_id: None,
             include_tools,
         })
         .await?;

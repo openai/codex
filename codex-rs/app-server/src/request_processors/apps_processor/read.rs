@@ -12,6 +12,7 @@ impl AppsRequestProcessor {
         let started_at = Instant::now();
         let AppsReadParams {
             app_ids,
+            thread_id,
             include_tools,
         } = params;
         if app_ids.len() > APP_READ_MAX_IDS {
@@ -25,7 +26,7 @@ impl AppsRequestProcessor {
             .into_iter()
             .filter(|app_id| seen_app_ids.insert(app_id.clone()))
             .collect::<Vec<_>>();
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let config = self.load_apps_config(thread_id.as_deref()).await?;
         let auth = self.auth_manager.auth().await;
         if !config
             .features

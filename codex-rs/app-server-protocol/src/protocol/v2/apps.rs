@@ -177,6 +177,9 @@ pub struct AppsReadParams {
     /// App ids to read. The server accepts at most 100 ids and deduplicates repeated ids while
     /// preserving their first-request order.
     pub app_ids: Vec<String>,
+    /// Optional loaded thread id used to evaluate effective app configuration.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     /// When true, include display-only public tool summaries in the returned metadata.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_tools: bool,

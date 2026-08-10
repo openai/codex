@@ -12,6 +12,10 @@ export type AppsReadParams = {
  */
 appIds: Array<string>,
 /**
+ * Optional loaded thread id used to evaluate effective app configuration.
+ */
+threadId?: string | null,
+/**
  * When true, include display-only public tool summaries in the returned metadata.
  */
 includeTools?: boolean, };

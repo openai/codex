@@ -12,6 +12,13 @@
     "includeTools": {
       "description": "When true, include display-only public tool summaries in the returned metadata.",
       "type": "boolean"
+    },
+    "threadId": {
+      "description": "Optional loaded thread id used to evaluate effective app configuration.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [
