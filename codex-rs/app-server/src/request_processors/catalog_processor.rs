@@ -514,17 +514,30 @@ impl CatalogRequestProcessor {
             plugins_manager.clear_cache();
             skills_service.clear_cache();
         }
+        // Plugin configuration is user-scoped; workspace skill rules are applied below.
+        let (effective_skill_roots, plugin_skill_snapshots) = if workspace_codex_plugins_enabled {
+            let plugins_input = config.plugins_config_input();
+            let plugins = plugins_manager.plugins_for_config(&plugins_input).await;
+            (
+                plugins.effective_plugin_skill_roots(),
+                plugins_manager.plugin_skill_snapshots_for_config(&plugins_input),
+            )
+        } else {
+            (Vec::new(), None)
+        };
         let fs = self
             .thread_manager
             .environment_manager()
             .default_environment()
             .map(|environment| environment.get_filesystem());
+        let skills_request = skills_service.for_request();
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
                 let fs = fs.clone();
-                let plugins_manager = &plugins_manager;
-                let skills_service = &skills_service;
+                let skills_request = &skills_request;
+                let effective_skill_roots = effective_skill_roots.clone();
+                let plugin_skill_snapshots = plugin_skill_snapshots.clone();
                 async move {
                     let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
                         Ok(resolved) => resolved,
@@ -543,31 +556,6 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let (effective_skill_roots, plugin_skill_snapshots) =
-                        if workspace_codex_plugins_enabled {
-                            let plugins_input = config.plugins_config_input();
-                            if config_layer_stack == plugins_input.config_layer_stack {
-                                let plugins =
-                                    plugins_manager.plugins_for_config(&plugins_input).await;
-                                (
-                                    plugins.effective_plugin_skill_roots(),
-                                    plugins_manager
-                                        .plugin_skill_snapshots_for_config(&plugins_input),
-                                )
-                            } else {
-                                (
-                                    plugins_manager
-                                        .effective_skill_roots_for_layer_stack(
-                                            &config_layer_stack,
-                                            &plugins_input,
-                                        )
-                                        .await,
-                                    None,
-                                )
-                            }
-                        } else {
-                            (Vec::new(), None)
-                        };
                     let skills_input = codex_core::skills::HostSkillsLoadInput::new(
                         cwd_abs.clone(),
                         effective_skill_roots,
@@ -575,7 +563,7 @@ impl CatalogRequestProcessor {
                         config.bundled_skills_enabled(),
                     )
                     .with_plugin_skill_snapshots(plugin_skill_snapshots);
-                    let snapshot = skills_service
+                    let snapshot = skills_request
                         .snapshot_for_cwd(&skills_input, force_reload, fs)
                         .await;
                     let outcome = snapshot.outcome();

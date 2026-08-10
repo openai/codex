@@ -787,28 +787,6 @@ impl PluginsManager {
         }
     }
 
-    /// Load plugins for a config layer stack without touching the plugins cache.
-    pub async fn plugins_for_layer_stack(
-        &self,
-        config_layer_stack: &ConfigLayerStack,
-        config: &PluginsConfigInput,
-    ) -> PluginLoadOutcome {
-        if !config.plugins_enabled {
-            return PluginLoadOutcome::default();
-        }
-        let plugins = load_plugins_from_layer_stack(
-            config_layer_stack,
-            self.remote_installed_plugins_snapshot(),
-            &self.store,
-            /*plugin_skill_snapshots*/ None,
-            self.restriction_product,
-            self.remote_global_catalog_active(config),
-            self.skill_root_loader.as_ref(),
-        )
-        .await;
-        self.resolve_loaded_plugins_for_auth(plugins, &config.model_provider_id)
-    }
-
     /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.
     pub async fn plugin_hooks_for_layer_stack(
         &self,
@@ -828,17 +806,6 @@ impl PluginsManager {
             self.remote_global_catalog_active(config),
         )
         .await
-    }
-
-    /// Resolve plugin skill roots for a config layer stack without touching the plugins cache.
-    pub async fn effective_skill_roots_for_layer_stack(
-        &self,
-        config_layer_stack: &ConfigLayerStack,
-        config: &PluginsConfigInput,
-    ) -> Vec<PluginSkillRoot> {
-        self.plugins_for_layer_stack(config_layer_stack, config)
-            .await
-            .effective_plugin_skill_roots()
     }
 
     fn cached_loaded_plugins(&self, key: &PluginLoadCacheKey) -> Option<Vec<LoadedPlugin>> {

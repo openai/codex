@@ -11,6 +11,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::migrated_command_skills_root;
+use futures::FutureExt;
 use futures::StreamExt;
 use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
@@ -20,12 +21,31 @@ use super::MAX_CONCURRENT_ROOT_SCANS;
 use super::host::HostSkillRootSnapshot;
 use super::load_host_skill_root;
 use crate::SkillLoadOutcome;
+use crate::host_service::RequestSkillRootSnapshots;
+use crate::host_service::config_skill_root_cache_key;
 
 pub(crate) async fn load_and_merge_host_skill_roots(
     roots: Vec<HostSkillRoot>,
     root_scan_slots: &Semaphore,
     restriction_product: Option<Product>,
     plugin_skill_snapshots: Option<&SkillRootSnapshots<PluginSkillRoot>>,
+) -> SkillLoadOutcome {
+    load_and_merge_host_skill_roots_with_request_snapshots(
+        roots,
+        root_scan_slots,
+        restriction_product,
+        plugin_skill_snapshots,
+        /*request_root_snapshots*/ None,
+    )
+    .await
+}
+
+pub(crate) async fn load_and_merge_host_skill_roots_with_request_snapshots(
+    roots: Vec<HostSkillRoot>,
+    root_scan_slots: &Semaphore,
+    restriction_product: Option<Product>,
+    plugin_skill_snapshots: Option<&SkillRootSnapshots<PluginSkillRoot>>,
+    request_root_snapshots: Option<&RequestSkillRootSnapshots>,
 ) -> SkillLoadOutcome {
     let migrated_command_roots_by_plugin = roots
         .iter()
@@ -42,42 +62,63 @@ pub(crate) async fn load_and_merge_host_skill_roots(
                 .cloned();
             let plugin_skill_root = root.plugin_skill_root();
             let file_system = Arc::clone(&root.file_system);
-            let _root_scan_slot = root_scan_slots
-                .acquire()
-                .await
-                .unwrap_or_else(|_| unreachable!());
-            let cached_snapshot = plugin_skill_root
-                .as_ref()
-                .and_then(|plugin_skill_root| plugin_skill_snapshots?.get(plugin_skill_root));
-            let snapshot = match cached_snapshot {
-                Some(snapshot) => HostSkillRootSnapshot {
-                    root: snapshot.root,
-                    skills: snapshot.skills,
-                    skill_discovery_path_by_path: snapshot.skill_discovery_path_by_path,
-                    errors: snapshot.errors,
-                    file_system: Arc::clone(&file_system),
-                    is_agent_plugin: snapshot.is_agent_plugin,
-                },
-                None => {
-                    let snapshot = load_host_skill_root(root).await;
-                    if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
-                        && let Some(plugin_skill_root) = plugin_skill_root
-                    {
-                        plugin_skill_snapshots.insert(
-                            plugin_skill_root,
-                            LoadedSkillRoot {
-                                root: snapshot.root.clone(),
-                                skills: snapshot.skills.clone(),
-                                skill_discovery_path_by_path: Arc::clone(
-                                    &snapshot.skill_discovery_path_by_path,
-                                ),
-                                errors: snapshot.errors.clone(),
-                                is_agent_plugin: snapshot.is_agent_plugin,
-                            },
-                        );
+            let request_snapshot = if plugin_skill_root.is_none() {
+                request_root_snapshots.map(|snapshots| {
+                    Arc::clone(
+                        snapshots
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .entry(config_skill_root_cache_key(&root))
+                            .or_insert_with(|| Arc::new(OnceCell::new())),
+                    )
+                })
+            } else {
+                None
+            };
+            let load = async {
+                let _root_scan_slot = root_scan_slots
+                    .acquire()
+                    .await
+                    .unwrap_or_else(|_| unreachable!());
+                let cached_snapshot = plugin_skill_root
+                    .as_ref()
+                    .and_then(|plugin_skill_root| plugin_skill_snapshots?.get(plugin_skill_root));
+                match cached_snapshot {
+                    Some(snapshot) => HostSkillRootSnapshot {
+                        root: snapshot.root,
+                        skills: snapshot.skills,
+                        skill_discovery_path_by_path: snapshot.skill_discovery_path_by_path,
+                        errors: snapshot.errors,
+                        file_system: Arc::clone(&file_system),
+                        is_agent_plugin: snapshot.is_agent_plugin,
+                    },
+                    None => {
+                        let snapshot = load_host_skill_root(root).await;
+                        if let Some(plugin_skill_snapshots) = plugin_skill_snapshots
+                            && let Some(plugin_skill_root) = plugin_skill_root
+                        {
+                            plugin_skill_snapshots.insert(
+                                plugin_skill_root,
+                                LoadedSkillRoot {
+                                    root: snapshot.root.clone(),
+                                    skills: snapshot.skills.clone(),
+                                    skill_discovery_path_by_path: Arc::clone(
+                                        &snapshot.skill_discovery_path_by_path,
+                                    ),
+                                    errors: snapshot.errors.clone(),
+                                    is_agent_plugin: snapshot.is_agent_plugin,
+                                },
+                            );
+                        }
+                        snapshot
                     }
-                    snapshot
                 }
+            }
+            .boxed();
+            let snapshot = if let Some(snapshot) = request_snapshot {
+                snapshot.get_or_init(|| load).await.clone()
+            } else {
+                load.await
             };
             let migrated_command_root = match (plugin_root.as_ref(), migrated_command_root) {
                 (Some(plugin_root), Some(migrated_command_root)) => Some(

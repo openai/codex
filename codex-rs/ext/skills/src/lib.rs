@@ -32,6 +32,7 @@ pub use host_outcome::SkillLoadOutcome;
 pub use host_prompt::HostSkillPrompts;
 pub use host_prompt::InjectedHostSkillPrompts;
 pub use host_service::HostSkillsLoadInput;
+pub use host_service::HostSkillsRequest;
 pub use host_service::HostSkillsService;
 pub use host_service::bundled_skills_enabled_from_stack;
 pub use host_snapshot::HostSkillsSnapshot;
