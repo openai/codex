@@ -38,6 +38,7 @@ use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::ResolvedPermissionProfile;
+use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -429,7 +430,8 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         review_context: GuardianReviewContext::from(Arc::new(turn_context)),
         call_id: "preapproved-additional-permissions".to_string(),
         environment_id: "local".to_string(),
-        tool_name: GuardianCommandSource::Shell,
+        source: GuardianCommandSource::Shell,
+        tool_name: ToolName::plain("shell_command"),
         approval_policy: AskForApproval::OnRequest,
         permission_profile: permission_profile.clone(),
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
@@ -561,13 +563,43 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     let command = vec!["touch".to_string(), target_str.clone()];
     let expected_hook_command =
         codex_shell_command::parse_command::shlex_join(&["/usr/bin/touch".to_string(), target_str]);
+
+    struct PendingApprovalTask;
+
+    impl crate::tasks::SessionTask for PendingApprovalTask {
+        fn kind(&self) -> crate::state::TaskKind {
+            crate::state::TaskKind::Regular
+        }
+
+        fn span_name(&self) -> &'static str {
+            "session_task.pending_execve_approval"
+        }
+
+        async fn run(
+            self: Arc<Self>,
+            _session: Arc<crate::session::session::Session>,
+            _turn_context: Arc<crate::session::turn_context::TurnContext>,
+            _input: Vec<crate::session::TurnInput>,
+            cancellation_token: tokio_util::sync::CancellationToken,
+        ) -> crate::tasks::SessionTaskResult {
+            cancellation_token.cancelled().await;
+            Ok(None)
+        }
+    }
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    session
+        .spawn_task(Arc::clone(&turn_context), Vec::new(), PendingApprovalTask)
+        .await;
     let provider = CoreShellActionProvider {
         policy: std::sync::Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
-        session: std::sync::Arc::new(session),
-        review_context: GuardianReviewContext::from(Arc::new(turn_context)),
+        session: Arc::clone(&session),
+        review_context: GuardianReviewContext::from(turn_context),
         call_id: "execve-hook-call".to_string(),
         environment_id: "local".to_string(),
-        tool_name: GuardianCommandSource::Shell,
+        source: GuardianCommandSource::Shell,
+        tool_name: ToolName::plain("shell_command"),
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::read_only(),
         sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -777,7 +809,8 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         review_context: GuardianReviewContext::from(Arc::new(turn_context)),
         call_id: "deny-read-prefix-allow".to_string(),
         environment_id: "local".to_string(),
-        tool_name: GuardianCommandSource::Shell,
+        source: GuardianCommandSource::Shell,
+        tool_name: ToolName::plain("shell_command"),
         approval_policy: AskForApproval::OnRequest,
         permission_profile,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -813,7 +846,8 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
         review_context: GuardianReviewContext::from(Arc::new(turn_context)),
         call_id: "deny-read-granular-sandbox-reject".to_string(),
         environment_id: "local".to_string(),
-        tool_name: GuardianCommandSource::Shell,
+        source: GuardianCommandSource::Shell,
+        tool_name: ToolName::plain("shell_command"),
         approval_policy: AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: false,
             rules: true,

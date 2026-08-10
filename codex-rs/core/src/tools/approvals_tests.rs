@@ -13,9 +13,27 @@ fn approval_resolution_rejects_denied_network_policy_amendment() {
         },
         source: ApprovalResolutionSource::User,
     };
+
     assert!(matches!(
         resolution.into_tool_result(),
         Err(ToolError::Rejected(rejection)) if rejection == "rejected by user"
+    ));
+}
+
+#[test]
+fn approval_resolution_aborts_turn_when_approval_is_aborted() {
+    let resolution = ApprovalResolution {
+        decision: ReviewDecision::Abort,
+        source: ApprovalResolutionSource::User,
+    };
+
+    assert!(matches!(
+        resolution.into_tool_result(),
+        Err(ToolError::Codex(error))
+            if matches!(
+                error.details(),
+                codex_protocol::error::CodexErrorDetails::TurnAborted
+            )
     ));
 }
 

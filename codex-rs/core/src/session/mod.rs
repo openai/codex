@@ -2891,13 +2891,14 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn reads must stay consistent with the matching turn state"
     )]
-    pub(crate) async fn strict_auto_review_enabled_for_turn(&self) -> bool {
+    pub(crate) async fn active_turn_context_and_strict_auto_review(
+        &self,
+    ) -> Option<(Arc<TurnContext>, bool)> {
         let active = self.active_turn.lock().await;
-        let Some(active) = active.as_ref() else {
-            return false;
-        };
+        let active = active.as_ref()?;
+        let turn_context = Arc::clone(&active.task.as_ref()?.turn_context);
         let ts = active.turn_state.lock().await;
-        ts.strict_auto_review_enabled()
+        Some((turn_context, ts.strict_auto_review_enabled()))
     }
 
     pub(crate) async fn granted_session_permissions(

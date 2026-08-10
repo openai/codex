@@ -3,20 +3,16 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
-use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianReviewContext;
-use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
-use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approvals::ApprovalAction;
+use crate::tools::approvals::ApprovalContext;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::prepend_zsh_fork_bin_to_path;
-use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -29,7 +25,6 @@ use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
-use codex_hooks::PermissionRequestDecision;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -63,6 +58,7 @@ use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::ShellCommandExecutorFuture;
 use codex_shell_escalation::Stopwatch;
+use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
@@ -238,7 +234,8 @@ pub(super) async fn try_run_zsh_fork(
         review_context: GuardianReviewContext::from(&ctx.step_context),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
-        tool_name: GuardianCommandSource::Shell,
+        source: GuardianCommandSource::Shell,
+        tool_name: ctx.tool_name.clone(),
         approval_policy: ctx.step_context.turn.approval_policy(),
         permission_profile: command_executor.permission_profile.clone(),
         sandbox_permissions: req.sandbox_permissions,
@@ -324,7 +321,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         review_context: GuardianReviewContext::from(&ctx.step_context),
         call_id: ctx.call_id.clone(),
         environment_id: req.turn_environment.environment_id.clone(),
-        tool_name: GuardianCommandSource::UnifiedExec,
+        source: GuardianCommandSource::UnifiedExec,
+        tool_name: ctx.tool_name.clone(),
         approval_policy: ctx.step_context.turn.approval_policy(),
         permission_profile: exec_request.permission_profile.clone(),
         sandbox_permissions: req.sandbox_permissions,
@@ -358,7 +356,8 @@ struct CoreShellActionProvider {
     review_context: GuardianReviewContext,
     call_id: String,
     environment_id: String,
-    tool_name: GuardianCommandSource,
+    source: GuardianCommandSource,
+    tool_name: ToolName,
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
     sandbox_permissions: SandboxPermissions,
@@ -441,78 +440,46 @@ impl CoreShellActionProvider {
         additional_permissions: Option<AdditionalPermissionProfile>,
     ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
-        let workdir = workdir.clone();
-        let session = self.session.clone();
-        let review_context = self.review_context.clone();
-        let turn = Arc::clone(review_context.turn());
-        let call_id = self.call_id.clone();
-        let approval_id = Some(Uuid::new_v4().to_string());
-        let environment_id = Some(self.environment_id.clone());
-        let source = self.tool_name;
-        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
-        Ok(stopwatch
-            .pause_for(async move {
-                // 1) Run PermissionRequest hooks
-                let permission_request = PermissionRequestPayload::bash(
-                    codex_shell_command::parse_command::shlex_join(&command),
-                    /*description*/ None,
-                );
-                let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
-                match run_permission_request_hooks(
-                    &session,
-                    &turn,
-                    &effective_approval_id,
-                    permission_request,
-                )
-                .await
-                {
-                    Some(PermissionRequestDecision::Allow) => {
-                        return ReviewDecision::Approved;
-                    }
-                    Some(PermissionRequestDecision::Deny { message }) => {
-                        return ReviewDecision::denied(message);
-                    }
-                    None => {}
-                }
-
-                // 2) Route to Guardian if configured
-                if let Some(review_id) = guardian_review_id {
-                    return review_approval_request(
-                        &session,
-                        review_context,
-                        review_id,
-                        GuardianApprovalRequest::Execve {
-                            id: call_id.clone(),
-                            source,
-                            program: program.to_string_lossy().into_owned(),
-                            argv: argv.to_vec(),
-                            cwd: workdir.clone(),
-                            additional_permissions,
-                        },
-                        Default::default(),
-                    )
-                    .await;
-                }
-
-                // 3) Fall back to regular user prompt
-                session
-                    .request_command_approval(
-                        &turn,
-                        call_id,
-                        approval_id,
-                        environment_id,
-                        command,
-                        workdir.clone(),
-                        /*reason*/ None,
-                        /*network_approval_context*/ None,
-                        /*proposed_execpolicy_amendment*/ None,
-                        additional_permissions,
-                        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                        /*plugin_attribution_override*/ None,
-                    )
+        let action = ApprovalAction::Execve {
+            id: self.call_id.clone(),
+            approval_id: Uuid::new_v4().to_string(),
+            environment_id: self.environment_id.clone(),
+            source: self.source,
+            program: program.clone(),
+            argv: argv.to_vec(),
+            command,
+            cwd: workdir.clone(),
+            additional_permissions,
+        };
+        match stopwatch
+            .pause_for(async {
+                let (turn_context, strict_auto_review) = self
+                    .session
+                    .active_turn_context_and_strict_auto_review()
                     .await
+                    .ok_or_else(|| {
+                        ToolError::Rejected(
+                            "cannot approve intercepted execution without an active turn"
+                                .to_string(),
+                        )
+                    })?;
+                let approval_ctx = ApprovalContext {
+                    review_context: GuardianReviewContext::from(turn_context),
+                    call_id: self.call_id.clone(),
+                    tool_name: self.tool_name.clone(),
+                    strict_auto_review,
+                    approval_reason: None,
+                    retry_reason: None,
+                    network_approval_context: None,
+                };
+                self.session.request_approval(action, approval_ctx).await
             })
-            .await)
+            .await
+        {
+            Ok(decision) => Ok(decision),
+            Err(ToolError::Rejected(rejection)) => Ok(ReviewDecision::denied(rejection)),
+            Err(ToolError::Codex(err)) => Err(err.into()),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

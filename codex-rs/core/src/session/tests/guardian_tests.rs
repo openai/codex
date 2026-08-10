@@ -455,6 +455,18 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    session
+        .start_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            super::NeverEndingTask {
+                kind: crate::state::TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+            /*input_persisted*/ None,
+            crate::tasks::MailboxParentProvenance::Ignore,
+        )
+        .await;
 
     let handler = crate::tools::handlers::ShellCommandHandler::from(
         codex_tools::ShellCommandBackendConfig::Classic,

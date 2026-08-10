@@ -6,6 +6,7 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::guardian::GuardianReviewContext;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::approvals::ApprovalContext;
 use crate::tools::flat_tool_name;
@@ -145,7 +146,11 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
-        let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
+        let strict_auto_review = tool_ctx
+            .session
+            .active_turn_context_and_strict_auto_review()
+            .await
+            .is_some_and(|(_, strict_auto_review)| strict_auto_review);
         // 1) Approval
         let mut already_approved = false;
 
@@ -172,7 +177,7 @@ impl ToolOrchestrator {
                             ToolError::Rejected(format!("could not prepare approval action: {err}"))
                         })?;
                     let approval_ctx = ApprovalContext {
-                        step_context: Arc::clone(&tool_ctx.step_context),
+                        review_context: GuardianReviewContext::from(&tool_ctx.step_context),
                         call_id: tool_ctx.call_id.clone(),
                         tool_name: tool_ctx.tool_name.clone(),
                         strict_auto_review,
@@ -204,7 +209,7 @@ impl ToolOrchestrator {
                         ToolError::Rejected(format!("could not prepare approval action: {err}"))
                     })?;
                 let approval_ctx = ApprovalContext {
-                    step_context: Arc::clone(&tool_ctx.step_context),
+                    review_context: GuardianReviewContext::from(&tool_ctx.step_context),
                     call_id: tool_ctx.call_id.clone(),
                     tool_name: tool_ctx.tool_name.clone(),
                     strict_auto_review,
@@ -400,7 +405,7 @@ impl ToolOrchestrator {
                             ToolError::Rejected(format!("could not prepare approval action: {err}"))
                         })?;
                     let approval_ctx = ApprovalContext {
-                        step_context: Arc::clone(&tool_ctx.step_context),
+                        review_context: GuardianReviewContext::from(&tool_ctx.step_context),
                         call_id: tool_ctx.call_id.clone(),
                         tool_name: tool_ctx.tool_name.clone(),
                         strict_auto_review,

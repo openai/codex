@@ -17,6 +17,9 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::GuardianAssessmentAction;
+use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -27,6 +30,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -90,6 +94,7 @@ async fn unified_exec_zsh_fork_parent_approval_preserves_denied_reads() -> Resul
         &test,
         "run approved unified exec denied read through zsh fork",
         approval_policy,
+        ApprovalsReviewer::User,
     )
     .await?;
     approve_expected_exec(&test, &command).await?;
@@ -149,6 +154,7 @@ async fn unified_exec_zsh_fork_parent_approval_escalates_intercepted_exec() -> R
         &test,
         "run approved unified exec through zsh fork",
         approval_policy,
+        ApprovalsReviewer::User,
     )
     .await?;
     approve_expected_exec(&test, &command).await?;
@@ -181,7 +187,8 @@ async fn unified_exec_zsh_fork_parent_approval_keeps_explicit_prompt_rule() -> R
     let outside_path = outside_dir
         .path()
         .join("unified-exec-zsh-fork-explicit-prompt-rule.txt");
-    let command = format!("touch {outside_path:?}");
+    let intercepted_command = format!("touch {outside_path:?}");
+    let command = format!("{intercepted_command} && {intercepted_command}");
     let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
 
     let outside_path_for_hook = outside_path.clone();
@@ -214,38 +221,64 @@ async fn unified_exec_zsh_fork_parent_approval_keeps_explicit_prompt_rule() -> R
         &test,
         "run approved unified exec prompt rule through zsh fork",
         approval_policy,
+        ApprovalsReviewer::User,
     )
     .await?;
     approve_expected_exec(&test, &command).await?;
 
-    let approval_event = wait_for_event_with_timeout(
-        &test.codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+    let mut intercepted_approval_ids = Vec::new();
+    for _ in 0..2 {
+        let approval_event = wait_for_event_with_timeout(
+            &test.codex,
+            |event| {
+                matches!(
+                    event,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+                )
+            },
+            Duration::from_secs(10),
+        )
+        .await;
+        let EventMsg::ExecApprovalRequest(inner_approval) = approval_event else {
+            panic!("expected explicit prompt rule approval before completion");
+        };
+        assert_eq!(
+            (
+                inner_approval.call_id.as_str(),
+                inner_approval.environment_id.as_deref(),
+                inner_approval.available_decisions.as_deref(),
+            ),
+            (
+                call_id,
+                Some(codex_exec_server::LOCAL_ENVIRONMENT_ID),
+                Some([ReviewDecision::Approved, ReviewDecision::Abort].as_slice()),
             )
-        },
-        Duration::from_secs(10),
-    )
-    .await;
-    let EventMsg::ExecApprovalRequest(inner_approval) = approval_event else {
-        panic!("expected explicit prompt rule approval before completion");
-    };
-    assert!(
-        inner_approval
-            .command
-            .iter()
-            .any(|arg| arg.ends_with("/touch"))
-            && inner_approval
+        );
+        let approval_id = inner_approval
+            .approval_id
+            .as_ref()
+            .context("intercepted execve should have a subprocess approval id")?;
+        assert_ne!(approval_id, call_id);
+        assert!(
+            !intercepted_approval_ids.contains(approval_id),
+            "identical intercepted commands must receive distinct approval ids"
+        );
+        intercepted_approval_ids.push(approval_id.clone());
+        assert!(
+            inner_approval
                 .command
                 .iter()
-                .any(|arg| arg == outside_path.to_string_lossy().as_ref()),
-        "expected explicit prompt rule approval for intercepted touch, got: {:?}",
-        inner_approval.command
-    );
+                .any(|arg| arg.ends_with("/touch"))
+                && inner_approval
+                    .command
+                    .iter()
+                    .any(|arg| arg == outside_path.to_string_lossy().as_ref()),
+            "expected explicit prompt rule approval for intercepted touch, got: {:?}",
+            inner_approval.command
+        );
 
-    approve_exec(&test, inner_approval.effective_approval_id()).await?;
+        approve_exec(&test, inner_approval.effective_approval_id()).await?;
+    }
     wait_for_completion(&test).await;
 
     let result = command_result(&results, call_id);
@@ -259,6 +292,309 @@ async fn unified_exec_zsh_fork_parent_approval_keeps_explicit_prompt_rule() -> R
         outside_path.exists(),
         "approved intercepted touch should create the out-of-workspace file"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_zsh_fork_guardian_reviews_intercepted_execve() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = restrictive_workspace_write_profile();
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir
+        .path()
+        .join("unified-exec-zsh-fork-guardian-execve.txt");
+    let command = format!("touch {outside_path:?}");
+    let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
+
+    let outside_path_for_hook = outside_path.clone();
+    let Some((server, test)) = build_unified_exec_zsh_fork_test_or_skip(
+        "unified-exec zsh-fork guardian execve approval test",
+        approval_policy,
+        permission_profile,
+        move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
+        },
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let call_id = "uexec-zsh-fork-guardian-execve";
+    let parent_tool_call = exec_command_event(
+        call_id,
+        &command,
+        Some(30_000),
+        SandboxPermissions::RequireEscalated,
+        "exercise Guardian review of intercepted execve",
+    )?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-guardian-execve-parent"),
+                parent_tool_call,
+                ev_completed("resp-guardian-execve-parent"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-parent-review"),
+                ev_assistant_message("msg-guardian-parent-review", r#"{"outcome":"allow"}"#),
+                ev_completed("resp-guardian-parent-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-execve-review"),
+                ev_assistant_message("msg-guardian-execve-review", r#"{"outcome":"allow"}"#),
+                ev_completed("resp-guardian-execve-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-execve-done"),
+                ev_assistant_message("msg-guardian-execve-done", "done"),
+                ev_completed("resp-guardian-execve-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn_with_session_permissions(
+        &test,
+        "run unified exec with an intercepted command requiring Guardian review",
+        approval_policy,
+        ApprovalsReviewer::AutoReview,
+    )
+    .await?;
+
+    let mut intercepted_assessments = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(30), test.codex.next_event())
+            .await
+            .context("timed out waiting for intercepted execve Guardian review")??;
+        match event.msg {
+            EventMsg::GuardianAssessment(assessment)
+                if assessment.status == GuardianAssessmentStatus::Approved
+                    && matches!(assessment.action, GuardianAssessmentAction::Execve { .. }) =>
+            {
+                intercepted_assessments.push(assessment);
+            }
+            EventMsg::ExecApprovalRequest(_) => {
+                panic!("Guardian-reviewed intercepted execution must not prompt the user")
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let [assessment] = intercepted_assessments.as_slice() else {
+        panic!(
+            "expected one approved intercepted execve Guardian assessment, got {intercepted_assessments:?}"
+        );
+    };
+    let GuardianAssessmentAction::Execve {
+        source,
+        program,
+        argv,
+        cwd,
+    } = &assessment.action
+    else {
+        unreachable!("intercepted assessments contain only execve actions");
+    };
+    let expected_cwd = test.config.cwd.canonicalize()?;
+    assert_eq!(
+        (
+            *source,
+            argv.as_slice(),
+            cwd,
+            assessment.target_item_id.as_deref(),
+        ),
+        (
+            GuardianCommandSource::UnifiedExec,
+            [
+                "touch".to_string(),
+                outside_path.to_string_lossy().into_owned()
+            ]
+            .as_slice(),
+            &expected_cwd,
+            Some(call_id),
+        )
+    );
+    assert!(
+        program.ends_with("/touch"),
+        "unexpected execve program: {program}"
+    );
+
+    let guardian_requests = responses
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(guardian_requests.len(), 2);
+    assert!(guardian_requests[1].body_contains_text(&outside_path.to_string_lossy()));
+    assert!(
+        outside_path.exists(),
+        "Guardian-approved intercepted touch should create the out-of-workspace file"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_zsh_fork_guardian_reviews_persistent_terminal_in_current_turn() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = restrictive_workspace_write_profile();
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir
+        .path()
+        .join("unified-exec-zsh-fork-current-turn.txt");
+    let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
+
+    let outside_path_for_hook = outside_path.clone();
+    let Some((server, test)) = build_unified_exec_zsh_fork_test_or_skip(
+        "unified-exec zsh-fork current-turn guardian approval test",
+        approval_policy,
+        permission_profile,
+        move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
+        },
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let open_call_id = "uexec-zsh-fork-cross-turn-open";
+    let open_command = "while IFS= read -r command; do eval \"$command\"; done";
+    let open_args = json!({
+        "cmd": open_command,
+        "yield_time_ms": 250,
+        "tty": true,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "start an interactive terminal for the next turn",
+    });
+    let write_call_id = "uexec-zsh-fork-cross-turn-write";
+    let write_args = json!({
+        "chars": format!("touch {outside_path:?}\nexit\n"),
+        "session_id": 1000,
+        "yield_time_ms": 5_000,
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-cross-turn-open"),
+                ev_function_call(
+                    open_call_id,
+                    "exec_command",
+                    &serde_json::to_string(&open_args)?,
+                ),
+                ev_completed("resp-cross-turn-open"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-cross-turn-first-done"),
+                ev_assistant_message("msg-cross-turn-first-done", "terminal is running"),
+                ev_completed("resp-cross-turn-first-done"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-cross-turn-write"),
+                ev_function_call(
+                    write_call_id,
+                    "write_stdin",
+                    &serde_json::to_string(&write_args)?,
+                ),
+                ev_completed("resp-cross-turn-write"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-cross-turn-guardian"),
+                ev_assistant_message("msg-cross-turn-guardian", r#"{"outcome":"allow"}"#),
+                ev_completed("resp-cross-turn-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-cross-turn-second-done"),
+                ev_assistant_message("msg-cross-turn-second-done", "done"),
+                ev_completed("resp-cross-turn-second-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn_with_session_permissions(
+        &test,
+        "start a persistent terminal with user approvals",
+        approval_policy,
+        ApprovalsReviewer::User,
+    )
+    .await?;
+    approve_expected_exec(&test, open_command).await?;
+    let first_completion = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let EventMsg::TurnComplete(first_completion) = first_completion else {
+        unreachable!("completion wait only returns turn-complete events");
+    };
+
+    submit_turn_with_session_permissions(
+        &test,
+        "run a command in the persistent terminal with Guardian approvals",
+        approval_policy,
+        ApprovalsReviewer::AutoReview,
+    )
+    .await?;
+
+    let mut current_turn_id = None;
+    let mut intercepted_assessment = None;
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(30), test.codex.next_event())
+            .await
+            .context("timed out waiting for current-turn intercepted execve Guardian review")??;
+        match event.msg {
+            EventMsg::TurnStarted(started) => current_turn_id = Some(started.turn_id),
+            EventMsg::GuardianAssessment(assessment)
+                if assessment.status == GuardianAssessmentStatus::Approved
+                    && matches!(assessment.action, GuardianAssessmentAction::Execve { .. }) =>
+            {
+                intercepted_assessment = Some(assessment);
+            }
+            EventMsg::ExecApprovalRequest(_) => {
+                panic!("persistent-terminal approval used the previous turn's user reviewer")
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let current_turn_id = current_turn_id.context("expected the second turn to start")?;
+    assert_ne!(current_turn_id, first_completion.turn_id);
+    let assessment = intercepted_assessment
+        .context("expected an approved Guardian assessment for the persistent terminal")?;
+    assert_eq!(assessment.turn_id, current_turn_id);
+    assert_eq!(assessment.target_item_id.as_deref(), Some(open_call_id));
+    assert!(
+        outside_path.exists(),
+        "Guardian-approved command from the second turn should create the file"
+    );
+
+    let guardian_requests = responses
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(guardian_requests.len(), 1);
+    assert!(guardian_requests[0].body_contains_text(&outside_path.to_string_lossy()));
 
     Ok(())
 }
@@ -396,6 +732,7 @@ async fn submit_turn_with_session_permissions(
     test: &TestCodex,
     prompt: &str,
     approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
 ) -> Result<()> {
     let session_model = test.session_configured.model.clone();
     let (sandbox_policy, permission_profile) = turn_permission_fields(
@@ -414,7 +751,7 @@ async fn submit_turn_with_session_permissions(
             thread_settings: ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(approval_policy),
-                approvals_reviewer: Some(ApprovalsReviewer::User),
+                approvals_reviewer: Some(approvals_reviewer),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 collaboration_mode: Some(CollaborationMode {
