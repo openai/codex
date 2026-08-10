@@ -7,6 +7,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -161,6 +162,30 @@ pub fn create_fake_rollout_with_source(
     git_info: Option<GitInfo>,
     source: SessionSource,
 ) -> Result<String> {
+    create_fake_rollout_with_session_and_thread_source(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        model_provider,
+        git_info,
+        source,
+        /*thread_source*/ None,
+    )
+}
+
+/// Create a minimal rollout file with explicit session and thread sources.
+#[allow(clippy::too_many_arguments)]
+pub fn create_fake_rollout_with_session_and_thread_source(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
+    source: SessionSource,
+    thread_source: Option<ThreadSource>,
+) -> Result<String> {
     create_fake_rollout_with_source_and_parent_thread_id(
         codex_home,
         filename_ts,
@@ -169,6 +194,7 @@ pub fn create_fake_rollout_with_source(
         model_provider,
         git_info,
         source,
+        thread_source,
         /*session_id*/ None,
         /*parent_thread_id*/ None,
     )
@@ -195,6 +221,7 @@ pub fn create_fake_parented_rollout_with_source(
         model_provider,
         git_info,
         source,
+        /*thread_source*/ None,
         Some(session_id),
         Some(parent_thread_id),
     )
@@ -209,6 +236,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
     model_provider: Option<&str>,
     git_info: Option<GitInfo>,
     source: SessionSource,
+    thread_source: Option<ThreadSource>,
     session_id: Option<SessionId>,
     parent_thread_id: Option<ThreadId>,
 ) -> Result<String> {
@@ -234,7 +262,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source,
-        thread_source: None,
+        thread_source,
         agent_path: None,
         agent_nickname: None,
         agent_role: None,

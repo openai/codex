@@ -191,7 +191,7 @@ impl Session {
             codex_apps_tools_cache: self.services.mcp_manager.codex_apps_tools_cache(),
             tool_catalog_cache: self.services.mcp_manager.tool_catalog_cache(),
             codex_apps_tools_cache_key: connector_runtime_context_key(auth.as_ref()),
-            client_mcp_extensions: self.services.client_mcp_extensions.clone(),
+            client_mcp_extensions: self.services.client_mcp_extensions.for_mcp_servers(),
             auth,
             codex_apps_auth_manager,
             elicitation_reviewer,

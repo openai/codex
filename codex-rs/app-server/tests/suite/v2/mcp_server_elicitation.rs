@@ -41,6 +41,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
+use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
 use codex_protocol::mcp_approval_meta as approval_meta;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -158,7 +159,29 @@ impl StrictReviewScenario {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mcp_server_form_elicitation_round_trip() -> Result<()> {
-    let mut fixture = ElicitationRoundTripFixture::start(ElicitationScenario::StandardForm).await?;
+    let fixture = ElicitationRoundTripFixture::start(ElicitationScenario::StandardForm).await?;
+    assert_standard_form_elicitation_round_trip(fixture).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mcp_server_form_elicitation_round_trip_in_full_access() -> Result<()> {
+    let fixture = ElicitationRoundTripFixture::start_with_thread_params(
+        ElicitationScenario::StandardForm,
+        ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            approval_policy: Some(AskForApproval::Never),
+            sandbox: Some(SandboxMode::DangerFullAccess),
+            thread_source: Some(codex_app_server_protocol::ThreadSource::User),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_standard_form_elicitation_round_trip(fixture).await
+}
+
+async fn assert_standard_form_elicitation_round_trip(
+    mut fixture: ElicitationRoundTripFixture,
+) -> Result<()> {
     let (request_id, params) = fixture.read_elicitation().await?;
     let requested_schema: McpElicitationSchema = serde_json::from_value(serde_json::to_value(
         ElicitationSchema::builder()
@@ -559,6 +582,58 @@ struct ElicitationRoundTripFixture {
 
 impl ElicitationRoundTripFixture {
     async fn start(scenario: ElicitationScenario) -> Result<Self> {
+        let strict = if let ElicitationScenario::Strict(strict) = scenario {
+            Some(strict)
+        } else {
+            None
+        };
+        Self::start_with_thread_params(
+            scenario,
+            ThreadStartParams {
+                model: Some("mock-model".to_string()),
+                approval_policy: strict.map(|strict| match strict {
+                    Review::Never | Review::FullAccess => AskForApproval::Never,
+                    _ => AskForApproval::OnRequest,
+                }),
+                approvals_reviewer: strict
+                    .filter(|strict| *strict == Review::ApproveForMe)
+                    .map(|_| ApprovalsReviewer::AutoReview),
+                sandbox: strict
+                    .filter(|strict| *strict == Review::FullAccess)
+                    .map(|_| SandboxMode::DangerFullAccess),
+                config: strict.map(|strict| {
+                    let mut config = HashMap::from([(
+                        "features.guardian_approval".to_string(),
+                        json!(strict != Review::GuardianDisabled),
+                    )]);
+                    if matches!(
+                        strict,
+                        Review::AppReviewerUser
+                            | Review::AppReviewerNoncanonicalId
+                            | Review::AppReviewerSpoofedId
+                    ) {
+                        config.insert(
+                            format!("apps.{CONNECTOR_ID}.approvals_reviewer"),
+                            json!("user"),
+                        );
+                    } else if strict == Review::AppDefaultReviewerUser {
+                        config.insert(
+                            "apps._default.approvals_reviewer".to_string(),
+                            json!("user"),
+                        );
+                    }
+                    config
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    async fn start_with_thread_params(
+        scenario: ElicitationScenario,
+        thread_params: ThreadStartParams,
+    ) -> Result<Self> {
         let (responses_server, response_mock, apps_server_url, apps_server_handle) =
             start_elicitation_services(scenario).await?;
         let codex_home = TempDir::new()?;
@@ -600,6 +675,10 @@ impl ElicitationRoundTripFixture {
                 Some(InitializeCapabilities {
                     experimental_api: true,
                     mcp_server_openai_form_elicitation: true,
+                    extensions: Some(HashMap::from([(
+                        OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID.to_string(),
+                        json!({}),
+                    )])),
                     ..Default::default()
                 }),
             ),
@@ -607,43 +686,7 @@ impl ElicitationRoundTripFixture {
         .await??;
 
         let thread_start_id = mcp
-            .send_thread_start_request_with_auto_env(ThreadStartParams {
-                model: Some("mock-model".to_string()),
-                approval_policy: strict.map(|strict| match strict {
-                    Review::Never | Review::FullAccess => AskForApproval::Never,
-                    _ => AskForApproval::OnRequest,
-                }),
-                approvals_reviewer: strict
-                    .filter(|strict| *strict == Review::ApproveForMe)
-                    .map(|_| ApprovalsReviewer::AutoReview),
-                sandbox: strict
-                    .filter(|strict| *strict == Review::FullAccess)
-                    .map(|_| SandboxMode::DangerFullAccess),
-                config: strict.map(|strict| {
-                    let mut config = HashMap::from([(
-                        "features.guardian_approval".to_string(),
-                        json!(strict != Review::GuardianDisabled),
-                    )]);
-                    if matches!(
-                        strict,
-                        Review::AppReviewerUser
-                            | Review::AppReviewerNoncanonicalId
-                            | Review::AppReviewerSpoofedId
-                    ) {
-                        config.insert(
-                            format!("apps.{CONNECTOR_ID}.approvals_reviewer"),
-                            json!("user"),
-                        );
-                    } else if strict == Review::AppDefaultReviewerUser {
-                        config.insert(
-                            "apps._default.approvals_reviewer".to_string(),
-                            json!("user"),
-                        );
-                    }
-                    config
-                }),
-                ..Default::default()
-            })
+            .send_thread_start_request_with_auto_env(thread_params)
             .await?;
         let thread_start_resp: JSONRPCResponse = timeout(
             DEFAULT_READ_TIMEOUT,

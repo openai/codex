@@ -49,6 +49,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -1763,7 +1764,7 @@ impl ThreadManagerState {
             session_source,
             forked_from_thread_id,
             parent_thread_id,
-            thread_source,
+            thread_source: thread_source.clone(),
             originator,
             agent_control,
             dynamic_tools,
@@ -1786,6 +1787,17 @@ impl ThreadManagerState {
                 codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         }))
         .await?;
+        // Enable Full Access form input only after session startup so a required MCP server cannot
+        // block startup while waiting for form input.
+        if session
+            .services
+            .client_mcp_extensions
+            .contains(OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID)
+            && matches!(thread_source.as_ref(), Some(ThreadSource::User))
+            && !tracked_session_source.is_non_root_agent()
+        {
+            session.services.mcp_runtime.enable_full_access_form_input();
+        }
         let new_thread = self
             .finalize_thread_spawn(session, io, tracked_session_source)
             .await?;

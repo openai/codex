@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
+use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -21,7 +22,9 @@ pub fn client_mcp_extensions(
         .filter(|(id, _)| {
             matches!(
                 id.as_str(),
-                OPENAI_FORM_EXTENSION_ID | MCP_APP_UI_EXTENSION_ID
+                OPENAI_FORM_EXTENSION_ID
+                    | OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID
+                    | MCP_APP_UI_EXTENSION_ID
             )
         })
         .map(|(id, value)| (id.clone(), value.clone()))

@@ -17,6 +17,10 @@ fn selects_only_supported_mcp_extensions() {
     let extensions = HashMap::from([
         (MCP_APP_UI_EXTENSION_ID.to_string(), app_ui.clone()),
         (OPENAI_FORM_EXTENSION_ID.to_string(), json!({})),
+        (
+            OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID.to_string(),
+            json!({}),
+        ),
         ("example/other".to_string(), json!({"enabled": true})),
     ]);
 
@@ -28,6 +32,10 @@ fn selects_only_supported_mcp_extensions() {
         ClientMcpExtensions::new(HashMap::from([
             (MCP_APP_UI_EXTENSION_ID.to_string(), app_ui),
             (OPENAI_FORM_EXTENSION_ID.to_string(), json!({})),
+            (
+                OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID.to_string(),
+                json!({}),
+            ),
         ]))
     );
 }

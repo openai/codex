@@ -45,6 +45,7 @@ pub use responses::create_shell_command_sse_response;
 pub use rollout::create_fake_paginated_rollout;
 pub use rollout::create_fake_parented_rollout_with_source;
 pub use rollout::create_fake_rollout;
+pub use rollout::create_fake_rollout_with_session_and_thread_source;
 pub use rollout::create_fake_rollout_with_source;
 pub use rollout::create_fake_rollout_with_text_elements;
 pub use rollout::create_fake_rollout_with_token_usage;

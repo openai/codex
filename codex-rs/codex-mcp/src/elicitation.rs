@@ -21,6 +21,8 @@ use async_channel::Sender;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
+use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY;
+use codex_protocol::mcp_approval_meta::APPROVAL_KIND_TOOL_SUGGESTION;
 use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY;
 use codex_protocol::mcp_approval_meta::STRICT_AUTO_REVIEW_KEY;
 use codex_protocol::models::PermissionProfile;
@@ -94,6 +96,7 @@ struct ActiveElicitation {
 pub(crate) struct ElicitationRequestRouter {
     requests: Arc<StdMutex<ResponderMap>>,
     auto_deny: Arc<AtomicBool>,
+    full_access_form_input_enabled: Arc<AtomicBool>,
 }
 
 struct PendingElicitationRequest {
@@ -120,6 +123,15 @@ impl ElicitationRequestRouter {
 
     pub(crate) fn set_auto_deny(&self, auto_deny: bool) {
         self.auto_deny.store(auto_deny, Ordering::Relaxed);
+    }
+
+    pub(crate) fn full_access_form_input_enabled(&self) -> bool {
+        self.full_access_form_input_enabled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn enable_full_access_form_input(&self) {
+        self.full_access_form_input_enabled
+            .store(true, Ordering::Release);
     }
 
     pub(crate) async fn resolve(
@@ -213,6 +225,19 @@ impl ElicitationRequestManager {
                     });
                 }
 
+                if elicitation
+                    .meta()
+                    .and_then(|meta| meta.get(APPROVAL_KIND_KEY))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(APPROVAL_KIND_TOOL_SUGGESTION)
+                {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Decline,
+                        content: None,
+                        meta: None,
+                    });
+                }
+
                 let Ok(authority) = authority.lock().map(|authority| authority.clone()) else {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Decline,
@@ -273,12 +298,12 @@ impl ElicitationRequestManager {
                     Some(_) => return Ok(strict_auto_review_decline()),
                 }
 
-                if mcp_permission_prompt_is_auto_approved(
+                let permission_prompt_is_auto_approved = mcp_permission_prompt_is_auto_approved(
                     approval_policy,
                     &permission_profile,
                     McpPermissionPromptAutoApproveContext::default(),
-                ) && can_auto_accept_elicitation(&elicitation)
-                {
+                );
+                if permission_prompt_is_auto_approved && can_auto_accept_elicitation(&elicitation) {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Accept,
                         content: Some(serde_json::json!({})),
@@ -286,22 +311,40 @@ impl ElicitationRequestManager {
                     });
                 }
 
-                if elicitation_is_rejected_by_policy(approval_policy) {
-                    return Ok(ElicitationResponse {
-                        action: ElicitationAction::Decline,
-                        content: None,
-                        meta: None,
-                    });
-                }
+                let should_surface_form_in_full_access = router.full_access_form_input_enabled()
+                    && permission_prompt_is_auto_approved
+                    && matches!(
+                        &elicitation,
+                        Elicitation::Mcp(
+                            rmcp::model::ElicitRequestParams::FormElicitationParams {
+                                meta,
+                                requested_schema,
+                                ..
+                            }
+                        ) if !requested_schema.properties.is_empty()
+                            && !meta
+                                .as_ref()
+                                .is_some_and(|meta| meta.contains_key(APPROVAL_KIND_KEY))
+                    );
 
-                if let Some(reviewer) = reviewer {
-                    let request = ElicitationReviewRequest {
-                        server_name: server_name.clone(),
-                        request_id: id.clone(),
-                        elicitation: elicitation.clone(),
-                    };
-                    if let Some(response) = reviewer.review(request).await? {
-                        return Ok(response);
+                if !should_surface_form_in_full_access {
+                    if elicitation_is_rejected_by_policy(approval_policy) {
+                        return Ok(ElicitationResponse {
+                            action: ElicitationAction::Decline,
+                            content: None,
+                            meta: None,
+                        });
+                    }
+
+                    if let Some(reviewer) = reviewer {
+                        let request = ElicitationReviewRequest {
+                            server_name: server_name.clone(),
+                            request_id: id.clone(),
+                            elicitation: elicitation.clone(),
+                        };
+                        if let Some(response) = reviewer.review(request).await? {
+                            return Ok(response);
+                        }
                     }
                 }
 

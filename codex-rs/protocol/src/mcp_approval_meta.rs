@@ -1,3 +1,6 @@
+/// Identifies privileged Codex approvals. Changing this key or adding another
+/// privileged discriminator requires updating the MCP elicitation router's
+/// form-forwarding safeguards.
 pub const APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 pub const APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
 pub const APPROVAL_KIND_TOOL_SUGGESTION: &str = "tool_suggestion";
