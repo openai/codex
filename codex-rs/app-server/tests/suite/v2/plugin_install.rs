@@ -927,6 +927,7 @@ async fn plugin_install_tracks_analytics_when_marketplace_file_cannot_be_read() 
         .send_plugin_install_request(PluginInstallParams {
             marketplace_path: Some(AbsolutePathBuf::try_from(marketplace_path)?),
             remote_marketplace_name: None,
+            install_attempt_id: None,
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
