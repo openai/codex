@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
@@ -24,7 +23,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
-use core_test_support::skip_if_target_windows;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -55,8 +54,10 @@ async fn write_repo_skill(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_includes_skill_instructions() -> Result<()> {
-    // TODO(anp): Remove after skill-path helpers use target-native paths.
-    skip_if_target_windows!(Ok(()), "requires native cross-OS skill paths");
+    skip_if_wine_exec!(
+        Ok(()),
+        "skill paths require matching host and executor path conventions"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -219,7 +220,10 @@ async fn user_turn_selects_symlinked_skill_by_advertised_discovery_path() -> Res
 
     let request = mock.single_request();
     let developer_texts = request.message_input_texts("developer");
-    let advertised_path = format!("(file: {discovery_path_display})");
+    let advertised_path = format!(
+        "(file: {})",
+        discovery_path.to_string_lossy().replace('\\', "/")
+    );
     assert!(
         developer_texts
             .iter()
@@ -243,7 +247,10 @@ async fn user_turn_selects_symlinked_skill_by_advertised_discovery_path() -> Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_user_turn_includes_skill_instructions_in_the_first_request() -> Result<()> {
-    skip_if_target_windows!(Ok(()), "requires native cross-OS skill paths");
+    skip_if_wine_exec!(
+        Ok(()),
+        "skill paths require matching host and executor path conventions"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

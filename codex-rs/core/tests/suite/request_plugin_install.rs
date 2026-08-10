@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Context;
@@ -159,7 +158,7 @@ async fn build_test(
                 configure_apps_without_search_tool(config, apps_base_url.as_str());
             }
         });
-    builder.build(server).await
+    builder.build_with_auto_env(server).await
 }
 
 async fn build_gated_step_preparation_test(
@@ -1029,7 +1028,7 @@ async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools()
                 )];
             }
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn("list tools").await?;
 

@@ -143,12 +143,12 @@ fn config_stack_with_session_flags(
 }
 
 fn path_toggle_config(path: &std::path::Path, enabled: bool) -> String {
+    let path = toml::Value::String(path.display().to_string());
     format!(
         r#"[[skills.config]]
-path = "{}"
+path = {path}
 enabled = {enabled}
-"#,
-        path.display()
+"#
     )
 }
 
@@ -908,7 +908,6 @@ async fn skills_for_cwd_uses_cached_result_until_force_reload() {
     );
 }
 
-#[cfg_attr(windows, ignore)]
 #[tokio::test]
 async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill() {
     let codex_home = tempfile::tempdir().expect("tempdir");

@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used)]
 
 use std::sync::Arc;
@@ -41,6 +40,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
+use core_test_support::skip_if_target_windows;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
@@ -201,17 +201,16 @@ fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
     let plugin_root = write_sample_plugin_manifest_and_config(home);
     std::fs::write(
         plugin_root.join(".mcp.json"),
-        format!(
-            r#"{{
-  "mcpServers": {{
-    "sample": {{
-      "command": "{command}",
-      "cwd": ".",
-      "startup_timeout_sec": 60.0
-    }}
-  }}
-}}"#
-        ),
+        serde_json::to_vec(&serde_json::json!({
+            "mcpServers": {
+                "sample": {
+                    "command": command,
+                    "cwd": ".",
+                    "startup_timeout_sec": 60.0,
+                },
+            },
+        }))
+        .expect("serialize plugin MCP configuration"),
     )
     .expect("write plugin mcp config");
 }
@@ -271,10 +270,7 @@ async fn build_analytics_plugin_test_codex(
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
         });
-    Ok(builder
-        .build(server)
-        .await
-        .expect("create new conversation"))
+    builder.build_with_auto_env(server).await
 }
 
 async fn build_apps_enabled_plugin_test_codex(
@@ -292,10 +288,7 @@ async fn build_apps_enabled_plugin_test_codex(
                 .expect("test config should allow feature update");
             config.chatgpt_base_url = chatgpt_base_url;
         });
-    Ok(builder
-        .build(server)
-        .await
-        .expect("create new conversation"))
+    builder.build_with_remote_and_local_env(server).await
 }
 
 async fn mount_plugin_tool_search_turn(server: &MockServer) -> ResponseMock {
@@ -349,6 +342,7 @@ fn searched_plugin_tools(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn persisted_remote_plugin_command_attribution_flows_through_turn_context() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "executes a POSIX shell script");
     skip_if_no_network!(Ok(()));
     skip_if_remote!(
         Ok(()),
@@ -452,12 +446,11 @@ async fn agent_plugin_skills_use_shared_catalog_and_direct_child_discovery() -> 
     )
     .await;
     let codex_home = Arc::new(TempDir::new()?);
-    let skill_path = std::fs::canonicalize(write_agent_plugin_skill_plugin(codex_home.as_ref()))?;
-    let test_codex = test_codex()
+    let skill_path = dunce::canonicalize(write_agent_plugin_skill_plugin(codex_home.as_ref()))?;
+    let mut builder = test_codex()
         .with_home(Arc::clone(&codex_home))
-        .with_extensions(skills_extensions())
-        .build(&server)
-        .await?;
+        .with_extensions(skills_extensions());
+    let test_codex = builder.build_with_auto_env(&server).await?;
 
     test_codex
         .codex
@@ -625,12 +618,11 @@ async fn legacy_plugin_skill_prompt_remains_complete() -> Result<()> {
         "x".repeat(9_000)
     );
     std::fs::write(&skill_path, &skill_contents)?;
-    let skill_path = std::fs::canonicalize(skill_path)?;
-    let test_codex = test_codex()
+    let skill_path = dunce::canonicalize(skill_path)?;
+    let mut builder = test_codex()
         .with_home(codex_home)
-        .with_extensions(skills_extensions())
-        .build(&server)
-        .await?;
+        .with_extensions(skills_extensions());
+    let test_codex = builder.build_with_auto_env(&server).await?;
 
     test_codex
         .codex
@@ -718,19 +710,18 @@ async fn agent_plugin_root_mcp_stdio_tool_round_trip_expands_reserved_paths() ->
         plugin_root.join("mcp.json"),
         serde_json::to_vec_pretty(&mcp_config)?,
     )?;
-    let test_codex = test_codex()
-        .with_home(Arc::clone(&codex_home))
-        .build(&server)
-        .await?;
+    let mut builder = test_codex().with_home(Arc::clone(&codex_home));
+    let test_codex = builder.build_with_remote_and_local_env(&server).await?;
     wait_for_mcp_server(&test_codex.codex, "agent").await?;
-    let data_root = std::fs::read_dir(codex_home.path().join("plugins/data/agent-plugins"))?
-        .next()
-        .expect("Agent Plugin data root")?
-        .path()
-        .canonicalize()?;
+    let data_root = dunce::canonicalize(
+        std::fs::read_dir(codex_home.path().join("plugins/data/agent-plugins"))?
+            .next()
+            .expect("Agent Plugin data root")?
+            .path(),
+    )?;
     let expected_env = format!(
         "{}|{}",
-        plugin_root.canonicalize()?.display(),
+        dunce::canonicalize(&plugin_root)?.display(),
         data_root.display()
     );
 
@@ -1215,7 +1206,7 @@ async fn explicitly_requested_mcp_waits_for_startup(request: ExplicitMcpRequest)
             return Ok(());
         }
     };
-    let skill_path = std::fs::canonicalize(write_plugin_skill_plugin(codex_home.as_ref()))?;
+    let skill_path = dunce::canonicalize(write_plugin_skill_plugin(codex_home.as_ref()))?;
     write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
     write_plugin_app_plugin(codex_home.as_ref());
     let initialize_barrier = block_plugin_mcp_startup(codex_home.as_ref(), &rmcp_test_server_bin);
@@ -1229,10 +1220,7 @@ async fn explicitly_requested_mcp_waits_for_startup(request: ExplicitMcpRequest)
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
         });
-    let test_codex = builder
-        .build(&server)
-        .await
-        .expect("create new conversation");
+    let test_codex = builder.build_with_remote_and_local_env(&server).await?;
     let codex = Arc::clone(&test_codex.codex);
 
     let input = match request {
@@ -1384,7 +1372,7 @@ async fn explicit_plugin_skill_invocation_tracks_remote_plugin_id() -> Result<()
     .await;
 
     let codex_home = Arc::new(TempDir::new()?);
-    let skill_path = std::fs::canonicalize(write_remote_plugin_skill_plugin(codex_home.as_ref()))?;
+    let skill_path = dunce::canonicalize(write_remote_plugin_skill_plugin(codex_home.as_ref()))?;
     persist_sample_remote_plugin_id(codex_home.as_ref());
     let test_codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
     let codex = Arc::clone(&test_codex.codex);
@@ -1429,6 +1417,8 @@ enum ImplicitPluginSkillInvocation {
 async fn implicit_plugin_skill_invocation_tracks_remote_plugin_id(
     invocation: ImplicitPluginSkillInvocation,
 ) -> Result<()> {
+    skip_if_target_windows!(Ok(()), "executes POSIX cat and bash commands");
+    skip_if_remote!(Ok(()), "shell commands use host plugin-cache paths");
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let codex_home = Arc::new(TempDir::new()?);
