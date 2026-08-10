@@ -1,8 +1,10 @@
+mod file_update;
 mod invocation;
 mod parser;
 mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
+mod text_file;
 
 use std::collections::HashMap;
 use std::io;
@@ -21,14 +23,21 @@ pub use parser::ParseError;
 use parser::ParseError::*;
 pub use parser::UpdateFileChunk;
 pub use parser::parse_patch;
-use similar::TextDiff;
 pub use streaming_parser::StreamingPatchParser;
 use thiserror::Error;
 
+use file_update::AppliedPatch;
+pub use file_update::ApplyPatchFileUpdate;
+use file_update::derive_new_contents_from_chunks;
+pub use file_update::unified_diff_from_chunks;
+pub use file_update::unified_diff_from_chunks_with_context;
+pub(crate) use file_update::unified_diff_from_chunks_with_mode;
 pub use invocation::MaybeApplyPatch;
 pub use invocation::maybe_parse_apply_patch;
 pub use invocation::maybe_parse_apply_patch_verified;
+pub use invocation::maybe_parse_apply_patch_verified_with_mode;
 pub use invocation::verify_apply_patch_args;
+pub use invocation::verify_apply_patch_args_with_mode;
 pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
@@ -41,6 +50,30 @@ use crate::invocation::ExtractHeredocError;
 /// process-invocation contract for the standalone `apply_patch` command
 /// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+
+/// Internal environment variable used to carry the selected update mode
+/// through the arg0-dispatched standalone executable.
+pub const CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR: &str =
+    "CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS";
+
+/// Controls how updates reconstruct the target file after matching a patch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ApplyPatchFileUpdateMode {
+    /// Preserve the historical behavior of normalizing updated files to LF.
+    #[default]
+    NormalizeToLf,
+    /// Preserve existing line endings and use the file's preferred ending for new lines.
+    PreserveLineEndings,
+}
+
+/// Reads the update mode selected for an arg0-dispatched `apply_patch` process.
+#[doc(hidden)]
+pub fn apply_patch_file_update_mode_from_env() -> ApplyPatchFileUpdateMode {
+    match std::env::var(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR).as_deref() {
+        Ok("1") => ApplyPatchFileUpdateMode::PreserveLineEndings,
+        _ => ApplyPatchFileUpdateMode::NormalizeToLf,
+    }
+}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
@@ -140,6 +173,8 @@ pub enum MaybeApplyPatchVerified {
 pub struct ApplyPatchAction {
     changes: HashMap<PathUri, ApplyPatchFileChange>,
 
+    update_file_mode: ApplyPatchFileUpdateMode,
+
     /// The raw patch argument that can be used to apply the patch. i.e., if the
     /// original arg was parsed in "lenient" mode with a
     /// heredoc, this should be the value without the heredoc wrapper.
@@ -159,6 +194,11 @@ impl ApplyPatchAction {
         &self.changes
     }
 
+    /// Returns the update mode selected while the patch was verified.
+    pub fn update_file_mode(&self) -> ApplyPatchFileUpdateMode {
+        self.update_file_mode
+    }
+
     /// Should be used exclusively for testing. (Not worth the overhead of
     /// creating a feature flag for this.)
     pub fn new_add_for_test(path: &PathUri, content: String) -> Self {
@@ -175,6 +215,7 @@ impl ApplyPatchAction {
         #[expect(clippy::expect_used)]
         Self {
             changes,
+            update_file_mode: ApplyPatchFileUpdateMode::default(),
             cwd: path.parent().expect("path should have parent"),
             patch,
         }
@@ -283,6 +324,29 @@ pub async fn apply_patch(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
+    apply_patch_with_mode(
+        patch,
+        ApplyPatchFileUpdateMode::default(),
+        cwd,
+        stdout,
+        stderr,
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+/// Applies the patch using the selected file-update mode and prints the result
+/// to stdout/stderr.
+pub async fn apply_patch_with_mode(
+    patch: &str,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    cwd: &PathUri,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
     let hunks = match parse_patch(patch) {
         Ok(source) => source.hunks,
         Err(e) => {
@@ -310,7 +374,7 @@ pub async fn apply_patch(
         }
     };
 
-    apply_hunks(&hunks, cwd, stdout, stderr, fs, sandbox).await
+    apply_hunks_with_mode(&hunks, update_file_mode, cwd, stdout, stderr, fs, sandbox).await
 }
 
 /// Applies hunks and continues to update stdout/stderr
@@ -322,8 +386,31 @@ pub async fn apply_hunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
+    apply_hunks_with_mode(
+        hunks,
+        ApplyPatchFileUpdateMode::default(),
+        cwd,
+        stdout,
+        stderr,
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+/// Applies hunks using the selected file-update mode and continues to update
+/// stdout/stderr.
+async fn apply_hunks_with_mode(
+    hunks: &[Hunk],
+    update_file_mode: ApplyPatchFileUpdateMode,
+    cwd: &PathUri,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
     let mut delta = AppliedPatchDelta::empty();
-    match apply_hunks_to_files(hunks, cwd, fs, sandbox, &mut delta).await {
+    match apply_hunks_to_files(hunks, update_file_mode, cwd, fs, sandbox, &mut delta).await {
         Ok(affected_paths) => {
             print_summary(&affected_paths, stdout).map_err(|error| {
                 ApplyPatchFailure::new(ApplyPatchError::from(error), delta.clone())
@@ -362,6 +449,7 @@ pub struct AffectedPaths {
 /// Returns an error if the patch could not be applied.
 async fn apply_hunks_to_files(
     hunks: &[Hunk],
+    update_file_mode: ApplyPatchFileUpdateMode,
     cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
@@ -470,7 +558,14 @@ async fn apply_hunks_to_files(
                 let AppliedPatch {
                     original_contents,
                     new_contents,
-                } = derive_new_contents_from_chunks(&path_uri, chunks, fs, sandbox).await?;
+                } = derive_new_contents_from_chunks(
+                    &path_uri,
+                    chunks,
+                    update_file_mode,
+                    fs,
+                    sandbox,
+                )
+                .await?;
                 if let Some(dest) = move_path {
                     let dest_uri = cwd.join(&dest.to_string_lossy())?;
                     let overwritten_move_content =
@@ -666,207 +761,6 @@ async fn write_file_with_missing_parent_retry(
     }
 }
 
-struct AppliedPatch {
-    original_contents: String,
-    new_contents: String,
-}
-
-/// Return *only* the new file contents (joined into a single `String`) after
-/// applying the chunks to the file at `path`.
-async fn derive_new_contents_from_chunks(
-    path: &PathUri,
-    chunks: &[UpdateFileChunk],
-    fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext>,
-) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path, sandbox).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!(
-                "Failed to read file to update {}",
-                path.inferred_native_path_string()
-            ),
-            source: err,
-        })
-    })?;
-
-    let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
-
-    // Drop the trailing empty element that results from the final newline so
-    // that line counts match the behaviour of standard `diff`.
-    if original_lines.last().is_some_and(String::is_empty) {
-        original_lines.pop();
-    }
-
-    let path_text = path.inferred_native_path_string();
-    let replacements = compute_replacements(&original_lines, &path_text, chunks)?;
-    let new_lines = apply_replacements(original_lines, &replacements);
-    let mut new_lines = new_lines;
-    if !new_lines.last().is_some_and(String::is_empty) {
-        new_lines.push(String::new());
-    }
-    let new_contents = new_lines.join("\n");
-    Ok(AppliedPatch {
-        original_contents,
-        new_contents,
-    })
-}
-
-/// Compute a list of replacements needed to transform `original_lines` into the
-/// new lines, given the patch `chunks`. Each replacement is returned as
-/// `(start_index, old_len, new_lines)`.
-fn compute_replacements(
-    original_lines: &[String],
-    path: &str,
-    chunks: &[UpdateFileChunk],
-) -> std::result::Result<Vec<(usize, usize, Vec<String>)>, ApplyPatchError> {
-    let mut replacements: Vec<(usize, usize, Vec<String>)> = Vec::new();
-    let mut line_index: usize = 0;
-
-    for chunk in chunks {
-        // If a chunk has a `change_context`, we use seek_sequence to find it, then
-        // adjust our `line_index` to continue from there.
-        if let Some(ctx_line) = &chunk.change_context {
-            if let Some(idx) = seek_sequence::seek_sequence(
-                original_lines,
-                std::slice::from_ref(ctx_line),
-                line_index,
-                /*eof*/ false,
-            ) {
-                line_index = idx + 1;
-            } else {
-                return Err(ApplyPatchError::ComputeReplacements(format!(
-                    "Failed to find context '{ctx_line}' in {path}"
-                )));
-            }
-        }
-
-        if chunk.old_lines.is_empty() {
-            // Pure addition (no old lines). We'll add them at the end or just
-            // before the final empty line if one exists.
-            let insertion_idx = if original_lines.last().is_some_and(String::is_empty) {
-                original_lines.len() - 1
-            } else {
-                original_lines.len()
-            };
-            replacements.push((insertion_idx, 0, chunk.new_lines.clone()));
-            continue;
-        }
-
-        // Otherwise, try to match the existing lines in the file with the old lines
-        // from the chunk. If found, schedule that region for replacement.
-        // Attempt to locate the `old_lines` verbatim within the file.  In many
-        // real‑world diffs the last element of `old_lines` is an *empty* string
-        // representing the terminating newline of the region being replaced.
-        // This sentinel is not present in `original_lines` because we strip the
-        // trailing empty slice emitted by `split('\n')`.  If a direct search
-        // fails and the pattern ends with an empty string, retry without that
-        // final element so that modifications touching the end‑of‑file can be
-        // located reliably.
-
-        let mut pattern: &[String] = &chunk.old_lines;
-        let mut found =
-            seek_sequence::seek_sequence(original_lines, pattern, line_index, chunk.is_end_of_file);
-
-        let mut new_slice: &[String] = &chunk.new_lines;
-
-        if found.is_none() && pattern.last().is_some_and(String::is_empty) {
-            // Retry without the trailing empty line which represents the final
-            // newline in the file.
-            pattern = &pattern[..pattern.len() - 1];
-            if new_slice.last().is_some_and(String::is_empty) {
-                new_slice = &new_slice[..new_slice.len() - 1];
-            }
-
-            found = seek_sequence::seek_sequence(
-                original_lines,
-                pattern,
-                line_index,
-                chunk.is_end_of_file,
-            );
-        }
-
-        if let Some(start_idx) = found {
-            replacements.push((start_idx, pattern.len(), new_slice.to_vec()));
-            line_index = start_idx + pattern.len();
-        } else {
-            return Err(ApplyPatchError::ComputeReplacements(format!(
-                "Failed to find expected lines in {}:\n{}",
-                path,
-                chunk.old_lines.join("\n"),
-            )));
-        }
-    }
-
-    replacements.sort_by_key(|(index, _, _)| *index);
-
-    Ok(replacements)
-}
-
-/// Apply the `(start_index, old_len, new_lines)` replacements to `original_lines`,
-/// returning the modified file contents as a vector of lines.
-fn apply_replacements(
-    mut lines: Vec<String>,
-    replacements: &[(usize, usize, Vec<String>)],
-) -> Vec<String> {
-    // We must apply replacements in descending order so that earlier replacements
-    // don't shift the positions of later ones.
-    for (start_idx, old_len, new_segment) in replacements.iter().rev() {
-        let start_idx = *start_idx;
-        let old_len = *old_len;
-
-        // Remove old lines.
-        for _ in 0..old_len {
-            if start_idx < lines.len() {
-                lines.remove(start_idx);
-            }
-        }
-
-        // Insert new lines.
-        for (offset, new_line) in new_segment.iter().enumerate() {
-            lines.insert(start_idx + offset, new_line.clone());
-        }
-    }
-
-    lines
-}
-
-/// Intended result of a file update for apply_patch.
-#[derive(Debug, Eq, PartialEq)]
-pub struct ApplyPatchFileUpdate {
-    unified_diff: String,
-    original_content: String,
-    content: String,
-}
-
-pub async fn unified_diff_from_chunks(
-    path: &PathUri,
-    chunks: &[UpdateFileChunk],
-    fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext>,
-) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    unified_diff_from_chunks_with_context(path, chunks, /*context*/ 1, fs, sandbox).await
-}
-
-pub async fn unified_diff_from_chunks_with_context(
-    path: &PathUri,
-    chunks: &[UpdateFileChunk],
-    context: usize,
-    fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext>,
-) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    let AppliedPatch {
-        original_contents,
-        new_contents,
-    } = derive_new_contents_from_chunks(path, chunks, fs, sandbox).await?;
-    let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
-    let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
-    Ok(ApplyPatchFileUpdate {
-        unified_diff,
-        original_content: original_contents,
-        content: new_contents,
-    })
-}
-
 /// Print the summary of changes in git-style format.
 /// Write a summary of changes to the given writer.
 pub fn print_summary(
@@ -892,7 +786,6 @@ mod tests {
     use codex_exec_server::LOCAL_FS;
     use pretty_assertions::assert_eq;
     use std::fs;
-    use std::string::ToString;
     use tempfile::tempdir;
 
     /// Helper to construct a patch with the given body.
@@ -1366,271 +1259,6 @@ mod tests {
 
         // No stderr expected.
         assert_eq!(String::from_utf8(stderr).unwrap(), "");
-    }
-
-    #[tokio::test]
-    async fn test_unified_diff() {
-        // Start with a file containing four lines.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("multi.txt");
-        fs::write(&path, "foo\nbar\nbaz\nqux\n").unwrap();
-        let patch = wrap_patch(&format!(
-            r#"*** Update File: {}
-@@
- foo
--bar
-+BAR
-@@
- baz
--qux
-+QUX"#,
-            path.display()
-        ));
-        let patch = parse_patch(&patch).unwrap();
-
-        let update_file_chunks = match patch.hunks.as_slice() {
-            [Hunk::UpdateFile { chunks, .. }] => chunks,
-            _ => panic!("Expected a single UpdateFile hunk"),
-        };
-        let path_uri = PathUri::from_host_native_path(&path).expect("absolute test path");
-        let diff = unified_diff_from_chunks(
-            &path_uri,
-            update_file_chunks,
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await
-        .unwrap();
-        let expected_diff = r#"@@ -1,4 +1,4 @@
- foo
--bar
-+BAR
- baz
--qux
-+QUX
-"#;
-        let expected = ApplyPatchFileUpdate {
-            unified_diff: expected_diff.to_string(),
-            original_content: "foo\nbar\nbaz\nqux\n".to_string(),
-            content: "foo\nBAR\nbaz\nQUX\n".to_string(),
-        };
-        assert_eq!(expected, diff);
-    }
-
-    #[tokio::test]
-    async fn test_unified_diff_first_line_replacement() {
-        // Replace the very first line of the file.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("first.txt");
-        fs::write(&path, "foo\nbar\nbaz\n").unwrap();
-
-        let patch = wrap_patch(&format!(
-            r#"*** Update File: {}
-@@
--foo
-+FOO
- bar
-"#,
-            path.display()
-        ));
-
-        let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.hunks.as_slice() {
-            [Hunk::UpdateFile { chunks, .. }] => chunks,
-            _ => panic!("Expected a single UpdateFile hunk"),
-        };
-
-        let resolved_path = PathUri::from_host_native_path(&path).expect("absolute test path");
-        let diff = unified_diff_from_chunks(
-            &resolved_path,
-            chunks,
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await
-        .unwrap();
-        let expected_diff = r#"@@ -1,2 +1,2 @@
--foo
-+FOO
- bar
-"#;
-        let expected = ApplyPatchFileUpdate {
-            unified_diff: expected_diff.to_string(),
-            original_content: "foo\nbar\nbaz\n".to_string(),
-            content: "FOO\nbar\nbaz\n".to_string(),
-        };
-        assert_eq!(expected, diff);
-    }
-
-    #[tokio::test]
-    async fn test_unified_diff_last_line_replacement() {
-        // Replace the very last line of the file.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("last.txt");
-        fs::write(&path, "foo\nbar\nbaz\n").unwrap();
-
-        let patch = wrap_patch(&format!(
-            r#"*** Update File: {}
-@@
- foo
- bar
--baz
-+BAZ
-"#,
-            path.display()
-        ));
-
-        let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.hunks.as_slice() {
-            [Hunk::UpdateFile { chunks, .. }] => chunks,
-            _ => panic!("Expected a single UpdateFile hunk"),
-        };
-
-        let resolved_path = PathUri::from_host_native_path(&path).expect("absolute test path");
-        let diff = unified_diff_from_chunks(
-            &resolved_path,
-            chunks,
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await
-        .unwrap();
-        let expected_diff = r#"@@ -2,2 +2,2 @@
- bar
--baz
-+BAZ
-"#;
-        let expected = ApplyPatchFileUpdate {
-            unified_diff: expected_diff.to_string(),
-            original_content: "foo\nbar\nbaz\n".to_string(),
-            content: "foo\nbar\nBAZ\n".to_string(),
-        };
-        assert_eq!(expected, diff);
-    }
-
-    #[tokio::test]
-    async fn test_unified_diff_insert_at_eof() {
-        // Insert a new line at end‑of‑file.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("insert.txt");
-        fs::write(&path, "foo\nbar\nbaz\n").unwrap();
-
-        let patch = wrap_patch(&format!(
-            r#"*** Update File: {}
-@@
-+quux
-*** End of File
-"#,
-            path.display()
-        ));
-
-        let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.hunks.as_slice() {
-            [Hunk::UpdateFile { chunks, .. }] => chunks,
-            _ => panic!("Expected a single UpdateFile hunk"),
-        };
-
-        let path_uri = PathUri::from_host_native_path(&path).expect("absolute test path");
-        let diff =
-            unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
-                .await
-                .unwrap();
-        let expected_diff = r#"@@ -3 +3,2 @@
- baz
-+quux
-"#;
-        let expected = ApplyPatchFileUpdate {
-            unified_diff: expected_diff.to_string(),
-            original_content: "foo\nbar\nbaz\n".to_string(),
-            content: "foo\nbar\nbaz\nquux\n".to_string(),
-        };
-        assert_eq!(expected, diff);
-    }
-
-    #[tokio::test]
-    async fn test_unified_diff_interleaved_changes() {
-        // Original file with six lines.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("interleaved.txt");
-        fs::write(&path, "a\nb\nc\nd\ne\nf\n").unwrap();
-
-        // Patch replaces two separate lines and appends a new one at EOF using
-        // three distinct chunks.
-        let patch_body = format!(
-            r#"*** Update File: {}
-@@
- a
--b
-+B
-@@
- d
--e
-+E
-@@
- f
-+g
-*** End of File"#,
-            path.display()
-        );
-        let patch = wrap_patch(&patch_body);
-
-        // Extract chunks then build the unified diff.
-        let parsed = parse_patch(&patch).unwrap();
-        let chunks = match parsed.hunks.as_slice() {
-            [Hunk::UpdateFile { chunks, .. }] => chunks,
-            _ => panic!("Expected a single UpdateFile hunk"),
-        };
-
-        let path_uri = PathUri::from_host_native_path(&path).expect("absolute test path");
-        let diff =
-            unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
-                .await
-                .unwrap();
-
-        let expected_diff = r#"@@ -1,6 +1,7 @@
- a
--b
-+B
- c
- d
--e
-+E
- f
-+g
-"#;
-
-        let expected = ApplyPatchFileUpdate {
-            unified_diff: expected_diff.to_string(),
-            original_content: "a\nb\nc\nd\ne\nf\n".to_string(),
-            content: "a\nB\nc\nd\nE\nf\ng\n".to_string(),
-        };
-
-        assert_eq!(expected, diff);
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        apply_patch(
-            &patch,
-            &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
-            &mut stdout,
-            &mut stderr,
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await
-        .unwrap();
-        let contents = fs::read_to_string(path).unwrap();
-        assert_eq!(
-            contents,
-            r#"a
-B
-c
-d
-E
-f
-g
-"#
-        );
     }
 
     #[cfg(unix)]

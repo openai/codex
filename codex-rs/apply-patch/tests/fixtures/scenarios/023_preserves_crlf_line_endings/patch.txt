@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: lines.txt
+@@
+-one
++ONE
+ two
++between
+ three
+*** End Patch
