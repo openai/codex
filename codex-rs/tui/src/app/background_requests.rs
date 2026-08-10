@@ -1443,6 +1443,7 @@ mod tests {
         let statuses = vec![
             McpServerStatus {
                 name: "docs".to_string(),
+                plugin_id: None,
                 server_info: None,
                 tools: HashMap::from([(
                     "list".to_string(),
@@ -1463,6 +1464,7 @@ mod tests {
             },
             McpServerStatus {
                 name: "disabled".to_string(),
+                plugin_id: None,
                 server_info: None,
                 tools: HashMap::new(),
                 resources: Vec::new(),

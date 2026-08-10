@@ -61,6 +61,7 @@ pub enum McpServerStatusDetail {
 #[ts(export_to = "v2/")]
 pub struct McpServerStatus {
     pub name: String,
+    pub plugin_id: Option<String>,
     pub server_info: Option<McpServerInfo>,
     pub tools: std::collections::HashMap<String, McpTool>,
     pub resources: Vec<McpResource>,

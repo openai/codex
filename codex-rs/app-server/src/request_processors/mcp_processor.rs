@@ -1,5 +1,6 @@
 use super::*;
 use codex_core::McpManager;
+use codex_mcp::McpServerSource;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -374,6 +375,17 @@ impl McpRequestProcessor {
             .iter()
             .map(|name| McpServerStatus {
                 name: name.clone(),
+                plugin_id: mcp_config.mcp_server_catalog.server(name).and_then(
+                    |server| match server.source() {
+                        McpServerSource::Plugin(plugin)
+                        | McpServerSource::SelectedPlugin(plugin) => {
+                            Some(plugin.plugin_id().to_owned())
+                        }
+                        McpServerSource::Config
+                        | McpServerSource::Compatibility { .. }
+                        | McpServerSource::Extension { .. } => None,
+                    },
+                ),
                 server_info: server_infos.get(name).cloned(),
                 tools: tools_by_server.get(name).cloned().unwrap_or_default(),
                 resources: resources.get(name).cloned().unwrap_or_default(),

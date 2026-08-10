@@ -13227,6 +13227,12 @@
           "name": {
             "type": "string"
           },
+          "pluginId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "resourceTemplates": {
             "items": {
               "$ref": "#/definitions/v2/ResourceTemplate"

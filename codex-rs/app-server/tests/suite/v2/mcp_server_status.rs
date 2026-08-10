@@ -112,6 +112,7 @@ async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()
     assert_eq!(response.data.len(), 1);
     let status = &response.data[0];
     assert_eq!(status.name, "some-server");
+    assert_eq!(status.plugin_id, None);
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
         BTreeSet::from(["look-up.raw".to_string()])

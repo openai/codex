@@ -11,6 +11,7 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
+use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::RequestId;
@@ -40,6 +41,7 @@ use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -447,26 +449,37 @@ startup_timeout_sec = 10
         Some(json!("ECHOING: refresh applied"))
     );
 
-    let selected_server_names = mcp_server_names(&mut app_server, selected_thread).await?;
-    assert!(
-        selected_server_names
-            .iter()
-            .any(|name| name == MCP_SERVER_NAME)
-    );
-    assert!(
-        selected_server_names
-            .iter()
-            .any(|name| name == HTTP_MCP_SERVER_NAME)
-    );
-    assert!(
-        selected_server_names
-            .iter()
-            .any(|name| name == OAUTH_MCP_SERVER_NAME)
+    let selected_server_owners = mcp_server_statuses(&mut app_server, selected_thread)
+        .await?
+        .into_iter()
+        .map(|server| (server.name, server.plugin_id))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        selected_server_owners,
+        BTreeMap::from([
+            (
+                HTTP_MCP_SERVER_NAME.to_string(),
+                Some("executor-demo@1".to_string()),
+            ),
+            (
+                MCP_SERVER_NAME.to_string(),
+                Some("executor-demo@1".to_string()),
+            ),
+            (
+                OAUTH_MCP_SERVER_NAME.to_string(),
+                Some("executor-demo@1".to_string()),
+            ),
+            (REFRESH_PROBE_SERVER_NAME.to_string(), None),
+        ])
     );
 
     let unselected_thread =
         start_thread(&mut app_server, /*selected_capability_roots*/ None).await?;
-    let unselected_server_names = mcp_server_names(&mut app_server, unselected_thread).await?;
+    let unselected_server_names = mcp_server_statuses(&mut app_server, unselected_thread)
+        .await?
+        .into_iter()
+        .map(|server| server.name)
+        .collect::<Vec<_>>();
     assert!(unselected_server_names.iter().all(|name| {
         name != MCP_SERVER_NAME && name != HTTP_MCP_SERVER_NAME && name != OAUTH_MCP_SERVER_NAME
     }));
@@ -525,10 +538,10 @@ impl ServerHandler for ExecutorHttpMcpServer {
     }
 }
 
-async fn mcp_server_names(
+async fn mcp_server_statuses(
     app_server: &mut TestAppServer,
     thread_id: String,
-) -> Result<Vec<String>> {
+) -> Result<Vec<McpServerStatus>> {
     let request_id = app_server
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
             cursor: None,
@@ -539,11 +552,7 @@ async fn mcp_server_names(
         .await?;
     let response: ListMcpServerStatusResponse =
         timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
-    Ok(response
-        .data
-        .into_iter()
-        .map(|server| server.name)
-        .collect())
+    Ok(response.data)
 }
 
 async fn start_thread(

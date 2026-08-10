@@ -25,6 +25,8 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallParams;
@@ -32,6 +34,7 @@ use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::stdio_server_bin;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use pretty_assertions::assert_eq;
@@ -2264,13 +2267,13 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
     write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
     std::fs::write(
         repo_root.path().join("sample-plugin/.mcp.json"),
-        r#"{
-  "mcpServers": {
-    "sample-mcp": {
-      "command": "echo"
-    }
-  }
-}"#,
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "sample-mcp": {
+                    "command": stdio_server_bin()?,
+                }
+            }
+        }))?,
     )?;
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
@@ -2294,7 +2297,28 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config.contains("[mcp_servers.sample-mcp]"));
-    assert!(!config.contains("command = \"echo\""));
+
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: None,
+            thread_id: None,
+        })
+        .await?;
+    let response: ListMcpServerStatusResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        response
+            .data
+            .into_iter()
+            .map(|server| (server.name, server.plugin_id))
+            .collect::<Vec<_>>(),
+        vec![(
+            "sample-mcp".to_string(),
+            Some("sample-plugin@debug".to_string()),
+        )]
+    );
 
     let request_id = mcp
         .send_raw_request(

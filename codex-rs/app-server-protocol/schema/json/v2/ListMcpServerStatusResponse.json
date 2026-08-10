@@ -60,6 +60,12 @@
         "name": {
           "type": "string"
         },
+        "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "resourceTemplates": {
           "items": {
             "$ref": "#/definitions/ResourceTemplate"
