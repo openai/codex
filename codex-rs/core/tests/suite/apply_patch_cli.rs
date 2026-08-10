@@ -257,6 +257,112 @@ fn apply_patch_responses(
     ]
 }
 
+async fn assert_apply_patch_crlf_update(
+    configure: impl FnOnce(TestCodexBuilder) -> TestCodexBuilder,
+    model_output: CrLfApplyPatchModelOutput,
+    expected: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(configure).await?;
+    let call_id = "apply-patch-crlf-rollout";
+    let file_name = "crlf.txt";
+    harness.write_file(file_name, "before\r\n").await?;
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {file_name}\n@@\n-before\n+after\n*** End Patch\n"
+    );
+    match model_output {
+        CrLfApplyPatchModelOutput::CustomTool => {
+            mount_apply_patch(&harness, call_id, &patch, "apply_patch done").await;
+        }
+        CrLfApplyPatchModelOutput::ShellCommandViaHeredoc => {
+            mount_apply_patch_model_output(
+                &harness,
+                call_id,
+                &patch,
+                "apply_patch done",
+                ApplyPatchModelOutput::ShellCommandViaHeredoc,
+            )
+            .await;
+        }
+    }
+
+    harness
+        .test()
+        .submit_turn_with_permission_profile(
+            "update the CRLF file with apply_patch",
+            PermissionProfile::Disabled,
+        )
+        .await?;
+
+    assert_eq!(harness.read_file_text(file_name).await?, expected);
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CrLfApplyPatchModelOutput {
+    CustomTool,
+    ShellCommandViaHeredoc,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_normalizes_crlf_without_preserve_line_endings_feature() -> Result<()> {
+    assert_apply_patch_crlf_update(
+        |builder| builder,
+        CrLfApplyPatchModelOutput::CustomTool,
+        "after\n",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_preserves_crlf_with_preserve_line_endings_feature() -> Result<()> {
+    assert_apply_patch_crlf_update(
+        |builder| {
+            builder.with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::ApplyPatchPreserveLineEndings)
+                    .expect("feature should be enabled");
+            })
+        },
+        CrLfApplyPatchModelOutput::CustomTool,
+        "after\r\n",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_shell_heredoc_normalizes_crlf_without_preserve_line_endings_feature()
+-> Result<()> {
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
+    assert_apply_patch_crlf_update(
+        |builder| builder,
+        CrLfApplyPatchModelOutput::ShellCommandViaHeredoc,
+        "after\n",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_shell_heredoc_preserves_crlf_with_preserve_line_endings_feature() -> Result<()>
+{
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
+    assert_apply_patch_crlf_update(
+        |builder| {
+            builder.with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::ApplyPatchPreserveLineEndings)
+                    .expect("feature should be enabled");
+            })
+        },
+        CrLfApplyPatchModelOutput::ShellCommandViaHeredoc,
+        "after\r\n",
+    )
+    .await
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -> Result<()> {

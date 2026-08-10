@@ -434,6 +434,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "apply_patch_preserve_line_endings": {
+              "type": "boolean"
+            },
             "apply_patch_streaming_events": {
               "type": "boolean"
             },
@@ -5100,6 +5103,9 @@
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
         "apply_patch_freeform": {
+          "type": "boolean"
+        },
+        "apply_patch_preserve_line_endings": {
           "type": "boolean"
         },
         "apply_patch_streaming_events": {

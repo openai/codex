@@ -16,6 +16,7 @@ use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
+use crate::exec_env::inject_apply_patch_env;
 use crate::exec_env::inject_permission_profile_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecOptions;
@@ -122,10 +123,18 @@ fn exec_env_policy_from_shell_policy(
         .iter()
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>();
-    exclude.push(CODEX_PERMISSION_PROFILE_ENV_VAR.to_string());
+    exclude.extend([
+        CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+        codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+    ]);
     let mut r#set = policy.r#set.clone();
     r#set.retain(|key, _| {
-        !key.eq_ignore_ascii_case(CODEX_PERMISSION_PROFILE_ENV_VAR)
+        ![
+            CODEX_PERMISSION_PROFILE_ENV_VAR,
+            codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
+        ]
+        .iter()
+        .any(|runtime_key| key.eq_ignore_ascii_case(runtime_key))
             && !is_non_inheritable_env_var(key)
     });
     codex_exec_server::ExecEnvPolicy {
@@ -149,8 +158,11 @@ fn env_overlay_for_exec_server(
         .iter()
         .filter(|(key, value)| {
             !is_non_inheritable_env_var(key)
-                && (key.as_str() == CODEX_PERMISSION_PROFILE_ENV_VAR
-                    || local_policy_env.get(*key) != Some(*value))
+                && (matches!(
+                    key.as_str(),
+                    CODEX_PERMISSION_PROFILE_ENV_VAR
+                        | codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR
+                ) || local_policy_env.get(*key) != Some(*value))
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
@@ -1148,6 +1160,7 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
+        inject_apply_patch_env(&mut env, &turn.config.features);
         let active_permission_profile = request.turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let env = apply_unified_exec_env(env);

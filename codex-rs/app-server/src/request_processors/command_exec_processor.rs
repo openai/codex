@@ -1,4 +1,5 @@
 use super::*;
+use codex_core::exec_env::inject_apply_patch_env;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
 
 #[derive(Clone)]
@@ -165,6 +166,7 @@ impl CommandExecRequestProcessor {
             }
         }
         env.retain(|name, _| !is_non_inheritable_env_var(name));
+        inject_apply_patch_env(&mut env, &self.config.features);
         let timeout_ms = match timeout_ms {
             Some(timeout_ms) => match u64::try_from(timeout_ms) {
                 Ok(timeout_ms) => Some(timeout_ms),

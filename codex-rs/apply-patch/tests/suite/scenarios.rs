@@ -1,5 +1,6 @@
+use anyhow::Context;
 use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
-use codex_utils_cargo_bin::repo_root;
+use codex_utils_cargo_bin::find_resource;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::fs;
@@ -10,17 +11,18 @@ use tempfile::tempdir;
 
 #[test]
 fn test_apply_patch_scenarios() -> anyhow::Result<()> {
-    let scenarios_dir = repo_root()?
-        .join("codex-rs")
-        .join("apply-patch")
-        .join("tests")
-        .join("fixtures")
-        .join("scenarios");
-    for scenario in fs::read_dir(scenarios_dir)? {
+    let scenarios_marker = find_resource!("tests/fixtures/scenarios/.gitattributes")?;
+    let scenarios_dir = scenarios_marker
+        .parent()
+        .context("scenario marker should have a parent directory")?;
+    for scenario in fs::read_dir(scenarios_dir)
+        .with_context(|| format!("failed to read {}", scenarios_dir.display()))?
+    {
         let scenario = scenario?;
         let path = scenario.path();
         if path.is_dir() {
-            run_apply_patch_scenario(&path)?;
+            run_apply_patch_scenario(&path)
+                .with_context(|| format!("failed to run scenario {}", path.display()))?;
         }
     }
     Ok(())
@@ -38,7 +40,9 @@ fn run_apply_patch_scenario(dir: &Path) -> anyhow::Result<()> {
     }
 
     // Read the patch.txt file
-    let patch = fs::read_to_string(dir.join("patch.txt"))?;
+    let patch_path = dir.join("patch.txt");
+    let patch = fs::read_to_string(&patch_path)
+        .with_context(|| format!("failed to read {}", patch_path.display()))?;
 
     // Run apply_patch in the temporary directory. We intentionally do not assert
     // on the exit status here; the scenarios are specified purely in terms of
@@ -47,7 +51,8 @@ fn run_apply_patch_scenario(dir: &Path) -> anyhow::Result<()> {
         .arg(patch)
         .env(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR, "1")
         .current_dir(tmp.path())
-        .output()?;
+        .output()
+        .with_context(|| format!("failed to run scenario {}", dir.display()))?;
 
     // Assert that the final state matches the expected state exactly
     let expected_dir = dir.join("expected");

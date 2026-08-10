@@ -16,6 +16,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_core::exec_env::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
@@ -195,6 +196,90 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
         }
     );
 
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CommandExecApplyPatchRollout {
+    Enabled,
+    Disabled,
+}
+
+#[tokio::test]
+async fn command_exec_apply_patch_preserves_line_endings_despite_client_override() -> Result<()> {
+    assert_command_exec_apply_patch_rollout(
+        CommandExecApplyPatchRollout::Enabled,
+        "0",
+        b"after\r\n",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn command_exec_apply_patch_normalizes_line_endings_despite_stale_overrides() -> Result<()> {
+    assert_command_exec_apply_patch_rollout(CommandExecApplyPatchRollout::Disabled, "1", b"after\n")
+        .await
+}
+
+async fn assert_command_exec_apply_patch_rollout(
+    rollout: CommandExecApplyPatchRollout,
+    client_override: &str,
+    expected_contents: &[u8],
+) -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let feature_enabled = matches!(rollout, CommandExecApplyPatchRollout::Enabled);
+    insert_command_exec_config(
+        codex_home.path(),
+        &format!("[features]\napply_patch_preserve_line_endings = {feature_enabled}\n"),
+    )?;
+
+    let workspace = TempDir::new()?;
+    let file_path = workspace.path().join("crlf.txt");
+    std::fs::write(&file_path, b"before\r\n")?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR, Some("1"))])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let patch = "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-before\n+after\n*** End Patch\n";
+    let request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec!["apply_patch".to_string(), patch.to_string()],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: Some(workspace.path().to_path_buf()),
+            env: Some(HashMap::from([(
+                CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+                Some(client_override.to_string()),
+            )])),
+            size: None,
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            permission_profile: None,
+        })
+        .await?;
+
+    let response: CommandExecResponse = mcp.read_response(request_id).await?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "Success. Updated the following files:\nM crlf.txt\n".to_string(),
+            stderr: String::new(),
+        }
+    );
+    assert_eq!(std::fs::read(file_path)?, expected_contents);
     Ok(())
 }
 
