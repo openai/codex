@@ -1443,7 +1443,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Result<()> {
+async fn view_image_tool_rejects_invalid_image_before_tool_output() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1496,12 +1496,13 @@ async fn view_image_tool_turns_invalid_image_into_placeholder() -> anyhow::Resul
     .await;
 
     let request = second_mock.single_request();
+    let output_text = request
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .context("invalid view_image error text present")?;
     assert_eq!(
-        request.function_call_output(call_id).get("output"),
-        Some(&serde_json::json!([{
-            "type": "input_text",
-            "text": "image content omitted because it could not be processed"
-        }]))
+        output_text,
+        "unable to process image: invalid or unsupported image data"
     );
     Ok(())
 }
