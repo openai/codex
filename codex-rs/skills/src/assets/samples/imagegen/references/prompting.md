@@ -73,13 +73,7 @@ Do not add:
 - Prefer one targeted follow-up at a time over rewriting the whole prompt.
 
 ## Transparent images
-- Use built-in `image_gen` first for transparent-image requests. If the subject is clearly too complex for chroma-key removal, explain the fallback and ask before switching to CLI.
-- Prompt for a perfectly flat solid chroma-key background, usually `#00ff00`; use `#ff00ff` when the subject is green, and avoid key colors that appear in the subject.
-- Explicitly prohibit shadows, gradients, floor planes, reflections, texture, and lighting variation in the background.
-- Ask for crisp edges, generous padding, and no use of the key color inside the subject.
-- After generation, remove the background locally with `python "${CODEX_HOME:-$HOME/.codex}/skills/.system/imagegen/scripts/remove_chroma_key.py" --input <source> --out <final.png> --auto-key border --soft-matte --transparent-threshold 12 --opaque-threshold 220 --despill` and validate the alpha result before shipping it.
-- Use soft matte and despill for antialiased edges; hard tolerance-only removal is mainly for flat pixel-art or exact-color fixtures.
-- Use CLI `gpt-image-1.5 --background transparent --output-format png` only after the user explicitly confirms the fallback, or when the user already explicitly requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback. Ask first for true/native transparency requests, failed chroma-key validation, or complex transparent subjects such as hair, fur, glass, smoke, liquids, translucent materials, reflective objects, or soft shadows.
+- Ask built-in `image_gen` for a genuinely transparent background and preserve its alpha.
 
 ## Fallback-only execution controls
 - `quality`, `input_fidelity`, explicit masks, output format, and output paths are fallback-only execution controls.
@@ -87,7 +81,7 @@ Do not add:
 - If the user explicitly chooses CLI fallback, see `references/cli.md` and `references/image-api.md` for those controls.
 - In CLI fallback mode, `gpt-image-2` is the default. It supports `quality=low|medium|high|auto`; use `low` for fast drafts and thumbnails, and move to `medium`, `high`, or `auto` for final assets.
 - `gpt-image-2` always uses high fidelity for image inputs, so do not set `input_fidelity` with that model.
-- If a transparent request needs true CLI transparency, ask before using `gpt-image-1.5` unless the user already explicitly chose it. Explain that built-in chroma-key removal is the default path, but `gpt-image-2` does not support `background=transparent`.
+- CLI `gpt-image-2` does not support `background=transparent`; ask before using `gpt-image-1.5` unless the user explicitly requested that model.
 - If the user asks for 4K-style output with `gpt-image-2`, use `3840x2160` for landscape or `2160x3840` for portrait.
 
 ## Use-case tips
@@ -109,7 +103,7 @@ Edit:
 - identity-preserve: Lock identity (face, body, pose, hair, expression); change only the specified elements; match lighting and shadows.
 - precise-object-edit: Specify exactly what to remove/replace; preserve surrounding texture and lighting; keep everything else unchanged.
 - lighting-weather: Change only environmental conditions (light, shadows, atmosphere, precipitation); keep geometry, framing, and subject identity.
-- background-extraction: For simple opaque subjects, request a clean cutout on a perfectly flat chroma-key background; crisp silhouette; generous padding; no shadows; no halos; preserve label text exactly; no restyling. Ask before using true CLI transparency for complex subjects.
+- background-extraction: Request a clean cutout on a genuinely transparent background; preserve fine edges and label text; no halos or restyling.
 - style-transfer: Specify style cues to preserve (palette, texture, brushwork) and what must change; add `no extra elements` to prevent drift.
 - compositing: Reference inputs by index; specify what moves where; match lighting, perspective, and scale; keep the base framing unchanged.
 - sketch-to-render: Preserve layout, proportions, and perspective; choose materials and lighting that support the supplied sketch without adding new elements.
